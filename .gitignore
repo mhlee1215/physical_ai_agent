@@ -2,8 +2,16 @@
 .env
 .env.*
 !.env.example
-.agents/
-.codex/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/harness/
+!.agents/skills/harness/**
+.codex/*
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/harness/
+!.codex/skills/harness/**
 
 # Python
 __pycache__/
@@ -46,4 +54,3 @@ mlruns/
 .idea/
 .vscode/
 *.swp
-
