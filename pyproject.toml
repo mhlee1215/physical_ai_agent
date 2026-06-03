@@ -39,6 +39,7 @@ ml = [
 [project.scripts]
 physical-ai-agent = "physical_ai_agent.cli:main"
 pai-checkpoint-01 = "physical_ai_agent.checkpoints.checkpoint_01:main"
+pai-checkpoint-02-04 = "physical_ai_agent.checkpoints.checkpoint_02_04:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -25,3 +25,5 @@
   `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - No-dependency syntax fallback:
   `PYTHONPATH=src python3 -B -c "import ast, pathlib; files=list(pathlib.Path('src').rglob('*.py'))+list(pathlib.Path('tests').rglob('*.py')); [ast.parse(p.read_text()) for p in files]; print(f'parsed {len(files)} files')"`
+- Checkpoint 02-04 random policy evaluation:
+  `sh scripts/checkpoint_02_04.sh`

@@ -582,10 +582,10 @@ robot.stop()
 
 - [ ] 1. Create repository skeleton.
 - [ ] 2. Add config system.
-- [ ] 3. Add LIBERO environment smoke test.
-- [ ] 4. Add random policy baseline.
-- [ ] 5. Add baseline evaluator.
-- [ ] 6. Save metrics, traces, and videos.
+- [x] 3. Add Mac-local MuJoCo environment smoke test.
+- [x] 4. Add random policy baseline.
+- [x] 5. Add baseline evaluator.
+- [x] 6. Save metrics, traces, and frames.
 - [ ] 7. Add ACT adapter.
 - [ ] 8. Add SmolVLA adapter or document local blocker.
 - [ ] 9. Add rule-based planner.
@@ -597,11 +597,11 @@ robot.stop()
 
 ## Minimal MVP Checklist
 
-- [ ] LIBERO environment runs on the Mac.
-- [ ] Random policy can run one full episode.
-- [ ] Episode video is saved.
-- [ ] Episode trace is saved.
-- [ ] Baseline success rate is computed.
+- [x] Mac-local MuJoCo environment runs on the Mac.
+- [x] Random policy can run one full episode.
+- [x] Episode frame is saved.
+- [x] Episode trace is saved.
+- [x] Baseline success rate is computed.
 - [ ] ACT or SmolVLA policy can be evaluated.
 - [ ] Rule-based planner creates subgoals.
 - [ ] Simulation-state verifier judges success or failure.
@@ -612,7 +612,7 @@ robot.stop()
 ## Notes
 
 - Keep the first milestone CUDA-free.
-- Prefer MuJoCo/LIBERO over Isaac Lab for local Mac development.
+- Prefer MuJoCo over Isaac Lab for local Mac development. Keep LIBERO as a Linux/cloud strict gate.
 - Use simulation-state verification first because it gives reliable ground truth.
 - Add VLM verification only after the basic agentic loop is measurable.
 - Treat the VLA/policy as an executor, not as the whole agent.

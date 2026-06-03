@@ -76,3 +76,19 @@ sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env
 ```
 
 The bootstrap command creates `.venv` and installs MuJoCo for the first Mac-local simulation gate. The first checkpoint command verifies the lightweight scaffold and writes evidence to `_workspace/checkpoints/checkpoint_01_smoke.json`. The second checkpoint command verifies the Mac-local MuJoCo simulation path and writes evidence to `_workspace/checkpoints/checkpoint_01_local_sim.json`. The third checkpoint command writes evidence to `_workspace/checkpoints/checkpoint_01_libero_strict.json`; it is expected to fail on macOS or until the full LIBERO/LeRobot dependency path is available on Linux/cloud.
+
+## Checkpoints 02-04
+
+Run a random policy episode, save artifacts, and compute baseline evaluator metrics:
+
+```bash
+sh scripts/checkpoint_02_04.sh
+```
+
+Artifacts are written to `_workspace/checkpoints/checkpoint_02_04/`, including `metrics.json`, `summary.md`, per-episode JSONL traces, final PPM frames, and `checkpoint_report.json`.
+
+Current CP02-04 status:
+
+- CP02 random policy episode: implemented and verified.
+- CP03 episode trace/frame/metrics artifacts: implemented and verified.
+- CP04 baseline evaluator metrics and summary: implemented and verified.
