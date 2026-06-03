@@ -1,0 +1,5 @@
+name: sim_state_verifier
+confidence_threshold: 0.7
+distance_threshold_m: 0.05
+lift_threshold_m: 0.03
+

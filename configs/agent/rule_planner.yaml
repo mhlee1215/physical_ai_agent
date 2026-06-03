@@ -1,0 +1,5 @@
+name: rule_planner
+max_subgoals: 8
+default_policy: smolvla
+default_timeout_steps: 80
+

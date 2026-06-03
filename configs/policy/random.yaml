@@ -1,0 +1,5 @@
+name: random
+action:
+  seed: 0
+  scale: 0.1
+

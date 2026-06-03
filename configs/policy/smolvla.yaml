@@ -1,0 +1,5 @@
+name: smolvla
+checkpoint: null
+device: auto
+action_chunk_size: 10
+

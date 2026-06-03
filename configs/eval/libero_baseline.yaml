@@ -1,0 +1,8 @@
+name: libero_baseline
+suite: libero_spatial
+episodes: 10
+mode: policy_only
+policy: random
+save_video: true
+save_traces: true
+

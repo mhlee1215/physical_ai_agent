@@ -1,0 +1,49 @@
+# Secrets and local app state
+.env
+.env.*
+!.env.example
+.agents/
+.codex/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Experiment outputs and datasets
+experiments/
+datasets/
+artifacts/
+outputs/
+runs/
+wandb/
+mlruns/
+
+# Media generated during simulation/evaluation
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.png
+*.jpg
+*.jpeg
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+

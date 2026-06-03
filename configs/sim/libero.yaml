@@ -1,0 +1,12 @@
+name: libero
+suite: libero_spatial
+task: null
+render:
+  enabled: true
+  width: 640
+  height: 480
+  camera: agentview
+episode:
+  max_steps: 500
+  seed: 0
+
