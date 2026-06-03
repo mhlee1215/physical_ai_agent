@@ -38,6 +38,7 @@ ml = [
 
 [project.scripts]
 physical-ai-agent = "physical_ai_agent.cli:main"
+pai-checkpoint-01 = "physical_ai_agent.checkpoints.checkpoint_01:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -51,4 +52,3 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-

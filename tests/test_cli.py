@@ -1,6 +1,8 @@
+from unittest import TestCase
+
 from physical_ai_agent import __version__
 
 
-def test_version() -> None:
-    assert __version__ == "0.1.0"
-
+class CliTest(TestCase):
+    def test_version(self) -> None:
+        self.assertEqual(__version__, "0.1.0")
