@@ -64,3 +64,15 @@ python -m physical_ai_agent
 pytest
 ```
 
+## Checkpoint 01
+
+Use the repo-local script so the checkpoint runs with a Python version compatible with `pyproject.toml`.
+
+```bash
+sh scripts/bootstrap_checkpoint_01.sh
+sh scripts/checkpoint_01.sh
+sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco
+sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env
+```
+
+The bootstrap command creates `.venv` and installs MuJoCo for the first Mac-local simulation gate. The first checkpoint command verifies the lightweight scaffold and writes evidence to `_workspace/checkpoints/checkpoint_01_smoke.json`. The second checkpoint command verifies the Mac-local MuJoCo simulation path and writes evidence to `_workspace/checkpoints/checkpoint_01_local_sim.json`. The third checkpoint command writes evidence to `_workspace/checkpoints/checkpoint_01_libero_strict.json`; it is expected to fail on macOS or until the full LIBERO/LeRobot dependency path is available on Linux/cloud.

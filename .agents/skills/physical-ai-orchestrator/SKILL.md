@@ -28,16 +28,22 @@ Use this skill when implementing or reviewing milestones for the agentic physica
 Always run:
 
 ```bash
-PYTHONPATH=src python3 -B -m physical_ai_agent.checkpoints.checkpoint_01
+sh scripts/checkpoint_01.sh
 ```
 
 When claiming LIBERO itself is executable, also run:
 
 ```bash
-PYTHONPATH=src python3 -B -m physical_ai_agent.checkpoints.checkpoint_01 --strict-sim-deps --probe-libero-env
+sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env
 ```
 
-If the strict command fails because MuJoCo, LIBERO, robosuite, or LeRobot are missing, treat the checkpoint as scaffold-passed but simulation-blocked.
+When claiming checkpoint 01 works on the target Mac, run:
+
+```bash
+sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco
+```
+
+If the Mac-local command fails because MuJoCo is missing, treat checkpoint 01 as not fully complete. If the LIBERO strict command fails on macOS because LIBERO/LeRobot requires Linux, treat that as a future Linux/cloud blocker rather than a Mac-local checkpoint failure.
 
 ## Expected Outputs
 
@@ -47,7 +53,6 @@ If the strict command fails because MuJoCo, LIBERO, robosuite, or LeRobot are mi
 
 ## Validation Notes
 
-- Do not claim simulation readiness from import-free tests alone.
+- Do not claim Mac-local simulation readiness from import-free tests alone.
 - Do not install or download simulation dependencies without user approval.
 - Keep validation commands deterministic and repo-local.
-

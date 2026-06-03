@@ -27,6 +27,10 @@ class CheckpointReport:
     python: str
     platform: str
     config: str
+    strict_local_sim: bool
+    strict_sim_deps: bool
+    probe_mujoco: bool
+    probe_libero_env: bool
     results: list[CheckResult]
 
 
@@ -36,6 +40,8 @@ OPTIONAL_IMPORTS = {
     "libero": "LIBERO benchmark package",
     "lerobot": "LeRobot policy/evaluation integration",
 }
+
+MIN_PYTHON = (3, 11)
 
 
 def _import_check(module_name: str, detail: str, required: bool) -> CheckResult:
@@ -134,25 +140,99 @@ def _libero_env_probe(enabled: bool, required: bool) -> CheckResult:
     )
 
 
+def _platform_check(strict_sim_deps: bool) -> CheckResult:
+    is_linux = sys.platform.startswith("linux")
+    if is_linux:
+        return CheckResult(
+            name="platform:libero",
+            status="passed",
+            detail=f"LIBERO strict gate running on supported platform: {sys.platform}",
+            required=strict_sim_deps,
+        )
+
+    return CheckResult(
+        name="platform:libero",
+        status="failed" if strict_sim_deps else "skipped",
+        detail=(
+            "LeRobot's LIBERO integration currently documents Linux as required; "
+            f"current platform is {sys.platform}"
+        ),
+        required=strict_sim_deps,
+    )
+
+
+def _mujoco_probe(enabled: bool, required: bool) -> CheckResult:
+    if not enabled:
+        return CheckResult(
+            name="mujoco:step_probe",
+            status="skipped",
+            detail="use --probe-mujoco to instantiate and step a tiny MuJoCo model",
+            required=False,
+        )
+
+    try:
+        mujoco = importlib.import_module("mujoco")
+        model = mujoco.MjModel.from_xml_string(
+            """
+            <mujoco>
+              <worldbody>
+                <body name="box" pos="0 0 0.1">
+                  <freejoint/>
+                  <geom type="box" size="0.05 0.05 0.05"/>
+                </body>
+              </worldbody>
+            </mujoco>
+            """
+        )
+        data = mujoco.MjData(model)
+        mujoco.mj_step(model, data)
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            name="mujoco:step_probe",
+            status="failed" if required else "skipped",
+            detail=f"could not step tiny MuJoCo model: {exc.__class__.__name__}: {exc}",
+            required=required,
+        )
+
+    return CheckResult(
+        name="mujoco:step_probe",
+        status="passed",
+        detail=f"stepped tiny MuJoCo model: nq={model.nq}, nv={model.nv}",
+        required=required,
+    )
+
+
 def run_checkpoint(
     config_path: Path,
+    strict_local_sim: bool,
     strict_sim_deps: bool,
+    probe_mujoco: bool,
     probe_libero_env: bool,
 ) -> CheckpointReport:
     start = perf_counter()
+    python_status = "passed" if sys.version_info >= MIN_PYTHON else "failed"
     results: list[CheckResult] = [
         CheckResult(
             name="python",
-            status="passed",
-            detail=f"running Python {platform.python_version()}",
+            status=python_status,
+            detail=(
+                f"running Python {platform.python_version()}, "
+                f"requires >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
+            ),
         ),
         _load_yaml_config(config_path),
     ]
 
     results.extend(
-        _import_check(module_name, detail, required=strict_sim_deps)
+        _import_check(
+            module_name,
+            detail,
+            required=strict_sim_deps or (strict_local_sim and module_name == "mujoco"),
+        )
         for module_name, detail in OPTIONAL_IMPORTS.items()
     )
+    results.append(_mujoco_probe(probe_mujoco, required=strict_local_sim))
+    results.append(_platform_check(strict_sim_deps))
     results.append(_libero_env_probe(probe_libero_env, required=strict_sim_deps))
 
     required_failures = [
@@ -177,6 +257,10 @@ def run_checkpoint(
         python=platform.python_version(),
         platform=platform.platform(),
         config=str(config_path),
+        strict_local_sim=strict_local_sim,
+        strict_sim_deps=strict_sim_deps,
+        probe_mujoco=probe_mujoco,
+        probe_libero_env=probe_libero_env,
         results=results,
     )
 
@@ -191,9 +275,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the LIBERO simulation config.",
     )
     parser.add_argument(
+        "--strict-local-sim",
+        action="store_true",
+        help="Fail if the Mac-local MuJoCo smoke path is not runnable.",
+    )
+    parser.add_argument(
         "--strict-sim-deps",
         action="store_true",
-        help="Fail if MuJoCo, robosuite, LIBERO, or LeRobot are not importable.",
+        help="Fail if the full LIBERO/LeRobot simulation dependency path is not runnable.",
+    )
+    parser.add_argument(
+        "--probe-mujoco",
+        action="store_true",
+        help="Instantiate and step a tiny MuJoCo model.",
     )
     parser.add_argument(
         "--probe-libero-env",
@@ -204,6 +298,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Print machine-readable JSON.",
+    )
+    parser.add_argument(
+        "--output",
+        help="Optional path to write the JSON checkpoint report.",
     )
     return parser
 
@@ -228,7 +326,9 @@ def main() -> None:
     args = build_parser().parse_args()
     report = run_checkpoint(
         config_path=Path(args.config),
+        strict_local_sim=args.strict_local_sim,
         strict_sim_deps=args.strict_sim_deps,
+        probe_mujoco=args.probe_mujoco,
         probe_libero_env=args.probe_libero_env,
     )
 
@@ -236,6 +336,11 @@ def main() -> None:
         print(json.dumps(asdict(report), indent=2, sort_keys=True))
     else:
         _print_human(report)
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(asdict(report), indent=2, sort_keys=True), encoding="utf-8")
 
     if report.status != "passed":
         sys.exit(1)

@@ -8,7 +8,7 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 
 - Project plan: `docs/agentic_physical_ai_plan.md`
 - Simulation config: `configs/sim/libero.yaml`
-- Checkpoint smoke command: `python3 -B -m physical_ai_agent.checkpoints.checkpoint_01`
+- Checkpoint smoke command: `sh scripts/checkpoint_01.sh`
 
 ## Outputs
 
@@ -49,26 +49,30 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 
 ## Required Checkpoint 01 Verification
 
-Run both commands before completing checkpoint 01:
+Run these commands before completing checkpoint 01:
 
 ```bash
-PYTHONPATH=src python3 -B -m physical_ai_agent.checkpoints.checkpoint_01
-PYTHONPATH=src python3 -B -m physical_ai_agent.checkpoints.checkpoint_01 --strict-sim-deps --probe-libero-env
+sh scripts/bootstrap_checkpoint_01.sh
+sh scripts/checkpoint_01.sh
+sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco
+sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env
 ```
 
-The first command must pass in the lightweight scaffold environment. The second command is the real simulation readiness gate; if MuJoCo, LIBERO, robosuite, or LeRobot are not installed yet, report it as the next environment blocker instead of treating the checkpoint as fully simulation-ready.
+The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightweight command must pass in the scaffold environment and writes evidence to `_workspace/checkpoints/checkpoint_01_smoke.json`. The Mac-local simulation command writes evidence to `_workspace/checkpoints/checkpoint_01_local_sim.json`; it must pass before claiming checkpoint 01 works on the target Mac. The full LIBERO/LeRobot command writes evidence to `_workspace/checkpoints/checkpoint_01_libero_strict.json`; current LeRobot documentation says LIBERO requires Linux, so on macOS this gate should be reported as a future Linux/cloud blocker rather than the Mac-local checkpoint.
 
 ## Failure Policy
 
 - retry policy: fix local code/config failures and rerun verification once
-- partial completion policy: scaffold smoke can pass while strict simulation smoke is blocked by missing external dependencies
-- conflict resolution policy: the strict simulation smoke is authoritative for claiming LIBERO is executable
+- partial completion policy: scaffold smoke can pass while Mac-local MuJoCo smoke is blocked by missing external dependencies
+- conflict resolution policy: the Mac-local MuJoCo smoke is authoritative for claiming checkpoint 01 works on the target Mac; the LIBERO strict gate is authoritative only for claiming full LIBERO execution
 - escalation trigger: request permission before installing or downloading simulation dependencies
 
 ## Validation Checks
 
-- `PYTHONPATH=src python3 -B -m physical_ai_agent.checkpoints.checkpoint_01`
-- `PYTHONPATH=src python3 -B -m physical_ai_agent.checkpoints.checkpoint_01 --strict-sim-deps --probe-libero-env`
-- `PYTHONPATH=src python3 -B -m unittest discover -s tests`
+- `sh scripts/bootstrap_checkpoint_01.sh`
+- `sh scripts/checkpoint_01.sh`
+- `sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco`
+- `sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env`
+- `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
 - `python3 -B -c "import ast, pathlib; ..."` as a no-dependency fallback syntax check

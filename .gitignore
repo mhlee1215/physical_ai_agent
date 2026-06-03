@@ -41,6 +41,7 @@ outputs/
 runs/
 wandb/
 mlruns/
+_workspace/
 
 # Media generated during simulation/evaluation
 *.mp4
