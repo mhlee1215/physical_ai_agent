@@ -588,12 +588,17 @@ robot.stop()
 - [x] 6. Save metrics, traces, and frames.
 - [x] 7. Add policy adapter/action-chunk interface.
 - [x] 8. Add SmolVLA adapter readiness probe or document local blocker.
-- [ ] 9. Add rule-based planner.
-- [ ] 10. Add simulation-state verifier.
-- [ ] 11. Add retry loop.
-- [ ] 12. Produce first comparison report.
-- [ ] 13. Add Web UI.
-- [ ] 14. Add local VLM verifier.
+- [x] 9. Add SO101-Nexus Mac-local robot-arm simulation gate.
+- [x] 10. Add SO101 rollout trace and visualization artifacts.
+- [x] 11. Add LeRobot-compatible SO101 environment factory.
+- [x] 12. Add SmolVLA dry input mapping and dry rollout visualization.
+- [x] 13. Add SO101 demo dataset generation.
+- [ ] 14. Add rule-based planner.
+- [ ] 15. Add simulation-state verifier.
+- [ ] 16. Add retry loop.
+- [ ] 17. Produce first comparison report.
+- [ ] 18. Add Web UI.
+- [ ] 19. Add local VLM verifier.
 
 ## Minimal MVP Checklist
 
@@ -604,6 +609,10 @@ robot.stop()
 - [x] Baseline success rate is computed.
 - [x] Policy adapter/action-chunk contract can be evaluated.
 - [x] SmolVLA readiness probe runs and documents blockers.
+- [x] SO101-Nexus robot-arm simulation runs on the Mac.
+- [x] SO101 simulation rollout visualization is saved.
+- [x] SmolVLA dry action chunk can be stepped through SO101-Nexus and visualized.
+- [x] SO101 demo data is generated in a LeRobot-like intermediate format.
 - [ ] Rule-based planner creates subgoals.
 - [ ] Simulation-state verifier judges success or failure.
 - [ ] Retry once after failed subgoal works.

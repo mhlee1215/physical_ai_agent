@@ -26,6 +26,9 @@ sim = [
   "numpy>=1.26",
   "opencv-python>=4.9",
 ]
+so101 = [
+  "so101-nexus-mujoco>=0.3.12,<0.4",
+]
 web = [
   "fastapi>=0.111",
   "uvicorn>=0.30",
@@ -44,6 +47,7 @@ physical-ai-agent = "physical_ai_agent.cli:main"
 pai-checkpoint-01 = "physical_ai_agent.checkpoints.checkpoint_01:main"
 pai-checkpoint-02-04 = "physical_ai_agent.checkpoints.checkpoint_02_04:main"
 pai-checkpoint-05-06 = "physical_ai_agent.checkpoints.checkpoint_05_06:main"
+pai-checkpoint-07-13 = "physical_ai_agent.checkpoints.checkpoint_07_13:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

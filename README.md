@@ -104,3 +104,24 @@ sh scripts/checkpoint_05_06.sh --require-real-smolvla --output-dir _workspace/ch
 ```
 
 The bootstrap command installs `lerobot[smolvla]` into `.venv`. Artifacts are written to `_workspace/checkpoints/checkpoint_05_06/`, including `checkpoint_report.json` and `smolvla_blocker.md`. The probe passes when the adapter contract works and either the LeRobot SmolVLA import path is ready or the missing dependency/model blocker is explicitly documented. Use `--require-real-smolvla` when the LeRobot SmolVLA import path must be available. This does not download model weights or prove task-quality inference yet.
+
+## Checkpoints 07-13
+
+Run SO101-Nexus MuJoCo locally, visualize the rollout, validate a LeRobot-compatible environment surface, and produce a SmolVLA dry-run rollout plus demo dataset:
+
+```bash
+sh scripts/bootstrap_checkpoint_07_13.sh
+sh scripts/checkpoint_07_13.sh
+```
+
+Artifacts are written to `_workspace/checkpoints/checkpoint_07_13/`, including `rollout/so101_rollout.jsonl`, `rollout/so101_rollout.png`, `rollout/so101_rollout.gif`, `smolvla_dry_rollout/smolvla_dry_rollout.jsonl`, `smolvla_dry_rollout/smolvla_dry_rollout.png`, `smolvla_dry_rollout/smolvla_dry_rollout.gif`, `demo_dataset/episodes.jsonl`, `demo_dataset/metadata.json`, and `checkpoint_report.json`.
+
+Current CP07-13 status:
+
+- CP07 SO101-Nexus reset/step: implemented and verified by the checkpoint command.
+- CP08 SO101 rollout trace and visualization: implemented with trace-derived PNG/GIF output.
+- CP09 LeRobot EnvHub-compatible `make_env`: implemented as `physical_ai_agent.envhub.so101_env.make_env`.
+- CP10 SO101 action-chunk policy: implemented as a center-action chunk policy.
+- CP11 SmolVLA dry input mapping: implemented without downloading model weights.
+- CP12 SmolVLA dry rollout visualization: implemented by feeding the dry chunk through SO101-Nexus.
+- CP13 demo dataset generation: implemented as a LeRobot-like JSONL intermediate artifact.

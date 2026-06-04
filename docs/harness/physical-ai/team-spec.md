@@ -77,6 +77,19 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 - `sh scripts/bootstrap_checkpoint_05_06.sh`
 - `sh scripts/checkpoint_05_06.sh`
 - `sh scripts/checkpoint_05_06.sh --require-real-smolvla --output-dir _workspace/checkpoints/checkpoint_05_06_require_real`
+- `sh scripts/bootstrap_checkpoint_07_13.sh`
+- `sh scripts/checkpoint_07_13.sh`
 - `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
 - `python3 -B -c "import ast, pathlib; ..."` as a no-dependency fallback syntax check
+
+## Required Checkpoint 07-13 Verification
+
+Run these commands before completing checkpoints 07-13:
+
+```bash
+sh scripts/bootstrap_checkpoint_07_13.sh
+sh scripts/checkpoint_07_13.sh
+```
+
+The bootstrap command installs SO101-Nexus MuJoCo into `.venv`. The checkpoint command runs a real SO101-Nexus reset/step, saves a deterministic rollout trace, writes schematic PNG/GIF visualizations, verifies a LeRobot EnvHub-compatible `make_env` surface, executes an SO101 action-chunk policy, validates the SO101-to-SmolVLA dry input mapping, runs a dry SmolVLA action chunk through the simulator, and writes a LeRobot-like JSONL demo dataset. Native MuJoCo RGB rendering can fail on headless macOS, so CP08/CP12 visualization is intentionally trace-derived while the physics steps still execute in SO101-Nexus.
