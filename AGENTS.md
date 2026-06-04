@@ -35,3 +35,5 @@
   `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`
 - Live SO101 MuJoCo viewer:
   `sh scripts/view_so101_live.sh`
+- Checkpoint 16 SO101 camera input preview:
+  `sh scripts/checkpoint_16.sh`

@@ -166,3 +166,13 @@ sh scripts/view_so101_live.sh --max-steps 300 --fps 30
 ```
 
 The live viewer uses a deterministic smooth action policy and is meant for visual inspection. GUI windows may not open from headless agent sessions; use the CP14/15 GIF artifacts when running in a headless context.
+
+## Checkpoint 16
+
+Capture and preview the actual inputs available to policies before adding planner or verifier logic:
+
+```bash
+sh scripts/checkpoint_16.sh
+```
+
+Artifacts are written to `_workspace/checkpoints/checkpoint_16/`, including `so101_inputs/input_manifest.json`, `so101_inputs/input_preview.png`, `so101_inputs/input_preview.gif`, and per-step camera frames under `so101_inputs/frames/`. Current SO101-Nexus environments expose one camera input, `wrist_cam`; observation vectors are shape 6 for reach/move, 18 for pick-lift, and 24 for pick-and-place.
