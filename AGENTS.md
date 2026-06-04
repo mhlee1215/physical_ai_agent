@@ -31,3 +31,5 @@
   `sh scripts/checkpoint_05_06.sh`
 - Bootstrap CP05-06 SmolVLA dependencies:
   `sh scripts/bootstrap_checkpoint_05_06.sh`
+- Checkpoint 14-15 3D render and real SmolVLA rollout:
+  `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`

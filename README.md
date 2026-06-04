@@ -125,3 +125,20 @@ Current CP07-13 status:
 - CP11 SmolVLA dry input mapping: implemented without downloading model weights.
 - CP12 SmolVLA dry rollout visualization: implemented by feeding the dry chunk through SO101-Nexus.
 - CP13 demo dataset generation: implemented as a LeRobot-like JSONL intermediate artifact.
+
+## Checkpoints 14-15
+
+Render the SO101-Nexus MuJoCo scene as real 3D RGB frames, then load LeRobot's pretrained SmolVLA and use its action output to step SO101-Nexus:
+
+```bash
+sh scripts/bootstrap_checkpoint_14_15.sh
+sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla
+```
+
+The strict command may download `lerobot/smolvla_base` from Hugging Face on first run. Artifacts are written to `_workspace/checkpoints/checkpoint_14_15/`, including `render_3d/so101_3d_render.png`, `render_3d/so101_3d_render.gif`, `smolvla_real/smolvla_real_rollout.jsonl`, `smolvla_real/smolvla_real_rollout_3d.png`, `smolvla_real/smolvla_real_rollout_3d.gif`, and `checkpoint_report.json`.
+
+Current CP14-15 status:
+
+- CP14 SO101 3D MuJoCo render: implemented and verified with 640x480 PNG/GIF output.
+- CP15 pretrained SmolVLA inference rollout: implemented and verified by loading `SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")`, executing `select_action()`, stepping SO101-Nexus for six steps, and saving a 3D rollout PNG/GIF.
+- The current SmolVLA observation shim uses SO101 state plus zero image tensors and synthetic language tokens, so it proves execution wiring rather than task-quality policy behavior.

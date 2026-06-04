@@ -593,12 +593,14 @@ robot.stop()
 - [x] 11. Add LeRobot-compatible SO101 environment factory.
 - [x] 12. Add SmolVLA dry input mapping and dry rollout visualization.
 - [x] 13. Add SO101 demo dataset generation.
-- [ ] 14. Add rule-based planner.
-- [ ] 15. Add simulation-state verifier.
-- [ ] 16. Add retry loop.
-- [ ] 17. Produce first comparison report.
-- [ ] 18. Add Web UI.
-- [ ] 19. Add local VLM verifier.
+- [x] 14. Add SO101-Nexus 3D MuJoCo render output.
+- [x] 15. Add pretrained SmolVLA inference rollout through SO101-Nexus with 3D output.
+- [ ] 16. Add rule-based planner.
+- [ ] 17. Add simulation-state verifier.
+- [ ] 18. Add retry loop.
+- [ ] 19. Produce first comparison report.
+- [ ] 20. Add Web UI.
+- [ ] 21. Add local VLM verifier.
 
 ## Minimal MVP Checklist
 
@@ -613,6 +615,8 @@ robot.stop()
 - [x] SO101 simulation rollout visualization is saved.
 - [x] SmolVLA dry action chunk can be stepped through SO101-Nexus and visualized.
 - [x] SO101 demo data is generated in a LeRobot-like intermediate format.
+- [x] SO101-Nexus real 3D MuJoCo render PNG/GIF is saved.
+- [x] Pretrained SmolVLA can produce an action that steps SO101-Nexus and saves a 3D rollout.
 - [ ] Rule-based planner creates subgoals.
 - [ ] Simulation-state verifier judges success or failure.
 - [ ] Retry once after failed subgoal works.

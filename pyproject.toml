@@ -48,6 +48,7 @@ pai-checkpoint-01 = "physical_ai_agent.checkpoints.checkpoint_01:main"
 pai-checkpoint-02-04 = "physical_ai_agent.checkpoints.checkpoint_02_04:main"
 pai-checkpoint-05-06 = "physical_ai_agent.checkpoints.checkpoint_05_06:main"
 pai-checkpoint-07-13 = "physical_ai_agent.checkpoints.checkpoint_07_13:main"
+pai-checkpoint-14-15 = "physical_ai_agent.checkpoints.checkpoint_14_15:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
