@@ -92,3 +92,15 @@ Current CP02-04 status:
 - CP02 random policy episode: implemented and verified.
 - CP03 episode trace/frame/metrics artifacts: implemented and verified.
 - CP04 baseline evaluator metrics and summary: implemented and verified.
+
+## Checkpoints 05-06
+
+Create the policy adapter/action-chunk contract and probe SmolVLA readiness:
+
+```bash
+sh scripts/bootstrap_checkpoint_05_06.sh
+sh scripts/checkpoint_05_06.sh
+sh scripts/checkpoint_05_06.sh --require-real-smolvla --output-dir _workspace/checkpoints/checkpoint_05_06_require_real
+```
+
+The bootstrap command installs `lerobot[smolvla]` into `.venv`. Artifacts are written to `_workspace/checkpoints/checkpoint_05_06/`, including `checkpoint_report.json` and `smolvla_blocker.md`. The probe passes when the adapter contract works and either the LeRobot SmolVLA import path is ready or the missing dependency/model blocker is explicitly documented. Use `--require-real-smolvla` when the LeRobot SmolVLA import path must be available. This does not download model weights or prove task-quality inference yet.

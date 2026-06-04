@@ -74,6 +74,9 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 - `sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco`
 - `sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env`
 - `sh scripts/checkpoint_02_04.sh`
+- `sh scripts/bootstrap_checkpoint_05_06.sh`
+- `sh scripts/checkpoint_05_06.sh`
+- `sh scripts/checkpoint_05_06.sh --require-real-smolvla --output-dir _workspace/checkpoints/checkpoint_05_06_require_real`
 - `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
 - `python3 -B -c "import ast, pathlib; ..."` as a no-dependency fallback syntax check

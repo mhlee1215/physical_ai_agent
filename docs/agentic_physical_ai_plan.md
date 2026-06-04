@@ -586,8 +586,8 @@ robot.stop()
 - [x] 4. Add random policy baseline.
 - [x] 5. Add baseline evaluator.
 - [x] 6. Save metrics, traces, and frames.
-- [ ] 7. Add ACT adapter.
-- [ ] 8. Add SmolVLA adapter or document local blocker.
+- [x] 7. Add policy adapter/action-chunk interface.
+- [x] 8. Add SmolVLA adapter readiness probe or document local blocker.
 - [ ] 9. Add rule-based planner.
 - [ ] 10. Add simulation-state verifier.
 - [ ] 11. Add retry loop.
@@ -602,7 +602,8 @@ robot.stop()
 - [x] Episode frame is saved.
 - [x] Episode trace is saved.
 - [x] Baseline success rate is computed.
-- [ ] ACT or SmolVLA policy can be evaluated.
+- [x] Policy adapter/action-chunk contract can be evaluated.
+- [x] SmolVLA readiness probe runs and documents blockers.
 - [ ] Rule-based planner creates subgoals.
 - [ ] Simulation-state verifier judges success or failure.
 - [ ] Retry once after failed subgoal works.

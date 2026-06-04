@@ -1,5 +1,6 @@
 name: smolvla
-checkpoint: null
+checkpoint: lerobot/smolvla_base
+model_id: lerobot/smolvla_base
 device: auto
 action_chunk_size: 10
-
+require_real_inference: false
