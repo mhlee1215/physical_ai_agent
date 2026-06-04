@@ -186,3 +186,14 @@ sh scripts/checkpoint_17.sh
 ```
 
 Artifacts are written to `_workspace/checkpoints/checkpoint_17/`, including `so101_multi_inputs/input_manifest.json`, `so101_multi_inputs/input_preview.png`, `so101_multi_inputs/input_preview.gif`, and per-step `wrist_cam` plus `top_down` frames. `wrist_cam` is the SO101-Nexus named camera; `top_down` is a MuJoCo virtual camera rendered without editing the SO101 XML. The planned LeRobot feature keys are `observation.images.wrist_cam` and `observation.images.top_down`.
+
+## Checkpoints 18-19
+
+Capture the policy/debug visual-input split, then run pretrained SmolVLA with real SO101 camera frames instead of zero image tensors:
+
+```bash
+sh scripts/checkpoint_18.sh
+sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla
+```
+
+CP18 writes `wrist_cam` and `egocentric_cam` as policy inputs plus `top_down` as a debug input. CP19 maps those real frames into LeRobot's pretrained SmolVLA image feature keys: `observation.images.camera1 <- wrist_cam`, `observation.images.camera2 <- egocentric_cam`, and `observation.images.camera3 <- egocentric_cam` as a non-zero duplicate fallback. Artifacts are written under `_workspace/checkpoints/checkpoint_18/` and `_workspace/checkpoints/checkpoint_19/`.

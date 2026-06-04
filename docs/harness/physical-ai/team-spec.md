@@ -83,6 +83,8 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 - `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`
 - `sh scripts/checkpoint_16.sh`
 - `sh scripts/checkpoint_17.sh`
+- `sh scripts/checkpoint_18.sh`
+- `sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla`
 - `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
 - `python3 -B -c "import ast, pathlib; ..."` as a no-dependency fallback syntax check
@@ -128,3 +130,14 @@ sh scripts/checkpoint_17.sh
 ```
 
 The checkpoint command must save both `wrist_cam` and `top_down` RGB frames for each captured step, write a multi-input manifest, and save a preview PNG/GIF showing both visual inputs alongside the state/action summary. The manifest should record planned LeRobot image feature keys for the later real SmolVLA image-input rollout.
+
+## Required Checkpoint 18-19 Verification
+
+Run these commands before completing checkpoints 18-19:
+
+```bash
+sh scripts/checkpoint_18.sh
+sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla
+```
+
+Checkpoint 18 must record `wrist_cam` and `egocentric_cam` as policy inputs and `top_down` as a debug input. Checkpoint 19 must load pretrained `lerobot/smolvla_base`, feed real SO101 RGB frames into SmolVLA image features without zero image tensors, step SO101-Nexus with the resulting action, and save input preview, rollout trace, and 3D rollout PNG/GIF artifacts.

@@ -26,6 +26,11 @@ class SmolVLAInferenceResult:
     frame_path: str
     gif_path: str
     rollout_steps: int
+    input_manifest_path: str
+    input_preview_path: str
+    input_preview_gif_path: str
+    image_feature_mapping: dict[str, str]
+    used_real_camera_inputs: bool
 
 
 def run_real_smolvla_inference_probe(
@@ -36,6 +41,7 @@ def run_real_smolvla_inference_probe(
     rollout_steps: int = 6,
     model_id: str = DEFAULT_SMOLVLA_MODEL_ID,
     local_files_only: bool = True,
+    use_real_camera_inputs: bool = False,
 ) -> SmolVLAInferenceResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "smolvla_real_inference_report.json"
@@ -43,20 +49,34 @@ def run_real_smolvla_inference_probe(
     trace_path = output_dir / "smolvla_real_rollout.jsonl"
     frame_path = output_dir / "smolvla_real_rollout_3d.png"
     gif_path = output_dir / "smolvla_real_rollout_3d.gif"
-    _unlink_if_exists(blocker_path, trace_path, frame_path, gif_path)
+    input_manifest_path = output_dir / "smolvla_real_input_manifest.json"
+    input_preview_path = output_dir / "smolvla_real_input_preview.png"
+    input_preview_gif_path = output_dir / "smolvla_real_input_preview.gif"
+    _unlink_if_exists(
+        blocker_path,
+        trace_path,
+        frame_path,
+        gif_path,
+        input_manifest_path,
+        input_preview_path,
+        input_preview_gif_path,
+    )
     started_at = perf_counter()
     action: list[float] = []
     action_shape: list[int] = []
     blocker = None
     records: list[SO101Step] = []
+    image_feature_mapping: dict[str, str] = {}
 
     try:
         policy = _load_pretrained_policy(model_id=model_id, local_files_only=local_files_only)
-        records, frames = _run_policy_rollout(
+        records, frames, image_feature_mapping = _run_policy_rollout(
             policy=policy,
             env_id=env_id,
             action_dim=action_dim,
             rollout_steps=rollout_steps,
+            output_dir=output_dir,
+            use_real_camera_inputs=use_real_camera_inputs,
         )
         if not records:
             raise RuntimeError("SmolVLA rollout produced no SO101 steps")
@@ -89,6 +109,11 @@ def run_real_smolvla_inference_probe(
         frame_path=str(frame_path),
         gif_path=str(gif_path),
         rollout_steps=len(records),
+        input_manifest_path=str(input_manifest_path),
+        input_preview_path=str(input_preview_path),
+        input_preview_gif_path=str(input_preview_gif_path),
+        image_feature_mapping=image_feature_mapping,
+        used_real_camera_inputs=use_real_camera_inputs,
     )
     report_path.write_text(json.dumps(asdict(result), indent=2, sort_keys=True), encoding="utf-8")
     return result
@@ -99,19 +124,59 @@ def _run_policy_rollout(
     env_id: str,
     action_dim: int,
     rollout_steps: int,
-) -> tuple[list[SO101Step], list[Any]]:
+    output_dir: Path,
+    use_real_camera_inputs: bool,
+) -> tuple[list[SO101Step], list[Any], dict[str, str]]:
+    import json
+
+    from physical_ai_agent.sim.so101_camera_input import SO101InputFrame, _make_camera, _write_input_preview
+
     env = SO101NexusEnv(env_id=env_id, render_mode=None)
     renderer = None
+    camera_renderers: dict[str, Any] = {}
     frames: list[Any] = []
     records: list[SO101Step] = []
+    input_records: list[SO101InputFrame] = []
+    image_feature_mapping: dict[str, str] = {}
+    input_frames_dir = output_dir / "input_frames"
+    input_frames_dir.mkdir(parents=True, exist_ok=True)
+    _clear_dir(input_frames_dir)
     try:
         obs, _info = env.reset(seed=3)
         renderer = _make_renderer_or_none(env)
+        if use_real_camera_inputs:
+            import mujoco
+
+            camera_renderers = {
+                name: mujoco.Renderer(env.env.unwrapped.model, height=480, width=640)
+                for name in ("wrist_cam", "egocentric_cam", "top_down")
+            }
         for step in range(rollout_steps):
-            batch = _build_batch_for_policy(policy, obs)
+            camera_pixels = (
+                _render_policy_cameras(env, camera_renderers)
+                if use_real_camera_inputs
+                else {}
+            )
+            batch, image_feature_mapping = _build_batch_for_policy(policy, obs, camera_pixels)
             raw_action = policy.select_action(batch)
             action = _clip_action(_tensor_to_float_list(raw_action), action_dim)
+            camera_paths: dict[str, str] = {}
+            if camera_pixels:
+                for camera_name, pixels in camera_pixels.items():
+                    camera_path = input_frames_dir / f"step_{step:03d}_{camera_name}.png"
+                    _write_image(pixels, camera_path)
+                    camera_paths[camera_name] = str(camera_path)
             obs, reward, terminated, truncated, info = env.step(action)
+            if camera_paths:
+                input_records.append(
+                    SO101InputFrame(
+                        step=step,
+                        observation=obs,
+                        action=action,
+                        reward=reward,
+                        camera_frames=camera_paths,
+                    )
+                )
             records.append(
                 SO101Step(
                     step=step,
@@ -131,8 +196,31 @@ def _run_policy_rollout(
     finally:
         if renderer is not None:
             renderer.close()
+        for camera_renderer in camera_renderers.values():
+            camera_renderer.close()
         env.close()
-    return records, frames
+    if input_records:
+        input_manifest_path = output_dir / "smolvla_real_input_manifest.json"
+        input_manifest_path.write_text(
+            json.dumps(
+                {
+                    "env_id": env_id,
+                    "policy_input_names": ["wrist_cam", "egocentric_cam"],
+                    "debug_input_names": ["top_down"],
+                    "image_feature_mapping": image_feature_mapping,
+                    "frames": [asdict(record) for record in input_records],
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        _write_input_preview(
+            input_records,
+            output_dir / "smolvla_real_input_preview.png",
+            output_dir / "smolvla_real_input_preview.gif",
+        )
+    return records, frames, image_feature_mapping
 
 
 def _make_renderer_or_none(env: SO101NexusEnv):
@@ -155,7 +243,21 @@ def _load_pretrained_policy(model_id: str, local_files_only: bool):
     )
 
 
-def _build_batch_for_policy(policy: Any, observation: list[float]) -> dict[str, Any]:
+def _render_policy_cameras(env: SO101NexusEnv, renderers: dict[str, Any]) -> dict[str, Any]:
+    from physical_ai_agent.sim.so101_camera_input import _make_camera
+
+    camera_pixels = {}
+    for camera_name, renderer in renderers.items():
+        renderer.update_scene(env.env.unwrapped.data, camera=_make_camera(env.env, camera_name))
+        camera_pixels[camera_name] = renderer.render()
+    return camera_pixels
+
+
+def _build_batch_for_policy(
+    policy: Any,
+    observation: list[float],
+    camera_pixels: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, str]]:
     import torch
     from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
 
@@ -169,9 +271,39 @@ def _build_batch_for_policy(policy: Any, observation: list[float]) -> dict[str, 
         OBS_LANGUAGE_TOKENS: torch.ones(1, 4, dtype=torch.long),
         OBS_LANGUAGE_ATTENTION_MASK: torch.ones(1, 4, dtype=torch.bool),
     }
-    for key, feature in config.image_features.items():
-        batch[key] = torch.zeros(1, *feature.shape, dtype=torch.float32)
-    return {key: value.to(config.device) if hasattr(value, "to") else value for key, value in batch.items()}
+    image_feature_mapping = {}
+    for index, (key, feature) in enumerate(config.image_features.items()):
+        source_name = _source_camera_name(index, camera_pixels or {})
+        image_feature_mapping[key] = source_name
+        if camera_pixels and source_name in camera_pixels:
+            batch[key] = _pixels_to_tensor(camera_pixels[source_name], feature.shape)
+        else:
+            batch[key] = torch.zeros(1, *feature.shape, dtype=torch.float32)
+    return (
+        {key: value.to(config.device) if hasattr(value, "to") else value for key, value in batch.items()},
+        image_feature_mapping,
+    )
+
+
+def _source_camera_name(index: int, camera_pixels: dict[str, Any]) -> str:
+    preferred = ["wrist_cam", "egocentric_cam", "egocentric_cam"]
+    if index < len(preferred):
+        return preferred[index]
+    return next(iter(camera_pixels), "zero")
+
+
+def _pixels_to_tensor(pixels: Any, feature_shape: tuple[int, ...]):
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    channels, height, width = feature_shape
+    image = Image.fromarray(pixels).convert("RGB").resize((width, height))
+    array = np.asarray(image, dtype=np.float32) / 255.0
+    tensor = torch.from_numpy(array).permute(2, 0, 1).unsqueeze(0)
+    if channels != 3:
+        raise ValueError(f"Expected RGB image feature with 3 channels, got {feature_shape}")
+    return tensor
 
 
 def _write_trace(records: list[SO101Step], path: Path) -> None:
@@ -235,3 +367,15 @@ def _unlink_if_exists(*paths: Path) -> None:
             path.unlink()
         except FileNotFoundError:
             pass
+
+
+def _clear_dir(path: Path) -> None:
+    for child in path.iterdir():
+        if child.is_file():
+            child.unlink()
+
+
+def _write_image(pixels: Any, path: Path) -> None:
+    from PIL import Image
+
+    Image.fromarray(pixels).save(path)

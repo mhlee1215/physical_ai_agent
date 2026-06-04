@@ -39,3 +39,7 @@
   `sh scripts/checkpoint_16.sh`
 - Checkpoint 17 SO101 multi-camera input preview:
   `sh scripts/checkpoint_17.sh`
+- Checkpoint 18 SO101 egocentric policy input preview:
+  `sh scripts/checkpoint_18.sh`
+- Checkpoint 19 SmolVLA real camera input rollout:
+  `sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla`

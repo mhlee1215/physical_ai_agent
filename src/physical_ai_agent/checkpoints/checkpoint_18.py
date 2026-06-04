@@ -12,7 +12,7 @@ from physical_ai_agent.sim.so101_nexus_env import DEFAULT_SO101_ENV_ID
 
 
 @dataclass(frozen=True)
-class Checkpoint17Report:
+class Checkpoint18Report:
     checkpoint: str
     status: str
     python: str
@@ -27,26 +27,26 @@ def run_checkpoint(
     output_dir: Path,
     env_id: str = DEFAULT_SO101_ENV_ID,
     steps: int = 8,
-) -> Checkpoint17Report:
+) -> Checkpoint18Report:
     output_dir.mkdir(parents=True, exist_ok=True)
     capture = capture_so101_inputs(
-        output_dir=output_dir / "so101_multi_inputs",
+        output_dir=output_dir / "so101_policy_inputs",
         env_id=env_id,
         steps=steps,
-        camera_names=("wrist_cam", "top_down"),
+        camera_names=("wrist_cam", "egocentric_cam", "top_down"),
     )
     first_frame = capture.frames[0] if capture.frames else None
     first_camera_frames = first_frame.camera_frames if first_frame is not None else {}
     checks = {
-        "cp17_wrist_cam_saved": "wrist_cam" in first_camera_frames
+        "cp18_wrist_policy_input_saved": "wrist_cam" in first_camera_frames
         and Path(first_camera_frames["wrist_cam"]).exists(),
-        "cp17_top_down_saved": "top_down" in first_camera_frames
+        "cp18_egocentric_policy_input_saved": "egocentric_cam" in first_camera_frames
+        and Path(first_camera_frames["egocentric_cam"]).exists(),
+        "cp18_top_down_debug_input_saved": "top_down" in first_camera_frames
         and Path(first_camera_frames["top_down"]).exists(),
-        "cp17_two_visual_inputs_per_step": bool(capture.frames)
-        and all({"wrist_cam", "top_down"}.issubset(frame.camera_frames) for frame in capture.frames),
-        "cp17_multi_input_manifest_saved": Path(capture.manifest_path).exists()
-        and Path(capture.manifest_path).stat().st_size > 0,
-        "cp17_multi_input_preview_saved": Path(capture.preview_path).exists()
+        "cp18_policy_debug_roles_recorded": capture.policy_input_names == ["wrist_cam", "egocentric_cam"]
+        and capture.debug_input_names == ["top_down"],
+        "cp18_preview_saved": Path(capture.preview_path).exists()
         and Path(capture.preview_gif_path).exists(),
     }
     artifacts = {
@@ -61,14 +61,12 @@ def run_checkpoint(
         "env_id": env_id,
         "frames": len(capture.frames),
         "visual_input_names": sorted(first_camera_frames),
-        "camera_specs": [asdict(spec) for spec in capture.camera_specs],
-        "lerobot_feature_keys": [
-            "observation.images.wrist_cam",
-            "observation.images.top_down",
-        ],
+        "policy_input_names": capture.policy_input_names,
+        "debug_input_names": capture.debug_input_names,
+        "lerobot_policy_feature_keys": capture.lerobot_policy_feature_keys,
     }
-    report = Checkpoint17Report(
-        checkpoint="checkpoint_17_so101_multi_camera_input",
+    report = Checkpoint18Report(
+        checkpoint="checkpoint_18_so101_egocentric_policy_inputs",
         status="passed" if all(checks.values()) else "failed",
         python=platform.python_version(),
         platform=platform.platform(),
@@ -85,8 +83,8 @@ def run_checkpoint(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Checkpoint 17 SO101 multi-camera input capture.")
-    parser.add_argument("--output-dir", default="_workspace/checkpoints/checkpoint_17")
+    parser = argparse.ArgumentParser(description="Checkpoint 18 SO101 egocentric policy input capture.")
+    parser.add_argument("--output-dir", default="_workspace/checkpoints/checkpoint_18")
     parser.add_argument("--env-id", default=DEFAULT_SO101_ENV_ID)
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--json", action="store_true")
@@ -106,8 +104,8 @@ def main() -> None:
         print(
             "metrics="
             f"env:{report.metrics['env_id']} "
-            f"frames:{report.metrics['frames']} "
-            f"visual_inputs:{','.join(report.metrics['visual_input_names'])}"
+            f"policy_inputs:{','.join(report.metrics['policy_input_names'])} "
+            f"debug_inputs:{','.join(report.metrics['debug_input_names'])}"
         )
     if report.status != "passed":
         sys.exit(1)

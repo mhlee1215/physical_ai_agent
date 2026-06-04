@@ -31,6 +31,9 @@ class SO101InputCapture:
     env_id: str
     camera_specs: list[SO101CameraSpec]
     frames: list[SO101InputFrame]
+    policy_input_names: list[str]
+    debug_input_names: list[str]
+    lerobot_policy_feature_keys: list[str]
     manifest_path: str
     preview_path: str
     preview_gif_path: str
@@ -43,7 +46,9 @@ DEFAULT_SO101_ENV_IDS = (
     "MuJoCoPickAndPlace-v1",
 )
 
-DEFAULT_VIRTUAL_CAMERA_NAMES = ("top_down",)
+POLICY_CAMERA_NAMES = ("wrist_cam", "egocentric_cam")
+DEBUG_CAMERA_NAMES = ("top_down",)
+DEFAULT_VIRTUAL_CAMERA_NAMES = ("egocentric_cam", "top_down")
 
 
 def inspect_so101_camera_specs(env_ids: tuple[str, ...] = DEFAULT_SO101_ENV_IDS) -> list[SO101CameraSpec]:
@@ -78,6 +83,7 @@ def capture_so101_inputs(
     width: int = 640,
     height: int = 480,
     include_virtual_cameras: bool = False,
+    camera_names: tuple[str, ...] | None = None,
 ) -> SO101InputCapture:
     import gymnasium as gym
     import mujoco
@@ -94,9 +100,12 @@ def capture_so101_inputs(
     records: list[SO101InputFrame] = []
     try:
         obs, _info = env.reset(seed=seed)
-        camera_names = [env.unwrapped.model.camera(index).name for index in range(env.unwrapped.model.ncam)]
-        input_names = camera_names[:]
-        if include_virtual_cameras:
+        named_camera_names = [
+            env.unwrapped.model.camera(index).name
+            for index in range(env.unwrapped.model.ncam)
+        ]
+        input_names = list(camera_names) if camera_names is not None else named_camera_names[:]
+        if include_virtual_cameras and camera_names is None:
             input_names.extend(DEFAULT_VIRTUAL_CAMERA_NAMES)
         renderers = {name: mujoco.Renderer(env.unwrapped.model, height=height, width=width) for name in input_names}
         for step in range(steps):
@@ -133,6 +142,13 @@ def capture_so101_inputs(
         env_id=env_id,
         camera_specs=specs,
         frames=records,
+        policy_input_names=[name for name in POLICY_CAMERA_NAMES if records and name in records[0].camera_frames],
+        debug_input_names=[name for name in DEBUG_CAMERA_NAMES if records and name in records[0].camera_frames],
+        lerobot_policy_feature_keys=[
+            f"observation.images.{name}"
+            for name in POLICY_CAMERA_NAMES
+            if records and name in records[0].camera_frames
+        ],
         manifest_path=str(manifest_path),
         preview_path=str(preview_path),
         preview_gif_path=str(preview_gif_path),
@@ -149,14 +165,14 @@ def _write_input_preview(records: list[SO101InputFrame], preview_path: Path, gif
     for record in records:
         if not record.camera_frames:
             continue
-        camera_names = sorted(record.camera_frames)
+        camera_names = _ordered_camera_names(record.camera_frames)
         canvas = Image.new("RGB", (960, 520), (245, 245, 240))
         draw = ImageDraw.Draw(canvas)
-        for index, camera_name in enumerate(camera_names[:2]):
-            camera_image = Image.open(record.camera_frames[camera_name]).convert("RGB").resize((420, 315))
-            x = 0 if index == 0 else 420
+        for index, camera_name in enumerate(camera_names[:3]):
+            camera_image = Image.open(record.camera_frames[camera_name]).convert("RGB").resize((320, 240))
+            x = index * 320
             canvas.paste(camera_image, (x, 0))
-            draw.rectangle((x, 0, x + 419, 24), fill=(245, 245, 240))
+            draw.rectangle((x, 0, x + 319, 24), fill=(245, 245, 240))
             draw.text((x + 10, 6), camera_name, fill=(25, 25, 25))
         draw.text((20, 344), f"step {record.step:03d}", fill=(25, 25, 25))
         draw.text((20, 370), f"visual inputs: {', '.join(camera_names)}", fill=(65, 65, 65))
@@ -190,19 +206,43 @@ def _write_image(pixels: Any, path: Path) -> None:
     Image.fromarray(pixels).save(path)
 
 
+def _ordered_camera_names(camera_frames: dict[str, str]) -> list[str]:
+    preferred = ["wrist_cam", "egocentric_cam", "top_down"]
+    ordered = [name for name in preferred if name in camera_frames]
+    ordered.extend(sorted(name for name in camera_frames if name not in set(preferred)))
+    return ordered
+
+
 def _make_camera(env: Any, camera_name: str) -> Any:
-    if camera_name != "top_down":
+    if camera_name not in {"egocentric_cam", "top_down"}:
         return camera_name
 
     import mujoco
 
     camera = mujoco.MjvCamera()
     camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-    camera.lookat[:] = _top_down_lookat(env)
-    camera.distance = 0.65
-    camera.azimuth = 90
-    camera.elevation = -90
+    if camera_name == "egocentric_cam":
+        camera.lookat[:] = _egocentric_lookat(env)
+        camera.distance = 0.45
+        camera.azimuth = 45
+        camera.elevation = -22
+    else:
+        camera.lookat[:] = _top_down_lookat(env)
+        camera.distance = 0.65
+        camera.azimuth = 90
+        camera.elevation = -90
     return camera
+
+
+def _egocentric_lookat(env: Any) -> list[float]:
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    names = {model.body(index).name: index for index in range(model.nbody)}
+    candidates = [names[name] for name in ("target", "cube", "gripper") if name in names]
+    if candidates:
+        points = [data.xpos[index] for index in candidates]
+        return [float(sum(point[axis] for point in points) / len(points)) for axis in range(3)]
+    return [0.18, -0.30, 0.12]
 
 
 def _top_down_lookat(env: Any) -> list[float]:
