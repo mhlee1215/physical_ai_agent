@@ -37,3 +37,5 @@
   `sh scripts/view_so101_live.sh`
 - Checkpoint 16 SO101 camera input preview:
   `sh scripts/checkpoint_16.sh`
+- Checkpoint 17 SO101 multi-camera input preview:
+  `sh scripts/checkpoint_17.sh`

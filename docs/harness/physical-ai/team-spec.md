@@ -82,6 +82,7 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 - `sh scripts/bootstrap_checkpoint_14_15.sh`
 - `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`
 - `sh scripts/checkpoint_16.sh`
+- `sh scripts/checkpoint_17.sh`
 - `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
 - `python3 -B -c "import ast, pathlib; ..."` as a no-dependency fallback syntax check
@@ -117,3 +118,13 @@ sh scripts/checkpoint_16.sh
 ```
 
 The checkpoint command must list available SO101 camera inputs, capture real MuJoCo camera RGB frames, save the state/action/camera input manifest, and write a preview PNG/GIF showing what the policy input would contain. This checkpoint must pass before changing SmolVLA rollout code to depend on visual input.
+
+## Required Checkpoint 17 Verification
+
+Run this command before completing checkpoint 17:
+
+```bash
+sh scripts/checkpoint_17.sh
+```
+
+The checkpoint command must save both `wrist_cam` and `top_down` RGB frames for each captured step, write a multi-input manifest, and save a preview PNG/GIF showing both visual inputs alongside the state/action summary. The manifest should record planned LeRobot image feature keys for the later real SmolVLA image-input rollout.

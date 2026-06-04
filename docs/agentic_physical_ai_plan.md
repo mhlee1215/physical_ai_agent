@@ -596,13 +596,14 @@ robot.stop()
 - [x] 14. Add SO101-Nexus 3D MuJoCo render output.
 - [x] 15. Add pretrained SmolVLA inference rollout through SO101-Nexus with 3D output.
 - [x] 16. Add SO101 camera input capture and preview.
-- [ ] 17. Feed real SO101 camera input into SmolVLA rollout.
-- [ ] 18. Add rule-based planner.
-- [ ] 19. Add simulation-state verifier.
-- [ ] 20. Add retry loop.
-- [ ] 21. Produce first comparison report.
-- [ ] 22. Add Web UI.
-- [ ] 23. Add local VLM verifier.
+- [x] 17. Add SO101 wrist plus top-down multi-camera input capture and preview.
+- [ ] 18. Feed real SO101 camera inputs into SmolVLA rollout.
+- [ ] 19. Add rule-based planner.
+- [ ] 20. Add simulation-state verifier.
+- [ ] 21. Add retry loop.
+- [ ] 22. Produce first comparison report.
+- [ ] 23. Add Web UI.
+- [ ] 24. Add local VLM verifier.
 
 ## Minimal MVP Checklist
 
@@ -620,6 +621,7 @@ robot.stop()
 - [x] SO101-Nexus real 3D MuJoCo render PNG/GIF is saved.
 - [x] Pretrained SmolVLA can produce an action that steps SO101-Nexus and saves a 3D rollout.
 - [x] SO101 camera input frames and state/action previews are saved.
+- [x] SO101 `wrist_cam` and virtual `top_down` RGB inputs are captured together.
 - [ ] SmolVLA receives real SO101 camera frames instead of zero image tensors.
 - [ ] Rule-based planner creates subgoals.
 - [ ] Simulation-state verifier judges success or failure.

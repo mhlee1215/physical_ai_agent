@@ -13,6 +13,7 @@ class SO101CameraSpec:
     env_id: str
     observation_shape: list[int]
     camera_names: list[str]
+    virtual_camera_names: list[str]
     info_keys: list[str]
 
 
@@ -42,6 +43,8 @@ DEFAULT_SO101_ENV_IDS = (
     "MuJoCoPickAndPlace-v1",
 )
 
+DEFAULT_VIRTUAL_CAMERA_NAMES = ("top_down",)
+
 
 def inspect_so101_camera_specs(env_ids: tuple[str, ...] = DEFAULT_SO101_ENV_IDS) -> list[SO101CameraSpec]:
     import gymnasium as gym
@@ -58,6 +61,7 @@ def inspect_so101_camera_specs(env_ids: tuple[str, ...] = DEFAULT_SO101_ENV_IDS)
                     env_id=env_id,
                     observation_shape=list(getattr(obs, "shape", [])),
                     camera_names=camera_names,
+                    virtual_camera_names=list(DEFAULT_VIRTUAL_CAMERA_NAMES),
                     info_keys=sorted(info.keys()),
                 )
             )
@@ -73,6 +77,7 @@ def capture_so101_inputs(
     seed: int = 0,
     width: int = 640,
     height: int = 480,
+    include_virtual_cameras: bool = False,
 ) -> SO101InputCapture:
     import gymnasium as gym
     import mujoco
@@ -90,16 +95,17 @@ def capture_so101_inputs(
     try:
         obs, _info = env.reset(seed=seed)
         camera_names = [env.unwrapped.model.camera(index).name for index in range(env.unwrapped.model.ncam)]
-        renderers = {
-            camera_name: mujoco.Renderer(env.unwrapped.model, height=height, width=width)
-            for camera_name in camera_names
-        }
+        input_names = camera_names[:]
+        if include_virtual_cameras:
+            input_names.extend(DEFAULT_VIRTUAL_CAMERA_NAMES)
+        renderers = {name: mujoco.Renderer(env.unwrapped.model, height=height, width=width) for name in input_names}
         for step in range(steps):
             action = sample_action(env.action_space, step / max(1, steps - 1))
             obs, reward, terminated, truncated, _info = env.step(action)
             camera_frames: dict[str, str] = {}
             for camera_name, renderer in renderers.items():
-                renderer.update_scene(env.unwrapped.data, camera=camera_name)
+                camera = _make_camera(env, camera_name)
+                renderer.update_scene(env.unwrapped.data, camera=camera)
                 pixels = renderer.render()
                 camera_path = frames_dir / f"step_{step:03d}_{camera_name}.png"
                 _write_image(pixels, camera_path)
@@ -143,33 +149,37 @@ def _write_input_preview(records: list[SO101InputFrame], preview_path: Path, gif
     for record in records:
         if not record.camera_frames:
             continue
-        camera_name = sorted(record.camera_frames)[0]
-        camera_image = Image.open(record.camera_frames[camera_name]).convert("RGB").resize((480, 360))
-        canvas = Image.new("RGB", (760, 420), (245, 245, 240))
-        canvas.paste(camera_image, (0, 0))
+        camera_names = sorted(record.camera_frames)
+        canvas = Image.new("RGB", (960, 520), (245, 245, 240))
         draw = ImageDraw.Draw(canvas)
-        draw.text((500, 18), f"step {record.step:03d}", fill=(25, 25, 25))
-        draw.text((500, 42), f"camera {camera_name}", fill=(65, 65, 65))
-        draw.text((500, 70), "state", fill=(65, 65, 65))
+        for index, camera_name in enumerate(camera_names[:2]):
+            camera_image = Image.open(record.camera_frames[camera_name]).convert("RGB").resize((420, 315))
+            x = 0 if index == 0 else 420
+            canvas.paste(camera_image, (x, 0))
+            draw.rectangle((x, 0, x + 419, 24), fill=(245, 245, 240))
+            draw.text((x + 10, 6), camera_name, fill=(25, 25, 25))
+        draw.text((20, 344), f"step {record.step:03d}", fill=(25, 25, 25))
+        draw.text((20, 370), f"visual inputs: {', '.join(camera_names)}", fill=(65, 65, 65))
+        draw.text((660, 344), "state", fill=(65, 65, 65))
         for index, value in enumerate(record.observation[:12]):
-            x0 = 510 + (index % 6) * 36
-            y0 = 115 + (index // 6) * 72
+            x0 = 670 + (index % 6) * 36
+            y0 = 390 + (index // 6) * 58
             draw.line((x0, y0 - 32, x0, y0 + 32), fill=(210, 210, 210))
             bar = max(-1.0, min(1.0, float(value))) * 30
             color = (35, 115, 210) if bar >= 0 else (225, 105, 55)
             y_min, y_max = sorted((y0, y0 - bar))
             draw.rectangle((x0 - 8, y_min, x0 + 8, y_max), fill=color)
             draw.text((x0 - 9, y0 + 36), str(index), fill=(90, 90, 90))
-        draw.text((500, 290), "action", fill=(65, 65, 65))
+        draw.text((20, 420), "action", fill=(65, 65, 65))
         for index, value in enumerate(record.action[:6]):
-            x0 = 510 + index * 36
-            y0 = 335
+            x0 = 30 + index * 42
+            y0 = 465
             fill = int(16 * max(-1.0, min(1.0, abs(float(value)))))
             draw.rectangle((x0 - 17, y0 - 7, x0 + 17, y0 + 7), outline=(160, 160, 160))
             draw.rectangle((x0 - fill, y0 - 6, x0 + fill, y0 + 6), fill=(55, 150, 100))
         preview_frames.append(canvas)
     if not preview_frames:
-        preview_frames.append(Image.new("RGB", (760, 420), (245, 245, 240)))
+        preview_frames.append(Image.new("RGB", (960, 520), (245, 245, 240)))
     preview_frames[-1].save(preview_path)
     preview_frames[0].save(gif_path, save_all=True, append_images=preview_frames[1:], duration=140, loop=0)
 
@@ -178,6 +188,32 @@ def _write_image(pixels: Any, path: Path) -> None:
     from PIL import Image
 
     Image.fromarray(pixels).save(path)
+
+
+def _make_camera(env: Any, camera_name: str) -> Any:
+    if camera_name != "top_down":
+        return camera_name
+
+    import mujoco
+
+    camera = mujoco.MjvCamera()
+    camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+    camera.lookat[:] = _top_down_lookat(env)
+    camera.distance = 0.65
+    camera.azimuth = 90
+    camera.elevation = -90
+    return camera
+
+
+def _top_down_lookat(env: Any) -> list[float]:
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    names = {model.body(index).name: index for index in range(model.nbody)}
+    candidates = [names[name] for name in ("target", "cube", "gripper") if name in names]
+    if candidates:
+        points = [data.xpos[index] for index in candidates]
+        return [float(sum(point[axis] for point in points) / len(points)) for axis in range(3)]
+    return [0.12, 0.0, 0.02]
 
 
 def _as_float_list(obs: object) -> list[float]:

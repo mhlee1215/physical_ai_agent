@@ -176,3 +176,13 @@ sh scripts/checkpoint_16.sh
 ```
 
 Artifacts are written to `_workspace/checkpoints/checkpoint_16/`, including `so101_inputs/input_manifest.json`, `so101_inputs/input_preview.png`, `so101_inputs/input_preview.gif`, and per-step camera frames under `so101_inputs/frames/`. Current SO101-Nexus environments expose one camera input, `wrist_cam`; observation vectors are shape 6 for reach/move, 18 for pick-lift, and 24 for pick-and-place.
+
+## Checkpoint 17
+
+Capture a two-view visual input bundle for future LeRobot/SmolVLA multi-image batches:
+
+```bash
+sh scripts/checkpoint_17.sh
+```
+
+Artifacts are written to `_workspace/checkpoints/checkpoint_17/`, including `so101_multi_inputs/input_manifest.json`, `so101_multi_inputs/input_preview.png`, `so101_multi_inputs/input_preview.gif`, and per-step `wrist_cam` plus `top_down` frames. `wrist_cam` is the SO101-Nexus named camera; `top_down` is a MuJoCo virtual camera rendered without editing the SO101 XML. The planned LeRobot feature keys are `observation.images.wrist_cam` and `observation.images.top_down`.
