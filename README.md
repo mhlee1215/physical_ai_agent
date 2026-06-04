@@ -165,7 +165,13 @@ Optional finite demo:
 sh scripts/view_so101_live.sh --max-steps 300 --fps 30
 ```
 
-The live viewer uses a deterministic smooth action policy and is meant for visual inspection. GUI windows may not open from headless agent sessions; use the CP14/15 GIF artifacts when running in a headless context.
+Open the live 3D viewer with a browser-based real-time camera-input stream:
+
+```bash
+sh scripts/view_so101_live.sh --show-inputs --fps 15
+```
+
+When `--show-inputs` is enabled, the script prints a local URL such as `http://127.0.0.1:8765`. Open that URL in a browser to watch `wrist_cam` and `egocentric_cam` as policy inputs plus `top_down` as a debug view. The live viewer uses a deterministic smooth action policy and is meant for visual inspection. GUI windows may not open from headless agent sessions; use the CP14/15 GIF artifacts or CP18/19 input previews when running in a headless context.
 
 ## Checkpoint 16
 
@@ -197,3 +203,16 @@ sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla
 ```
 
 CP18 writes `wrist_cam` and `egocentric_cam` as policy inputs plus `top_down` as a debug input. CP19 maps those real frames into LeRobot's pretrained SmolVLA image feature keys: `observation.images.camera1 <- wrist_cam`, `observation.images.camera2 <- egocentric_cam`, and `observation.images.camera3 <- egocentric_cam` as a non-zero duplicate fallback. Artifacts are written under `_workspace/checkpoints/checkpoint_18/` and `_workspace/checkpoints/checkpoint_19/`.
+
+## Checkpoints 20-23
+
+Add the first agentic wrapper around SO101 evaluation: rule-based planning, simulation-state verification, retry, and a policy-only vs agentic-retry comparison report.
+
+```bash
+sh scripts/checkpoint_20.sh
+sh scripts/checkpoint_21.sh
+sh scripts/checkpoint_22.sh
+sh scripts/checkpoint_23.sh
+```
+
+CP20 writes a deterministic subgoal plan for `reach_target`. CP21 verifies a subgoal from SO101 simulator state using `tcp_to_target_dist` and `success`. CP22 executes the planned subgoals with one retry budget per failed subgoal and records verifier decisions in the trace. CP23 writes `_workspace/checkpoints/checkpoint_23/comparison/comparison_report.md` comparing `policy_only` and `agentic_retry` runs.

@@ -599,10 +599,10 @@ robot.stop()
 - [x] 17. Add SO101 wrist plus top-down multi-camera input capture and preview.
 - [x] 18. Add SO101 wrist plus egocentric policy inputs and top-down debug input.
 - [x] 19. Feed real SO101 camera inputs into SmolVLA rollout.
-- [ ] 20. Add rule-based planner.
-- [ ] 21. Add simulation-state verifier.
-- [ ] 22. Add retry loop.
-- [ ] 23. Produce first comparison report.
+- [x] 20. Add rule-based planner.
+- [x] 21. Add simulation-state verifier.
+- [x] 22. Add retry loop.
+- [x] 23. Produce first comparison report.
 - [ ] 24. Add Web UI.
 - [ ] 25. Add local VLM verifier.
 
@@ -625,11 +625,11 @@ robot.stop()
 - [x] SO101 `wrist_cam` and virtual `top_down` RGB inputs are captured together.
 - [x] SO101 `wrist_cam` and virtual `egocentric_cam` are recorded as policy inputs.
 - [x] SmolVLA receives real SO101 camera frames instead of zero image tensors.
-- [ ] Rule-based planner creates subgoals.
-- [ ] Simulation-state verifier judges success or failure.
-- [ ] Retry once after failed subgoal works.
-- [ ] `policy_only` and `agentic_retry` results are compared.
-- [ ] A Markdown summary report is generated.
+- [x] Rule-based planner creates subgoals.
+- [x] Simulation-state verifier judges success or failure.
+- [x] Retry once after failed subgoal works.
+- [x] `policy_only` and `agentic_retry` results are compared.
+- [x] A Markdown summary report is generated.
 
 ## Notes
 

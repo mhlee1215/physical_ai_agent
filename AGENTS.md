@@ -35,6 +35,8 @@
   `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`
 - Live SO101 MuJoCo viewer:
   `sh scripts/view_so101_live.sh`
+- Live SO101 MuJoCo viewer with camera inputs:
+  `sh scripts/view_so101_live.sh --show-inputs --fps 15`
 - Checkpoint 16 SO101 camera input preview:
   `sh scripts/checkpoint_16.sh`
 - Checkpoint 17 SO101 multi-camera input preview:
@@ -43,3 +45,11 @@
   `sh scripts/checkpoint_18.sh`
 - Checkpoint 19 SmolVLA real camera input rollout:
   `sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla`
+- Checkpoint 20 rule-based planner:
+  `sh scripts/checkpoint_20.sh`
+- Checkpoint 21 simulation-state verifier:
+  `sh scripts/checkpoint_21.sh`
+- Checkpoint 22 agentic retry loop:
+  `sh scripts/checkpoint_22.sh`
+- Checkpoint 23 first comparison report:
+  `sh scripts/checkpoint_23.sh`

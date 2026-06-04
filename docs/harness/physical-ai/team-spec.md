@@ -85,6 +85,10 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 - `sh scripts/checkpoint_17.sh`
 - `sh scripts/checkpoint_18.sh`
 - `sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla`
+- `sh scripts/checkpoint_20.sh`
+- `sh scripts/checkpoint_21.sh`
+- `sh scripts/checkpoint_22.sh`
+- `sh scripts/checkpoint_23.sh`
 - `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
 - `python3 -B -c "import ast, pathlib; ..."` as a no-dependency fallback syntax check
@@ -141,3 +145,16 @@ sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla
 ```
 
 Checkpoint 18 must record `wrist_cam` and `egocentric_cam` as policy inputs and `top_down` as a debug input. Checkpoint 19 must load pretrained `lerobot/smolvla_base`, feed real SO101 RGB frames into SmolVLA image features without zero image tensors, step SO101-Nexus with the resulting action, and save input preview, rollout trace, and 3D rollout PNG/GIF artifacts.
+
+## Required Checkpoint 20-23 Verification
+
+Run these commands before completing checkpoints 20-23:
+
+```bash
+sh scripts/checkpoint_20.sh
+sh scripts/checkpoint_21.sh
+sh scripts/checkpoint_22.sh
+sh scripts/checkpoint_23.sh
+```
+
+Checkpoint 20 must write a rule-based SO101 subgoal plan. Checkpoint 21 must execute a real SO101 simulator step and save a simulation-state verifier decision based on `tcp_to_target_dist` and `success`. Checkpoint 22 must execute planned subgoals with a retry event after a verifier failure and save planner/verifier/retry trace records. Checkpoint 23 must compare `policy_only` and `agentic_retry` outputs and save both JSON metrics and a Markdown comparison report.
