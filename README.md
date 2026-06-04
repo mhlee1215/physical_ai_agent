@@ -151,6 +151,14 @@ Open a real-time MuJoCo viewer from a normal macOS Terminal session:
 sh scripts/view_so101_live.sh
 ```
 
+On macOS, MuJoCo's live viewer requires `mjpython`. If the repo `.venv` was created from a bundled/symlinked Python and `mjpython` cannot start, create a separate viewer venv from Homebrew or python.org Python:
+
+```bash
+/opt/homebrew/bin/python3 -m venv .venv-viewer
+.venv-viewer/bin/python -m pip install -e ".[so101]"
+PYTHONPATH=src .venv-viewer/bin/mjpython -B -m physical_ai_agent.sim.so101_live_viewer
+```
+
 Optional finite demo:
 
 ```bash

@@ -26,7 +26,16 @@ def run_live_viewer(config: LiveViewerConfig) -> int:
     step = 0
 
     try:
-        with mujoco.viewer.launch_passive(env.unwrapped.model, env.unwrapped.data) as viewer:
+        try:
+            viewer_context = mujoco.viewer.launch_passive(env.unwrapped.model, env.unwrapped.data)
+        except RuntimeError as exc:
+            if "mjpython" in str(exc):
+                raise RuntimeError(
+                    "MuJoCo live viewer on macOS requires `mjpython`. "
+                    "Run through `scripts/view_so101_live.sh` for the repo-local preflight and setup hint."
+                ) from exc
+            raise
+        with viewer_context as viewer:
             while viewer.is_running():
                 if config.max_steps is not None and step >= config.max_steps:
                     break
