@@ -142,3 +142,19 @@ Current CP14-15 status:
 - CP14 SO101 3D MuJoCo render: implemented and verified with 640x480 PNG/GIF output.
 - CP15 pretrained SmolVLA inference rollout: implemented and verified by loading `SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")`, executing `select_action()`, stepping SO101-Nexus for six steps, and saving a 3D rollout PNG/GIF.
 - The current SmolVLA observation shim uses SO101 state plus zero image tensors and synthetic language tokens, so it proves execution wiring rather than task-quality policy behavior.
+
+## Live SO101 Viewer
+
+Open a real-time MuJoCo viewer from a normal macOS Terminal session:
+
+```bash
+sh scripts/view_so101_live.sh
+```
+
+Optional finite demo:
+
+```bash
+sh scripts/view_so101_live.sh --max-steps 300 --fps 30
+```
+
+The live viewer uses a deterministic smooth action policy and is meant for visual inspection. GUI windows may not open from headless agent sessions; use the CP14/15 GIF artifacts when running in a headless context.
