@@ -37,8 +37,8 @@
   `sh scripts/view_so101_live.sh`
 - Live SO101 MuJoCo viewer with camera inputs:
   `sh scripts/view_so101_live.sh --show-inputs --fps 15`
-- Live SO101 MuJoCo viewer with SmolVLA inference:
-  `sh scripts/view_so101_live.sh --policy smolvla --allow-download --show-inputs --fps 2`
+- Live SO101 browser simulator with SmolVLA inference:
+  `sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download --smolvla-action-steps 15 --show-inputs --fps 2`
 - Checkpoint 16 SO101 camera input preview:
   `sh scripts/checkpoint_16.sh`
 - Checkpoint 17 SO101 multi-camera input preview:

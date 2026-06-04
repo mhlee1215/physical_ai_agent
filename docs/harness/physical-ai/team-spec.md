@@ -85,6 +85,7 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 - `sh scripts/checkpoint_17.sh`
 - `sh scripts/checkpoint_18.sh`
 - `sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla`
+- `sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download --smolvla-action-steps 15 --show-inputs --fps 2 --max-steps 1`
 - `sh scripts/checkpoint_20.sh`
 - `sh scripts/checkpoint_21.sh`
 - `sh scripts/checkpoint_22.sh`

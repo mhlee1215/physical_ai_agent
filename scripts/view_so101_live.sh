@@ -3,12 +3,22 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+PYTHON_BIN="${PHYSICAL_AI_PYTHON:-python3}"
+if [ -x ".venv/bin/python" ]; then
+  PYTHON_BIN=".venv/bin/python"
+fi
+
+for arg in "$@"; do
+  if [ "$arg" = "--browser-only" ]; then
+    PYTHONPATH=src "$PYTHON_BIN" -B -m physical_ai_agent.sim.so101_live_viewer "$@"
+    exit 0
+  fi
+done
+
 if [ "$(uname -s)" = "Darwin" ]; then
   if [ -x ".venv/bin/mjpython" ]; then
-    if PYTHONPATH=src .venv/bin/mjpython -c "print('mjpython-ok')" >/dev/null 2>&1; then
-      PYTHONPATH=src .venv/bin/mjpython -B -m physical_ai_agent.sim.so101_live_viewer "$@"
-      exit 0
-    fi
+    PYTHONPATH=src .venv/bin/mjpython -B -m physical_ai_agent.sim.so101_live_viewer "$@"
+    exit 0
   fi
   cat >&2 <<'EOF'
 SO101 live viewer on macOS requires MuJoCo's `mjpython`.
@@ -32,12 +42,6 @@ For non-live 3D output with the current venv, use:
   sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla
 EOF
   exit 1
-fi
-
-if [ -x ".venv/bin/python" ]; then
-  PYTHON_BIN=".venv/bin/python"
-else
-  PYTHON_BIN="${PHYSICAL_AI_PYTHON:-python3}"
 fi
 
 PYTHONPATH=src "$PYTHON_BIN" -B -m physical_ai_agent.sim.so101_live_viewer "$@"

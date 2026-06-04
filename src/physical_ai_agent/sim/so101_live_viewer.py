@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import io
+import json
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 from physical_ai_agent.policies.smolvla_adapter import DEFAULT_SMOLVLA_MODEL_ID
@@ -21,6 +26,9 @@ class LiveViewerConfig:
     policy: str = "sample"
     model_id: str = DEFAULT_SMOLVLA_MODEL_ID
     allow_download: bool = False
+    smolvla_action_steps: int = 15
+    smolvla_worker_python: str = ""
+    browser_only: bool = False
     show_inputs: bool = False
     input_width: int = 320
     input_height: int = 240
@@ -30,7 +38,6 @@ class LiveViewerConfig:
 def run_live_viewer(config: LiveViewerConfig) -> int:
     import gymnasium as gym
     import mujoco
-    import mujoco.viewer
     import so101_nexus_mujoco  # noqa: F401 - registers Gymnasium env ids.
 
     env = gym.make(config.env_id, render_mode=None)
@@ -38,114 +45,321 @@ def run_live_viewer(config: LiveViewerConfig) -> int:
     sleep_s = 1.0 / max(1.0, config.fps)
     step = 0
     input_viewer = None
-    policy = None
+    smolvla_worker = None
+    action_queue: list[list[float]] = []
+    image_feature_mapping: dict[str, str] = {}
+    chunk_status = ""
 
     try:
-        if config.show_inputs or config.policy == "smolvla":
+        if config.policy == "smolvla":
+            smolvla_worker = SmolVLAWorkerClient(
+                model_id=config.model_id,
+                allow_download=config.allow_download,
+                action_steps=config.smolvla_action_steps,
+                python_executable=config.smolvla_worker_python,
+            )
+            print("Starting isolated SmolVLA worker process...", flush=True)
+            smolvla_worker.start()
+            print(
+                "SmolVLA worker started; "
+                f"executing {config.smolvla_action_steps} actions per predicted chunk.",
+                flush=True,
+            )
+        if config.show_inputs or config.policy == "smolvla" or config.browser_only:
             input_viewer = SO101LiveInputViewer(
                 env=env,
                 width=config.input_width,
                 height=config.input_height,
                 port=config.input_port,
+                show_scene=config.browser_only,
             )
             input_viewer.start()
-            print(f"SO101 camera inputs live at http://127.0.0.1:{config.input_port}")
-        if config.policy == "smolvla":
-            from physical_ai_agent.policies.smolvla_real import _load_pretrained_policy
-
-            print(f"Loading SmolVLA policy: {config.model_id}")
-            policy = _load_pretrained_policy(
-                model_id=config.model_id,
-                local_files_only=not config.allow_download,
-            )
-            print("SmolVLA policy loaded; stepping sim with select_action().")
-        try:
-            viewer_context = mujoco.viewer.launch_passive(env.unwrapped.model, env.unwrapped.data)
-        except RuntimeError as exc:
-            if "mjpython" in str(exc):
-                raise RuntimeError(
-                    "MuJoCo live viewer on macOS requires `mjpython`. "
-                    "Run through `scripts/view_so101_live.sh` for the repo-local preflight and setup hint."
-                ) from exc
-            raise
-        with viewer_context as viewer:
-            while viewer.is_running():
+            print(f"SO101 live stream available at http://127.0.0.1:{config.input_port}")
+        if config.browser_only:
+            while True:
                 if config.max_steps is not None and step >= config.max_steps:
                     break
-                action_started_at = time.perf_counter()
-                camera_pixels = input_viewer.render_camera_pixels() if input_viewer is not None else {}
-                image_feature_mapping: dict[str, str] = {}
-                if config.policy == "smolvla":
-                    if policy is None:
-                        raise RuntimeError("SmolVLA policy was not loaded")
-                    action, image_feature_mapping = _select_smolvla_action(
-                        policy=policy,
-                        observation=[float(value) for value in obs],
-                        camera_pixels=camera_pixels,
-                        action_dim=int(env.action_space.shape[0]),
-                    )
-                else:
-                    action = sample_action(env.action_space, (step % 120) / 119.0)
-                inference_latency_s = time.perf_counter() - action_started_at
-                obs, reward, terminated, truncated, _info = env.step(action)
-                viewer.sync()
+                (
+                    obs,
+                    action,
+                    reward,
+                    terminated,
+                    truncated,
+                    inference_latency_s,
+                    chunk_status,
+                ) = _run_policy_step(
+                    env=env,
+                    obs=obs,
+                    step=step,
+                    config=config,
+                    input_viewer=input_viewer,
+                    smolvla_worker=smolvla_worker,
+                    action_queue=action_queue,
+                    image_feature_mapping=image_feature_mapping,
+                    chunk_status=chunk_status,
+                )
                 if input_viewer is not None:
                     if not input_viewer.show(
                         step=step,
                         observation=[float(value) for value in obs],
                         action=[float(value) for value in action],
                         reward=float(reward),
-                        camera_pixels=camera_pixels,
                         policy_name=config.policy,
                         inference_latency_s=inference_latency_s,
                         image_feature_mapping=image_feature_mapping,
+                        chunk_status=chunk_status if config.policy == "smolvla" else "",
                     ):
                         break
                 step += 1
                 if terminated or truncated:
                     obs, _info = env.reset()
                 time.sleep(max(0.0, sleep_s - inference_latency_s))
+        else:
+            import mujoco.viewer
+
+            try:
+                viewer_context = mujoco.viewer.launch_passive(env.unwrapped.model, env.unwrapped.data)
+            except RuntimeError as exc:
+                if "mjpython" in str(exc):
+                    raise RuntimeError(
+                        "MuJoCo live viewer on macOS requires `mjpython`. "
+                        "Use `--browser-only` to run the live SmolVLA path without the native Cocoa viewer, "
+                        "or run through `scripts/view_so101_live.sh` with a Homebrew/python.org viewer venv."
+                    ) from exc
+                raise
+            with viewer_context as viewer:
+                while viewer.is_running():
+                    if config.max_steps is not None and step >= config.max_steps:
+                        break
+                    (
+                        obs,
+                        action,
+                        reward,
+                        terminated,
+                        truncated,
+                        inference_latency_s,
+                        chunk_status,
+                    ) = _run_policy_step(
+                        env=env,
+                        obs=obs,
+                        step=step,
+                        config=config,
+                        input_viewer=input_viewer,
+                        smolvla_worker=smolvla_worker,
+                        action_queue=action_queue,
+                        image_feature_mapping=image_feature_mapping,
+                        chunk_status=chunk_status,
+                    )
+                    viewer.sync()
+                    if input_viewer is not None:
+                        if not input_viewer.show(
+                            step=step,
+                            observation=[float(value) for value in obs],
+                            action=[float(value) for value in action],
+                            reward=float(reward),
+                            policy_name=config.policy,
+                            inference_latency_s=inference_latency_s,
+                            image_feature_mapping=image_feature_mapping,
+                            chunk_status=chunk_status if config.policy == "smolvla" else "",
+                        ):
+                            break
+                    step += 1
+                    if terminated or truncated:
+                        obs, _info = env.reset()
+                    time.sleep(max(0.0, sleep_s - inference_latency_s))
     finally:
         if input_viewer is not None:
             input_viewer.close()
+        if smolvla_worker is not None:
+            smolvla_worker.close()
         env.close()
     return step
 
 
-def _select_smolvla_action(
-    policy: Any,
-    observation: list[float],
-    camera_pixels: dict[str, Any],
-    action_dim: int,
-) -> tuple[list[float], dict[str, str]]:
-    from physical_ai_agent.policies.smolvla_real import (
-        _build_batch_for_policy,
-        _clip_action,
-        _tensor_to_float_list,
-    )
+def _run_policy_step(
+    env: Any,
+    obs: Any,
+    step: int,
+    config: LiveViewerConfig,
+    input_viewer: "SO101LiveInputViewer | None",
+    smolvla_worker: "SmolVLAWorkerClient | None",
+    action_queue: list[list[float]],
+    image_feature_mapping: dict[str, str],
+    chunk_status: str,
+) -> tuple[Any, list[float], float, bool, bool, float, str]:
+    action_started_at = time.perf_counter()
+    camera_pixels = input_viewer.render_policy_camera_pixels() if input_viewer is not None else {}
+    if config.policy == "smolvla":
+        if smolvla_worker is None:
+            raise RuntimeError("SmolVLA worker was not started")
+        if not action_queue:
+            chunk = smolvla_worker.predict_chunk(
+                observation=[float(value) for value in obs],
+                camera_pixels=camera_pixels,
+                action_dim=int(env.action_space.shape[0]),
+            )
+            action_queue[:] = chunk.actions[:]
+            image_feature_mapping.clear()
+            image_feature_mapping.update(chunk.image_feature_mapping)
+            chunk_status = (
+                f"chunk steps 0/{chunk.executed_action_steps} "
+                f"from predicted {chunk.predicted_chunk_size}"
+            )
+        action = action_queue.pop(0)
+        executed_steps = config.smolvla_action_steps
+        predicted_steps = smolvla_worker.last_predicted_chunk_size or executed_steps
+        used = executed_steps - len(action_queue)
+        chunk_status = f"chunk steps {used}/{executed_steps} from predicted {predicted_steps}"
+    else:
+        action = [float(value) for value in sample_action(env.action_space, (step % 120) / 119.0)]
+    inference_latency_s = time.perf_counter() - action_started_at
+    next_obs, reward, terminated, truncated, _info = env.step(action)
+    return next_obs, action, float(reward), bool(terminated), bool(truncated), inference_latency_s, chunk_status
 
-    batch, image_feature_mapping = _build_batch_for_policy(policy, observation, camera_pixels)
-    raw_action = policy.select_action(batch)
-    action = _clip_action(_tensor_to_float_list(raw_action), action_dim)
-    return action, image_feature_mapping
+
+class SmolVLAActionChunk:
+    def __init__(
+        self,
+        actions: list[list[float]],
+        predicted_chunk_size: int,
+        executed_action_steps: int,
+        image_feature_mapping: dict[str, str],
+        latency_s: float,
+    ) -> None:
+        self.actions = actions
+        self.predicted_chunk_size = predicted_chunk_size
+        self.executed_action_steps = executed_action_steps
+        self.image_feature_mapping = image_feature_mapping
+        self.latency_s = latency_s
+
+
+class SmolVLAWorkerClient:
+    def __init__(
+        self,
+        model_id: str,
+        allow_download: bool,
+        action_steps: int,
+        python_executable: str = "",
+    ) -> None:
+        self.model_id = model_id
+        self.allow_download = allow_download
+        self.action_steps = action_steps
+        self.python_executable = python_executable or _default_worker_python()
+        self.process: subprocess.Popen[str] | None = None
+        self.last_predicted_chunk_size = 0
+
+    def start(self) -> None:
+        cmd = [
+            self.python_executable,
+            "-B",
+            "-m",
+            "physical_ai_agent.policies.smolvla_worker",
+            "--model-id",
+            self.model_id,
+            "--action-steps",
+            str(self.action_steps),
+        ]
+        if self.allow_download:
+            cmd.append("--allow-download")
+        self.process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=None,
+            text=True,
+            bufsize=1,
+            close_fds=False,
+        )
+
+    def predict_chunk(
+        self,
+        observation: list[float],
+        camera_pixels: dict[str, Any],
+        action_dim: int,
+    ) -> SmolVLAActionChunk:
+        if self.process is None or self.process.stdin is None or self.process.stdout is None:
+            raise RuntimeError("SmolVLA worker is not running")
+        request = {
+            "type": "predict",
+            "observation": observation,
+            "action_dim": action_dim,
+            "camera_pixels": _encode_camera_pixels(camera_pixels),
+        }
+        self.process.stdin.write(json.dumps(request, sort_keys=True) + "\n")
+        self.process.stdin.flush()
+        line = self.process.stdout.readline()
+        if not line:
+            raise RuntimeError("SmolVLA worker exited before returning an action chunk")
+        response = json.loads(line)
+        self.last_predicted_chunk_size = int(response["predicted_chunk_size"])
+        return SmolVLAActionChunk(
+            actions=[[float(value) for value in action] for action in response["actions"]],
+            predicted_chunk_size=self.last_predicted_chunk_size,
+            executed_action_steps=int(response["executed_action_steps"]),
+            image_feature_mapping=dict(response["image_feature_mapping"]),
+            latency_s=float(response["latency_s"]),
+        )
+
+    def close(self) -> None:
+        if self.process is None:
+            return
+        try:
+            if self.process.stdin is not None:
+                self.process.stdin.write(json.dumps({"type": "shutdown"}) + "\n")
+                self.process.stdin.flush()
+            self.process.wait(timeout=2)
+        except Exception:  # noqa: BLE001
+            self.process.terminate()
+        self.process = None
+
+
+def _default_worker_python() -> str:
+    venv_python = Path(".venv/bin/python")
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
+
+
+def _encode_camera_pixels(camera_pixels: dict[str, Any]) -> dict[str, str]:
+    from PIL import Image
+
+    encoded = {}
+    for camera_name, pixels in camera_pixels.items():
+        buffer = io.BytesIO()
+        Image.fromarray(pixels).save(buffer, format="PNG")
+        encoded[camera_name] = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return encoded
 
 
 class SO101LiveInputViewer:
     camera_names = ("wrist_cam", "egocentric_cam", "top_down")
 
-    def __init__(self, env: Any, width: int = 320, height: int = 240, port: int = 8765) -> None:
+    def __init__(
+        self,
+        env: Any,
+        width: int = 320,
+        height: int = 240,
+        port: int = 8765,
+        show_scene: bool = False,
+    ) -> None:
         import mujoco
 
         self._env = env
         self._width = width
         self._height = height
         self._port = port
+        self._show_scene = show_scene
         self._latest_jpeg: bytes | None = None
         self._lock = threading.Lock()
         self._renderers = {
             name: mujoco.Renderer(env.unwrapped.model, height=height, width=width)
             for name in self.camera_names
         }
+        self._scene_renderer = (
+            mujoco.Renderer(env.unwrapped.model, height=height, width=width)
+            if show_scene
+            else None
+        )
         self._server = ThreadingHTTPServer(("127.0.0.1", port), self._make_handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -153,6 +367,13 @@ class SO101LiveInputViewer:
         self._thread.start()
 
     def render_camera_pixels(self) -> dict[str, Any]:
+        frames = self.render_policy_camera_pixels()
+        if self._scene_renderer is not None:
+            self._scene_renderer.update_scene(self._env.unwrapped.data)
+            frames = {"scene_3d": self._scene_renderer.render(), **frames}
+        return frames
+
+    def render_policy_camera_pixels(self) -> dict[str, Any]:
         from physical_ai_agent.sim.so101_camera_input import _make_camera
 
         frames = {}
@@ -171,6 +392,7 @@ class SO101LiveInputViewer:
         policy_name: str = "sample",
         inference_latency_s: float = 0.0,
         image_feature_mapping: dict[str, str] | None = None,
+        chunk_status: str = "",
     ) -> bool:
         frames = camera_pixels or self.render_camera_pixels()
         image = self._compose_canvas(
@@ -182,6 +404,7 @@ class SO101LiveInputViewer:
             policy_name=policy_name,
             inference_latency_s=inference_latency_s,
             image_feature_mapping=image_feature_mapping or {},
+            chunk_status=chunk_status,
         )
         buffer = io.BytesIO()
         image.save(buffer, format="JPEG", quality=85)
@@ -192,6 +415,8 @@ class SO101LiveInputViewer:
     def close(self) -> None:
         for renderer in self._renderers.values():
             renderer.close()
+        if self._scene_renderer is not None:
+            self._scene_renderer.close()
         self._server.shutdown()
         self._server.server_close()
 
@@ -205,12 +430,15 @@ class SO101LiveInputViewer:
         policy_name: str = "sample",
         inference_latency_s: float = 0.0,
         image_feature_mapping: dict[str, str] | None = None,
+        chunk_status: str = "",
     ) -> Any:
         from PIL import Image, ImageDraw
 
-        canvas = Image.new("RGB", (self._width * 3, self._height + 120), (245, 245, 240))
+        panel_names = ["scene_3d"] if self._show_scene else []
+        panel_names.extend(self.camera_names)
+        canvas = Image.new("RGB", (self._width * len(panel_names), self._height + 120), (245, 245, 240))
         draw = ImageDraw.Draw(canvas)
-        for index, name in enumerate(self.camera_names):
+        for index, name in enumerate(panel_names):
             pixels = frames[name]
             image = Image.fromarray(pixels).convert("RGB")
             x = index * self._width
@@ -229,11 +457,12 @@ class SO101LiveInputViewer:
         mapping_text = _mapping_text(image_feature_mapping or {})
         draw.text(
             (16, y + 28),
-            mapping_text or "policy: wrist_cam + egocentric_cam    debug: top_down",
+            _status_text(mapping_text, chunk_status),
             fill=(45, 45, 45),
         )
         self._draw_bars(draw, "state", observation[:12], x=16, y=y + 76)
-        self._draw_bars(draw, "action", action[:6], x=520, y=y + 76)
+        action_x = min(520, self._width * len(panel_names) - 260)
+        self._draw_bars(draw, "action", action[:6], x=action_x, y=y + 76)
         return canvas
 
     def _draw_bars(self, draw: Any, label: str, values: list[float], x: int, y: int) -> None:
@@ -314,6 +543,16 @@ def _mapping_text(mapping: dict[str, str]) -> str:
     return f"SmolVLA images: {values}"
 
 
+def _status_text(mapping_text: str, chunk_status: str) -> str:
+    if mapping_text and chunk_status:
+        return f"{mapping_text} | {chunk_status}"
+    if mapping_text:
+        return mapping_text
+    if chunk_status:
+        return chunk_status
+    return "policy: wrist_cam + egocentric_cam    debug: top_down"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Open a live MuJoCo viewer for SO101-Nexus.")
     parser.add_argument("--env-id", default=DEFAULT_SO101_ENV_ID)
@@ -327,6 +566,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model-id", default=DEFAULT_SMOLVLA_MODEL_ID)
     parser.add_argument("--allow-download", action="store_true")
+    parser.add_argument(
+        "--smolvla-action-steps",
+        type=int,
+        default=15,
+        help="Number of actions to execute from each SmolVLA predicted chunk.",
+    )
+    parser.add_argument(
+        "--smolvla-worker-python",
+        default="",
+        help="Python executable for the isolated SmolVLA inference worker.",
+    )
+    parser.add_argument(
+        "--browser-only",
+        action="store_true",
+        help="Stream the live 3D scene, camera inputs, and action telemetry in the browser without mjpython.",
+    )
     parser.add_argument(
         "--show-inputs",
         action="store_true",
@@ -355,6 +610,9 @@ def main() -> None:
             policy=args.policy,
             model_id=args.model_id,
             allow_download=args.allow_download,
+            smolvla_action_steps=args.smolvla_action_steps,
+            smolvla_worker_python=args.smolvla_worker_python,
+            browser_only=args.browser_only,
             show_inputs=args.show_inputs,
             input_width=args.input_width,
             input_height=args.input_height,

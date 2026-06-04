@@ -165,7 +165,7 @@ Optional finite demo:
 sh scripts/view_so101_live.sh --max-steps 300 --fps 30
 ```
 
-Open the live 3D viewer with a browser-based real-time camera-input stream:
+Open the native MuJoCo viewer with a browser-based real-time camera-input stream:
 
 ```bash
 sh scripts/view_so101_live.sh --show-inputs --fps 15
@@ -173,13 +173,13 @@ sh scripts/view_so101_live.sh --show-inputs --fps 15
 
 When `--show-inputs` is enabled, the script prints a local URL such as `http://127.0.0.1:8765`. Open that URL in a browser to watch `wrist_cam` and `egocentric_cam` as policy inputs plus `top_down` as a debug view. The live viewer uses a deterministic smooth action policy and is meant for visual inspection. GUI windows may not open from headless agent sessions; use the CP14/15 GIF artifacts or CP18/19 input previews when running in a headless context.
 
-Run the live viewer with pretrained SmolVLA selecting the action for every simulation step:
+Run the browser-based live simulator with pretrained SmolVLA action chunks:
 
 ```bash
-sh scripts/view_so101_live.sh --policy smolvla --allow-download --show-inputs --fps 2
+sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download --smolvla-action-steps 15 --show-inputs --fps 2
 ```
 
-This path loads `lerobot/smolvla_base`, renders `wrist_cam` and `egocentric_cam` inputs, runs `select_action()`, steps SO101-Nexus with the selected action, and updates the browser stream with the action bars, image-feature mapping, and inference latency. It is slower than the sample policy because each simulation step waits for local SmolVLA inference.
+This path avoids the macOS `mjpython` native-window trampoline by streaming the MuJoCo 3D scene, `wrist_cam`, `egocentric_cam`, `top_down`, action bars, image-feature mapping, chunk status, and inference latency to `http://127.0.0.1:8765`. It loads `lerobot/smolvla_base` in an isolated worker process, predicts an action chunk, executes 15 actions from that chunk, steps SO101-Nexus with each selected action, and refreshes the chunk after 15 executed actions so the sim does not blindly consume all 50 predicted actions from a stale observation.
 
 ## Checkpoint 16
 

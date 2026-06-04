@@ -16,6 +16,11 @@ class SO101LiveViewerTest(TestCase):
                 "--policy",
                 "smolvla",
                 "--allow-download",
+                "--smolvla-action-steps",
+                "15",
+                "--smolvla-worker-python",
+                ".venv/bin/python",
+                "--browser-only",
                 "--show-inputs",
                 "--input-width",
                 "160",
@@ -31,6 +36,9 @@ class SO101LiveViewerTest(TestCase):
         self.assertEqual(args.max_steps, 2)
         self.assertEqual(args.policy, "smolvla")
         self.assertTrue(args.allow_download)
+        self.assertEqual(args.smolvla_action_steps, 15)
+        self.assertEqual(args.smolvla_worker_python, ".venv/bin/python")
+        self.assertTrue(args.browser_only)
         self.assertTrue(args.show_inputs)
         self.assertEqual(args.input_width, 160)
         self.assertEqual(args.input_height, 120)
@@ -43,6 +51,9 @@ class SO101LiveViewerTest(TestCase):
         self.assertEqual(config.fps, 30.0)
         self.assertEqual(config.policy, "sample")
         self.assertFalse(config.allow_download)
+        self.assertEqual(config.smolvla_action_steps, 15)
+        self.assertEqual(config.smolvla_worker_python, "")
+        self.assertFalse(config.browser_only)
         self.assertFalse(config.show_inputs)
         self.assertEqual(config.input_width, 320)
         self.assertEqual(config.input_height, 240)
