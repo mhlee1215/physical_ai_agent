@@ -173,6 +173,14 @@ sh scripts/view_so101_live.sh --show-inputs --fps 15
 
 When `--show-inputs` is enabled, the script prints a local URL such as `http://127.0.0.1:8765`. Open that URL in a browser to watch `wrist_cam` and `egocentric_cam` as policy inputs plus `top_down` as a debug view. The live viewer uses a deterministic smooth action policy and is meant for visual inspection. GUI windows may not open from headless agent sessions; use the CP14/15 GIF artifacts or CP18/19 input previews when running in a headless context.
 
+Run the live viewer with pretrained SmolVLA selecting the action for every simulation step:
+
+```bash
+sh scripts/view_so101_live.sh --policy smolvla --allow-download --show-inputs --fps 2
+```
+
+This path loads `lerobot/smolvla_base`, renders `wrist_cam` and `egocentric_cam` inputs, runs `select_action()`, steps SO101-Nexus with the selected action, and updates the browser stream with the action bars, image-feature mapping, and inference latency. It is slower than the sample policy because each simulation step waits for local SmolVLA inference.
+
 ## Checkpoint 16
 
 Capture and preview the actual inputs available to policies before adding planner or verifier logic:

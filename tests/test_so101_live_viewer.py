@@ -13,6 +13,9 @@ class SO101LiveViewerTest(TestCase):
                 "12",
                 "--max-steps",
                 "2",
+                "--policy",
+                "smolvla",
+                "--allow-download",
                 "--show-inputs",
                 "--input-width",
                 "160",
@@ -26,6 +29,8 @@ class SO101LiveViewerTest(TestCase):
         self.assertEqual(args.env_id, "MuJoCoReach-v1")
         self.assertEqual(args.fps, 12)
         self.assertEqual(args.max_steps, 2)
+        self.assertEqual(args.policy, "smolvla")
+        self.assertTrue(args.allow_download)
         self.assertTrue(args.show_inputs)
         self.assertEqual(args.input_width, 160)
         self.assertEqual(args.input_height, 120)
@@ -36,6 +41,8 @@ class SO101LiveViewerTest(TestCase):
 
         self.assertEqual(config.env_id, "MuJoCoReach-v1")
         self.assertEqual(config.fps, 30.0)
+        self.assertEqual(config.policy, "sample")
+        self.assertFalse(config.allow_download)
         self.assertFalse(config.show_inputs)
         self.assertEqual(config.input_width, 320)
         self.assertEqual(config.input_height, 240)
