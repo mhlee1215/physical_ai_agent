@@ -6,6 +6,8 @@ WORK_ROOT="${WORK_ROOT:-/workspace/physical-ai}"
 LEROBOT_DIR="${LEROBOT_DIR:-$WORK_ROOT/vendor/lerobot}"
 PY312_VENV="${PY312_VENV:-$WORK_ROOT/envs/lerobot_py312}"
 LEROBOT_REF="${LEROBOT_REF:-main}"
+LIBERO_CONFIG_DIR="${LIBERO_CONFIG_DIR:-$HOME/.libero}"
+LIBERO_ASSETS_DIR="${LIBERO_ASSETS_DIR:-$WORK_ROOT/libero_assets}"
 
 SMOLVLA_MODEL_ID="${SMOLVLA_MODEL_ID:-lerobot/smolvla_libero}"
 LIBERO_TASKS="${LIBERO_TASKS:-libero_spatial,libero_object,libero_goal,libero_10}"
@@ -62,6 +64,35 @@ if [ "$SKIP_BOOTSTRAP" != "1" ]; then
 
   "$PY312_VENV/bin/python" -m pip install -e "$LEROBOT_DIR[smolvla,libero]"
 fi
+
+LIBERO_SITE_PACKAGES="$("$PY312_VENV/bin/python" - <<'PY'
+import sysconfig
+
+print(sysconfig.get_paths()["purelib"])
+PY
+)"
+LIBERO_PACKAGE_DIR="$LIBERO_SITE_PACKAGES/libero/libero"
+
+if [ ! -f "$LIBERO_CONFIG_DIR/config.yaml" ]; then
+  mkdir -p "$LIBERO_CONFIG_DIR"
+  "$PY312_VENV/bin/python" - <<PY
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="lerobot/libero-assets",
+    repo_type="dataset",
+    local_dir="$LIBERO_ASSETS_DIR",
+)
+PY
+  cat > "$LIBERO_CONFIG_DIR/config.yaml" <<EOF
+assets: $LIBERO_ASSETS_DIR
+bddl_files: $LIBERO_PACKAGE_DIR/bddl_files
+datasets: $LIBERO_PACKAGE_DIR/../datasets
+init_states: $LIBERO_PACKAGE_DIR/init_files
+EOF
+fi
+
+export LIBERO_CONFIG_PATH="$LIBERO_CONFIG_DIR"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export HF_HOME="${HF_HOME:-$WORK_ROOT/hf_home}"
