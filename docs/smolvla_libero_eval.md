@@ -33,12 +33,28 @@ git pull --ff-only origin main
 sh scripts/runpod_smolvla_libero_eval.sh
 ```
 
+The RunPod command is a wrapper around the Linux evaluator:
+
+```bash
+sh scripts/eval_smolvla_libero_linux.sh
+```
+
 For a quick smoke:
 
 ```bash
 LIBERO_TASKS=libero_spatial \
 LIBERO_N_EPISODES=1 \
-sh scripts/runpod_smolvla_libero_eval.sh
+sh scripts/eval_smolvla_libero_linux.sh
+```
+
+## Mac Local Preflight
+
+macOS cannot produce paper-comparable LIBERO numbers because LeRobot's LIBERO
+benchmark requires Linux. Use the Mac script only to produce a local readiness
+report:
+
+```bash
+sh scripts/eval_smolvla_libero_mac.sh
 ```
 
 ## Result Handoff
