@@ -20,8 +20,15 @@ Use LeRobot's LIBERO benchmark integration:
 - control mode: use the checkpoint's default unless the model card or config
   specifies otherwise
 
-The quick smoke protocol may use one suite and one episode per task, but those
-numbers are not paper-comparable.
+Subset runs are useful for validation, but label them precisely:
+
+- `smoke`: one suite, one task id, one episode. Plumbing only.
+- `subset-comparable`: one official suite and fixed official task ids. Comparable
+  only against the exact same subset.
+- `paper-comparable`: all four standard suites, all 10 tasks per suite, 10
+  episodes per task, 400 total trials.
+
+Do not compare a subset average directly against a paper's full LIBERO average.
 
 ## RunPod Command
 
@@ -43,9 +50,23 @@ For a quick smoke:
 
 ```bash
 LIBERO_TASKS=libero_spatial \
+LIBERO_TASK_IDS='[0]' \
 LIBERO_N_EPISODES=1 \
 sh scripts/eval_smolvla_libero_linux.sh
 ```
+
+For a small but repeatable subset:
+
+```bash
+LIBERO_TASKS=libero_spatial \
+LIBERO_TASK_IDS='[0,1,2]' \
+LIBERO_N_EPISODES=5 \
+sh scripts/eval_smolvla_libero_linux.sh
+```
+
+This produces `3 tasks * 5 episodes = 15` trials. It is a useful early signal
+and can be compared only with another run using the same suite, task ids, model,
+control mode, and episode count.
 
 ## Mac Local Preflight
 

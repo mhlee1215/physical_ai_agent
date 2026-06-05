@@ -9,6 +9,7 @@ LEROBOT_REF="${LEROBOT_REF:-main}"
 
 SMOLVLA_MODEL_ID="${SMOLVLA_MODEL_ID:-lerobot/smolvla_libero}"
 LIBERO_TASKS="${LIBERO_TASKS:-libero_spatial,libero_object,libero_goal,libero_10}"
+LIBERO_TASK_IDS="${LIBERO_TASK_IDS:-}"
 LIBERO_N_EPISODES="${LIBERO_N_EPISODES:-10}"
 LIBERO_BATCH_SIZE="${LIBERO_BATCH_SIZE:-1}"
 LIBERO_MAX_PARALLEL_TASKS="${LIBERO_MAX_PARALLEL_TASKS:-1}"
@@ -59,11 +60,17 @@ export HF_HOME="${HF_HOME:-$WORK_ROOT/hf_home}"
 export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 
+TASK_IDS_ARG=""
+if [ -n "$LIBERO_TASK_IDS" ]; then
+  TASK_IDS_ARG="--env.task_ids=$LIBERO_TASK_IDS"
+fi
+
 COMMAND="lerobot-eval \
   --output_dir=$OUTPUT_ROOT/eval_logs \
   --policy.path=$SMOLVLA_MODEL_ID \
   --env.type=libero \
   --env.task=$LIBERO_TASKS \
+  $TASK_IDS_ARG \
   --eval.batch_size=$LIBERO_BATCH_SIZE \
   --eval.n_episodes=$LIBERO_N_EPISODES \
   --env.max_parallel_tasks=$LIBERO_MAX_PARALLEL_TASKS \
@@ -76,6 +83,7 @@ cat > "$REPORT_PATH" <<EOF
 - git_commit: \`$GIT_COMMIT\`
 - model_id: \`$SMOLVLA_MODEL_ID\`
 - tasks: \`$LIBERO_TASKS\`
+- task_ids: \`${LIBERO_TASK_IDS:-all}\`
 - episodes_per_task: \`$LIBERO_N_EPISODES\`
 - batch_size: \`$LIBERO_BATCH_SIZE\`
 - max_parallel_tasks: \`$LIBERO_MAX_PARALLEL_TASKS\`
@@ -92,7 +100,9 @@ $COMMAND
 
 - Paper-comparable protocol is 10 episodes per task over Spatial, Object, Goal,
   and Long/10 suites.
-- Quick smoke runs with fewer episodes are only plumbing checks.
+- Subset runs are comparable only against the same suite/task-id/episode subset.
+- Quick smoke runs with fewer episodes are plumbing checks, not full-paper
+  comparison numbers.
 EOF
 
 set +e

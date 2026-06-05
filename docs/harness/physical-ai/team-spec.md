@@ -173,6 +173,7 @@ reported benchmark table.
 - `sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --real-images --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_images_1ep_1step`
 - `sh scripts/eval_smolvla_libero_mac.sh`
 - `LIBERO_TASKS=libero_spatial LIBERO_N_EPISODES=1 sh scripts/eval_smolvla_libero_linux.sh`
+- `LIBERO_TASKS=libero_spatial LIBERO_TASK_IDS='[0,1,2]' LIBERO_N_EPISODES=5 sh scripts/eval_smolvla_libero_linux.sh`
 - `sh scripts/runpod_smolvla_libero_eval.sh`
 - `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
