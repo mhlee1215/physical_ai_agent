@@ -72,6 +72,12 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 Use RunPod as the Linux/NVIDIA execution lane for LIBERO, LeRobot/SmolVLA,
 ManiSkill GPU rendering, Isaac, and paper-comparable evaluation runs.
 
+Maintain `docs/runpod_worklog.md` as the durable handoff journal for cloud work.
+Update it whenever a RunPod evaluation, setup fix, result fetch, or lifecycle
+decision changes the state a future conversation needs to recover. Do not
+include API keys, private SSH keys, full `.env` contents, or raw secret-bearing
+API responses.
+
 Default workflow:
 
 ```bash

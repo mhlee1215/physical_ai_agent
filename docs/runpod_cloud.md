@@ -66,6 +66,15 @@ volume. Container-root data under `/` should be treated as disposable.
 
 ## Result Handoff Before Stop
 
+Maintain the durable RunPod handoff journal while working:
+
+```text
+docs/runpod_worklog.md
+```
+
+Update it with the active Pod, result paths, exact commands, current status,
+and next actions before ending a work session or stopping the Pod.
+
 Before stopping a Pod after an evaluation run, collect a self-contained result
 bundle under the network volume:
 
