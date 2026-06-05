@@ -187,3 +187,82 @@ previous `lerobot/smolvla_libero` run.
   protocol parity: exact checkpoint identity, LeRobot commit/version, LIBERO
   assets/init states, action normalization/control mode, and whether the
   published table used a different SmolVLA checkpoint.
+
+### 2026-06-05 Model Identity Check
+
+- User concern: 68.5% overall success seemed high for a baseline.
+- Verified from run command/log: the evaluated policy path was
+  `HuggingFaceVLA/smolvla_libero`.
+- Verified from both Hugging Face config and local `lerobot_eval.log`:
+  `type=smolvla`, visual inputs are `observation.images.image` and
+  `observation.images.image2`, action output is 7D, and runtime device is CUDA.
+- Important baseline interpretation: this is a LIBERO-finetuned SmolVLA policy,
+  not a random/zero/scripted baseline. It is a strong policy-only baseline for
+  later agentic-wrapper comparisons.
+- Config details explaining the baseline character: `train_expert_only=True`,
+  `num_vlm_layers=0`, `vlm_model_name=HuggingFaceTB/SmolVLM2-500M-Instruct`,
+  `num_steps=10`, and `n_action_steps=1`.
+- Reference comparison source to keep with any table: ActionX Table 1 reports
+  SmolVLA LIBERO success rates of Goal 91, Object 94, Spatial 93, Long 77,
+  Average 88.8 under 10 tasks per suite and 10 trials per task.
+- Current result remains materially below that reference, especially on
+  `libero_10` Long: 39.0% versus 77.0%.
+
+## 2026-06-05 Cloud Resourcing + Debug Plan
+
+- I verified `RUNPOD_POD_ID=t8eqsuj7nzaou8` is in `EXITED` state and cannot be
+  started (`There are not enough free GPUs on the host machine`).
+- Attempted replacement Pod creation on the same network volume `tchm4gxfvd`:
+  - `NVIDIA GeForce RTX 4090` (requested): `There are no instances currently available`.
+  - `NVIDIA H200`: `could not find any pods with required specifications`.
+  - `NVIDIA A40`: same error.
+  - `NVIDIA H100 80GB HBM3`, `NVIDIA H100 SXM`, `NVIDIA A100-SXM4-80GB`,
+    `NVIDIA RTX A2000`, `NVIDIA GeForce RTX 3070`, `NVIDIA RTX A4000`:
+    no instances/invalid host availability errors from API.
+- Result: 재현 비교 재실행은 현재 클라우드 자원 부족으로 보류.
+
+### Prepared debug preset for next run
+
+- Added `scripts/runpod_smolvla_libero_eval_paper.sh` and docs entry with a
+  high-likelihood paper-parity preset:
+  - `SMOLVLA_MODEL_ID=lerobot/smolvla_libero`
+  - `POLICY_EMPTY_CAMERAS=0`
+  - `LIBERO_BATCH_SIZE=10`
+  - `LIBERO_EXTRA_ARGS="--policy.num_steps=10 --policy.n_action_steps=50"`
+- Run order once pod is available:
+ 1. `libero_spatial LIBERO_TASK_IDS='[0,1,2,3,4]' LIBERO_N_EPISODES=5` for
+     quick sanity.
+ 2. Full `paper-comparable` 400-episode run with the preset above.
+
+### 2026-06-05 to 2026-06-06 Cloud Resourcing Escalation
+
+- Community pool probing (same image/volume) continued to fail with:
+  - `There are no instances currently available`
+  - `could not find any pods with required specifications`
+- Escalation to `RUNPOD_CLOUD_TYPE=SECURE` succeeded on
+  `NVIDIA GeForce RTX 4090` with the existing volume `tchm4gxfvd`, creating:
+  - `z1py6r6em95aa5` (running, 16 vCPU, costPerHr 0.69)
+- Additional probe result still visible: `3f6so5bs0zz6k6` (running, started during
+  same search, 6 vCPU, costPerHr 0.39, has mapped SSH port in RunPod status).
+- Status now: there are live SECURE 4090 candidates, so benchmark continuation can
+  proceed if SSH access is confirmed for one of them; otherwise keep one and
+  convert its SSH path before the next evaluation.
+- Post-check action:
+  - Stopped the SECURE 4090 probe pod (`z1py6r6em95aa5`) to avoid a duplicate running Pod while continuing with
+    `3f6so5bs0zz6k6` as the single active experiment Pod.
+
+### 2026-06-05 Pod Cost Cleanup
+
+- User correctly pointed out that stopped Pods can still carry small residual
+  cost.
+- Terminated stopped Pods:
+  - `z1py6r6em95aa5` probe Pod
+  - `t8eqsuj7nzaou8` previous eval Pod
+- Verified current RunPod list now contains only:
+  - `3f6so5bs0zz6k6` running, `NVIDIA L4`, `0.39/hr`, network volume
+    `tchm4gxfvd`, SSH `root@213.173.105.22:30187`.
+- Updated local uncommitted `.env` RunPod target to this active Pod.
+- Current blocker for immediate rerun: active L4 Pod has repo checkout but does
+  not have the prior Python 3.12 LeRobot environment at
+  `/workspace/physical-ai/envs/lerobot_py312`; bootstrap is required before the
+  next sanity evaluation.

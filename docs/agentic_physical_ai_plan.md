@@ -598,6 +598,19 @@ robot.stop()
 - [ ] Test policy output without sending commands to robot.
 - [ ] Add human confirmation mode before real actuation.
 
+## Phase 17: SO-100 Real Robot Pilot
+
+- [ ] Prepare a calibrated SO-100 follower arm with two arm-mounted cameras as the policy observation inputs.
+- [ ] Add a `so100_follower` real-robot adapter behind the common `RealRobotInterface`.
+- [ ] Add a two-camera OpenCV capture manifest that records camera indexes, frame sizes, feature keys, and calibration files.
+- [ ] Keep the MacBook built-in webcam as a Codex/operator observer channel, separate from policy inputs.
+- [ ] Add a periodic observer-frame capture loop using `cv2.VideoCapture(0)` that saves latest frames for Codex-side situation checks.
+- [ ] Run planner, verifier, and Codex observer checks on live SO-100 camera frames without sending robot actions.
+- [ ] Add a dry-run real-robot policy rollout that logs predicted actions, safety clipping, and human approval prompts.
+- [ ] Require physical emergency stop, action rate limits, joint limits, and manual confirmation before any real actuation.
+- [ ] Compare `policy_only`, `agentic_retry`, and `human-confirmed agentic_retry` on a small SO-100 tabletop task.
+- [ ] Treat successful live SO-100 observer-assisted trials as a paper appendix or qualitative demo until repeated quantitative trials are complete.
+
 ## Immediate Task Order
 
 - [ ] 1. Create repository skeleton.

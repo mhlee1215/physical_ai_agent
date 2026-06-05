@@ -64,6 +64,23 @@ for Pods attached to network volumes; in that case, terminate only after
 confirming all useful files are under the persistent `/workspace` network
 volume. Container-root data under `/` should be treated as disposable.
 
+## Probe Alternative GPU Types
+
+When COMMUNITY pool is saturated, try SECURE pool with the same image/volume and
+probe for first available GPU type:
+
+```bash
+export RUNPOD_API_KEY=...
+export RUNPOD_NETWORK_VOLUME_ID=tchm4gxfvd
+RUNPOD_CLOUD_TYPE=SECURE sh scripts/runpod_probe_gpus.sh
+```
+
+Useful follow-up:
+
+- If it succeeds, keep the returned `RUNPOD_POD_ID` for the run.
+- If it fails, rerun later or add more GPU names to the probe list in
+  `scripts/runpod_probe_gpus.sh`.
+
 ## Result Handoff Before Stop
 
 Maintain the durable RunPod handoff journal while working:

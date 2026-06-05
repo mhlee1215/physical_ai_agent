@@ -273,3 +273,51 @@ Checkpoint 24 must register ManiSkill / ManiSkill-HAB as the first research-rele
 ## Planned Checkpoint 25 Verification
 
 Checkpoint 25 will register RoboCasa / RoboCasa365 as the heavier long-horizon household manipulation benchmark. Its first gate should probe dependencies and execute one reset/step rollout; its strict gate should save success metrics, trace/video artifacts, and a `policy_only` vs `agentic_retry` comparison report. Keep CP25 separate from CP24 because RoboCasa assets are large and should not be part of the lightweight Mac-local smoke.
+
+## Planned Checkpoint 26 Verification
+
+Checkpoint 26 will register the real SO-100 pilot. The first gate should use a calibrated `so100_follower` arm with two arm-mounted OpenCV cameras as policy inputs and the MacBook built-in webcam as a separate Codex/operator observer channel. The smoke gate must capture all camera streams, save a manifest with camera indexes, feature keys, frame sizes, calibration file paths, and observer-frame artifacts, then run planner/verifier logic without sending robot actions. The strict gate may execute physical actions only after emergency stop, joint limits, action rate limits, safety clipping, and human confirmation are wired and evidenced. Any paper claim from CP26 must distinguish quantitative policy results from qualitative Codex observer-assisted demonstrations.
+
+## AI & Coding-Agent Disclosure Policy for Papers
+
+Purpose:
+
+- Keep publication artifacts reproducible and transparent.
+- Prevent policy drift between simulation runs, benchmark claims, and manuscript text.
+- Ensure top-tier journal expectations are met for LLM/coding-agent usage.
+
+Mandatory rules for any manuscript draft in this repo:
+
+- Never list AI tools as authors.
+- Always disclose AI contributions in a stable manuscript section (`Methods`, `Acknowledgements`, `Author contributions`, or a dedicated `AI Disclosure` section).
+- Record at least:
+  - tool name + model/version,
+  - date used,
+  - task type (e.g., drafting, proofreading, code assist, experiment interpretation, figure caption drafting),
+  - scope/amount (entire draft vs. partial section, prompt count, or file list),
+  - whether outputs were independently verified.
+- Keep a human-in-the-loop trace:
+  - all AI outputs must be reviewed and edited by the authors;
+  - generated code must be executed, and reported metrics/visuals linked as evidence.
+
+Top-tier examples to mirror (Nature portfolio examples already observed):
+
+- Nature Communications 2025: `Acknowledgements` disclosure of ChatGPT-based assistance and explicit statement that core scientific conclusions were written by authors.
+- Nature Communications 2025 (another article): script assistance with explicit tool/version/task disclosure in `Acknowledgements`.
+- Communications Biology 2026: explicit `Acknowledgements` disclosure of ChatGPT/Perplexity/Elicit for idea generation and literature scan.
+- Scientific Reports 2024: explicit AI-use section with model/version and non-authorship statement.
+
+Example templates (adapt per journal):
+
+- `We used [Tool] ([model/version], [date]) for [task], and then manually reviewed, edited, and finalized all outputs before submission.`
+- `No text or claims in the manuscript were copied directly from model output without human verification; all figures and code were executed/validated, and evidence is reported in _workspace/checkpoints.`
+- `No AI system is listed as an author.`
+
+Venue alignment:
+
+- For journal-specific policies (Nature/Elsevier/IEEE/OUP/MDPI/ACM), place disclosure in the required location and mirror wording in final manuscript evidence notes.
+
+Required checkpoint-local record:
+
+- Add a short disclosure note to the checkpoint evidence bundle whenever AI or coding-agent outputs were used during manuscript preparation.
+- Add the same note to final response artifacts when publishing claims or benchmark tables are produced.

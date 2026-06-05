@@ -28,6 +28,21 @@ Subset runs are useful for validation, but label them precisely:
 - `paper-comparable`: all four standard suites, all 10 tasks per suite, 10
   episodes per task, 400 total trials.
 
+If your first full-paper attempt is far below expected, try the paper-parity preset
+below before changing benchmark scope:
+
+```bash
+SMOLVLA_MODEL_ID=lerobot/smolvla_libero \
+POLICY_EMPTY_CAMERAS=0 \
+LIBERO_BATCH_SIZE=10 \
+LIBERO_MAX_PARALLEL_TASKS=1 \
+LIBERO_EXTRA_ARGS="--policy.num_steps=10 --policy.n_action_steps=50" \
+sh scripts/runpod_smolvla_libero_eval_paper.sh
+```
+
+That preset keeps image inputs active and uses the legacy LIBERO action-step layout
+that is commonly reported in public SmolVLA LIBERO baselines.
+
 Do not compare a subset average directly against a paper's full LIBERO average.
 
 ## RunPod Command
