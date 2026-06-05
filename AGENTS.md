@@ -55,3 +55,9 @@
   `sh scripts/checkpoint_22.sh`
 - Checkpoint 23 first comparison report:
   `sh scripts/checkpoint_23.sh`
+- Checkpoint 24 ManiSkill / ManiSkill-HAB evaluation:
+  `sh scripts/checkpoint_24.sh --require-maniskill`
+- Checkpoint 24 real SmolVLA image probe:
+  `sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --real-images`
+- RunPod cloud workstation check:
+  `RUNPOD_SSH='<pod-user>@ssh.runpod.io' sh scripts/runpod_check.sh`
