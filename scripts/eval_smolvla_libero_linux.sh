@@ -107,7 +107,7 @@ if [ -n "$LIBERO_TASK_IDS" ]; then
 fi
 
 CAMERA_NAME_MAPPING_ARG=""
-if [ -n "$LIBERO_CAMERA_NAME_MAPPING" ]; then
+if [ "$LIBERO_CAMERA_NAME_MAPPING" != "none" ]; then
   CAMERA_NAME_MAPPING_ARG="--env.camera_name_mapping='$LIBERO_CAMERA_NAME_MAPPING'"
 fi
 

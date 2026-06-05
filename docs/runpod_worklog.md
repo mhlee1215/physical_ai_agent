@@ -24,7 +24,7 @@ API responses that may contain secrets.
 
 ### Current State
 
-- Status: running on RunPod.
+- Status: completed and fetched locally.
 - Goal: evaluate `lerobot/smolvla_libero` on LIBERO suites with a protocol close
   to paper-comparable reporting.
 - Pod: `t8eqsuj7nzaou8`.
@@ -62,6 +62,24 @@ lerobot-eval \
 
 ### Latest Observations
 
+- Completion:
+  - exit code: 0
+  - local fetched bundle:
+    `_workspace/runpod_results/20260605T173150Z/smolvla_libero_full_20260605T162959Z`
+  - metric file:
+    `_workspace/runpod_results/20260605T173150Z/smolvla_libero_full_20260605T162959Z/eval_logs/eval_info.json`
+  - videos: 400
+  - elapsed eval time: 3186.6 s
+  - overall success: 64.75%
+- Suite success:
+  - `libero_spatial`: 57.0%
+  - `libero_object`: 68.0%
+  - `libero_goal`: 81.0%
+  - `libero_10`: 53.0%
+- Interpretation: completed correctly, but the result is not close to published
+  SmolVLA numbers. The likely mismatch is checkpoint/config. This run used
+  `lerobot/smolvla_libero` and loaded `n_action_steps=50`; the benchmark
+  checkpoint path is `HuggingFaceVLA/smolvla_libero` with `n_action_steps=1`.
 - The evaluation is using GPU, but it is CPU-bound by LIBERO/MuJoCo stepping.
 - Evidence from the running process:
   - GPU memory: about 1994 MiB allocated by the `lerobot-eval` Python process.
@@ -92,18 +110,46 @@ finishes.
 
 ### Next Actions
 
-1. Let the current run finish unless it errors or disk fills.
-2. If it finishes, fetch the result bundle locally:
+1. Continue the second full run using `HuggingFaceVLA/smolvla_libero` and
+   `--policy.num_steps=10 --policy.n_action_steps=1`.
+2. Fetch the second run's result bundle when it completes.
+3. Replace the headline comparison table with the second run if it matches the
+   canonical SmolVLA configuration better.
+4. Stop the Pod only after the comparable result and report are fetched locally.
 
-   ```bash
-   set -a
-   . ./.env
-   set +a
-   RUNPOD_REMOTE_RESULT_DIR=/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results \
-     sh scripts/runpod_fetch_results.sh
-   ```
+## 2026-06-05 HuggingFaceVLA SmolVLA LIBERO Full Eval
 
-3. Parse `eval_info.json` or the generated metrics files.
-4. Write a side-by-side comparison report against published SmolVLA LIBERO
-   numbers.
-5. Only then decide whether this milestone is large enough to stop the Pod.
+### Current State
+
+- Status: first attempt failed before rollout; corrected attempt is running.
+- Goal: rerun the full 400-episode LIBERO evaluation with the benchmark-oriented
+  checkpoint/config.
+- Pod: `t8eqsuj7nzaou8`.
+- Failed output root:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_libero_full_20260605T173749Z`.
+- Failed driver log:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/hfvla_full_eval_driver_20260605T173749Z.log`.
+- Corrected output root:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_libero_full_20260605T173842Z`.
+- Corrected driver log:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/hfvla_full_eval_driver_20260605T173842Z.log`.
+
+### Command Difference From Previous Run
+
+```bash
+SMOLVLA_MODEL_ID=HuggingFaceVLA/smolvla_libero
+LIBERO_EXTRA_ARGS="--policy.num_steps=10 --policy.n_action_steps=1"
+```
+
+This is expected to be closer to published SmolVLA LIBERO settings than the
+previous `lerobot/smolvla_libero` run.
+
+### Failure And Fix
+
+- First attempt failed before any videos were created.
+- Error: feature mismatch. The HuggingFaceVLA checkpoint expected
+  `observation.images.image`, `observation.images.image2`, and
+  `observation.images.empty_camera_0`, but the previous camera mapping produced
+  `observation.images.camera1` and `observation.images.camera2`.
+- Fix: rerun with `LIBERO_CAMERA_NAME_MAPPING=none` so LeRobot keeps the default
+  image feature names for this checkpoint.
