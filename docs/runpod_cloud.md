@@ -34,6 +34,36 @@ ssh -tt -i ~/.ssh/id_ed25519 "$RUNPOD_SSH"
 
 Avoid SSH agent forwarding (`-A`) unless there is a specific reason. The normal key-based connection is enough for setup and keeps the local SSH agent from being exposed to the cloud machine.
 
+## Lifecycle Script
+
+Create a RunPod API key in RunPod account settings and keep it only in your
+local shell or uncommitted `.env` file:
+
+```bash
+export RUNPOD_API_KEY='...'
+export RUNPOD_POD_ID='v605dhuhdkjbfm'
+```
+
+Then manage the Pod without opening the RunPod console:
+
+```bash
+sh scripts/runpod_pod.sh status
+sh scripts/runpod_pod.sh stop
+sh scripts/runpod_pod.sh start
+sh scripts/runpod_pod.sh list
+```
+
+There is also an explicit terminate command, but it is intentionally guarded:
+
+```bash
+sh scripts/runpod_pod.sh terminate --yes-terminate
+```
+
+Use `stop` first when the goal is to pause GPU billing. RunPod may reject stop
+for Pods attached to network volumes; in that case, terminate only after
+confirming all useful files are under the persistent `/workspace` network
+volume. Container-root data under `/` should be treated as disposable.
+
 ## Update Repo On RunPod
 
 Inside the Pod:

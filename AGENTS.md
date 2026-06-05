@@ -61,5 +61,7 @@
   `sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --real-images`
 - RunPod cloud workstation check:
   `RUNPOD_SSH='<pod-user>@ssh.runpod.io' sh scripts/runpod_check.sh`
+- RunPod Pod lifecycle:
+  `RUNPOD_API_KEY='<api-key>' RUNPOD_POD_ID='<pod-id>' sh scripts/runpod_pod.sh stop`
 - RunPod baseline note:
   `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` verifies CUDA/PyTorch and CP24 `Empty-v1`, but Python 3.11 blocks `lerobot>=0.5.1` SmolVLA and the tested Pod did not expose NVIDIA Vulkan for `PickCube-v1`.
