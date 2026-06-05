@@ -224,3 +224,53 @@ sh scripts/checkpoint_23.sh
 ```
 
 CP20 writes a deterministic subgoal plan for `reach_target`. CP21 verifies a subgoal from SO101 simulator state using `tcp_to_target_dist` and `success`. CP22 executes the planned subgoals with one retry budget per failed subgoal and records verifier decisions in the trace. CP23 writes `_workspace/checkpoints/checkpoint_23/comparison/comparison_report.md` comparing `policy_only` and `agentic_retry` runs.
+
+## Checkpoint 24: ManiSkill / ManiSkill-HAB
+
+Add the first research-relevant Mac-local benchmark gate beyond the SO101 smoke path:
+
+```bash
+sh scripts/bootstrap_checkpoint_24.sh
+sh scripts/checkpoint_24.sh
+sh scripts/checkpoint_24.sh --require-maniskill
+sh scripts/checkpoint_24.sh --require-maniskill --episodes 20 --steps 100 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_pickcube_baselines_20ep_100step
+sh scripts/checkpoint_24.sh --require-maniskill --episodes 10 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_dry_10ep_50step
+sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_1ep_1step
+sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --real-images --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_images_1ep_1step
+sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADSetTableVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_hab_settable_val_2ep_50step
+sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADPrepareGroceriesVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_hab_preparegroceries_val_2ep_50step
+sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADSetTableVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_hab_settable_val_smolvla_dry_2ep_50step
+sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADPrepareGroceriesVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_hab_preparegroceries_val_smolvla_dry_2ep_50step
+```
+
+CP24 targets ManiSkill first and records the ManiSkill-HAB expansion path as the next suite target. The non-strict command writes `_workspace/checkpoints/checkpoint_24/checkpoint_report.json`, documents a dependency blocker when `mani_skill` is not installed, and always writes `smolvla_maniskill_eval_plan.md` plus `checkpoint_25_robocasa_plan.md`. The strict command requires a real ManiSkill reset/step rollout and writes `maniskill_rollout/episodes.jsonl`, `metrics.json`, and `summary.md`.
+
+For a first Mac-local baseline number, run the longer command above. It evaluates `random` and `zero` policies on the same `PickCube-v1` seeds and writes per-policy success rate, mean reward sum, and mean episode steps under `maniskill_rollout/metrics.json`.
+
+For a small Mac-local HAB probe, install the extra scene/object assets once:
+
+```bash
+PYTHONPATH=src .venv/bin/python -B -m mani_skill.utils.download_asset ReplicaCAD -y
+PYTHONPATH=src .venv/bin/python -B -m mani_skill.utils.download_asset ReplicaCADRearrange -y
+PYTHONPATH=src .venv/bin/python -B -m mani_skill.utils.download_asset ycb -y
+```
+
+Then run the two `ReplicaCAD...SceneManipulation` commands above. The `--no-fallback-env` flag keeps these probes honest: if the HAB task cannot load, the checkpoint fails instead of silently falling back to `Empty-v1`.
+
+The default research target is `PickCube-v1`. On macOS, SAPIEN needs a working Vulkan loader plus MoltenVK ICD to create the render device used by ManiSkill manipulation assets. Install them once with:
+
+```bash
+/opt/homebrew/bin/brew install vulkan-loader vulkan-tools molten-vk
+```
+
+`scripts/checkpoint_24.sh` automatically exports the Homebrew Vulkan loader and MoltenVK ICD paths when they exist. In Codex sandboxed sessions, Metal may still be hidden from MoltenVK; run the strict command from a normal macOS Terminal or with an unsandboxed command runner. If `PickCube-v1` is still blocked, CP24 falls back to `Empty-v1` to prove the ManiSkill evaluation pipeline is executable while preserving the `PickCube-v1` blocker in `maniskill_blocker.md`.
+
+The SmolVLA layer is not treated as task-quality ManiSkill evaluation until two bridges exist: a ManiSkill observation-to-LeRobot feature bridge and a SmolVLA action-chunk-to-ManiSkill action bridge. CP24 records that installation and adapter plan explicitly.
+
+`smolvla_dry` validates that bridge shape without loading model weights. It writes `maniskill_rollout/smolvla_dry_bridge_manifest.json` with the mapped feature keys, state dimension, synthetic image feature shape, instruction, and ManiSkill action-space shape. Treat it as a wiring baseline, not as pretrained SmolVLA task performance.
+
+`smolvla_real` loads LeRobot's pretrained `lerobot/smolvla_base`, builds a ManiSkill-shaped batch, calls `select_action()`, clips the resulting action into the ManiSkill action space, and steps the environment. By default it uses state plus zero image tensors for the smallest model-call probe. Add `--real-images` to create the ManiSkill env with `obs_mode=rgb`, map `sensor_data.base_camera.rgb` into SmolVLA image features, and save `maniskill_rollout/smolvla_real_input.png`, per-step frames under `maniskill_rollout/smolvla_real_frames/`, and `maniskill_rollout/smolvla_real_rollout.gif`. This proves real model inference with real ManiSkill camera frames, but it is still a one-camera Mac-local probe rather than a full paper-scale visual policy evaluation.
+
+## Checkpoint 25: RoboCasa
+
+RoboCasa is registered as the heavier long-horizon household manipulation checkpoint. CP25 should remain separate from CP24 because RoboCasa assets are large and the benchmark is better used after the lighter ManiSkill local gate passes. The planned strict gate is a RoboCasa reset/step rollout, task success metrics, trace/video artifacts, and the same `policy_only` vs `agentic_retry` comparison contract used by CP23/CP24.

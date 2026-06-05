@@ -90,6 +90,11 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 - `sh scripts/checkpoint_21.sh`
 - `sh scripts/checkpoint_22.sh`
 - `sh scripts/checkpoint_23.sh`
+- `sh scripts/bootstrap_checkpoint_24.sh`
+- `sh scripts/checkpoint_24.sh`
+- `sh scripts/checkpoint_24.sh --require-maniskill`
+- `sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_1ep_1step`
+- `sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --real-images --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_images_1ep_1step`
 - `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
 - `python3 -B -c "import ast, pathlib; ..."` as a no-dependency fallback syntax check
@@ -159,3 +164,26 @@ sh scripts/checkpoint_23.sh
 ```
 
 Checkpoint 20 must write a rule-based SO101 subgoal plan. Checkpoint 21 must execute a real SO101 simulator step and save a simulation-state verifier decision based on `tcp_to_target_dist` and `success`. Checkpoint 22 must execute planned subgoals with a retry event after a verifier failure and save planner/verifier/retry trace records. Checkpoint 23 must compare `policy_only` and `agentic_retry` outputs and save both JSON metrics and a Markdown comparison report.
+
+## Required Checkpoint 24 Verification
+
+Run these commands before completing checkpoint 24:
+
+```bash
+sh scripts/bootstrap_checkpoint_24.sh
+sh scripts/checkpoint_24.sh --require-maniskill
+sh scripts/checkpoint_24.sh --require-maniskill --episodes 20 --steps 100 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_pickcube_baselines_20ep_100step
+sh scripts/checkpoint_24.sh --require-maniskill --episodes 10 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_dry_10ep_50step
+sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_1ep_1step
+sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --real-images --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_images_1ep_1step
+sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADSetTableVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_hab_settable_val_2ep_50step
+sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADPrepareGroceriesVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_hab_preparegroceries_val_2ep_50step
+sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADSetTableVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_hab_settable_val_smolvla_dry_2ep_50step
+sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADPrepareGroceriesVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_hab_preparegroceries_val_smolvla_dry_2ep_50step
+```
+
+Checkpoint 24 must register ManiSkill / ManiSkill-HAB as the first research-relevant Mac-local evaluation gate, execute a real ManiSkill reset/step rollout when dependencies are installed, save rollout JSONL metrics and summary artifacts, and write a SmolVLA-to-ManiSkill evaluation plan. The non-strict command may pass with a documented dependency blocker, but `--require-maniskill` is required before claiming the benchmark pipeline is executable on the target Mac. The longer baseline command must produce per-policy `random` and `zero` metrics on `PickCube-v1`, including success rate, mean reward sum, and mean episode steps. `smolvla_dry` must write `maniskill_rollout/smolvla_dry_bridge_manifest.json` and is only a bridge-shape baseline, not pretrained model performance. `smolvla_real` must load LeRobot's pretrained `lerobot/smolvla_base`, execute `select_action()`, clip the action into the ManiSkill action space, and step the environment; the smallest probe may use zero image tensors, while the `--real-images` probe must map ManiSkill `sensor_data.base_camera.rgb` into SmolVLA image features and save `maniskill_rollout/smolvla_real_input.png`. The HAB partial probes must use `--no-fallback-env` so the requested `ReplicaCAD...SceneManipulation` task is authoritative. They require `ReplicaCAD`, `ReplicaCADRearrange`, and `ycb` assets. On macOS, install `vulkan-loader`, `vulkan-tools`, and `molten-vk` with Homebrew before strict manipulation-task evaluation. If the default `PickCube-v1` manipulation task is blocked by a headless SAPIEN render-device failure, CP24 may execute the fallback `Empty-v1` rollout and must preserve the `PickCube-v1` blocker in `maniskill_blocker.md`.
+
+## Planned Checkpoint 25 Verification
+
+Checkpoint 25 will register RoboCasa / RoboCasa365 as the heavier long-horizon household manipulation benchmark. Its first gate should probe dependencies and execute one reset/step rollout; its strict gate should save success metrics, trace/video artifacts, and a `policy_only` vs `agentic_retry` comparison report. Keep CP25 separate from CP24 because RoboCasa assets are large and should not be part of the lightweight Mac-local smoke.

@@ -41,6 +41,11 @@ ml = [
 smolvla = [
   "lerobot[smolvla]>=0.5.1,<0.6",
 ]
+maniskill = [
+  "gymnasium>=1.0",
+  "mani_skill>=3.0",
+  "numpy>=1.26",
+]
 
 [project.scripts]
 physical-ai-agent = "physical_ai_agent.cli:main"
@@ -57,6 +62,7 @@ pai-checkpoint-20 = "physical_ai_agent.checkpoints.checkpoint_20:main"
 pai-checkpoint-21 = "physical_ai_agent.checkpoints.checkpoint_21:main"
 pai-checkpoint-22 = "physical_ai_agent.checkpoints.checkpoint_22:main"
 pai-checkpoint-23 = "physical_ai_agent.checkpoints.checkpoint_23:main"
+pai-checkpoint-24 = "physical_ai_agent.checkpoints.checkpoint_24:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

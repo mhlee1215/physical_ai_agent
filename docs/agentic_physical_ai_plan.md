@@ -438,6 +438,26 @@ python -m physical_ai_agent.evaluation.run \
   - [ ] Short task suites vs long-horizon suite
   - [ ] Cost of agentic wrapper in latency and retries
 
+## Phase 9A: Research-Relevant Mac-Local Benchmarks
+
+- [ ] Add ManiSkill / ManiSkill-HAB as the first research-relevant Mac-local benchmark.
+  - [x] Bootstrap `mani_skill` and `gymnasium` dependencies.
+  - [x] Run a ManiSkill reset/step rollout on `PickCube-v1`.
+  - [x] Save `episodes.jsonl`, `metrics.json`, and `summary.md`.
+  - [x] Add `random` and `zero` baseline policy metrics for `PickCube-v1`.
+  - [x] Run small Mac-local HAB partial probes on `ReplicaCADSetTableVal` and `ReplicaCADPrepareGroceriesVal`.
+  - [x] Add a dry ManiSkill observation-to-LeRobot feature bridge for SmolVLA.
+  - [x] Add a dry SmolVLA action-chunk-to-ManiSkill action bridge.
+  - [x] Add a minimal real pretrained SmolVLA inference probe on ManiSkill state observations and action-space clipping.
+  - [x] Add a minimal real ManiSkill RGB observation bridge for SmolVLA using `sensor_data.base_camera.rgb`.
+  - [ ] Scale CP24 real-image SmolVLA evaluation beyond the one-camera local probe before treating it as task-quality VLA performance.
+  - [ ] Reuse the `policy_only` vs `agentic_retry` comparison contract.
+- [ ] Add RoboCasa / RoboCasa365 as the long-horizon household manipulation benchmark.
+  - [ ] Keep asset download and install separate from the lightweight ManiSkill gate.
+  - [ ] Run one dependency probe and reset/step rollout first.
+  - [ ] Add task success metrics, traces, videos, and comparison reports.
+  - [ ] Use RoboCasa for planner, verifier, retry, and replan stress tests after CP24 passes.
+
 ## Phase 10: Web UI and Debugging
 
 - [ ] Choose backend.
