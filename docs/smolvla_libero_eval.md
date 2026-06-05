@@ -84,3 +84,45 @@ sh scripts/runpod_pod.sh stop
   current LeRobot SmolVLA because `lerobot>=0.5.1` requires Python `>=3.12`.
 - Prefer a Python 3.12-capable image. If unavailable, bootstrap Python 3.12
   inside the Pod and create the LeRobot environment under `/workspace`.
+
+## Data And Cache Size
+
+Checked through the Hugging Face tree API on 2026-06-05:
+
+| Artifact | Approx size | Recommendation |
+| --- | ---: | --- |
+| `lerobot/smolvla_libero` model | 0.91 GB | Fine to download once; cache under `/workspace` |
+| `lerobot/smolvla_base` model | 0.92 GB | Fine to download once; cache under `/workspace` |
+| `lerobot/libero` dataset repo | 1.94 GB | Cache under `/workspace`; acceptable to redownload if needed |
+| `HuggingFaceVLA/libero` dataset repo | 34.93 GB | Do not redownload repeatedly; keep on network volume |
+
+For evaluation, the first required download should primarily be the finetuned
+policy plus LIBERO/MuJoCo assets. Full training datasets are not necessarily
+needed for policy evaluation, but any Hugging Face cache should still point at
+the network volume:
+
+```bash
+export HF_HOME=/workspace/physical-ai/hf_home
+export HF_HUB_CACHE=/workspace/physical-ai/hf_home/hub
+export TRANSFORMERS_CACHE=/workspace/physical-ai/hf_home/transformers
+```
+
+If a run starts downloading `HuggingFaceVLA/libero`, preserve it on the network
+volume and do not place it on the disposable container disk.
+
+## Create Replacement RunPod
+
+If the stopped Pod cannot start because its old host has no available GPU, make
+a replacement Pod attached to the same network volume:
+
+```bash
+set -a
+. ./.env
+set +a
+export RUNPOD_NETWORK_VOLUME_ID=tchm4gxfvd
+sh scripts/runpod_create_pod.sh
+sh scripts/runpod_create_pod.sh --yes-create
+```
+
+The dry run prints the request body without starting billing. The `--yes-create`
+form creates a new Pod and starts billing.
