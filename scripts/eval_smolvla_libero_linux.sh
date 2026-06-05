@@ -15,6 +15,9 @@ LIBERO_TASK_IDS="${LIBERO_TASK_IDS:-}"
 LIBERO_N_EPISODES="${LIBERO_N_EPISODES:-10}"
 LIBERO_BATCH_SIZE="${LIBERO_BATCH_SIZE:-1}"
 LIBERO_MAX_PARALLEL_TASKS="${LIBERO_MAX_PARALLEL_TASKS:-1}"
+LIBERO_USE_ASYNC_ENVS="${LIBERO_USE_ASYNC_ENVS:-false}"
+LIBERO_CAMERA_NAME_MAPPING="${LIBERO_CAMERA_NAME_MAPPING:-{\"agentview_image\": \"camera1\", \"robot0_eye_in_hand_image\": \"camera2\"}}"
+POLICY_EMPTY_CAMERAS="${POLICY_EMPTY_CAMERAS:-1}"
 LIBERO_EXTRA_ARGS="${LIBERO_EXTRA_ARGS:-}"
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-0}"
 APT_PACKAGES="python3.12 python3.12-dev python3.12-venv build-essential cmake git ffmpeg libegl1 libgl1"
@@ -51,8 +54,7 @@ if [ "$SKIP_BOOTSTRAP" != "1" ]; then
     python3.12 -m venv "$PY312_VENV"
   fi
 
-  "$PY312_VENV/bin/python" -m pip install --upgrade pip setuptools wheel
-  "$PY312_VENV/bin/python" -m pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
+  "$PY312_VENV/bin/python" -m pip install --upgrade pip 'setuptools>=71,<81' wheel
 
   mkdir -p "$(dirname "$LEROBOT_DIR")"
   if [ ! -d "$LEROBOT_DIR/.git" ]; then
@@ -104,15 +106,23 @@ if [ -n "$LIBERO_TASK_IDS" ]; then
   TASK_IDS_ARG="--env.task_ids=$LIBERO_TASK_IDS"
 fi
 
+CAMERA_NAME_MAPPING_ARG=""
+if [ -n "$LIBERO_CAMERA_NAME_MAPPING" ]; then
+  CAMERA_NAME_MAPPING_ARG="--env.camera_name_mapping='$LIBERO_CAMERA_NAME_MAPPING'"
+fi
+
 COMMAND="lerobot-eval \
   --output_dir=$OUTPUT_ROOT/eval_logs \
   --policy.path=$SMOLVLA_MODEL_ID \
   --env.type=libero \
   --env.task=$LIBERO_TASKS \
   $TASK_IDS_ARG \
+  $CAMERA_NAME_MAPPING_ARG \
   --eval.batch_size=$LIBERO_BATCH_SIZE \
   --eval.n_episodes=$LIBERO_N_EPISODES \
+  --eval.use_async_envs=$LIBERO_USE_ASYNC_ENVS \
   --env.max_parallel_tasks=$LIBERO_MAX_PARALLEL_TASKS \
+  --policy.empty_cameras=$POLICY_EMPTY_CAMERAS \
   $LIBERO_EXTRA_ARGS"
 
 cat > "$REPORT_PATH" <<EOF
@@ -126,6 +136,9 @@ cat > "$REPORT_PATH" <<EOF
 - episodes_per_task: \`$LIBERO_N_EPISODES\`
 - batch_size: \`$LIBERO_BATCH_SIZE\`
 - max_parallel_tasks: \`$LIBERO_MAX_PARALLEL_TASKS\`
+- use_async_envs: \`$LIBERO_USE_ASYNC_ENVS\`
+- camera_name_mapping: \`$LIBERO_CAMERA_NAME_MAPPING\`
+- policy_empty_cameras: \`$POLICY_EMPTY_CAMERAS\`
 - mujoco_gl: \`$MUJOCO_GL\`
 - output_root: \`$OUTPUT_ROOT\`
 
