@@ -15,6 +15,7 @@ LIBERO_BATCH_SIZE="${LIBERO_BATCH_SIZE:-1}"
 LIBERO_MAX_PARALLEL_TASKS="${LIBERO_MAX_PARALLEL_TASKS:-1}"
 LIBERO_EXTRA_ARGS="${LIBERO_EXTRA_ARGS:-}"
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-0}"
+APT_PACKAGES="python3.12 python3.12-dev python3.12-venv build-essential cmake git ffmpeg libegl1 libgl1"
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/_workspace/runpod_results/smolvla_libero_$STAMP}"
@@ -32,9 +33,16 @@ cd "$PROJECT_DIR"
 GIT_COMMIT="$(git rev-parse --short HEAD)"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
-  if ! command -v python3.12 >/dev/null 2>&1; then
+  missing_apt_packages=""
+  for package in $APT_PACKAGES; do
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed"; then
+      missing_apt_packages="$missing_apt_packages $package"
+    fi
+  done
+
+  if [ -n "$missing_apt_packages" ]; then
     apt-get update
-    apt-get install -y python3.12 python3.12-dev python3.12-venv build-essential git ffmpeg libegl1 libgl1
+    apt-get install -y $missing_apt_packages
   fi
 
   if [ ! -d "$PY312_VENV" ]; then
