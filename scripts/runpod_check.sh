@@ -8,8 +8,13 @@ if [ -z "${RUNPOD_SSH:-}" ]; then
 fi
 
 SSH_KEY="${RUNPOD_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+SSH_PORT="${RUNPOD_SSH_PORT:-}"
+SSH_PORT_ARGS=""
+if [ -n "$SSH_PORT" ]; then
+  SSH_PORT_ARGS="-p $SSH_PORT"
+fi
 
-cat <<'REMOTE_COMMANDS' | ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$SSH_KEY" "$RUNPOD_SSH"
+cat <<'REMOTE_COMMANDS' | ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$SSH_KEY" $SSH_PORT_ARGS "$RUNPOD_SSH"
 set -eu
 echo "[runpod]"
 hostname
