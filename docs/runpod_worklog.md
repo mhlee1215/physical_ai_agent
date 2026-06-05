@@ -121,7 +121,8 @@ finishes.
 
 ### Current State
 
-- Status: first attempt failed before rollout; corrected attempt is running.
+- Status: first attempts failed before rollout; corrected shell handling is being
+  deployed for the next attempt.
 - Goal: rerun the full 400-episode LIBERO evaluation with the benchmark-oriented
   checkpoint/config.
 - Pod: `t8eqsuj7nzaou8`.
@@ -133,6 +134,10 @@ finishes.
   `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_libero_full_20260605T173842Z`.
 - Corrected driver log:
   `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/hfvla_full_eval_driver_20260605T173842Z.log`.
+- Third failed output root:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_libero_full_20260605T174046Z`.
+- Third failed driver log:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/hfvla_full_eval_driver_20260605T174046Z.log`.
 
 ### Command Difference From Previous Run
 
@@ -146,10 +151,16 @@ previous `lerobot/smolvla_libero` run.
 
 ### Failure And Fix
 
-- First attempt failed before any videos were created.
-- Error: feature mismatch. The HuggingFaceVLA checkpoint expected
+- First and second attempts failed before any videos were created.
+- Initial error: feature mismatch. The HuggingFaceVLA checkpoint expected
   `observation.images.image`, `observation.images.image2`, and
   `observation.images.empty_camera_0`, but the previous camera mapping produced
   `observation.images.camera1` and `observation.images.camera2`.
-- Fix: rerun with `LIBERO_CAMERA_NAME_MAPPING=none` so LeRobot keeps the default
-  image feature names for this checkpoint.
+- Follow-up bug: the shell expression
+  `LIBERO_CAMERA_NAME_MAPPING="${LIBERO_CAMERA_NAME_MAPPING:-{...}}"` appended
+  a stray `}` when `LIBERO_CAMERA_NAME_MAPPING=none`, producing `none}` and a
+  draccus decode error.
+- Fix: replace that default assignment with an explicit `if [ -z
+  "${LIBERO_CAMERA_NAME_MAPPING+x}" ]` block, then rerun with
+  `LIBERO_CAMERA_NAME_MAPPING=none` so LeRobot keeps the default image feature
+  names for this checkpoint.
