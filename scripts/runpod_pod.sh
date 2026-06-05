@@ -61,8 +61,7 @@ request() {
   set -e
 
   if [ -s "$tmp" ]; then
-    cat "$tmp"
-    printf '\n'
+    print_response "$tmp"
   fi
   echo "http_status=$status"
 
@@ -77,6 +76,64 @@ request() {
       exit 1
       ;;
   esac
+}
+
+print_response() {
+  response_path="$1"
+
+  if [ "${RUNPOD_RAW_RESPONSE:-0}" = "1" ]; then
+    cat "$response_path"
+    printf '\n'
+    return
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$response_path" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+redacted_keys = {
+    "api_key",
+    "apiKey",
+    "authorization",
+    "env",
+    "jupyter_password",
+    "password",
+    "public_key",
+    "secret",
+    "token",
+}
+
+
+def redact(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if key in redacted_keys or key.lower() in redacted_keys:
+                redacted[key] = "<redacted>"
+            else:
+                redacted[key] = redact(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    return value
+
+
+with open(path, "r", encoding="utf-8") as handle:
+    body = handle.read()
+
+try:
+    parsed = json.loads(body)
+except json.JSONDecodeError:
+    print(body)
+else:
+    print(json.dumps(redact(parsed), indent=2, sort_keys=True))
+PY
+    return
+  fi
+
+  echo "[response redacted: install python3 or set RUNPOD_RAW_RESPONSE=1 to print raw JSON]"
 }
 
 ACTION="${1:-}"

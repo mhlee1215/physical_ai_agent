@@ -67,6 +67,82 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 - conflict resolution policy: the Mac-local MuJoCo smoke is authoritative for claiming checkpoint 01 works on the target Mac; the LIBERO strict gate is authoritative only for claiming full LIBERO execution
 - escalation trigger: request permission before installing or downloading simulation dependencies
 
+## RunPod Orchestration
+
+Use RunPod as the Linux/NVIDIA execution lane for LIBERO, LeRobot/SmolVLA,
+ManiSkill GPU rendering, Isaac, and paper-comparable evaluation runs.
+
+Default workflow:
+
+```bash
+set -a
+. ./.env
+set +a
+sh scripts/runpod_pod.sh start
+sh scripts/runpod_pod.sh status
+RUNPOD_SSH="$RUNPOD_SSH" sh scripts/runpod_check.sh
+```
+
+Then, on the Pod:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+```
+
+Run heavy evaluation under `/workspace` only. Keep environments, model caches,
+datasets, logs, videos, and benchmark outputs under `/workspace`, not `/`.
+
+Before stopping the Pod, consolidate outputs under a network-volume result
+directory and fetch them back to the local repo:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+mkdir -p _workspace/runpod_results
+cp -R _workspace/checkpoints _workspace/runpod_results/checkpoints
+cp -R outputs _workspace/runpod_results/outputs 2>/dev/null || true
+```
+
+Write a concise Markdown report under `_workspace/runpod_results/` with:
+
+- git commit evaluated on RunPod
+- exact command line
+- policy checkpoint/model id
+- benchmark suite and episode count
+- success-rate table
+- blocker list, if any
+- artifact paths for logs, videos, and JSON metrics
+
+Fetch results locally before stopping:
+
+```bash
+set -a
+. ./.env
+set +a
+sh scripts/runpod_fetch_results.sh
+```
+
+Then stop the Pod:
+
+```bash
+set -a
+. ./.env
+set +a
+sh scripts/runpod_pod.sh stop
+sh scripts/runpod_pod.sh status
+```
+
+RunPod API responses can include sensitive env values. `scripts/runpod_pod.sh`
+redacts API response fields by default; do not set `RUNPOD_RAW_RESPONSE=1`
+unless raw JSON is explicitly needed for debugging.
+
+For paper-comparable numbers, only count runs from a committed Git revision
+that has been pulled on RunPod. Ad hoc `rsync` or uncommitted remote edits may
+be used for quick debugging, but they are not acceptable evidence for a
+reported benchmark table.
+
 ## Validation Checks
 
 - `sh scripts/bootstrap_checkpoint_01.sh`

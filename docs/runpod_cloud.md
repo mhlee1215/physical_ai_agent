@@ -64,6 +64,42 @@ for Pods attached to network volumes; in that case, terminate only after
 confirming all useful files are under the persistent `/workspace` network
 volume. Container-root data under `/` should be treated as disposable.
 
+## Result Handoff Before Stop
+
+Before stopping a Pod after an evaluation run, collect a self-contained result
+bundle under the network volume:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+mkdir -p _workspace/runpod_results
+cp -R _workspace/checkpoints _workspace/runpod_results/checkpoints
+cp -R outputs _workspace/runpod_results/outputs 2>/dev/null || true
+```
+
+Also write a report such as:
+
+```text
+_workspace/runpod_results/smolvla_libero_report.md
+```
+
+The report should include the git commit, exact command, model id, benchmark
+suite, episode count, success-rate table, blockers, and artifact paths.
+
+Fetch the bundle to the local repo before stopping:
+
+```bash
+set -a
+. ./.env
+set +a
+sh scripts/runpod_fetch_results.sh
+```
+
+Only after the local fetch succeeds:
+
+```bash
+sh scripts/runpod_pod.sh stop
+```
+
 ## Update Repo On RunPod
 
 Inside the Pod:
