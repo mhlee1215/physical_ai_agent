@@ -121,8 +121,7 @@ finishes.
 
 ### Current State
 
-- Status: first attempts failed before rollout; corrected shell handling is being
-  deployed for the next attempt.
+- Status: corrected batch-10 attempt completed and fetched locally.
 - Goal: rerun the full 400-episode LIBERO evaluation with the benchmark-oriented
   checkpoint/config.
 - Pod: `t8eqsuj7nzaou8`.
@@ -138,6 +137,10 @@ finishes.
   `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_libero_full_20260605T174046Z`.
 - Third failed driver log:
   `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/hfvla_full_eval_driver_20260605T174046Z.log`.
+- Completed output root:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_libero_full_b10_20260605T174446Z`.
+- Completed local bundle:
+  `_workspace/runpod_results/20260605T205127Z/smolvla_hfvla_libero_full_b10_20260605T174446Z`.
 
 ### Command Difference From Previous Run
 
@@ -164,3 +167,23 @@ previous `lerobot/smolvla_libero` run.
   "${LIBERO_CAMERA_NAME_MAPPING+x}" ]` block, then rerun with
   `LIBERO_CAMERA_NAME_MAPPING=none` so LeRobot keeps the default image feature
   names for this checkpoint.
+
+### Completed Result
+
+- exit code: 0
+- videos: 400
+- metric file:
+  `_workspace/runpod_results/20260605T205127Z/smolvla_hfvla_libero_full_b10_20260605T174446Z/eval_logs/eval_info.json`
+- comparison report:
+  `_workspace/runpod_results/20260605T205127Z/smolvla_hfvla_libero_full_b10_20260605T174446Z/comparison_report.md`
+- overall success: 68.5%
+- suite success:
+  - `libero_spatial`: 75.0%
+  - `libero_object`: 78.0%
+  - `libero_goal`: 82.0%
+  - `libero_10`: 39.0%
+- interpretation: the cloud pipeline is verified, but this is not a close
+  reproduction of published SmolVLA LIBERO numbers. The next debugging target is
+  protocol parity: exact checkpoint identity, LeRobot commit/version, LIBERO
+  assets/init states, action normalization/control mode, and whether the
+  published table used a different SmolVLA checkpoint.
