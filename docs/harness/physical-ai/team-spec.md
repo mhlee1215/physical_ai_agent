@@ -130,6 +130,22 @@ set +a
 sh scripts/runpod_fetch_results.sh
 ```
 
+For long-running baseline debugging, archive completed result directories
+locally and delete those completed remote directories before the network volume
+fills. Preserve the active run explicitly:
+
+```bash
+set -a
+. ./.env
+set +a
+RUNPOD_ACTIVE_RESULT_DIR=/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/<active-run> \
+  sh scripts/runpod_archive_results.sh --delete-remote --yes-delete
+```
+
+Do not delete model caches or LIBERO assets during an active parity-debugging
+loop unless the volume is blocked; deleting them usually costs more time than it
+saves space.
+
 Then stop the Pod:
 
 ```bash

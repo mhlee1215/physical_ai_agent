@@ -723,6 +723,32 @@ previous `lerobot/smolvla_libero` run.
     `/workspace/physical-ai/pip_cache`
   - retained HF model cache and LIBERO assets for the active and next runs.
   - `/workspace/physical-ai` usage dropped from roughly `19G` to `7.1G`.
+- Added `scripts/runpod_archive_results.sh` as the standard mid-run cleanup
+  tool:
+  - fetches remote `runpod_results` into local
+    `_workspace/runpod_results/remote_archives/`
+  - deletes only completed remote result directories with
+    `eval_logs/eval_info.json` when called with
+    `--delete-remote --yes-delete`
+  - preserves `RUNPOD_ACTIVE_RESULT_DIR`
+- Volume check at `2026-06-06T09:51:41Z`:
+  - `/workspace/physical-ai`: `7.1G`
+  - active run:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_libero_all_mj332_rootvenv_b1_10eps_cuda_20260606T0814Z`
+  - active run size: `41M`
+  - active videos: `148`
+  - status: still running
+  - retained data: HF cache `5.9G`, LIBERO assets `710M`, vendor `463M`
+- Archive script verification:
+  - first no-delete full fetch completed locally at
+    `_workspace/runpod_results/remote_archives/runpod_results_20260606T095321Z`
+  - then changed the script default to completed-result-only archives so it
+    does not copy an active run during evaluation.
+  - verified completed-only mode with the active run excluded:
+    `no_completed_remote_results=/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results`
+  - follow-up progress check at `2026-06-06T09:57:38Z`: active videos `158`,
+    active size `43M`, `/workspace/physical-ai` still `7.1G`, GPU memory
+    `2406/24564 MiB`.
 - References currently tracked:
   - ActionX Table 1 SmolVLA: Goal `91.0`, Object `94.0`, Spatial `93.0`,
     Long `77.0`, Average `88.8`

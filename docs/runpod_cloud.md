@@ -120,6 +120,21 @@ set +a
 sh scripts/runpod_fetch_results.sh
 ```
 
+During long debugging sessions, archive completed result directories locally and
+clear them from the network volume without stopping the active Pod:
+
+```bash
+set -a
+. ./.env
+set +a
+RUNPOD_ACTIVE_RESULT_DIR=/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/<active-run> \
+  sh scripts/runpod_archive_results.sh --delete-remote --yes-delete
+```
+
+Keep model caches and LIBERO assets on the network volume while iterating; they
+are usually more expensive to redownload than to store. Delete only completed
+run outputs after a successful local archive.
+
 Only after the local fetch succeeds:
 
 ```bash
