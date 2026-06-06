@@ -115,6 +115,7 @@ run_one seed1000_steps1 1000 1
 run_one seed0_steps1 0 1
 run_one seed10000_steps1 10000 1
 run_one seed1000_steps10 1000 10
+run_one seed1000_steps15 1000 15
 run_one seed1000_steps50 1000 50
 
 {

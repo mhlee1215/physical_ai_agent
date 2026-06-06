@@ -789,3 +789,69 @@ previous `lerobot/smolvla_libero` run.
   - LeRobot/HF reproduction issue `huggingface/lerobot#2354` for public
     checkpoint reality checks.
   - LeRobot LIBERO docs for protocol and command shape.
+
+### 2026-06-06 Steps10 Parity And Process-Lane Scaling
+
+- Completed `HuggingFaceVLA/smolvla_libero` full 400-episode run:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_libero_all_mj332_rootvenv_b1_10eps_cuda_20260606T0814Z`
+  - result: Goal `66.0`, Object `92.0`, Spatial `70.0`, Long `39.0`, Avg
+    `66.75`
+  - interpretation: not the ActionX-parity path. Object is good, but Spatial,
+    Goal, and Long are much worse than the `lerobot/smolvla_libero` baseline.
+- Completed process-level parallel probes:
+  - HF checkpoint probe:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_parallel_probe_after_hfvla_20260606T100356Z`
+    showed little speedup from async/batched envs and worse result with task
+    thread parallelism.
+  - `lerobot/smolvla_libero` probe:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_parallel_probe_lerobot_fixed_20260606T144929Z`
+    showed `b1_sync_t1` stayed best: `100.0%`, `96s`; async/batched variants
+    dropped to `75.0%`.
+  - conclusion: do not use intra-eval batching/async/task-thread parallelism
+    for reported baseline numbers.
+- Completed Long protocol sweep on hard Long subset `[0,1,6,7,8]`, 5 episodes
+  per task:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_long_protocol_sweep_fixed_20260606T150943Z`
+  - `seed=1000, n_action_steps=1`: `40.0%`
+  - `seed=0, n_action_steps=1`: `24.0%`
+  - `seed=10000, n_action_steps=1`: `32.0%`
+  - `seed=1000, n_action_steps=10`: `68.0%`
+  - `seed=1000, n_action_steps=50`: `28.0%`
+  - conclusion: seed changes did not help; `n_action_steps=10` is the first
+    strong Long improvement signal.
+- Added `n_action_steps=15` to future protocol sweeps because the user noted
+  this setting from the π0.7 paper. Do not interrupt the active full run for
+  this; run it as the next targeted check if steps10 full result leaves a gap.
+- Completed dual-process canary:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_dual_process_probe_20260606T164816Z`
+  - sequential lanes: `116s` wall-clock
+  - concurrent lanes: `61s` wall-clock
+  - all lanes kept `100.0%` success.
+  - conclusion: independent process-level lanes can reduce wall-clock while
+    preserving each lane's conservative eval settings.
+- Completed Long full split run with `n_action_steps=10`:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_long_full_steps10_split_20260606T165555Z`
+  - lane A `[0,1,2,3,4]`: `80.0%`
+  - lane B `[5,6,7,8,9]`: `70.0%`
+  - aggregate Long: `75.0%`, close to ActionX Long `77.0`
+  - wall-clock: `726s`
+  - interpretation: `n_action_steps=10` is now the current best candidate for
+    ActionX-parity full 4-suite evaluation.
+- Launched active full 4-suite two-lane validation with
+  `n_action_steps=10`:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_full_steps10_two_lane_20260606T171310Z`
+  - lane A: `libero_spatial,libero_object`
+  - lane B: `libero_goal,libero_10`
+  - eval settings per lane: `batch_size=1`, `use_async_envs=false`,
+    `max_parallel_tasks=1`
+  - latest checked progress at `2026-06-06T17:15:15Z`: `24/400` videos,
+    still running.
+- Added `scripts/runpod_smolvla_libero_multi_process_probe.sh` to test
+  triple-process scaling after the active full run completes. Do not run it
+  concurrently with the active reported evaluation because it could contaminate
+  timing and possibly success.
