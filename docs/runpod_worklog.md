@@ -915,3 +915,21 @@ previous `lerobot/smolvla_libero` run.
       at `3/10` and `4/10`.
     - Spatial-focused check only if we need to close the last two Spatial
       points; steps10 already appears best for Spatial among tested settings.
+- Completed Long-only task-routed probe:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_long_task_routed_probe_20260606T1915Z`
+  - local compact artifact:
+    `_workspace/runpod_results/baseline_debug_20260606/smolvla_lerobot_long_task_routed_probe_20260606T1915Z`
+  - protocol: Long tasks `[4,8]` used `n_action_steps=10`; tasks
+    `[0,1,2,3,5,6,7,9]` used `n_action_steps=15`.
+  - result: Long `71.0`, below the current routed full baseline Long `75.0`.
+  - per-task counts: task `0` `4/10`, `1` `10/10`, `2` `10/10`, `3` `7/10`,
+    `4` `2/10`, `5` `10/10`, `6` `7/10`, `7` `7/10`, `8` `5/10`, `9`
+    `9/10`.
+  - interpretation: task-level routing is not safe to adopt from subset
+    probes. Task `6` improved, but tasks `3`, `4`, and `7` regressed. The
+    subset run also changes task order and likely episode/RNG details, so it is
+    useful as debug evidence but not as a reportable full-baseline replacement.
+  - next recommended step: repeat the current best routed full run to estimate
+    variance and confirm whether the ActionX average gap around `-1.05` is
+    stable.

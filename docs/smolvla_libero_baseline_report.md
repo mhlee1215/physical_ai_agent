@@ -98,6 +98,10 @@ Network volume artifact:
   `n_action_steps=15`. This yields Goal `91`, Object `94`, Spatial `91`, Long
   `75`, and Avg `87.75`.
 - The remaining ActionX gap is narrow: Spatial `-2`, Long `-2`, Avg `-1.05`.
+- A follow-up Long-only task-routed subset probe did not improve the baseline:
+  it produced Long `71.0%`. Treat that run as debug evidence only, not as a
+  reportable full-baseline replacement, because changing task subsets also
+  changes task order and likely episode/RNG details.
 - The ActionX reference likely does not name the exact LeRobot hub checkpoint
   and logs a different action/control protocol. Our LeRobot run logs
   `control_mode=relative`, while ActionX describes normalized absolute Cartesian
