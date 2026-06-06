@@ -763,6 +763,15 @@ previous `lerobot/smolvla_libero` run.
   - Preferred next acceleration path is `batch_size + async`; task-thread
     parallelism is higher risk because it shares one policy across task
     workers and must be regression-checked before full-run use.
+- Registered a RunPod wait-wrapper so the active 400-episode run is not
+  interrupted:
+  - waiter pid: `6339`
+  - waiter log:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/parallel_probe_waiter_20260606T100356Z.log`
+  - probe root after active completion:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_parallel_probe_after_hfvla_20260606T100356Z`
+  - latest active progress at `2026-06-06T10:04:15Z`: `167/400` videos,
+    still running, GPU memory `2406/24564 MiB`.
 - References currently tracked:
   - ActionX Table 1 SmolVLA: Goal `91.0`, Object `94.0`, Spatial `93.0`,
     Long `77.0`, Average `88.8`
