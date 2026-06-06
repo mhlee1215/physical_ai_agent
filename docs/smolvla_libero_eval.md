@@ -17,6 +17,8 @@ Use LeRobot's LIBERO benchmark integration:
 - total trials: `4 suites * 10 tasks * 10 episodes = 400`
 - metric: binary task success rate, reported per suite and averaged
 - rendering: `MUJOCO_GL=egl` on headless cloud
+- MuJoCo: `3.3.2` by default. Later MuJoCo versions can change rendered colors
+  enough to break image-conditioned VLA checkpoints.
 - control mode: use the checkpoint's default unless the model card or config
   specifies otherwise
 
@@ -36,12 +38,16 @@ SMOLVLA_MODEL_ID=lerobot/smolvla_libero \
 POLICY_EMPTY_CAMERAS=0 \
 LIBERO_BATCH_SIZE=10 \
 LIBERO_MAX_PARALLEL_TASKS=1 \
-LIBERO_EXTRA_ARGS="--policy.num_steps=10 --policy.n_action_steps=50" \
+LIBERO_EXTRA_ARGS="--policy.num_steps=10 --policy.n_action_steps=1 --policy.device=cuda" \
 sh scripts/runpod_smolvla_libero_eval_paper.sh
 ```
 
-That preset keeps image inputs active and uses the legacy LIBERO action-step layout
-that is commonly reported in public SmolVLA LIBERO baselines.
+That preset keeps image inputs active and uses the `lerobot/smolvla_libero`
+checkpoint that matched the external Spatial baseline in the first GPU subset
+debug run. The `HuggingFaceVLA/smolvla_libero` checkpoint uses
+`observation.images.image` and `observation.images.image2` feature names and is
+tracked as a separate diagnostic checkpoint unless a reference table explicitly
+names it.
 
 Do not compare a subset average directly against a paper's full LIBERO average.
 

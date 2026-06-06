@@ -375,3 +375,300 @@ previous `lerobot/smolvla_libero` run.
   - `--policy.n_action_steps=1`
   - `--policy.device=cuda`
   - `--policy.empty_cameras=0`
+
+### 2026-06-06 GPU SmolVLA Spatial Subset
+
+- Verified new root/container-disk venv on the 4090 Pod:
+  - torch: `2.11.0+cu130`
+  - CUDA available: `True`
+  - GPU: `NVIDIA GeForce RTX 4090`
+- First HuggingFaceVLA run failed due feature mismatch:
+  - policy expected `observation.images.image` and
+    `observation.images.image2`.
+  - env mapping produced `observation.images.camera1` and
+    `observation.images.camera2`.
+- Fixed by overriding camera mapping:
+  - `LIBERO_CAMERA_NAME_MAPPING={"agentview_image": "image",
+    "robot0_eye_in_hand_image": "image2"}`
+- Completed GPU subset:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_spatial_5tasks_5eps_cuda_imagenames_20260606T013004Z`
+  - model: `HuggingFaceVLA/smolvla_libero`
+  - suite/tasks: `libero_spatial`, task ids `[0,1,2,3,4]`
+  - episodes: `5` per task, `25` total
+  - result: `80.0%` success
+  - per-task successes: task 0 `3/5`, task 1 `4/5`, task 2 `5/5`,
+    task 3 `4/5`, task 4 `4/5`
+  - eval speed: `484.7s` total, `19.4s/episode`
+- Interpretation:
+  - CPU fallback, old-driver CUDA mismatch, network-volume venv quota, and
+    feature-name mismatch are now resolved for the current best-known setup.
+  - The 25-episode subset is still below the external Spatial reference
+    (`93%`), so full Spatial 10-task/10-episode evaluation is required before
+    judging baseline parity.
+- Launched full Spatial evaluation:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_spatial_full_10eps_cuda_20260606T014347Z`
+  - task suite: all `libero_spatial`
+  - episodes: `10` per task, `100` total
+
+### 2026-06-06 Full Spatial Result
+
+- Completed full Spatial run:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_spatial_full_10eps_cuda_20260606T014347Z`
+  - model: `HuggingFaceVLA/smolvla_libero`
+  - suite: all `libero_spatial`
+  - episodes: `10` per task, `100` total
+  - result: `69.0%` success
+  - eval speed: `1422.4s` total, `14.2s/episode`
+  - per-task successes:
+    - task 0: `6/10`
+    - task 1: `8/10`
+    - task 2: `7/10`
+    - task 3: `8/10`
+    - task 4: `6/10`
+    - task 5: `4/10`
+    - task 6: `5/10`
+    - task 7: `10/10`
+    - task 8: `8/10`
+    - task 9: `7/10`
+- Interpretation:
+  - This is now a valid GPU evaluation with CUDA active and correct feature
+    names for the HuggingFaceVLA checkpoint.
+  - The result is close to historical LeRobot reproduction reports around the
+    low 70s on Spatial, but far below the ActionX table reference of `93%`.
+  - Next high-probability cause to test is checkpoint/model-id mismatch.
+- Launched checkpoint comparison:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_5tasks_5eps_nas1_cuda_20260606T021418Z`
+  - model: `lerobot/smolvla_libero`
+  - suite/tasks: `libero_spatial`, task ids `[0,1,2,3,4]`
+  - episodes: `5` per task, `25` total
+  - policy args: `--policy.num_steps=10 --policy.n_action_steps=1
+    --policy.device=cuda --policy.empty_cameras=0`
+
+### 2026-06-06 Checkpoint Identity Debug Result
+
+- The first checkpoint-comparison launch used the deleted network-volume venv
+  and failed before evaluation. Relaunched with the root/container-disk venv:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_5tasks_5eps_nas1_cuda_rootvenv_20260606T022020Z`
+  - model: `lerobot/smolvla_libero`
+  - suite/tasks: `libero_spatial`, task ids `[0,1,2,3,4]`
+  - episodes: `5` per task, `25` total
+  - batch size: `1`
+  - policy args: `--policy.num_steps=10 --policy.n_action_steps=1
+    --policy.device=cuda --policy.empty_cameras=0`
+  - result: `96.0%` success
+  - per-task successes: task 0 `5/5`, task 1 `5/5`, task 2 `5/5`,
+    task 3 `5/5`, task 4 `4/5`
+  - eval speed: `372.4s` total, `14.9s/episode`
+- Interpretation:
+  - The largest mismatch was checkpoint identity, not GPU plumbing.
+  - `HuggingFaceVLA/smolvla_libero` is valid to evaluate, but it is not the
+    current best candidate for matching the external `SmolVLA` Spatial `93%`
+    reference.
+  - The paper-parity preset should default back to `lerobot/smolvla_libero`,
+    `--policy.n_action_steps=1`, and CUDA.
+- Launched full Spatial validation:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_full_10eps_cuda_20260606T022852Z`
+  - suite: all `libero_spatial`
+  - episodes: `10` per task, `100` total
+  - model: `lerobot/smolvla_libero`
+  - batch size: `10`
+
+### 2026-06-06 MuJoCo Version Debug
+
+- Full Spatial with `lerobot/smolvla_libero` on MuJoCo `3.9.0` completed:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_full_10eps_cuda_20260606T022852Z`
+  - result: `78.0%`
+  - per-task successes:
+    - task 0: `9/10`
+    - task 1: `9/10`
+    - task 2: `9/10`
+    - task 3: `10/10`
+    - task 4: `7/10`
+    - task 5: `0/10`
+    - task 6: `9/10`
+    - task 7: `8/10`
+    - task 8: `7/10`
+    - task 9: `10/10`
+- Version check:
+  - MuJoCo: `3.9.0`
+  - robosuite: `1.4.0`
+  - LeRobot: `0.5.2`
+  - LeRobot checkout: `09808183ca72c30cbb41b653586f6d0632a4bcca`
+- Task 5 instruction:
+  `pick up the black bowl on the ramekin and place it on the plate`
+- Downgraded the root/container venv to MuJoCo `3.3.2`, matching the LeRobot
+  maintainer note that older/newer MuJoCo versions can render colors
+  differently.
+- Re-ran task 5 only:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_task5_mj332_10eps_cuda_20260606T025325Z`
+  - result: `90.0%`, task 5 `9/10`
+- Interpretation:
+  - MuJoCo version/rendering mismatch is a confirmed high-impact baseline
+    parity issue.
+  - The Linux evaluator now defaults to `MUJOCO_VERSION=3.3.2`.
+- Launched full Spatial validation on MuJoCo `3.3.2`:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_full_mj332_10eps_cuda_20260606T025657Z`
+  - suite: all `libero_spatial`
+  - episodes: `10` per task, `100` total
+
+### 2026-06-06 MuJoCo 3.3.2 Full Spatial Result
+
+- Completed full Spatial run on MuJoCo `3.3.2`:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_full_mj332_10eps_cuda_20260606T025657Z`
+  - model: `lerobot/smolvla_libero`
+  - result: `87.0%`
+  - eval speed: `1144.5s` total, `11.4s/episode`
+  - per-task successes:
+    - task 0: `9/10`
+    - task 1: `8/10`
+    - task 2: `9/10`
+    - task 3: `10/10`
+    - task 4: `7/10`
+    - task 5: `8/10`
+    - task 6: `10/10`
+    - task 7: `8/10`
+    - task 8: `8/10`
+    - task 9: `10/10`
+- Compared to the MuJoCo `3.9.0` run, Spatial improved from `78.0%` to
+  `87.0%`, and task 5 recovered from `0/10` to `8/10`.
+- Tested `POLICY_EMPTY_CAMERAS=1` on hard task ids `[4,5,7,8]`:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_hardtasks_mj332_emptycam1_10eps_cuda_20260606T032203Z`
+  - result: `82.5%` across 40 episodes
+  - per-task successes: task 4 `9/10`, task 5 `8/10`, task 7 `9/10`,
+    task 8 `7/10`
+- Interpretation:
+  - `empty_cameras=1` did not clearly improve the hard subset total; it changed
+    which tasks failed but not the aggregate.
+  - MuJoCo `3.3.2` is a confirmed necessary setting, but it is not sufficient
+    to match the ActionX Spatial `93%` reference.
+- Launched the official LeRobot ported checkpoint under the same MuJoCo `3.3.2`
+  condition:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_spatial_full_mj332_10eps_cuda_20260606T033221Z`
+  - model: `HuggingFaceVLA/smolvla_libero`
+  - camera mapping: `{"agentview_image": "image",
+    "robot0_eye_in_hand_image": "image2"}`
+  - suite: all `libero_spatial`
+  - episodes: `10` per task, `100` total
+
+### 2026-06-06 HuggingFaceVLA Checkpoint Result
+
+- Completed full Spatial run on MuJoCo `3.3.2`:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_spatial_full_mj332_10eps_cuda_20260606T033221Z`
+  - model: `HuggingFaceVLA/smolvla_libero`
+  - result: `72.0%`
+  - eval speed: `1517.1s` total, `15.2s/episode`
+  - per-task successes:
+    - task 0: `6/10`
+    - task 1: `9/10`
+    - task 2: `7/10`
+    - task 3: `8/10`
+    - task 4: `5/10`
+    - task 5: `7/10`
+    - task 6: `6/10`
+    - task 7: `9/10`
+    - task 8: `9/10`
+    - task 9: `6/10`
+- Interpretation:
+  - `HuggingFaceVLA/smolvla_libero` remains below the current best
+    `lerobot/smolvla_libero` result under this harness.
+  - The best validated Spatial result so far is `87.0%` with
+    `lerobot/smolvla_libero`, MuJoCo `3.3.2`, `batch_size=10`.
+  - The next high-probability parity issue is batch handling: an earlier
+    `batch_size=1` 25-episode subset reached `96.0%`, while `batch_size=10`
+    full Spatial reached `87.0%`.
+- Launched full Spatial validation with `batch_size=1`:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_full_mj332_b1_10eps_cuda_20260606T040105Z`
+  - model: `lerobot/smolvla_libero`
+  - suite: all `libero_spatial`
+  - episodes: `10` per task, `100` total
+
+### 2026-06-06 Batch-Size And Action-Step Debug
+
+- Completed full Spatial run with `batch_size=1`:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_spatial_full_mj332_b1_10eps_cuda_20260606T040105Z`
+  - result: `88.0%`
+  - eval speed: `1733.4s` total, `17.3s/episode`
+  - per-task successes:
+    - task 0: `10/10`
+    - task 1: `9/10`
+    - task 2: `10/10`
+    - task 3: `9/10`
+    - task 4: `6/10`
+    - task 5: `8/10`
+    - task 6: `10/10`
+    - task 7: `9/10`
+    - task 8: `8/10`
+    - task 9: `9/10`
+- Interpretation:
+  - `batch_size=1` improves Spatial by only one point over `batch_size=10`
+    (`88.0%` vs `87.0%`), so batch handling is not the main remaining gap.
+  - The persistent gap is task 4 (`top drawer`) and partially tasks 5/8.
+- Ran task 4 action-step sweep:
+  - `n_action_steps=5`: task 4 `5/10`
+  - `n_action_steps=10`: task 4 `7/10`
+  - `n_action_steps=50`: task 4 `5/10`
+- Interpretation:
+  - larger action chunks do not solve task 4.
+  - The current best internal Spatial baseline is `88.0%` using
+    `lerobot/smolvla_libero`, MuJoCo `3.3.2`, `batch_size=1`,
+    `n_action_steps=1`, CUDA, and image inputs.
+  - This remains below ActionX Table 1's SmolVLA Spatial reference of `93%`.
+    The likely reason is protocol/checkpoint/control-mode mismatch: ActionX
+    reports fine-tuned LIBERO baselines with normalized absolute Cartesian pose
+    actions, while the LeRobot run logs `control_mode=relative`.
+- Launched full 4-suite LIBERO evaluation with the current best setting:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_libero_all_mj332_b1_10eps_cuda_20260606T044020Z`
+  - suites: `libero_spatial,libero_object,libero_goal,libero_10`
+  - episodes: `10` per task, expected `400` total
+
+### 2026-06-06 Full 4-Suite LIBERO Result
+
+- Completed the full 4-suite, 400-episode run:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_libero_all_mj332_b1_10eps_cuda_20260606T044020Z`
+  - model: `lerobot/smolvla_libero`
+  - MuJoCo: `3.3.2`
+  - batch size: `1`
+  - policy args: `--policy.num_steps=10 --policy.n_action_steps=1 --policy.device=cuda`
+  - total result: `76.25%`
+  - eval speed: `11066.5s` total, `27.7s/episode`
+- Suite results:
+  - `libero_spatial`: `89.0%`
+  - `libero_object`: `78.0%`
+  - `libero_goal`: `79.0%`
+  - `libero_10`: `59.0%`
+- External reference used for side-by-side comparison:
+  - ActionX Table 1 SmolVLA: Goal `91.0`, Object `94.0`, Spatial `93.0`,
+    Long `77.0`, Average `88.8`
+  - reference URL:
+    `https://www.frontiersin.org/journals/neurorobotics/articles/10.3389/fnbot.2026.1806605/full`
+- Local handoff:
+  - copied `eval_info.json` and `smolvla_libero_report.md` locally under:
+    `_workspace/runpod_results/baseline_debug_20260606/smolvla_lerobot_libero_all_mj332_b1_10eps_cuda_20260606T044020Z`
+  - left the 400 rollout videos on the RunPod network volume to avoid filling
+    the local Mac workspace.
+- Interpretation:
+  - The run is now format-comparable with the reference table: 4 suites, 10
+    tasks per suite, 10 episodes per task.
+  - The result is not performance-comparable yet. The largest remaining gap is
+    Long/`libero_10` (`59.0%` internal vs `77.0%` reference), followed by
+    Object and Goal.
+  - Current working hypothesis remains checkpoint/control protocol mismatch:
+    the LeRobot hub checkpoint logs `control_mode=relative`, while the external
+    reference describes normalized absolute Cartesian pose actions.
