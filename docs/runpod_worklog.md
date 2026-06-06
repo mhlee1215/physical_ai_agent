@@ -879,3 +879,20 @@ previous `lerobot/smolvla_libero` run.
     user noted pi0.7 uses this setting.
   - run triple-process canary only as an acceleration check, not as a reported
     metric change.
+- Completed the full 4-suite two-lane `n_action_steps=15` run:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_full_steps15_two_lane_20260606T1753Z`
+  - local compact artifact:
+    `_workspace/runpod_results/baseline_debug_20260606/smolvla_lerobot_full_steps15_two_lane_20260606T1753Z`
+  - result: Goal `89.0`, Object `93.0`, Spatial `86.0`, Long `74.0`, Avg
+    `85.5`
+  - delta vs ActionX Table 1 SmolVLA: Goal `-2.0`, Object `-1.0`, Spatial
+    `-7.0`, Long `-3.0`, Avg `-3.3`
+  - delta vs LeRobot/HF issue `#2354` paper line: Goal `-3.0`, Object `-3.0`,
+    Spatial `-4.0`, Long `+3.0`, Avg `-1.75`
+  - interpretation: `n_action_steps=15` is the best-average internal baseline
+    so far, but `n_action_steps=10` is more balanced because Spatial stays
+    much closer to ActionX.
+  - next question: whether Spatial can be recovered while keeping the
+    Goal/Object/Long gains. Candidate checks are per-suite action-step routing
+    (`Spatial=10`, other suites `15`) or a small `n_action_steps=12` full run.
