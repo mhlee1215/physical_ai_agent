@@ -18,6 +18,13 @@ if [ -z "${LIBERO_CAMERA_NAME_MAPPING+x}" ]; then
   LIBERO_CAMERA_NAME_MAPPING='{"agentview_image": "camera1", "robot0_eye_in_hand_image": "camera2"}'
 fi
 OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/_workspace/runpod_results/smolvla_agentic_retry_probe_$(date -u +%Y%m%dT%H%M%SZ)}"
+if [ "$LIBERO_TASK_IDS" = "all" ]; then
+  EVAL_TASK_IDS=""
+  DISPLAY_TASK_IDS="all"
+else
+  EVAL_TASK_IDS="$LIBERO_TASK_IDS"
+  DISPLAY_TASK_IDS="$LIBERO_TASK_IDS"
+fi
 
 mkdir -p "$OUTPUT_ROOT/baseline" "$OUTPUT_ROOT/retry" "$OUTPUT_ROOT/agentic"
 
@@ -26,7 +33,7 @@ cat > "$OUTPUT_ROOT/README.md" <<EOF
 
 - model_id: \`$SMOLVLA_MODEL_ID\`
 - task_group: \`$LIBERO_TASKS\`
-- initial_task_ids: \`$LIBERO_TASK_IDS\`
+- initial_task_ids: \`$DISPLAY_TASK_IDS\`
 - episodes_per_task: \`$LIBERO_N_EPISODES\`
 - baseline_policy_args: \`$BASELINE_EXTRA_ARGS\`
 - retry_policy_args: \`$RETRY_EXTRA_ARGS\`
@@ -60,7 +67,7 @@ run_eval() {
     "$SCRIPT_DIR/eval_smolvla_libero_linux.sh" > "$out.driver.log" 2>&1
 }
 
-run_eval "$OUTPUT_ROOT/baseline" "$LIBERO_TASK_IDS" "$BASELINE_EXTRA_ARGS"
+run_eval "$OUTPUT_ROOT/baseline" "$EVAL_TASK_IDS" "$BASELINE_EXTRA_ARGS"
 
 BASELINE_INFO="$OUTPUT_ROOT/baseline/eval_logs/eval_info.json"
 PLAN_JSON="$OUTPUT_ROOT/agentic/retry_plan.json"
