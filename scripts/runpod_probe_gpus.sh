@@ -9,7 +9,7 @@ CLOUD_TYPE="${RUNPOD_CLOUD_TYPE:-COMMUNITY}"
 NETWORK_VOLUME_ID="${RUNPOD_NETWORK_VOLUME_ID:-}"
 IMAGE_NAME="${RUNPOD_IMAGE_NAME:-runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04}"
 VCPU_COUNT="${RUNPOD_VCPU_COUNT:-16}"
-CONTAINER_DISK_GB="${RUNPOD_CONTAINER_DISK_GB:-20}"
+CONTAINER_DISK_GB="${RUNPOD_CONTAINER_DISK_GB:-60}"
 VOLUME_IN_GB="${RUNPOD_VOLUME_IN_GB:-0}"
 PORTS_JSON="${RUNPOD_PORTS_JSON:-[\"8888/http\",\"22/tcp\"]}"
 NAME_PREFIX="${RUNPOD_NEW_POD_NAME_PREFIX:-physical_ai_probe}"
@@ -23,7 +23,7 @@ Usage:
 Optional overrides:
   RUNPOD_CLOUD_TYPE          COMMUNITY or SECURE (default COMMUNITY)
   RUNPOD_VCPU_COUNT           vCPU override (default 16)
-  RUNPOD_CONTAINER_DISK_GB    container disk (default 20)
+  RUNPOD_CONTAINER_DISK_GB    container disk (default 60)
   RUNPOD_MAX_ATTEMPTS         max types to probe before stop (default 40)
   RUNPOD_NEW_POD_NAME_PREFIX  prefix for temporary pod names
 

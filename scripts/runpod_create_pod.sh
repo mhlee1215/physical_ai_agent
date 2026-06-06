@@ -7,7 +7,7 @@ IMAGE_NAME="${RUNPOD_IMAGE_NAME:-runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ub
 GPU_TYPE="${RUNPOD_GPU_TYPE:-NVIDIA GeForce RTX 4090}"
 GPU_COUNT="${RUNPOD_GPU_COUNT:-1}"
 VCPU_COUNT="${RUNPOD_VCPU_COUNT:-16}"
-CONTAINER_DISK_GB="${RUNPOD_CONTAINER_DISK_GB:-20}"
+CONTAINER_DISK_GB="${RUNPOD_CONTAINER_DISK_GB:-60}"
 VOLUME_IN_GB="${RUNPOD_VOLUME_IN_GB:-0}"
 VOLUME_MOUNT_PATH="${RUNPOD_VOLUME_MOUNT_PATH:-/workspace}"
 PORTS_JSON="${RUNPOD_PORTS_JSON:-[\"8888/http\",\"22/tcp\"]}"
@@ -24,7 +24,7 @@ Defaults match the prior working Pod:
   image: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
   gpu: NVIDIA GeForce RTX 4090 x1
   vcpu: 16
-  container disk: 20 GB
+  container disk: 60 GB
   network volume mount: /workspace
 
 Environment overrides:

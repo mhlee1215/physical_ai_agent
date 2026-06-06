@@ -5,6 +5,8 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 PROJECT_DIR="${PROJECT_DIR:-/workspace/physical-ai/physical_ai_agent}" \
 WORK_ROOT="${WORK_ROOT:-/workspace/physical-ai}" \
+PY312_VENV="${PY312_VENV:-/root/physical-ai/envs/lerobot_py312}" \
+PIP_CACHE_DIR="${PIP_CACHE_DIR:-/workspace/physical-ai/pip_cache}" \
 SMOLVLA_MODEL_ID="${SMOLVLA_MODEL_ID:-lerobot/smolvla_libero}" \
 POLICY_EMPTY_CAMERAS="${POLICY_EMPTY_CAMERAS:-0}" \
 LIBERO_BATCH_SIZE="${LIBERO_BATCH_SIZE:-10}" \

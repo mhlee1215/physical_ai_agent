@@ -266,3 +266,92 @@ previous `lerobot/smolvla_libero` run.
   not have the prior Python 3.12 LeRobot environment at
   `/workspace/physical-ai/envs/lerobot_py312`; bootstrap is required before the
   next sanity evaluation.
+
+### 2026-06-06 SmolVLA LIBERO Bootstrap Bottleneck
+
+- Started a sanity evaluation on the active L4 Pod with:
+  - `SMOLVLA_MODEL_ID=lerobot/smolvla_libero`
+  - `LIBERO_TASKS=libero_spatial`
+  - `LIBERO_TASK_IDS=[0,1]`
+  - `LIBERO_N_EPISODES=5`
+  - paper-parity policy args: `--policy.num_steps=10 --policy.n_action_steps=50`
+- The run stayed in `pip install -e /workspace/physical-ai/vendor/lerobot[smolvla,libero]`
+  for over 25 minutes before any GPU evaluation began.
+- Evidence collected while running:
+  - GPU memory/utilization remained `0 MiB / 0%`, so evaluation had not started.
+  - `venv` on `/workspace/physical-ai/envs/lerobot_py312` grew from roughly
+    `4.4G` to `11G`.
+  - Newest venv files were robosuite robot mesh assets under
+    `site-packages/robosuite/models/assets/...`, showing install was still
+    writing many small files rather than hard-hanging.
+- Likely cause: placing the Python venv on the RunPod network volume preserves
+  it across Pods, but it is slow for Python package installs that write many
+  small files.
+- Follow-up change prepared for the next run:
+  - export `PIP_CACHE_DIR` before bootstrap installs.
+  - keep pip/HF/model/data caches under `/workspace/physical-ai`.
+  - default the RunPod paper preset venv to
+    `/root/physical-ai/envs/lerobot_py312` to use faster container disk for
+    small-file package installs.
+  - raise the create/probe script default container disk from `20GB` to `60GB`
+    because the SmolVLA/LIBERO venv alone can exceed `13GB` before model and
+    asset caches are considered.
+- Operating rule: keep only the active experiment Pod running; terminate stopped
+  Pods after results are in git or the network volume because stopped Pods can
+  still carry residual hourly cost.
+
+### 2026-06-06 SmolVLA LIBERO Spatial Sanity Results
+
+- Completed paper-preset plumbing sanity:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_libero_paper_sanity_20260605T235334Z`
+  - model: `lerobot/smolvla_libero`
+  - suite/tasks: `libero_spatial`, task ids `[0,1]`
+  - episodes: `5` per task, `10` total
+  - result: `80.0%` success, task 0 `4/5`, task 1 `4/5`
+- Completed larger Spatial subset:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_libero_spatial_5tasks_5eps_20260606T003702Z`
+  - model: `lerobot/smolvla_libero`
+  - suite/tasks: `libero_spatial`, task ids `[0,1,2,3,4]`
+  - episodes: `5` per task, `25` total
+  - policy args: `--policy.num_steps=10 --policy.n_action_steps=50`
+  - result: `72.0%` success
+  - per-task successes: task 0 `4/5`, task 1 `4/5`, task 2 `4/5`,
+    task 3 `4/5`, task 4 `2/5`
+- Interpretation:
+  - The evaluation pipeline is now real: generated videos and `eval_info.json`
+    for every episode.
+  - The result is still materially below the external Spatial reference of
+    roughly `93%`, so this is not yet a satisfactory baseline parity run.
+  - High-probability mismatch: the current paper preset forces
+    `--policy.n_action_steps=50`, while LeRobot LIBERO default evaluation does
+    not require that for SmolVLA and historical SmolVLA reproduction commands
+    use `--policy.n_action_steps=1`.
+- Next debug run launched:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_spatial_5tasks_5eps_nas1_20260606T005516Z`
+  - model: `HuggingFaceVLA/smolvla_libero`
+  - same `libero_spatial` task ids `[0,1,2,3,4]`, `5` episodes per task
+  - policy args: `--policy.num_steps=10 --policy.n_action_steps=1`
+- Additional blocker found:
+  - the existing network-volume venv installed `torch 2.11.0+cu130`.
+  - RunPod L4 driver reports CUDA driver version `12080`, so PyTorch CUDA 13
+    reports `torch.cuda.is_available() == False`.
+  - As a result, attempted CUDA evals fell back to CPU despite
+    `--policy.device=cuda`.
+- Attempted repair:
+  - checked PyTorch wheel availability and found `torch==2.11.0+cu128`,
+    `torchvision==0.26.0+cu128`, and `torchcodec==0.11.1+cu128`.
+  - deleted unused repo `.venv` and failed HuggingFaceVLA partial cache,
+    reducing `/workspace/physical-ai` from about `22GB` to `19GB`.
+  - `pip install --force-reinstall --no-cache-dir --index-url
+    https://download.pytorch.org/whl/cu128 ...` still failed with
+    `Disk quota exceeded` while replacing packages inside the network-volume
+    venv.
+- Decision:
+  - stop repairing the network-volume venv.
+  - create the next Pod with `RUNPOD_CONTAINER_DISK_GB=60`.
+  - keep venv/build/temp under container disk (`/root/physical-ai/...`) and
+    preserve only repo, HF cache, LIBERO assets, videos, metrics, and reports
+    under `/workspace`.
