@@ -12,7 +12,9 @@ LIBERO_TASKS="${LIBERO_TASKS:-libero_spatial}"
 LIBERO_TASK_IDS="${LIBERO_TASK_IDS:-[0,1]}"
 LIBERO_N_EPISODES="${LIBERO_N_EPISODES:-2}"
 POLICY_EMPTY_CAMERAS="${POLICY_EMPTY_CAMERAS:-0}"
-LIBERO_CAMERA_NAME_MAPPING="${LIBERO_CAMERA_NAME_MAPPING:-{\"agentview_image\": \"image\", \"robot0_eye_in_hand_image\": \"image2\"}}"
+if [ -z "${LIBERO_CAMERA_NAME_MAPPING+x}" ]; then
+  LIBERO_CAMERA_NAME_MAPPING='{"agentview_image": "image", "robot0_eye_in_hand_image": "image2"}'
+fi
 LIBERO_EXTRA_ARGS="${LIBERO_EXTRA_ARGS:---policy.num_steps=10 --policy.n_action_steps=1 --policy.device=cuda}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/_workspace/runpod_results/smolvla_parallel_probe_$(date -u +%Y%m%dT%H%M%SZ)}"
 
