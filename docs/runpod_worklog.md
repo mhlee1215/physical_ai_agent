@@ -117,6 +117,53 @@ finishes.
    canonical SmolVLA configuration better.
 4. Stop the Pod only after the comparable result and report are fetched locally.
 
+## 2026-06-06 Low-Cost Affordance Overlay Probe Pod
+
+### Current State
+
+- Status: stopped after blocker capture.
+- Purpose: create a separate low-cost Pod so CP24 affordance-overlay probing did
+  not interfere with the active LIBERO evaluation.
+- Pod: `ynyy1lwc5qnnef`.
+- GPU: NVIDIA RTX 2000 Ada Generation 16GB.
+- Cost at creation: `$0.24/hr`.
+- Cloud type: SECURE.
+- Container disk: 20GB.
+- Network volume: `tchm4gxfvd`.
+- Separate clone path:
+  `/workspace/physical-ai/physical_ai_agent_affordance_probe`.
+
+### Commands
+
+```bash
+PYTHONPATH=src .venv/bin/python -B -m physical_ai_agent.checkpoints.checkpoint_24 \
+  --require-maniskill \
+  --episodes 1 \
+  --steps 1 \
+  --policy affordance_oracle_probe \
+  --real-images \
+  --output-dir _workspace/checkpoints/runpod_affordance_oracle_probe_rtx2000_1step
+```
+
+### Result
+
+- Result: blocked before rollout.
+- Output path:
+  `/workspace/physical-ai/physical_ai_agent_affordance_probe/_workspace/checkpoints/runpod_affordance_oracle_probe_rtx2000_1step`.
+- Blocker:
+  `vk::createInstanceUnique: ErrorIncompatibleDriver`.
+- `vulkaninfo --summary` saw only CPU `llvmpipe`, not the RTX 2000 Ada Vulkan
+  device.
+- Installing `libvulkan1` and `vulkan-tools` did not expose NVIDIA Vulkan.
+
+### Interpretation
+
+This low-cost Pod confirmed the same limitation as earlier RunPod templates:
+CUDA is available, but ManiSkill/SAPIEN RGB manipulation tasks need a working
+NVIDIA Vulkan device. The overlay code should be tested on a template or host
+where `vulkaninfo --summary` lists the NVIDIA GPU, or on a benchmark path that
+does not require SAPIEN Vulkan rendering.
+
 ## 2026-06-05 HuggingFaceVLA SmolVLA LIBERO Full Eval
 
 ### Current State
@@ -933,3 +980,19 @@ previous `lerobot/smolvla_libero` run.
   - next recommended step: repeat the current best routed full run to estimate
     variance and confirm whether the ActionX average gap around `-1.05` is
     stable.
+- Completed routed full repeat with the same `Spatial=10`, `Object/Goal/Long=15`
+  protocol:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_routed_spatial10_rest15_repeat_20260606T1933Z`
+  - local compact artifact:
+    `_workspace/runpod_results/baseline_debug_20260606/smolvla_lerobot_routed_spatial10_rest15_repeat_20260606T1933Z`
+  - result: Goal `91.0`, Object `94.0`, Spatial `91.0`, Long `75.0`, Avg
+    `87.75`
+  - delta vs ActionX Table 1 SmolVLA: Goal `0.0`, Object `0.0`, Spatial
+    `-2.0`, Long `-2.0`, Avg `-1.05`
+  - repeat matched the previous routed full result exactly, including per-task
+    counts. This is now the repeat-confirmed internal policy-only baseline.
+  - conclusion: baseline parity is close enough for the next stage of
+    agentic-wrapper experiments, while reporting the remaining `-1.05` average
+    gap and the fact that ActionX may use a different exact checkpoint/control
+    protocol.

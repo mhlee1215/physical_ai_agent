@@ -16,12 +16,15 @@ Current best internal 4-suite baseline:
 - result: `87.75%` average success
 - output root:
   `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_routed_spatial10_rest15_20260606T1829Z`
+- repeat output root:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_routed_spatial10_rest15_repeat_20260606T1933Z`
 
 This now uses the same high-level evaluation scale as the external LIBERO
 table: 4 suites, 10 tasks per suite, 10 episodes per task. It is format
 comparable and is now within `1.05` average points of the ActionX Table 1
 SmolVLA reference. Goal and Object match the ActionX reference exactly; Spatial
-and Long are both `2` points below it.
+and Long are both `2` points below it. A repeat run with the same protocol
+reproduced the same suite and per-task counts.
 
 ## External Reference
 
@@ -48,6 +51,7 @@ Reference:
 | Run | Policy | Goal | Object | Spatial | Long | Avg | Episodes |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Internal routed spatial10 rest15 full | `lerobot/smolvla_libero` | 91.0 | 94.0 | 91.0 | 75.0 | 87.75 | 400 |
+| Internal routed repeat | `lerobot/smolvla_libero` | 91.0 | 94.0 | 91.0 | 75.0 | 87.75 | 400 |
 | Delta vs ActionX, routed |  | 0.0 | 0.0 | -2.0 | -2.0 | -1.05 |  |
 | Internal steps15 two-lane full | `lerobot/smolvla_libero` | 89.0 | 93.0 | 86.0 | 74.0 | 85.5 | 400 |
 | Delta vs ActionX, steps15 |  | -2.0 | -1.0 | -7.0 | -3.0 | -3.3 |  |
@@ -64,6 +68,9 @@ Local artifact:
 
 Network volume artifact:
 `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_routed_spatial10_rest15_20260606T1829Z`
+
+Repeat local artifact:
+`_workspace/runpod_results/baseline_debug_20260606/smolvla_lerobot_routed_spatial10_rest15_repeat_20260606T1933Z/merged_eval_info.json`
 
 ## Internal Debug Runs
 
@@ -97,6 +104,8 @@ Network volume artifact:
   steps15 gains: Spatial uses `n_action_steps=10`, and Object/Goal/Long use
   `n_action_steps=15`. This yields Goal `91`, Object `94`, Spatial `91`, Long
   `75`, and Avg `87.75`.
+- The routed result reproduced exactly on a repeat 400-episode run, including
+  per-task counts, under the same seed and split-lane protocol.
 - The remaining ActionX gap is narrow: Spatial `-2`, Long `-2`, Avg `-1.05`.
 - A follow-up Long-only task-routed subset probe did not improve the baseline:
   it produced Long `71.0%`. Treat that run as debug evidence only, not as a
