@@ -996,3 +996,45 @@ previous `lerobot/smolvla_libero` run.
     agentic-wrapper experiments, while reporting the remaining `-1.05` average
     gap and the fact that ActionX may use a different exact checkpoint/control
     protocol.
+
+### 2026-06-06 Basic Agentic Retry Wrapper
+
+- Added the first LIBERO/SmolVLA agentic retry layer:
+  - source: `src/physical_ai_agent/agent_core/libero_agentic_retry.py`
+  - runner: `scripts/runpod_smolvla_libero_agentic_retry_probe.sh`
+  - test: `tests/test_libero_agentic_retry.py`
+  - report: `docs/smolvla_libero_agentic_retry_report.md`
+- Semantics:
+  - verifier reads the LIBERO benchmark `success` flag from `eval_info.json`.
+  - planner schedules retry for task ids that have failed baseline episodes.
+  - retry executor reruns those failed task ids once.
+  - aggregator reports `success_once_rate`, counting an episode as successful
+    if either baseline or retry succeeds for the same task/episode index.
+  - This is an episode-level retry wrapper, not yet a subgoal-level in-episode
+    controller.
+- Completed same-protocol RunPod probe:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_probe_20260606T2036Z`
+  - local:
+    `_workspace/runpod_results/agentic_retry_probe_20260606/smolvla_agentic_retry_probe_20260606T2036Z`
+  - subset: `libero_10`, task ids `[0,6,8]`, `2` episodes per task
+  - baseline and retry args: `n_action_steps=15`, `seed=1000`
+  - result: baseline `50.0`, success-once `50.0`, recovered `0/3`
+  - interpretation: plumbing passed, but identical retry protocol did not
+    recover failures.
+- Completed alternate-protocol RunPod probe:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_alt_probe_20260606T2042Z`
+  - local:
+    `_workspace/runpod_results/agentic_retry_probe_20260606/smolvla_agentic_retry_alt_probe_20260606T2042Z`
+  - baseline args: `n_action_steps=15`, `seed=1000`
+  - retry args: `n_action_steps=10`, `seed=1001`
+  - result: baseline `50.0`, success-once `66.67`, recovered `1/3`
+  - interpretation: first positive SmolVLA/LIBERO agentic retry signal. The
+    sample is too small for a paper-scale claim, but it proves the wrapper can
+    schedule, execute, trace, and recover a failed task-episode index.
+- Next recommended run:
+  - same alternate retry protocol on `libero_10` task ids `[0,6,8]` with `10`
+    episodes per task.
+  - if recovery remains positive, scale to the full Long suite before comparing
+    against the repeat-confirmed policy-only baseline.
