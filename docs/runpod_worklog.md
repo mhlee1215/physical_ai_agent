@@ -855,3 +855,27 @@ previous `lerobot/smolvla_libero` run.
   triple-process scaling after the active full run completes. Do not run it
   concurrently with the active reported evaluation because it could contaminate
   timing and possibly success.
+- Completed the full 4-suite two-lane `n_action_steps=10` run:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_full_steps10_two_lane_20260606T171310Z`
+  - local compact artifact:
+    `_workspace/runpod_results/baseline_debug_20260606/smolvla_lerobot_full_steps10_two_lane_20260606T171310Z`
+  - result: Goal `85.0`, Object `92.0`, Spatial `91.0`, Long `73.0`, Avg
+    `85.25`
+  - delta vs ActionX Table 1 SmolVLA: Goal `-6.0`, Object `-2.0`, Spatial
+    `-2.0`, Long `-4.0`, Avg `-3.55`
+  - delta vs LeRobot/HF issue `#2354` paper line: Goal `-7.0`, Object `-4.0`,
+    Spatial `+1.0`, Long `+2.0`, Avg `-2.0`
+  - delta vs LeRobot/HF issue `#2354` public repro line: Goal `+2.0`, Object
+    `+1.0`, Spatial `+18.0`, Long `+30.0`, Avg `+12.5`
+  - interpretation: this is the first close policy-only baseline. It is not an
+    exact ActionX reproduction, but the remaining ActionX average gap is now
+    small enough to make targeted protocol checks meaningful.
+- Added `scripts/merge_lerobot_eval_infos.py` to merge split-lane
+  `eval_info.json` files into a single 400-episode artifact before running
+  comparison tables.
+- Next debug checks after this result:
+  - run the already-registered `n_action_steps=15` protocol check because the
+    user noted pi0.7 uses this setting.
+  - run triple-process canary only as an acceleration check, not as a reported
+    metric change.
