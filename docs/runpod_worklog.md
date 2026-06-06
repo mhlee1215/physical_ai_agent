@@ -672,3 +672,60 @@ previous `lerobot/smolvla_libero` run.
   - Current working hypothesis remains checkpoint/control protocol mismatch:
     the LeRobot hub checkpoint logs `control_mode=relative`, while the external
     reference describes normalized absolute Cartesian pose actions.
+
+### 2026-06-06 HF Checkpoint Parity Run And Volume Cleanup
+
+- Operating rule update:
+  - If the baseline still needs parity debugging, keep the active RunPod Pod
+    running instead of stopping it between attempts.
+  - Stop the Pod only after a satisfactory milestone, local handoff, and report
+    update, or when explicitly requested.
+- The previous stopped Pod could not restart because its host had no free GPU:
+  - stopped Pod id: `nu2iyu4s8nqmbl`
+  - error: `There are not enough free GPUs on the host machine to start this pod`
+- Created a replacement SECURE 4090 Pod attached to the same network volume:
+  - new Pod id: `ldwpvij20awxqi`
+  - SSH: `root@213.173.109.208`, port `19632`
+  - network volume id: `tchm4gxfvd`
+  - GPU: `NVIDIA GeForce RTX 4090`
+- Tried to bootstrap the reusable network-volume venv:
+  - path: `/workspace/physical-ai/envs/lerobot_py312`
+  - issue: `pip install -e lerobot[smolvla,libero]` stayed slow on network
+    volume I/O.
+  - decision: terminate that bootstrap and use a root/container-disk venv for
+    the current continuous debugging session.
+- Root/container venv smoke passed:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_smoke_mj332_rootvenv_b1_20260606T0810Z`
+  - model: `HuggingFaceVLA/smolvla_libero`
+  - camera mapping:
+    `{"agentview_image": "image", "robot0_eye_in_hand_image": "image2"}`
+  - MuJoCo: `3.3.2`
+  - result: `1/1`, success `100.0%`
+- Launched current HF checkpoint 4-suite parity run:
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_hfvla_libero_all_mj332_rootvenv_b1_10eps_cuda_20260606T0814Z`
+  - model: `HuggingFaceVLA/smolvla_libero`
+  - suites: `libero_spatial,libero_object,libero_goal,libero_10`
+  - episodes: `10` per task, expected `400` total
+  - batch size: `1`
+  - policy args: `--policy.num_steps=10 --policy.n_action_steps=1 --policy.device=cuda`
+  - camera mapping:
+    `{"agentview_image": "image", "robot0_eye_in_hand_image": "image2"}`
+  - latest checked progress: `78/400` videos at `2026-06-06T09:04:06Z`
+  - status: running
+- Cleaned the RunPod network volume while preserving the active run:
+  - local backup:
+    `_workspace/runpod_results/remote_archives/runpod_results_before_cleanup_20260606T0820Z.tar.gz`
+  - deleted old remote run result directories after backup.
+  - deleted the incomplete network-volume venv and pip cache:
+    `/workspace/physical-ai/envs/lerobot_py312`,
+    `/workspace/physical-ai/pip_cache`
+  - retained HF model cache and LIBERO assets for the active and next runs.
+  - `/workspace/physical-ai` usage dropped from roughly `19G` to `7.1G`.
+- References currently tracked:
+  - ActionX Table 1 SmolVLA: Goal `91.0`, Object `94.0`, Spatial `93.0`,
+    Long `77.0`, Average `88.8`
+  - LeRobot/HF reproduction issue `huggingface/lerobot#2354` for public
+    checkpoint reality checks.
+  - LeRobot LIBERO docs for protocol and command shape.
