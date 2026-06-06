@@ -1051,3 +1051,25 @@ previous `lerobot/smolvla_libero` run.
     Next step is full Long-suite agentic retry, still with explicit disclosure
     that this wrapper retries task/episode indexes rather than intervening
     mid-episode.
+- Started a full Long-suite run at
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_alt_long_full_20260606T2105Z`,
+  but stopped it because `LIBERO_TASK_IDS=` fell back to the script default
+  `[0,6,8]`. Added `LIBERO_TASK_IDS=all` support in
+  `scripts/runpod_smolvla_libero_agentic_retry_probe.sh` before relaunching.
+- Completed full Long-suite alternate-protocol agentic retry:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_alt_long_full_20260606T2108Z`
+  - local:
+    `_workspace/runpod_results/agentic_retry_probe_20260606/smolvla_agentic_retry_alt_long_full_20260606T2108Z`
+  - suite: `libero_10`, all task ids, `10` episodes per task
+  - baseline args: `n_action_steps=15`, `seed=1000`
+  - retry args: `n_action_steps=10`, `seed=1001`
+  - result: baseline `71.0`, success-once `86.0`, recovered `15/29`
+  - strongest per-task recovery:
+    - task `6`: baseline `1/10`, recovered `6/9`, success-once `7/10`
+    - task `8`: baseline `7/10`, recovered `3/3`, success-once `10/10`
+    - task `4`: baseline `4/10`, recovered `2/6`, success-once `6/10`
+  - interpretation: first full Long-suite positive agentic retry result. It
+    should be repeated before paper-scale claims, and reported against its
+    same-run baseline because the policy-only routed parity baseline used a
+    different split-suite protocol.
