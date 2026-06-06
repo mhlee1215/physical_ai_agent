@@ -849,8 +849,8 @@ previous `lerobot/smolvla_libero` run.
   - lane B: `libero_goal,libero_10`
   - eval settings per lane: `batch_size=1`, `use_async_envs=false`,
     `max_parallel_tasks=1`
-  - latest checked progress at `2026-06-06T17:15:15Z`: `24/400` videos,
-    still running.
+  - latest checked progress at `2026-06-06T17:18:36Z`: `83/400` videos,
+    still running; GPU was `32%` with `4237/24564 MiB` used.
 - Added `scripts/runpod_smolvla_libero_multi_process_probe.sh` to test
   triple-process scaling after the active full run completes. Do not run it
   concurrently with the active reported evaluation because it could contaminate
