@@ -1038,3 +1038,16 @@ previous `lerobot/smolvla_libero` run.
     episodes per task.
   - if recovery remains positive, scale to the full Long suite before comparing
     against the repeat-confirmed policy-only baseline.
+- Completed 30-episode alternate-protocol sanity run:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_alt_30ep_20260606T2049Z`
+  - local:
+    `_workspace/runpod_results/agentic_retry_probe_20260606/smolvla_agentic_retry_alt_30ep_20260606T2049Z`
+  - subset: `libero_10`, task ids `[0,6,8]`, `10` episodes per task
+  - baseline args: `n_action_steps=15`, `seed=1000`
+  - retry args: `n_action_steps=10`, `seed=1001`
+  - result: baseline `50.0`, success-once `70.0`, recovered `6/15`
+  - interpretation: positive retry signal persisted at a larger subset scale.
+    Next step is full Long-suite agentic retry, still with explicit disclosure
+    that this wrapper retries task/episode indexes rather than intervening
+    mid-episode.

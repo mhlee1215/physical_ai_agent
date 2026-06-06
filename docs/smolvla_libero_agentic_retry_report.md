@@ -26,10 +26,13 @@ Task subset:
 | --- | --- | --- | ---: | ---: | ---: |
 | same-protocol retry | steps15, seed1000 | steps15, seed1000 | 50.00 | 50.00 | 0/3 |
 | alternate retry | steps15, seed1000 | steps10, seed1001 | 50.00 | 66.67 | 1/3 |
+| alternate retry, 30 episodes | steps15, seed1000 | steps10, seed1001 | 50.00 | 70.00 | 6/15 |
 
 The same-protocol retry confirmed the wrapper plumbing but did not recover any
 failed episode. The alternate retry recovered one failed task-episode index,
-raising success-once from `50.00%` to `66.67%` on the small subset.
+raising success-once from `50.00%` to `66.67%` on the smallest subset. Scaling
+the same alternate condition to `30` episodes recovered `6/15` failed episodes
+and raised success-once from `50.00%` to `70.00%`.
 
 ## Artifacts
 
@@ -41,10 +44,14 @@ raising success-once from `50.00%` to `66.67%` on the small subset.
   `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_alt_probe_20260606T2042Z`
 - alternate local:
   `_workspace/runpod_results/agentic_retry_probe_20260606/smolvla_agentic_retry_alt_probe_20260606T2042Z`
+- alternate 30-episode remote:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_alt_30ep_20260606T2049Z`
+- alternate 30-episode local:
+  `_workspace/runpod_results/agentic_retry_probe_20260606/smolvla_agentic_retry_alt_30ep_20260606T2049Z`
 
 ## Next Step
 
-Scale the alternate retry condition to a larger Long subset before making any
-paper-scale claim. The first useful target is `libero_10` task ids `[0,6,8]`
-with `10` episodes per task, then a full Long-suite retry comparison if recovery
-remains positive.
+Scale the alternate retry condition to the full Long suite before making any
+paper-scale claim. If recovery remains positive, compare against the
+repeat-confirmed policy-only routed baseline and then decide whether to expand
+to all four LIBERO suites.
