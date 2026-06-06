@@ -896,3 +896,22 @@ previous `lerobot/smolvla_libero` run.
   - next question: whether Spatial can be recovered while keeping the
     Goal/Object/Long gains. Candidate checks are per-suite action-step routing
     (`Spatial=10`, other suites `15`) or a small `n_action_steps=12` full run.
+- Completed routed full run with `Spatial n_action_steps=10` and
+  `Object/Goal/Long n_action_steps=15`:
+  - output:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_lerobot_routed_spatial10_rest15_20260606T1829Z`
+  - local compact artifact:
+    `_workspace/runpod_results/baseline_debug_20260606/smolvla_lerobot_routed_spatial10_rest15_20260606T1829Z`
+  - result: Goal `91.0`, Object `94.0`, Spatial `91.0`, Long `75.0`, Avg
+    `87.75`
+  - delta vs ActionX Table 1 SmolVLA: Goal `0.0`, Object `0.0`, Spatial
+    `-2.0`, Long `-2.0`, Avg `-1.05`
+  - delta vs LeRobot/HF issue `#2354` paper line: Goal `-1.0`, Object `-2.0`,
+    Spatial `+1.0`, Long `+4.0`, Avg `+0.5`
+  - interpretation: this is now the closest internal policy-only baseline.
+    It matches ActionX Goal/Object exactly and leaves only Spatial/Long gaps.
+  - remaining targeted debug candidates:
+    - Long task-focused routing, because Long tasks `6` and `8` remain weak
+      at `3/10` and `4/10`.
+    - Spatial-focused check only if we need to close the last two Spatial
+      points; steps10 already appears best for Spatial among tested settings.
