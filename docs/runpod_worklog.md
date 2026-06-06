@@ -772,6 +772,17 @@ previous `lerobot/smolvla_libero` run.
     `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_parallel_probe_after_hfvla_20260606T100356Z`
   - latest active progress at `2026-06-06T10:04:15Z`: `167/400` videos,
     still running, GPU memory `2406/24564 MiB`.
+- Added `scripts/compare_smolvla_libero_results.py` to generate comparison
+  tables from any completed LeRobot `eval_info.json`.
+  - Verified it against the previous 400-episode
+    `lerobot/smolvla_libero` result.
+  - It reports ActionX Table 1 deltas and LeRobot/HF issue `#2354` public
+    checkpoint repro/paper deltas separately.
+  - Important interpretation from the previous run: average was `-12.55` vs
+    ActionX, but `+3.5` vs the HF public-checkpoint repro line; those are not
+    the same external baseline.
+- Active progress check at `2026-06-06T10:14:05Z`: `181/400` videos, still
+  running, GPU memory `2404/24564 MiB`.
 - References currently tracked:
   - ActionX Table 1 SmolVLA: Goal `91.0`, Object `94.0`, Spatial `93.0`,
     Long `77.0`, Average `88.8`

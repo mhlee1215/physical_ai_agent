@@ -51,6 +51,16 @@ names it.
 
 Do not compare a subset average directly against a paper's full LIBERO average.
 
+Generate a side-by-side comparison from any completed LeRobot `eval_info.json`:
+
+```bash
+scripts/compare_smolvla_libero_results.py \
+  _workspace/runpod_results/<run>/eval_logs/eval_info.json \
+  --run-name <run-name> \
+  --policy <policy-id> \
+  --output-md _workspace/runpod_results/<run>/comparison_generated.md
+```
+
 ## RunPod Command
 
 After starting the Pod and pulling the latest repo:
