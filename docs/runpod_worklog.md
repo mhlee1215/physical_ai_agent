@@ -355,3 +355,23 @@ previous `lerobot/smolvla_libero` run.
   - keep venv/build/temp under container disk (`/root/physical-ai/...`) and
     preserve only repo, HF cache, LIBERO assets, videos, metrics, and reports
     under `/workspace`.
+
+### 2026-06-06 New 60GB Container Disk Pod
+
+- Created a replacement SECURE Pod after Community pool availability failed:
+  - Pod id: `nu2iyu4s8nqmbl`
+  - GPU: `NVIDIA GeForce RTX 4090`
+  - driver: `580.126.20`
+  - container disk: `60GB`
+  - cost: `$0.69/hr`
+  - network volume: `tchm4gxfvd`
+  - SSH: `root@213.173.109.89:18329`
+- Verified SSH, GPU, and disk on the new Pod.
+- Terminated the old L4 Pod `3f6so5bs0zz6k6` after confirming the new Pod, so
+  only one billable Pod remains.
+- Updated the paper preset default toward the current best debug hypothesis:
+  - `SMOLVLA_MODEL_ID=HuggingFaceVLA/smolvla_libero`
+  - `--policy.num_steps=10`
+  - `--policy.n_action_steps=1`
+  - `--policy.device=cuda`
+  - `--policy.empty_cameras=0`
