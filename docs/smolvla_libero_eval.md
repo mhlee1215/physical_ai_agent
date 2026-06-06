@@ -67,6 +67,18 @@ The RunPod command is a wrapper around the Linux evaluator:
 sh scripts/eval_smolvla_libero_linux.sh
 ```
 
+For a parallel throughput probe:
+
+```bash
+LIBERO_TASKS=libero_spatial LIBERO_TASK_IDS='[0,1]' LIBERO_N_EPISODES=2 \
+  sh scripts/runpod_smolvla_libero_parallel_probe.sh
+```
+
+Use the parallel probe before changing a full benchmark run to a higher
+throughput setting. The probe compares conservative `batch_size=1` against
+`batch_size=4/8` with async envs and one task-thread variant. Treat it as a
+throughput and regression check, not as a paper-comparable result.
+
 For a quick smoke:
 
 ```bash

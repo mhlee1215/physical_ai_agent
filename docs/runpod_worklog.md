@@ -749,6 +749,20 @@ previous `lerobot/smolvla_libero` run.
   - follow-up progress check at `2026-06-06T09:57:38Z`: active videos `158`,
     active size `43M`, `/workspace/physical-ai` still `7.1G`, GPU memory
     `2406/24564 MiB`.
+- Parallelization check:
+  - current active run remains conservative on purpose:
+    `batch_size=1`, `use_async_envs=false`, `max_parallel_tasks=1`.
+  - RunPod resources at `2026-06-06T10:01:29Z`: 32 CPU cores, 124GiB RAM,
+    RTX 4090 using about `2406/24564 MiB` VRAM and about `33%` GPU util.
+  - LeRobot source confirms `eval.batch_size` creates multiple envs,
+    `eval.use_async_envs` uses async envs, and `env.max_parallel_tasks` runs
+    task-level work with a thread pool.
+  - Added `scripts/runpod_smolvla_libero_parallel_probe.sh` to compare:
+    `b1_sync_t1`, `b4_async_t1`, `b8_async_t1`, and `b4_async_t2` on a small
+    fixed subset before changing a full benchmark run.
+  - Preferred next acceleration path is `batch_size + async`; task-thread
+    parallelism is higher risk because it shares one policy across task
+    workers and must be regression-checked before full-run use.
 - References currently tracked:
   - ActionX Table 1 SmolVLA: Goal `91.0`, Object `94.0`, Spatial `93.0`,
     Long `77.0`, Average `88.8`
