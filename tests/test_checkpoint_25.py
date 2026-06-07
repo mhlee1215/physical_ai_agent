@@ -31,6 +31,15 @@ class _FakeEnv:
         self.closed = True
 
 
+class _FakeNumpy:
+    @staticmethod
+    def zeros(shape: tuple[int, ...], dtype: object = None) -> list[float]:
+        size = 1
+        for dim in shape:
+            size *= dim
+        return [0.0] * size
+
+
 class Checkpoint25Test(TestCase):
     def _missing_robocasa_import(self, name: str) -> object:
         if name == "robocasa":
@@ -74,7 +83,11 @@ class Checkpoint25Test(TestCase):
                 return types.SimpleNamespace()
             return __import__(name)
 
-        with TemporaryDirectory() as tmpdir, patch.object(checkpoint_25.importlib, "import_module", fake_import):
+        with TemporaryDirectory() as tmpdir, patch.object(
+            checkpoint_25.importlib,
+            "import_module",
+            fake_import,
+        ):
             report = checkpoint_25.run_checkpoint(
                 output_dir=Path(tmpdir),
                 require_robocasa=True,
@@ -93,7 +106,11 @@ class Checkpoint25Test(TestCase):
                 return types.SimpleNamespace(create_env=lambda **_: _FakeEnv())
             return __import__(name)
 
-        with TemporaryDirectory() as tmpdir, patch.object(checkpoint_25.importlib, "import_module", fake_import):
+        with TemporaryDirectory() as tmpdir, patch.object(
+            checkpoint_25.importlib,
+            "import_module",
+            fake_import,
+        ), patch.dict("sys.modules", {"numpy": _FakeNumpy}):
             report = checkpoint_25.run_checkpoint(
                 output_dir=Path(tmpdir),
                 require_robocasa=True,
@@ -108,7 +125,7 @@ class Checkpoint25Test(TestCase):
             self.assertEqual(metrics["success"], True)
             self.assertIn('"success": true', trace)
 
-    def test_reference_table_contains_leaderboard_and_pending_row(self) -> None:
+    def test_reference_table_contains_leaderboard_and_partial_run_row(self) -> None:
         with TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "reference.md"
             checkpoint_25._write_reference_table(path)
@@ -116,5 +133,7 @@ class Checkpoint25Test(TestCase):
 
             self.assertIn("RLDX-1", text)
             self.assertIn("Diffusion Policy", text)
-            self.assertIn("Our SmolVLA RoboCasa365 run", text)
-            self.assertIn("20-episodes-per-task", text)
+            self.assertIn("Our SmolVLA RoboCasa365 full benchmark", text)
+            self.assertIn("CloseFridge", text)
+            self.assertIn("0/20, 0.0%", text)
+            self.assertIn("20 episodes per task", text)

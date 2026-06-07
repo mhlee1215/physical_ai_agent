@@ -8,17 +8,18 @@ paper or official leaderboard values.
 
 ## Current Decision
 
-The best next external benchmark is **RoboCasa365 / RoboCasa**, but the most
-immediately executable non-LIBERO lane in this repo is **ManiSkill /
-ManiSkill-HAB CP24**.
+The best next external benchmark is **RoboCasa365 / RoboCasa**. CP25 has now
+advanced from install/runtime readiness to a real SmolVLA single-task
+evaluation.
 
 Why:
 
 - ManiSkill/HAB already has repo-local execution plumbing and Mac-local pilot
-  artifacts.
+  artifacts, but the current strict Mac renderer path is blocked and the
+  available policy rows are random/zero controls.
 - RoboCasa365 is more paper-relevant for household long-horizon agentic
-  wrappers, and now has a separate CP25 install/reset-step probe gate before
-  full evaluation.
+  wrappers, and the RunPod path now supports strict reset/step plus
+  `lerobot/smolvla_robocasa` evaluation.
 - RoboTwin/Isaac/SimplerEnv/CALVIN are plausible later lanes, but they require
   new model/action-space compatibility work before a fair SmolVLA comparison.
 
@@ -48,6 +49,7 @@ Reference:
 
 - https://robocasa.ai/leaderboard.html
 - https://robocasa.ai/
+- https://huggingface.co/docs/lerobot/main/robocasa
 
 ### ManiSkill / ManiSkill-HAB
 
@@ -197,7 +199,18 @@ sh scripts/checkpoint_25.sh
 sh scripts/checkpoint_25.sh --probe-reset-step --require-robocasa --task CloseFridge
 ```
 
-Expected artifacts:
+RunPod strict result:
+
+| Field | Value |
+| --- | --- |
+| status | passed |
+| task | `CloseFridge` |
+| probe language | `Close the fridge door.` |
+| steps executed | 1 |
+| success | not reported by one-step probe |
+| artifact | `_workspace/runpod_results/checkpoint_25_robocasa_strict_assets_ready_20260607T061729Z/checkpoint_report.json` |
+
+Expected/generated artifacts:
 
 | Artifact | Path |
 | --- | --- |
@@ -209,11 +222,73 @@ Expected artifacts:
 Interpretation:
 
 The non-strict CP25 run is allowed to pass with a documented missing-dependency
-blocker. The strict run is the first real RoboCasa execution gate: it must
-import `robocasa` and `robosuite`, create a `CloseFridge` environment through
-`robocasa.utils.env_utils.create_env()`, reset it, and execute at least one
-zero-action step. This is still not a paper-comparable score; it is the
-installation/runtime gate before `lerobot/smolvla_robocasa` evaluation.
+blocker. The strict RunPod gate now imports `robocasa` and `robosuite`, creates
+a `CloseFridge` environment through `robocasa.utils.env_utils.create_env()`,
+resets it, and executes at least one zero-action step. This is an installation
+and runtime proof, not a policy score.
+
+### 6. RoboCasa `CloseFridge` SmolVLA 20-episode evaluation
+
+Command shape:
+
+```bash
+PYTHONPATH=/workspace/physical-ai/robocasa:/workspace/physical-ai/robosuite:/workspace/physical-ai/vendor/lerobot/src:$PYTHONPATH \
+/root/physical-ai/envs/lerobot_py312/bin/python -m lerobot.scripts.lerobot_eval \
+  --output_dir _workspace/runpod_results/robocasa_smolvla_closefridge_20ep_default_horizon_20260607T063345Z \
+  --policy.path=lerobot/smolvla_robocasa \
+  --env.type=robocasa \
+  --env.task=CloseFridge \
+  --eval.n_episodes=20 \
+  --eval.batch_size=1 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --rename_map='{"observation.images.robot0_agentview_left":"observation.images.camera1","observation.images.robot0_eye_in_hand":"observation.images.camera2","observation.images.robot0_agentview_right":"observation.images.camera3"}' \
+  --seed=0
+```
+
+Result:
+
+| Field | Value |
+| --- | --- |
+| policy | `lerobot/smolvla_robocasa` |
+| task | `CloseFridge` |
+| episodes | 20 |
+| horizon | default LeRobot/RoboCasa `1000` |
+| successes | 0/20 |
+| success rate | 0.0% |
+| avg sum reward | 0.0 |
+| eval seconds | 821.637 |
+| eval seconds per episode | 41.082 |
+| metrics artifact | `_workspace/runpod_results/robocasa_smolvla_closefridge_20ep_default_horizon_20260607T063345Z/eval_info.json` |
+| representative video | `_workspace/runpod_results/robocasa_smolvla_closefridge_20ep_default_horizon_20260607T063345Z/videos/CloseFridge_0/eval_episode_0.mp4` |
+
+Visual check:
+
+- Representative frame inspected locally:
+  `_workspace/runpod_results/robocasa_smolvla_closefridge_20ep_default_horizon_20260607T063345Z/videos/CloseFridge_0/frame_000.png`
+- The frame shows a valid RoboCasa kitchen/fridge scene with the robot arm, not
+  a blank or broken render.
+
+Interpretation:
+
+This is a real non-LIBERO SmolVLA policy evaluation and follows the LeRobot
+single-task evaluation shape for `CloseFridge`: `lerobot/smolvla_robocasa`,
+`env.type=robocasa`, `eval.n_episodes=20`, and the three-camera rename map.
+It is not the same as the RoboCasa365 leaderboard because the leaderboard is a
+50-task multi-task benchmark over three splits. Treat it as the first
+official-protocol single-task number and a scale-up gate.
+
+## RoboCasa Comparison Table
+
+| Evaluation | Policy | Scale | Metric | Our Number | Reference Number | Delta / Boundary |
+| --- | --- | ---: | --- | ---: | ---: | --- |
+| Single-task quick iteration | `lerobot/smolvla_robocasa` | `CloseFridge`, 20 episodes | task success | 0.0% | LeRobot documents this as the recommended quick-iteration command, but does not publish a success target on the docs page | protocol match, no public target |
+| RoboCasa365 leaderboard | RLDX-1 | 50 tasks, 3 splits | overall task success | n/a | 33.2 | not directly comparable to single-task |
+| RoboCasa365 leaderboard | GR00T N1.5 | 50 tasks, 3 splits | overall task success | n/a | 23.9 | not directly comparable to single-task |
+| RoboCasa365 leaderboard | pi0.5 | 50 tasks, 3 splits | overall task success | n/a | 16.9 | not directly comparable to single-task |
+| RoboCasa365 leaderboard | pi0 | 50 tasks, 3 splits | overall task success | n/a | 14.8 | not directly comparable to single-task |
+| RoboCasa365 leaderboard | Diffusion Policy | 50 tasks, 3 splits | overall task success | n/a | 6.1 | not directly comparable to single-task |
 
 ## Recommendation
 
@@ -225,22 +300,21 @@ Next executable path:
    ManiSkill table over `PickCube`, `PushCube`, `StackCube`,
    `PegInsertionSide`, and `PlugCharger` only if model/action compatibility is
    available.
-3. Run CP25 on RunPod. If the non-strict probe only records missing
-   dependencies, install RoboCasa/robosuite plus lightweight assets and rerun
-   the strict reset-step gate.
+3. Expand RoboCasa from the completed `CloseFridge` 20ep run to a small
+   multi-task subset or `atomic_seen`.
 4. Do not compare random/zero pilots to trained-policy paper numbers except as
    sanity controls. A fair table needs either the same policy family or an
    explicitly labeled weak-control row.
 
 ## Claim Boundary
 
-Current non-LIBERO state is **not yet paper-comparable**. It is a readiness
-audit:
+Current non-LIBERO state is **partially paper-facing but not yet leaderboard
+comparable**:
 
 - ManiSkill/HAB: local pilots and current renderer blocker are documented.
-- RoboCasa365: reference numbers are identified; CP25 probe gate exists, while
-  strict reset-step and SmolVLA policy evaluation still require installed
-  RoboCasa assets.
-- Next required milestone: a strict non-LIBERO task-success run on a
-  renderer-compatible ManiSkill machine, or a RoboCasa strict reset-step smoke
-  followed by `lerobot/smolvla_robocasa` evaluation.
+- RoboCasa: CP25 strict reset/step passed on RunPod, and
+  `lerobot/smolvla_robocasa` ran on `CloseFridge` for 20 episodes with a
+  measured `0/20` success rate.
+- RoboCasa365: full leaderboard comparability still requires 20 episodes per
+  task across the target benchmark groups, not just the single `CloseFridge`
+  task.
