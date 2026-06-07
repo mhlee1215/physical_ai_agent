@@ -316,6 +316,27 @@ PushCube SFT parity status:
 | qpos idle-filtered count1000 SFT | same checkpoint, seeds `1000..1004` | 9000 | 1500 total | 30 | `62.2%` (`933/1500`) | `-24.1pp` |
 | qpos idle-filtered count1000 SFT | official-demo replay filtered at qpos delta `0.06`, `18850` frames | 9000 | 50 | 30 | `62.0%` | `-24.3pp` |
 
+Current STARE-style SmolVLA fine-tuning reproduction table:
+
+| Task | STARE SmolVLA fine-tuning | Our closest paper-scale run | Eval protocol | Delta |
+| --- | ---: | ---: | --- | ---: |
+| `PushCube-v1` | `86.3%` | `62.2%` (`933/1500`) | horizon `30`, `300ep x 5 seeds` | `-24.1pp` |
+| `StackCube-v1` | `12.7%` | `0.33%` (`1/300`) | horizon `30`, `300ep x 1 seed` | `-12.37pp` |
+| `PullCube-v1` | `90.7%` | `9.67%` (`145/1500`) | horizon `30`, `300ep x 5 seeds` | `-81.03pp` |
+| `LiftPegUpright-v1` | `16.3%` | `0.00%` (`0/1500`) | horizon `30`, `300ep x 5 seeds` | `-16.3pp` |
+
+Interpretation:
+
+This now covers all four STARE Table 2 ManiSkill3 tasks with at least one
+SmolVLA SFT attempt, and three of the four have the paper-scale `300ep x 5
+seeds` evaluation count. The results are **not parity**. PushCube is the only
+row with meaningful success; PullCube and LiftPegUpright remain far below the
+STARE reference despite successful replayed official demos, qpos idle
+filtering, `lerobot/smolvla_base`, LeRobot pre/postprocessing, and the paper
+horizon. The leading hypothesis is no longer evaluation sample count; it is
+source-demo semantics, exact STARE filtering/training details, control-mode
+mismatch, or action/observation protocol differences.
+
 Interpretation:
 
 Fine-tuning here is a baseline-calibration step, not the agentic contribution.
@@ -1340,6 +1361,67 @@ not evaluation sample count. The strongest remaining suspects are source-demo
 type, control-mode/action replay semantics, exact STARE idle-action filtering,
 and training-protocol mismatch.
 
+## ManiSkill3 LiftPegUpright Qpos Filter 0.05 SFT
+
+This section records the fourth STARE-style SmolVLA SFT row. It is a
+policy-only fine-tuning calibration run, not an agentic-wrapper result.
+
+Reference boundary:
+
+| Source | Task | Policy row | Reported success |
+| --- | --- | --- | ---: |
+| STARE Table 2 | `LiftPegUpright-v1` | `SmolVLA (fine-tuning)`, `1000` trajectory samples for SFT | 16.3% |
+
+Protocol and data:
+
+| Item | Value |
+| --- | --- |
+| selected source demos | official `LiftPegUpright-v1` RL trajectory, `pd_joint_delta_pos` |
+| source demo count | `993` successful source episodes in metadata |
+| count-100 replay without env states | `0/100`, `0.0%`; rejected as unstable for SFT conversion |
+| count-100 replay with `--use-env-states` | `93/100`, `93.0%` |
+| full RGB replay with `--use-env-states` | `878/993`, `88.42%` demos saved |
+| LeRobot conversion | `878` episodes, `35726` frames |
+| idle filter | qpos delta threshold `0.05` |
+| filtered dataset | `878` episodes, `34663` frames, mean length `39.48`, p50 `41`, p90 `48`, max `50` |
+| cameras | `base_camera` |
+| training | `lerobot/smolvla_base`, 9000 SFT steps, `base_camera -> camera1` rename map |
+| checkpoint | `/root/physical-ai/tmp_train_smolvla_base_maniskill3_liftpeg_count878_qpos_filter005_9000step/checkpoints/009000/pretrained_model` |
+| training completion | `9000/9000` |
+
+Current results:
+
+| Run | Eval episodes | Horizon | Success | Delta vs STARE LiftPegUpright |
+| --- | ---: | ---: | ---: | ---: |
+| smoke seed1000 | 10 | 30 | 0.0% (`0/10`) | -16.3pp |
+| seed1000 | 300 | 30 | 0.0% (`0/300`) | -16.3pp |
+| seed1001 | 300 | 30 | 0.0% (`0/300`) | -16.3pp |
+| seed1002 | 300 | 30 | 0.0% (`0/300`) | -16.3pp |
+| seed1003 | 300 | 30 | 0.0% (`0/300`) | -16.3pp |
+| seed1004 | 300 | 30 | 0.0% (`0/300`) | -16.3pp |
+| five-seed aggregate | 1500 | 30 | 0.0% (`0/1500`) | -16.3pp |
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| local fetched result bundle | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed` |
+| train config | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/train_config_liftpeg_count878_qpos005_9000step.json` |
+| seed1000 metrics | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/liftpeg_count878_qpos_filter005_9000step_horizon30_eval_300ep_seed1000/metrics.json` |
+| seed1001 metrics | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/liftpeg_count878_qpos_filter005_9000step_horizon30_eval_300ep_seed1001/metrics.json` |
+| seed1002 metrics | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/liftpeg_count878_qpos_filter005_9000step_horizon30_eval_300ep_seed1002/metrics.json` |
+| seed1003 metrics | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/liftpeg_count878_qpos_filter005_9000step_horizon30_eval_300ep_seed1003/metrics.json` |
+| seed1004 metrics | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/liftpeg_count878_qpos_filter005_9000step_horizon30_eval_300ep_seed1004/metrics.json` |
+
+Interpretation:
+
+LiftPegUpright is now evaluated at the STARE episode and seed scale, but the
+current policy-only result is below the reference. Since the selected source
+needed `--use-env-states` and still dropped `115` of `993` source episodes
+during replay, the likely suspects are exact source-demo selection,
+control-mode/action replay semantics, STARE's idle-action filtering, and
+training-protocol details rather than evaluation sample count.
+
 ## Claim Boundary
 
 Current non-LIBERO state is **partially paper-facing but not yet leaderboard
@@ -1362,6 +1444,10 @@ comparable**:
   a five-seed paper-horizon result, `9.67%` over `1500` episodes, which is
   `-81.03pp` below the STARE PullCube reference; the replay path itself needed
   `--use-env-states` to recover `989/1000` usable demos.
+  `LiftPegUpright-v1` qpos-filtered count878 SFT now has a five-seed
+  paper-horizon result, `0.0%` over `1500` episodes, which is `-16.3pp` below
+  the STARE LiftPegUpright reference; its replay path also required
+  `--use-env-states` and saved only `878/993` demos.
 - RoboCasa: CP25 strict reset/step passed on RunPod, and
   `lerobot/smolvla_robocasa` ran on `CloseFridge` for 20 episodes with a
   measured `0/20` success rate.
