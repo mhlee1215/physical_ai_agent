@@ -1339,3 +1339,30 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   implement a custom LIBERO rollout wrapper that logs `action_step_count`,
   `verifier_triggered`, `trigger_step`, `intervention_type`, and final benchmark
   success before launching more paper-facing GPU runs.
+
+### In-Episode Instrumentation Smoke
+
+- Added dependency-light core:
+  `src/physical_ai_agent/agent_core/libero_in_episode.py`.
+- Added executable smoke:
+  `scripts/run_libero_in_episode_instrumented_smoke.py`.
+- Local smoke command:
+  `PYTHONPATH=src:. python3 scripts/run_libero_in_episode_instrumented_smoke.py --output-dir _workspace/libero_in_episode_smoke_20260607`
+- Smoke evidence:
+  - report:
+    `_workspace/libero_in_episode_smoke_20260607/in_episode_report.md`
+  - metrics:
+    `_workspace/libero_in_episode_smoke_20260607/in_episode_metrics.json`
+  - trace:
+    `_workspace/libero_in_episode_smoke_20260607/in_episode_trace.jsonl`
+- Smoke result:
+  - success `true`
+  - action steps `6`
+  - verifier triggers `1`
+  - interventions `1`
+  - environment resets `1`
+  - success/action-step `0.166667`
+- Interpretation:
+  this is not a LIBERO benchmark result yet. It proves the in-episode logging
+  contract: verifier trigger and intervention occur before terminal reset, and
+  the result reports action-step-normalized cost.
