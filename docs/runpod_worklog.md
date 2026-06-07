@@ -1771,3 +1771,46 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   success. The next candidate should be a phased/gated trigger: use
   no-progress to recover approach/reach, then switch to placement only under
   contact or near-receptacle conditions.
+
+### ManiSkill3 Shared LeRobot Runner Smoke
+
+- Checked the previous LIBERO SmolVLA path and confirmed it uses the full
+  LeRobot processor contract:
+  `env_preprocessor -> preprocessor -> policy.select_action -> postprocessor -> env_postprocessor`.
+- Added a shared custom-benchmark policy path:
+  - `src/physical_ai_agent/policies/lerobot_policy_runner.py`
+  - `scripts/run_maniskill3_smolvla_eval.py`
+  - `tests/test_lerobot_policy_runner.py`
+- Purpose:
+  - prevent one-off custom scripts from skipping policy processors
+  - preserve `UnnormalizerProcessorStep` for SmolVLA actions
+  - make future ManiSkill3 and other custom benchmark evals use one runner
+- RunPod checkpoint inspected:
+  - `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count10_100step/checkpoints/last/pretrained_model`
+  - preprocessor steps:
+    `RenameObservationsProcessorStep`, `AddBatchDimensionProcessorStep`,
+    `NewLineTaskProcessorStep`, `TokenizerProcessorStep`,
+    `DeviceProcessorStep`, `NormalizerProcessorStep`
+  - postprocessor steps:
+    `UnnormalizerProcessorStep`, `DeviceProcessorStep`
+- Debug fixes made:
+  - aligned mismatched processor stats to declared feature shape for the small
+    probe checkpoint
+  - converted ManiSkill RGB observations to batched CHW LeRobot image format
+  - moved preprocessed tensors to the policy device before action selection
+- Smoke result:
+  - env: `PushCube-v1`
+  - episodes: `3`
+  - success: `0/3`
+  - output:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count10_100step_shared_runner_eval_3ep/metrics.json`
+  - metrics confirm:
+    `preprocessor_applied=true`, `postprocessor_applied=true`,
+    `postprocessor_steps=["UnnormalizerProcessorStep","DeviceProcessorStep"]`
+- Interpretation:
+  - the earlier raw custom `select_action()` eval snippets are invalid for
+    comparison because they skipped LeRobot processors
+  - this shared-runner smoke is a valid pipeline proof, but the `0/3` result is
+    not a paper-comparable STARE number because it uses only a count10,
+    100-step PushCube probe checkpoint rather than paper-like task-specific
+    SFT with `1000` trajectory samples

@@ -1060,6 +1060,46 @@ Next executable path:
    sanity controls. A fair table needs either the same policy family or an
    explicitly labeled weak-control row.
 
+## Shared LeRobot Policy Runner Rule
+
+Custom benchmark scripts must not call `policy.select_action()` directly for
+paper-facing numbers. Use `physical_ai_agent.policies.lerobot_policy_runner`
+so the same contract as LeRobot/LIBERO rollout is preserved:
+
+```text
+env_preprocessor -> policy_preprocessor -> policy.select_action ->
+policy_postprocessor -> env_postprocessor
+```
+
+This matters because SmolVLA checkpoints include saved processor artifacts.
+For the current ManiSkill3 SFT probe, the loaded postprocessor includes
+`UnnormalizerProcessorStep`; skipping it creates action-scale results that are
+not comparable to the previous LIBERO pipeline or to paper tables.
+
+RunPod smoke:
+
+| Item | Value |
+| --- | --- |
+| script | `scripts/run_maniskill3_smolvla_eval.py` |
+| shared runner | `LeRobotPolicyRunner` |
+| checkpoint | `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count10_100step/checkpoints/last/pretrained_model` |
+| env | `PushCube-v1` |
+| episodes | 3 |
+| result | `0/3`, `0.0%` |
+| preprocessor applied | true |
+| postprocessor applied | true |
+| postprocessor steps | `UnnormalizerProcessorStep`, `DeviceProcessorStep` |
+| output | `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count10_100step_shared_runner_eval_3ep/metrics.json` |
+
+Interpretation:
+
+The previous raw custom evaluation snippets are now treated as invalid for
+comparison because they skipped the LeRobot processor chain. The current
+shared-runner smoke is valid as a pipeline proof, but the `0/3` score is not a
+paper-comparable STARE result: it used only a `count=10`, `100`-step
+PushCube probe checkpoint, while the STARE SmolVLA reference row uses
+task-specific SFT with `1000` trajectory samples per task.
+
 ## Claim Boundary
 
 Current non-LIBERO state is **partially paper-facing but not yet leaderboard
@@ -1069,9 +1109,10 @@ comparable**:
 - ManiSkill3: selected Franka task runtime is green on RunPod; official
   successful trajectories are downloadable for all four selected STARE tasks;
   all four selected tasks pass 1-episode RGB replay and RGB LeRobot conversion,
-  and pretrained `lerobot/smolvla_base` 1-step training passes on all four
-  selected tasks with `rename_map`; no scaled SFT/eval success number has been
-  run yet.
+  pretrained `lerobot/smolvla_base` 1-step training passes on all four
+  selected tasks with `rename_map`, and the custom eval path now uses the
+  shared LeRobot runner with `UnnormalizerProcessorStep`; no paper-like
+  scaled SFT/eval success number has been run yet.
 - RoboCasa: CP25 strict reset/step passed on RunPod, and
   `lerobot/smolvla_robocasa` ran on `CloseFridge` for 20 episodes with a
   measured `0/20` success rate.
