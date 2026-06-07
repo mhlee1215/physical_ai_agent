@@ -2265,6 +2265,8 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
     `0/300`, `0.0%`.
   - five-seed aggregate:
     `0/1500`, `0.0%`.
+  - horizon-100 debug seed `1000`:
+    `0/100`, `0.0%`.
 - Local fetched bundle:
   `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed`.
 - Delta:
@@ -2272,7 +2274,9 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   gap.
 - Interpretation:
   this is now a paper-scale row by episode and seed count, but not a parity
-  result. Because the selected source required `--use-env-states` and still
-  dropped `115` of `993` episodes, likely suspects are exact source-demo
-  selection, control-mode/action replay semantics, STARE's idle-action filter,
-  and training-protocol details rather than evaluation sample count.
+  result. The horizon-100 debug run also scored `0/100`, so the failure is not
+  only a short-horizon issue. Because the selected source required
+  `--use-env-states` and still dropped `115` of `993` episodes, likely suspects
+  are exact source-demo selection, control-mode/action replay semantics,
+  STARE's idle-action filter, and training-protocol details rather than
+  evaluation sample count.

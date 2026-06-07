@@ -1400,6 +1400,7 @@ Current results:
 | seed1003 | 300 | 30 | 0.0% (`0/300`) | -16.3pp |
 | seed1004 | 300 | 30 | 0.0% (`0/300`) | -16.3pp |
 | five-seed aggregate | 1500 | 30 | 0.0% (`0/1500`) | -16.3pp |
+| horizon-100 debug seed1000 | 100 | 100 | 0.0% (`0/100`) | -16.3pp |
 
 Artifacts:
 
@@ -1412,15 +1413,18 @@ Artifacts:
 | seed1002 metrics | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/liftpeg_count878_qpos_filter005_9000step_horizon30_eval_300ep_seed1002/metrics.json` |
 | seed1003 metrics | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/liftpeg_count878_qpos_filter005_9000step_horizon30_eval_300ep_seed1003/metrics.json` |
 | seed1004 metrics | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/liftpeg_count878_qpos_filter005_9000step_horizon30_eval_300ep_seed1004/metrics.json` |
+| horizon-100 debug metrics | `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed/liftpeg_count878_qpos_filter005_9000step_horizon100_debug_100ep_seed1000/metrics.json` |
 
 Interpretation:
 
 LiftPegUpright is now evaluated at the STARE episode and seed scale, but the
-current policy-only result is below the reference. Since the selected source
-needed `--use-env-states` and still dropped `115` of `993` source episodes
-during replay, the likely suspects are exact source-demo selection,
-control-mode/action replay semantics, STARE's idle-action filtering, and
-training-protocol details rather than evaluation sample count.
+current policy-only result is below the reference. The horizon-100 debug run
+also scored `0/100`, so the failure is not explained by the STARE horizon-30
+limit alone. Since the selected source needed `--use-env-states` and still
+dropped `115` of `993` source episodes during replay, the likely suspects are
+exact source-demo selection, control-mode/action replay semantics, STARE's
+idle-action filtering, and training-protocol details rather than evaluation
+sample count.
 
 ## Claim Boundary
 
