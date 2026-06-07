@@ -70,9 +70,13 @@ runtime gates or secondary evidence. The next meaningful work is either:
 - SmolVLA paper Table 2 Meta-World reference:
   <https://arxiv.org/abs/2506.01844>
 - LeRobot Meta-World docs:
+  <https://huggingface.co/docs/lerobot/en/metaworld>
+- LeRobot Meta-World docs, earlier pinned version used during bring-up:
   <https://huggingface.co/docs/lerobot/v0.4.3/metaworld>
 - `lerobot/smolvla_metaworld` model:
   <https://huggingface.co/lerobot/smolvla_metaworld>
+- Public SmolVLA LIBERO / Meta-World reproduction-detail issue:
+  <https://github.com/huggingface/lerobot/issues/1316>
 - RoboCasa365 leaderboard:
   <https://robocasa.ai/leaderboard.html>
 - RoboCasa benchmarking documentation:

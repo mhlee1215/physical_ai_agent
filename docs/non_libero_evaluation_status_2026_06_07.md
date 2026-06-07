@@ -103,12 +103,25 @@ Protocol notes:
 - SmolVLA paper reports 10 trials per task.
 - LeRobot Meta-World groups are `easy`, `medium`, `hard`, and `very_hard`.
 - The released checkpoint is `lerobot/smolvla_metaworld`.
+- Current LeRobot Meta-World docs also specify 10 episodes per task for
+  reproducible benchmarking, `corner2` as the single camera view,
+  4-dimensional proprioceptive state, continuous `Box(-1, 1, shape=(4,))`
+  actions, and an MT50 dataset formatted with fixed object/goal positions.
+  These match the main axes of the current RunPod evaluation setup.
+- The public `lerobot/smolvla_metaworld` model card links the model to
+  `lerobot/metaworld_mt50` and arXiv `2506.01844`, but does not provide a more
+  specific Table 2 reproduction command than the generic LeRobot usage block.
+- A public LeRobot issue asking for SmolVLA LIBERO / Meta-World reproduction
+  details exists, but it does not expose an additional confirmed Meta-World
+  evaluation command in the public issue body.
 
 Reference:
 
 - https://arxiv.org/abs/2506.01844
+- https://huggingface.co/docs/lerobot/en/metaworld
 - https://huggingface.co/docs/lerobot/v0.4.3/metaworld
 - https://huggingface.co/lerobot/smolvla_metaworld
+- https://github.com/huggingface/lerobot/issues/1316
 
 ### VLA evaluation harness
 
