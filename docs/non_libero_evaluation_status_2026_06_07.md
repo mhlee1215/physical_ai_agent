@@ -211,6 +211,41 @@ Artifacts:
 | ManiSkill3 install log | `_workspace/runpod_results/maniskill3_runtime_audit_20260607/install.log` |
 | ManiSkill3 reset/step/render smoke log | `_workspace/runpod_results/maniskill3_runtime_audit_20260607/smoke.log` |
 
+SFT data-preparation feasibility audit:
+
+The first training-data path was validated on `PushCube-v1`.
+
+| Check | Result |
+| --- | --- |
+| `mani_skill.utils.download_demo PushCube-v1` | passed; official demo download size was about `65M` under `/root/physical-ai/tmp_maniskill_official_demos` |
+| official motion-planning demo contents | `1000` episodes; JSON marks every inspected entry as a successful `pd_joint_pos` trajectory; source type `motionplanning`; `trajectory.h5` size about `26M` |
+| action-only LeRobot conversion | passed after installing `pandas` and `pyarrow`; converted `1000` episodes and `68978` frames to a `3.2M` LeRobot-format dataset |
+| RGB replay smoke | passed for `1` episode with `--obs-mode rgb --save-traj --save-video --use-env-states`; replay saved `1/1=100.00%` demos |
+| RGB LeRobot conversion smoke | passed; converted `1` episode and `71` frames with features `action` shape `[8]`, `observation.state` shape `[9]`, and `observation.images.base_camera` shape `[128, 128, 3]` |
+| local motion-planning generation | failed on this Pod with a segmentation fault and a truncated `96` byte `.h5`; use official demos/replay path until the generator crash is separately debugged |
+
+Interpretation:
+
+This is still **not** a paper-comparable SmolVLA number. It does, however,
+remove the first practical blocker for the STARE-style table lane: at least one
+of the four selected ManiSkill3 tasks has official `1000`-trajectory data, can
+be converted to LeRobot format, and can produce RGB observation data suitable
+for SmolVLA-style SFT dataset construction. The remaining work is full
+task-specific SFT/evaluation over `StackCube-v1`, `PushCube-v1`, `PullCube-v1`,
+and `LiftPegUpright-v1`, then side-by-side comparison with STARE Table 2.
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| feasibility package inventory | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/package_inventory.log` |
+| official PushCube demo download | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/download_demo_pushcube.log` |
+| official PushCube H5 inspection | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/inspect_official_pushcube_h5.log` |
+| action-only LeRobot conversion | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/convert_official_pushcube_128_after_pyarrow.log` |
+| RGB replay smoke | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/replay_pushcube_rgb_count1.log` |
+| RGB LeRobot conversion smoke | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/convert_pushcube_rgb_count1_128.log` |
+| failed local generator smoke | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/pushcube_motionplanning_1traj.log` |
+
 #### SafeVLA-Bench
 
 SafeVLA-Bench is a post-hoc safety layer over native LIBERO and RoboCasa-365
@@ -938,14 +973,17 @@ official-protocol single-task number and a scale-up gate.
 
 Next executable path:
 
-1. Use RunPod only if the selected Pod exposes a working NVIDIA Vulkan/SAPIEN
-   renderer for ManiSkill. Validate with strict `PickCube-v1`, no fallback.
-2. If strict `PickCube-v1` works, run a small trained-policy-compatible
-   ManiSkill table over `PickCube`, `PushCube`, `StackCube`,
-   `PegInsertionSide`, and `PlugCharger` only if model/action compatibility is
-   available.
-3. Expand RoboCasa from the completed `CloseFridge` 20ep run to a small
-   multi-task subset or `atomic_seen`.
+1. Keep Meta-World as the only direct released-checkpoint SmolVLA
+   non-LIBERO parity target. It already has a paper table and a full MT50 run,
+   but our current best remains below the SmolVLA paper by `16.9pp` table avg.
+2. Treat ManiSkill3 selected Franka tasks as the next table-backed training
+   lane, not as zero-shot checkpoint evaluation. The first `PushCube-v1`
+   data-preparation smoke is now green; next steps are checking official
+   `1000`-trajectory availability for `StackCube-v1`, `PullCube-v1`, and
+   `LiftPegUpright-v1`, then running a tiny SmolVLA SFT smoke before scaling.
+3. Keep RoboCasa as the household manipulation lane, but label current results
+   as internal/protocol-compatible unless a public SmolVLA RoboCasa reference
+   number is found or a full RoboCasa365 leaderboard-scale run is completed.
 4. Do not compare random/zero pilots to trained-policy paper numbers except as
    sanity controls. A fair table needs either the same policy family or an
    explicitly labeled weak-control row.
@@ -956,6 +994,9 @@ Current non-LIBERO state is **partially paper-facing but not yet leaderboard
 comparable**:
 
 - ManiSkill/HAB: local pilots and current renderer blocker are documented.
+- ManiSkill3: selected Franka task runtime is green on RunPod; `PushCube-v1`
+  official-demo download, action-only LeRobot conversion, RGB replay, and RGB
+  LeRobot conversion are green, but no SmolVLA SFT/eval number has been run yet.
 - RoboCasa: CP25 strict reset/step passed on RunPod, and
   `lerobot/smolvla_robocasa` ran on `CloseFridge` for 20 episodes with a
   measured `0/20` success rate.
