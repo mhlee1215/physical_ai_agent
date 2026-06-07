@@ -1899,3 +1899,158 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   - observation preprocessing, especially camera resolution and any image
     resize/padding semantics between replay conversion, training, and eval
   - whether the STARE row uses a different ManiSkill task/control-mode variant
+
+### ManiSkill3 PushCube Horizon-30 / Idle-Filtered Parity Round
+
+- Status: completed on RunPod; Pod left running for follow-up parity debugging.
+- Reference protocol update:
+  - STARE Appendix B.5 reports ManiSkill3 evaluation with horizon `30`, `300`
+    episodes, and `5` random seeds.
+  - STARE Appendix C.2 reports filtering idle actions before training.
+- Raw checkpoint paper-horizon check:
+  - checkpoint:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_feature_override_9000step/checkpoints/last/pretrained_model`
+  - eval:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_9000step_qpos_horizon30_shared_runner_eval_50ep`
+  - result:
+    `0/50`, `0.0%` at horizon `30`.
+  - interpretation:
+    the earlier horizon-100 `58.0%` number is not paper-comparable; most raw
+    SFT successes happen too late for STARE's horizon.
+- Qpos idle-filtered dataset:
+  - source:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_no_env_states`
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_qpos_filter005`
+  - filter:
+    keep frames with qpos delta at least `0.05`.
+  - size:
+    `1000` episodes, `21802` frames, mean length `21.8`, p50 `21`, p90 `24`,
+    max `31`.
+  - loader smoke:
+    `LeRobotDataset` loaded `1000` episodes and `21802` frames; sample state
+    shape `[9]`, action shape `[8]`.
+- Qpos idle-filtered SFT:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_qpos_filter005_9000step`
+  - source config:
+    raw count1000 9000-step train config.
+  - training completed:
+    `9000` steps, about `3.30` epochs, final logged loss `0.023`.
+- Evaluation:
+  - 50ep horizon-30 eval:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_50ep`
+    scored `34/50`, `68.0%`.
+  - 300ep horizon-30 eval, seed `1000`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1000`
+    scored `182/300`, `60.7%`.
+  - 300ep horizon-30 eval, seed `1001`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1001`
+    scored `183/300`, `61.0%`.
+  - 300ep horizon-30 eval, seed `1002`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1002`
+    scored `189/300`, `63.0%`.
+  - 300ep horizon-30 eval, seed `1003`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1003`
+    scored `193/300`, `64.3%`.
+  - 300ep horizon-30 eval, seed `1004`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1004`
+    scored `186/300`, `62.0%`.
+- Delta:
+  the five-seed aggregate is `933/1500`, `62.2%` vs STARE PushCube `86.3%`, so
+  the current paper-horizon gap is `-24.1pp`.
+- Interpretation:
+  fine-tuning here is baseline calibration, not the agentic contribution.
+  Action/idle filtering is a real protocol lever: it recovers horizon-30
+  success from `0.0%` to a stable `61-64%` band across five 300-episode seeds,
+  matching STARE's reported seed count. The remaining gap is still too large
+  for a parity claim, so continue by matching STARE's exact filtering/source
+  trajectory protocol before expanding to the other three ManiSkill3 tasks.
+
+### ManiSkill3 PushCube Qpos Filter 0.04 Negative Ablation
+
+- Status: completed on RunPod.
+- Purpose:
+  test whether qpos threshold `0.05` was too aggressive by trying a looser
+  idle-frame filter.
+- Script:
+  `scripts/filter_lerobot_idle_frames.py` now provides a reusable repo-local
+  idle-frame filtering command for LeRobot datasets. It keeps a frame when the
+  state delta from the last kept frame exceeds the threshold, rewrites parquet
+  metadata, and reuses source videos through symlinks by default.
+- Dataset:
+  - source:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_no_env_states`
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_qpos_filter004`
+  - threshold:
+    qpos delta `0.04`
+  - size:
+    `1000` episodes, `25104` frames, mean length `25.1`, p50 `24`, p90 `30`,
+    max `37`.
+  - loader smoke:
+    `LeRobotDataset` loaded `1000` episodes and `25104` frames; sample state
+    shape `[9]`, action shape `[8]`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_qpos_filter004_9000step`
+  - steps:
+    `9000`
+  - final logged loss:
+    `0.022`
+  - approximate epochs:
+    `2.87`
+- Evaluation:
+  - artifact:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter004_9000step_qpos_horizon30_shared_runner_eval_50ep`
+  - result:
+    `20/50`, `40.0%`
+  - delta vs STARE PushCube `86.3%`:
+    `-46.3pp`
+- Interpretation:
+  looser filtering is worse than threshold `0.05` (`68.0%` over the same 50ep
+  horizon-30 check). The next likely filter ablation is a stronger threshold,
+  or a closer implementation of STARE's exact idle-action filtering rule.
+
+### ManiSkill3 PushCube Qpos Filter 0.06 Ablation
+
+- Status: completed on RunPod.
+- Purpose:
+  test whether a stronger qpos idle-frame filter improves horizon-30 success
+  relative to the current best threshold `0.05`.
+- Dataset:
+  - source:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_no_env_states`
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_qpos_filter006`
+  - threshold:
+    qpos delta `0.06`
+  - size:
+    `1000` episodes, `18850` frames, mean length `18.85`, p50 `19`, p90 `21`,
+    max `25`.
+  - loader smoke:
+    `LeRobotDataset` loaded `1000` episodes and `18850` frames; sample state
+    shape `[9]`, action shape `[8]`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_qpos_filter006_9000step`
+  - steps:
+    `9000`
+  - final logged loss:
+    `0.022`
+  - approximate epochs:
+    `3.82`
+- Evaluation:
+  - artifact:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter006_9000step_qpos_horizon30_shared_runner_eval_50ep`
+  - result:
+    `31/50`, `62.0%`
+  - delta vs STARE PushCube `86.3%`:
+    `-24.3pp`
+- Interpretation:
+  stronger filtering is better than the looser `0.04` threshold but still below
+  the threshold `0.05` 50ep result (`68.0%`). The current qpos-filter best
+  remains threshold `0.05`, with the stronger five-seed 300ep estimate
+  `62.2%`. Further improvement likely requires matching STARE's exact
+  action-filter/source-demo protocol rather than sweeping qpos thresholds
+  alone.
