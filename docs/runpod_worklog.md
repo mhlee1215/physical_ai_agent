@@ -1855,3 +1855,47 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   checkpoint as the fixed baseline. The remaining work is to narrow or explain
   the `-28.3pp` gap before expanding to `StackCube-v1`, `PullCube-v1`, and
   `LiftPegUpright-v1`.
+
+### ManiSkill3 PushCube Negative Parity Ablations
+
+- Action chunk ablation on the count1000/9000-step checkpoint:
+  - default checkpoint config: `n_action_steps=50`
+  - temporary config copy with `n_action_steps=1`:
+    `1/20`, `5.0%`
+  - temporary config copy with `n_action_steps=10`:
+    `8/20`, `40.0%`
+  - temporary config copy with `n_action_steps=15`:
+    `8/20`, `40.0%`
+  - interpretation:
+    unlike the LIBERO parity sweep, shorter action chunks do not help
+    `PushCube-v1`; keep the default `50` for this checkpoint.
+- Longer SFT ablation:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_feature_override_27000step`
+  - config source:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_feature_override_9000step/checkpoints/last/pretrained_model/train_config.json`
+  - changed fields:
+    `steps=27000`, `save_freq=27000`, `eval_freq=50000`, output dir and
+    repo id only
+  - training completed:
+    `27000` steps, about `3.13` epochs, final logged loss `0.017`
+  - 50-episode eval result:
+    `26/50`, `52.0%`
+  - artifact:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_27000step_qpos_horizon100_shared_runner_eval_50ep/metrics.json`
+  - interpretation:
+    longer training reduced train loss but worsened eval relative to the
+    9000-step result (`58.0%`), so simple under-training is not the main
+    explanation for the STARE `86.3%` gap.
+- Operational note:
+  - the RunPod clone used for these commands reported git revision `808aa6a`
+    during the ablation session, while the local branch later contained newer
+    documentation commits. Before the next paper-facing run, run `git pull` on
+    RunPod and record the exact git revision in the metrics/report.
+- Next likely parity checks:
+  - exact STARE eval seed/distribution and number of episodes
+  - whether STARE used the same official motion-planning demo source or a
+    different successful trajectory source
+  - observation preprocessing, especially camera resolution and any image
+    resize/padding semantics between replay conversion, training, and eval
+  - whether the STARE row uses a different ManiSkill task/control-mode variant

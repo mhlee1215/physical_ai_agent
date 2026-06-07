@@ -1120,6 +1120,15 @@ Current results:
 | count100 SFT | 100 official replayed RGB demos | 1000 | 20 | 100 | 55.0% (`11/20`) | -31.3pp |
 | count100 SFT | 100 official replayed RGB demos | 1000 | 50 | 100 | 40.0% (`20/50`) | -46.3pp |
 | count1000 SFT | 1000 official replayed RGB demos | 9000 | 50 | 100 | 58.0% (`29/50`) | -28.3pp |
+| count1000 longer SFT | 1000 official replayed RGB demos | 27000 | 50 | 100 | 52.0% (`26/50`) | -34.3pp |
+
+Negative ablations:
+
+| Probe | Eval scale | Success | Interpretation |
+| --- | ---: | ---: | --- |
+| count1000/9000 checkpoint with `n_action_steps=1` | 20 episodes | 5.0% (`1/20`) | much worse than default; not a parity fix |
+| count1000/9000 checkpoint with `n_action_steps=10` | 20 episodes | 40.0% (`8/20`) | worse than default |
+| count1000/9000 checkpoint with `n_action_steps=15` | 20 episodes | 40.0% (`8/20`) | worse than default |
 
 Important fixes made before treating the numbers as valid:
 
@@ -1144,14 +1153,25 @@ Artifacts:
 | count1000 conversion log | `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/convert_pushcube_rgbmode_count1000_no_env_states_128_py312.log` |
 | count1000 SFT log | `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_9000step_train.log` |
 | count1000 50ep eval | `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_9000step_qpos_horizon100_shared_runner_eval_50ep/metrics.json` |
+| count1000 27000-step SFT log | `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_27000step_train.log` |
+| count1000 27000-step 50ep eval | `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_27000step_qpos_horizon100_shared_runner_eval_50ep/metrics.json` |
+| `n_action_steps=1` ablation | `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_9000step_nact1_qpos_horizon100_eval_20ep/metrics.json` |
+| `n_action_steps=10` ablation | `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_9000step_nact10_qpos_horizon100_eval_20ep/metrics.json` |
+| `n_action_steps=15` ablation | `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_9000step_nact15_qpos_horizon100_eval_20ep/metrics.json` |
 
 Interpretation:
 
 The count1000 run improved over the count100 run, so SFT data scale is a real
 axis in this benchmark. However, `58.0%` is still far below the STARE PushCube
-reference `86.3%`. Until that gap is narrowed or explained, this lane should be
-used as baseline/protocol calibration rather than evidence that an agentic
-wrapper improves SmolVLA.
+reference `86.3%`. Extending the same setup to `27000` steps reduced training
+loss to `0.017` but lowered evaluation success to `52.0%`, so the remaining
+gap is unlikely to be solved by naive longer training alone. The
+`n_action_steps` sweep was also negative. Until the gap is narrowed or
+explained, this lane should be used as baseline/protocol calibration rather
+than evidence that an agentic wrapper improves SmolVLA. The next likely checks
+are protocol/data distribution details: exact STARE eval seeds, demonstration
+source, observation/camera resolution and preprocessing, and whether the paper
+uses a different ManiSkill task/control-mode variant.
 
 ## Claim Boundary
 
@@ -1165,8 +1185,10 @@ comparable**:
   pretrained `lerobot/smolvla_base` 1-step training passes on all four
   selected tasks with `rename_map`, and the custom eval path now uses the
   shared LeRobot runner with `UnnormalizerProcessorStep`. `PushCube-v1`
-  count1000 SFT now has a policy-only result, `58.0%` over 50 episodes, but it
-  remains `-28.3pp` below the STARE PushCube reference.
+  count1000 SFT now has a best policy-only result, `58.0%` over 50 episodes,
+  but it remains `-28.3pp` below the STARE PushCube reference. A longer
+  27000-step run scored `52.0%`, and `n_action_steps=1/10/15` ablations were
+  worse than the default `50`.
 - RoboCasa: CP25 strict reset/step passed on RunPod, and
   `lerobot/smolvla_robocasa` ran on `CloseFridge` for 20 episodes with a
   measured `0/20` success rate.
