@@ -15,7 +15,13 @@ def main() -> None:
     parser.add_argument("--intervention-step", type=int, default=3)
     parser.add_argument(
         "--trigger-mode",
-        choices=("fixed_step", "action_norm_threshold", "fixed_or_action_norm", "semantic_no_progress"),
+        choices=(
+            "fixed_step",
+            "action_norm_threshold",
+            "fixed_or_action_norm",
+            "semantic_no_progress",
+            "semantic_near_receptacle",
+        ),
         default="fixed_step",
         help="Verifier trigger rule used before env.step().",
     )
@@ -36,6 +42,7 @@ def main() -> None:
             "semantic_reach_target",
             "semantic_push_receptacle",
             "semantic_reach_then_push",
+            "semantic_place_receptacle",
         ),
         default="scale",
         help="Action-space intervention applied after the verifier triggers.",
@@ -53,9 +60,11 @@ def main() -> None:
     parser.add_argument("--semantic-min-step", type=int, default=40)
     parser.add_argument("--semantic-window", type=int, default=30)
     parser.add_argument("--semantic-progress-threshold", type=float, default=0.01)
+    parser.add_argument("--semantic-distance-threshold", type=float, default=0.07)
     parser.add_argument("--semantic-reach-gain", type=float, default=4.0)
     parser.add_argument("--semantic-push-gain", type=float, default=4.0)
     parser.add_argument("--semantic-contact-threshold", type=float, default=0.06)
+    parser.add_argument("--semantic-place-z-command", type=float, default=-0.2)
     parser.add_argument("--semantic-gripper-command", type=float, default=1.0)
     args, lerobot_args = parser.parse_known_args()
 
@@ -78,9 +87,11 @@ def main() -> None:
         semantic_min_step=args.semantic_min_step,
         semantic_window=args.semantic_window,
         semantic_progress_threshold=args.semantic_progress_threshold,
+        semantic_distance_threshold=args.semantic_distance_threshold,
         semantic_reach_gain=args.semantic_reach_gain,
         semantic_push_gain=args.semantic_push_gain,
         semantic_contact_threshold=args.semantic_contact_threshold,
+        semantic_place_z_command=args.semantic_place_z_command,
         semantic_gripper_command=args.semantic_gripper_command,
     )
     sys.argv = ["lerobot-eval", *lerobot_args]
@@ -101,9 +112,11 @@ def build_instrumented_rollout(
     semantic_min_step: int,
     semantic_window: int,
     semantic_progress_threshold: float,
+    semantic_distance_threshold: float,
     semantic_reach_gain: float,
     semantic_push_gain: float,
     semantic_contact_threshold: float,
+    semantic_place_z_command: float,
     semantic_gripper_command: float,
 ):
     def instrumented_rollout(
@@ -195,6 +208,7 @@ def build_instrumented_rollout(
                 semantic_min_step=semantic_min_step,
                 semantic_window=semantic_window,
                 semantic_progress_threshold=semantic_progress_threshold,
+                semantic_distance_threshold=semantic_distance_threshold,
             )
             intervention_type = None
             if verifier_triggered and intervention_mode != "none":
@@ -243,6 +257,16 @@ def build_instrumented_rollout(
                         reach_gain=semantic_reach_gain,
                         push_gain=semantic_push_gain,
                         contact_threshold=semantic_contact_threshold,
+                        gripper_command=semantic_gripper_command,
+                    )
+                elif intervention_mode == "semantic_place_receptacle":
+                    action = semantic_place_receptacle_action(
+                        action,
+                        semantic_state=semantic_state,
+                        reach_gain=semantic_reach_gain,
+                        push_gain=semantic_push_gain,
+                        contact_threshold=semantic_contact_threshold,
+                        place_z_command=semantic_place_z_command,
                         gripper_command=semantic_gripper_command,
                     )
             post_intervention_action_norm = float(torch.linalg.vector_norm(action).item())
@@ -336,9 +360,11 @@ def build_instrumented_rollout(
                         "semantic_min_step": semantic_min_step,
                         "semantic_window": semantic_window,
                         "semantic_progress_threshold": semantic_progress_threshold,
+                        "semantic_distance_threshold": semantic_distance_threshold,
                         "semantic_reach_gain": semantic_reach_gain,
                         "semantic_push_gain": semantic_push_gain,
                         "semantic_contact_threshold": semantic_contact_threshold,
+                        "semantic_place_z_command": semantic_place_z_command,
                         "semantic_gripper_command": semantic_gripper_command,
                         "action_step_count": len(trace_records),
                         "verifier_trigger_count": sum(1 for record in trace_records if record["verifier_triggered"]),
@@ -371,6 +397,7 @@ def should_trigger_verifier(
     semantic_min_step: int = 0,
     semantic_window: int = 1,
     semantic_progress_threshold: float = 0.0,
+    semantic_distance_threshold: float = 0.0,
 ) -> tuple[bool, str]:
     if is_done:
         return False, "episode_done"
@@ -394,6 +421,16 @@ def should_trigger_verifier(
             min_step=semantic_min_step,
             window=semantic_window,
             progress_threshold=semantic_progress_threshold,
+        )
+        if triggered:
+            return True, reason
+        return False, reason
+    if trigger_mode == "semantic_near_receptacle":
+        triggered, reason = semantic_near_receptacle_trigger(
+            step=step,
+            semantic_history=semantic_history or [],
+            min_step=semantic_min_step,
+            distance_threshold=semantic_distance_threshold,
         )
         if triggered:
             return True, reason
@@ -431,6 +468,8 @@ def format_intervention_type(
         return "semantic_push_receptacle"
     if mode == "semantic_reach_then_push":
         return "semantic_reach_then_push"
+    if mode == "semantic_place_receptacle":
+        return "semantic_place_receptacle"
     return mode
 
 
@@ -497,6 +536,25 @@ def semantic_no_progress_trigger(
     return False, f"semantic_target_progress_{movement:.6f}"
 
 
+def semantic_near_receptacle_trigger(
+    *,
+    step: int,
+    semantic_history: list[dict[str, Any]],
+    min_step: int,
+    distance_threshold: float,
+) -> tuple[bool, str]:
+    if step < min_step:
+        return False, "semantic_before_min_step"
+    if not semantic_history:
+        return False, "semantic_waiting_for_state"
+    distance_value = semantic_history[-1].get("target_to_receptacle_dist")
+    if distance_value is None:
+        return False, "semantic_target_to_receptacle_unavailable"
+    if float(distance_value) <= distance_threshold:
+        return True, f"semantic_near_receptacle_{float(distance_value):.6f}_le_{distance_threshold:.6f}"
+    return False, f"semantic_far_from_receptacle_{float(distance_value):.6f}"
+
+
 def semantic_reach_target_action(action: Any, *, semantic_state: dict[str, Any], gain: float, gripper_command: float) -> Any:
     target_pos = semantic_state.get("target_pos")
     eef_pos = semantic_state.get("eef_pos")
@@ -552,6 +610,37 @@ def semantic_reach_then_push_action(
         gain=push_gain,
         gripper_command=gripper_command,
     )
+
+
+def semantic_place_receptacle_action(
+    action: Any,
+    *,
+    semantic_state: dict[str, Any],
+    reach_gain: float,
+    push_gain: float,
+    contact_threshold: float,
+    place_z_command: float,
+    gripper_command: float,
+) -> Any:
+    eef_to_target = semantic_state.get("eef_to_target_dist")
+    if eef_to_target is None or float(eef_to_target) > contact_threshold:
+        return semantic_reach_target_action(
+            action,
+            semantic_state=semantic_state,
+            gain=reach_gain,
+            gripper_command=gripper_command,
+        )
+    target_pos = semantic_state.get("target_pos")
+    receptacle_pos = semantic_state.get("receptacle_pos")
+    if not target_pos or not receptacle_pos:
+        return action
+    delta = [receptacle_pos[i] - target_pos[i] for i in range(3)]
+    action[:, 0] = clamp_scalar(delta[0] * push_gain, -1.0, 1.0)
+    action[:, 1] = clamp_scalar(delta[1] * push_gain, -1.0, 1.0)
+    action[:, 2] = clamp_scalar(place_z_command, -1.0, 1.0)
+    if action.shape[-1] >= 7:
+        action[:, 6] = clamp_scalar(gripper_command, -1.0, 1.0)
+    return action
 
 
 def vector3(value: Any) -> list[float] | None:

@@ -153,15 +153,33 @@ def internal_probe(env: Any) -> dict[str, Any]:
         }
     except Exception as exc:  # noqa: BLE001
         result["raw_obs"] = {"error": type(exc).__name__, "message": str(exc)[:500]}
-    try:
-        sim = offscreen.sim
-        model = sim.model
-        result["body_names"] = summarize_names(model, "body")
-        result["site_names"] = summarize_names(model, "site")
-        result["geom_names"] = summarize_names(model, "geom")
-    except Exception as exc:  # noqa: BLE001
-        result["model_names"] = {"error": type(exc).__name__, "message": str(exc)[:500]}
+    result["sim_candidates"] = {}
+    for name, sim in iter_sim_candidates(offscreen):
+        try:
+            model = sim.model
+            result["sim_candidates"][name] = {
+                "type": f"{type(sim).__module__}.{type(sim).__name__}",
+                "body_names": summarize_names(model, "body"),
+                "site_names": summarize_names(model, "site"),
+                "geom_names": summarize_names(model, "geom"),
+                "contacts": summarize_contacts(sim),
+            }
+        except Exception as exc:  # noqa: BLE001
+            result["sim_candidates"][name] = {"error": type(exc).__name__, "message": str(exc)[:500]}
     return result
+
+
+def iter_sim_candidates(offscreen: Any) -> list[tuple[str, Any]]:
+    candidates = []
+    for path in ("sim", "env.sim", "env.env.sim", "env.env.env.sim"):
+        current = offscreen
+        try:
+            for part in path.split("."):
+                current = getattr(current, part)
+            candidates.append((path, current))
+        except Exception:  # noqa: BLE001
+            continue
+    return candidates
 
 
 def summarize_names(model: Any, prefix: str) -> list[str]:
@@ -175,6 +193,25 @@ def summarize_names(model: Any, prefix: str) -> list[str]:
         if name:
             names.append(str(name))
     return names[:300]
+
+
+def summarize_contacts(sim: Any) -> dict[str, Any]:
+    contacts = []
+    model = sim.model
+    data = sim.data
+    ncon = int(getattr(data, "ncon", 0))
+    for idx in range(ncon):
+        contact = data.contact[idx]
+        geom1 = int(contact.geom1)
+        geom2 = int(contact.geom2)
+        contacts.append(
+            {
+                "geom1": model.id2name(geom1, "geom"),
+                "geom2": model.id2name(geom2, "geom"),
+                "dist": float(getattr(contact, "dist", 0.0)),
+            }
+        )
+    return {"ncon": ncon, "pairs": contacts[:100]}
 
 
 def safe_task_descriptions(env: Any) -> list[str]:
