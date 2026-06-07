@@ -107,6 +107,59 @@ This is the strongest current agentic-retry table, but it must be presented as
 `retry_budget=2` portfolio evaluation. It is not directly comparable to
 policy-only ActionX numbers unless the extra retry budget is disclosed.
 
+## Four-Suite Three-Seed Portfolio With Cost
+
+The follow-up run completed Spatial/Object/Goal seeds `1001` and `1002` and
+joins them with the existing Long 3-seed series. This gives a 12-run table:
+four LIBERO suites over seeds `1000,1001,1002`, 100 episodes per suite/seed.
+
+| Metric | Mean |
+| --- | ---: |
+| Baseline success | 85.42 +/- 8.66 |
+| Best single retry success | 93.92 +/- 5.17 |
+| Portfolio budget2 success | 95.00 +/- 4.85 |
+| Portfolio delta vs baseline | +9.58 +/- 4.27 |
+| Portfolio recovery | 69.17 +/- 13.23 |
+| Portfolio attempts | 235.00 |
+| Portfolio success/attempt | 0.4084 |
+| Portfolio success/eval minute | 4.52 |
+
+Seed macro results:
+
+| Seed | Baseline macro | Best single macro | Portfolio macro | Delta |
+| ---: | ---: | ---: | ---: | ---: |
+| 1000 | 88.25 | 95.25 | 96.50 | +8.25 |
+| 1001 | 83.25 | 92.50 | 93.50 | +10.25 |
+| 1002 | 84.75 | 94.00 | 95.00 | +10.25 |
+
+Artifact:
+`docs/smolvla_libero_agentic_retry_four_suite_portfolio_report.md`
+
+Interpretation: this confirms a strong realized-success gain from retry
+budget, but it is not a one-shot policy improvement. The model weights remain
+`lerobot/smolvla_libero`. The protocol spends extra environment resets and
+retry attempts. For paper claims, present this as a cost-normalized
+retry-budget baseline/control, not as a better SmolVLA policy.
+
+## Paper Claim Boundary
+
+The current evidence supports:
+
+- Same frozen SmolVLA plus explicit reset/retry budget improves realized LIBERO
+  benchmark success.
+- Different retry protocols recover different failure subsets; blind retry is
+  a strong control and sometimes wins.
+
+The current evidence does not yet support:
+
+- SmolVLA model weights improved.
+- One-shot rollout success improved.
+- The wrapper performs intelligent in-episode failure diagnosis.
+
+The next paper-grade agentic experiment must either beat blind retry under the
+same retry budget, improve success per attempt/eval minute, or intervene inside
+an episode before environment reset.
+
 ## Full Long Per-Task Recovery
 
 | Task | Baseline | Recovered | Success once |
@@ -154,12 +207,17 @@ policy-only ActionX numbers unless the extra retry budget is disclosed.
   `_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z_no_videos.tar.gz`
 - Remaining-suite portfolio local extracted report:
   `_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z/agentic_retry_portfolio_report.md`
+- Remaining-suite seed1001/1002 portfolio remote:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_portfolio_remaining_suites_seed1001_1002_20260607T012517Z`
+- Remaining-suite seed1001/1002 portfolio local archive:
+  `_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1001_1002_20260607T012517Z_no_videos.tar.gz`
+- Four-suite 3-seed cost-normalized report:
+  `docs/smolvla_libero_agentic_retry_four_suite_portfolio_report.md`
 
 ## Next Step
 
-The repeat/control series confirms that retry budget improves realized success
-on Long, but it also shows that blind retry is competitive and task-id-only
-selection is weak. The next paper-useful GPU experiment is to repeat the
-four-suite portfolio probe across additional seeds, then decide whether the
-claim should be framed as retry-budget scaling or as a stronger verifier-guided
-method.
+The repeat/control series confirms that retry budget improves realized success,
+but it also shows that blind retry is competitive and task-id-only selection is
+weak. The next paper-useful experiment should move from reset-level retry to an
+instrumented in-episode verifier/intervention loop, while continuing to report
+attempt, reset, eval-time, and action-step normalized costs.
