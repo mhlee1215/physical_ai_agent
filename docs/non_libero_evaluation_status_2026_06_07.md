@@ -218,21 +218,36 @@ The first training-data path was validated on `PushCube-v1`.
 | Check | Result |
 | --- | --- |
 | `mani_skill.utils.download_demo PushCube-v1` | passed; official demo download size was about `65M` under `/root/physical-ai/tmp_maniskill_official_demos` |
+| `mani_skill.utils.download_demo PullCube-v1` | passed; official package includes RL trajectories and checkpoints |
+| `mani_skill.utils.download_demo StackCube-v1` | passed; official package includes motion-planning trajectories plus RL trajectories/checkpoints |
+| `mani_skill.utils.download_demo LiftPegUpright-v1` | passed; official package includes RL trajectories and checkpoints |
 | official motion-planning demo contents | `1000` episodes; JSON marks every inspected entry as a successful `pd_joint_pos` trajectory; source type `motionplanning`; `trajectory.h5` size about `26M` |
 | action-only LeRobot conversion | passed after installing `pandas` and `pyarrow`; converted `1000` episodes and `68978` frames to a `3.2M` LeRobot-format dataset |
 | RGB replay smoke | passed for `1` episode with `--obs-mode rgb --save-traj --save-video --use-env-states`; replay saved `1/1=100.00%` demos |
 | RGB LeRobot conversion smoke | passed; converted `1` episode and `71` frames with features `action` shape `[8]`, `observation.state` shape `[9]`, and `observation.images.base_camera` shape `[128, 128, 3]` |
 | local motion-planning generation | failed on this Pod with a segmentation fault and a truncated `96` byte `.h5`; use official demos/replay path until the generator crash is separately debugged |
 
+Official STARE-task demo availability:
+
+| Env id | Source selected for SFT feasibility | Successful episodes found | Control mode | Notes |
+| --- | --- | ---: | --- | --- |
+| `PushCube-v1` | motion-planning | 1000 | `pd_joint_pos` | Also has RL trajectories with `1018-1023` successes depending on control mode |
+| `StackCube-v1` | motion-planning | 1000 | `pd_joint_pos` | RL variants have `902-995` successes |
+| `PullCube-v1` | RL | 1024 | `pd_ee_delta_pos`, `pd_ee_delta_pose`, or `pd_joint_delta_pos` | No motion-planning directory in the downloaded official package |
+| `LiftPegUpright-v1` | RL | 1015 | `pd_ee_delta_pose` | `pd_joint_delta_pos` variant has `993` successes |
+
 Interpretation:
 
 This is still **not** a paper-comparable SmolVLA number. It does, however,
-remove the first practical blocker for the STARE-style table lane: at least one
-of the four selected ManiSkill3 tasks has official `1000`-trajectory data, can
-be converted to LeRobot format, and can produce RGB observation data suitable
-for SmolVLA-style SFT dataset construction. The remaining work is full
+remove the first practical blocker for the STARE-style table lane: all four
+selected ManiSkill3 tasks have official successful trajectory data at roughly
+the required `1000`-sample scale, and at least `PushCube-v1` can be converted
+to LeRobot format and replayed into RGB observation data suitable for
+SmolVLA-style SFT dataset construction. The remaining work is full
 task-specific SFT/evaluation over `StackCube-v1`, `PushCube-v1`, `PullCube-v1`,
-and `LiftPegUpright-v1`, then side-by-side comparison with STARE Table 2.
+and `LiftPegUpright-v1`, then side-by-side comparison with STARE Table 2. The
+paper-facing caveat is that the official data source/control mode is not
+identical for every task, so the exact SFT protocol must be declared.
 
 Artifacts:
 
@@ -240,7 +255,11 @@ Artifacts:
 | --- | --- |
 | feasibility package inventory | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/package_inventory.log` |
 | official PushCube demo download | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/download_demo_pushcube.log` |
+| official PullCube demo download | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/download_demo_PullCube-v1.log` |
+| official StackCube demo download | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/download_demo_StackCube-v1.log` |
+| official LiftPegUpright demo download | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/download_demo_LiftPegUpright-v1.log` |
 | official PushCube H5 inspection | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/inspect_official_pushcube_h5.log` |
+| all STARE demo metadata inspection | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/inspect_all_stare_demo_metadata.log` |
 | action-only LeRobot conversion | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/convert_official_pushcube_128_after_pyarrow.log` |
 | RGB replay smoke | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/replay_pushcube_rgb_count1.log` |
 | RGB LeRobot conversion smoke | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/convert_pushcube_rgb_count1_128.log` |
@@ -978,9 +997,10 @@ Next executable path:
    but our current best remains below the SmolVLA paper by `16.9pp` table avg.
 2. Treat ManiSkill3 selected Franka tasks as the next table-backed training
    lane, not as zero-shot checkpoint evaluation. The first `PushCube-v1`
-   data-preparation smoke is now green; next steps are checking official
-   `1000`-trajectory availability for `StackCube-v1`, `PullCube-v1`, and
-   `LiftPegUpright-v1`, then running a tiny SmolVLA SFT smoke before scaling.
+   data-preparation smoke is now green, and official successful trajectories
+   are available for all four selected tasks. Next steps are replaying the
+   selected source trajectories into RGB LeRobot datasets for the remaining
+   tasks, then running a tiny SmolVLA SFT smoke before scaling.
 3. Keep RoboCasa as the household manipulation lane, but label current results
    as internal/protocol-compatible unless a public SmolVLA RoboCasa reference
    number is found or a full RoboCasa365 leaderboard-scale run is completed.
@@ -994,9 +1014,10 @@ Current non-LIBERO state is **partially paper-facing but not yet leaderboard
 comparable**:
 
 - ManiSkill/HAB: local pilots and current renderer blocker are documented.
-- ManiSkill3: selected Franka task runtime is green on RunPod; `PushCube-v1`
-  official-demo download, action-only LeRobot conversion, RGB replay, and RGB
-  LeRobot conversion are green, but no SmolVLA SFT/eval number has been run yet.
+- ManiSkill3: selected Franka task runtime is green on RunPod; official
+  successful trajectories are downloadable for all four selected STARE tasks;
+  `PushCube-v1` action-only LeRobot conversion, RGB replay, and RGB LeRobot
+  conversion are green, but no SmolVLA SFT/eval number has been run yet.
 - RoboCasa: CP25 strict reset/step passed on RunPod, and
   `lerobot/smolvla_robocasa` ran on `CloseFridge` for 20 episodes with a
   measured `0/20` success rate.
