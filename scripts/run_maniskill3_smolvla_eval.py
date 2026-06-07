@@ -53,6 +53,7 @@ def main() -> int:
         render_mode="rgb_array",
         control_mode=args.control_mode,
         num_envs=1,
+        max_episode_steps=args.max_steps,
     )
 
     records: list[dict[str, Any]] = []
@@ -118,7 +119,9 @@ def build_lerobot_observation(runner: LeRobotPolicyRunner, obs: Any, *, instruct
     config = runner.policy.config
     state_dim = config.robot_state_feature.shape[0] if config.robot_state_feature else 0
     state = np.zeros((1, state_dim), dtype=np.float32)
-    numeric = flatten_numeric_observation(obs, limit=max(1, state_dim))
+    numeric = extract_robot_qpos(obs, limit=max(1, state_dim))
+    if not numeric:
+        numeric = flatten_numeric_observation(obs, limit=max(1, state_dim))
     if numeric and state_dim:
         source = np.asarray(numeric[:state_dim], dtype=np.float32)
         state[0, : len(source)] = source
@@ -163,6 +166,21 @@ def flatten_numeric_observation(obs: Any, *, limit: int) -> list[float]:
 
     visit(obs.get("state", obs) if isinstance(obs, dict) else obs)
     return values
+
+
+def extract_robot_qpos(obs: Any, *, limit: int) -> list[float]:
+    if not isinstance(obs, dict):
+        return []
+    agent = obs.get("agent")
+    if not isinstance(agent, dict) or "qpos" not in agent:
+        return []
+    value = agent["qpos"]
+    if hasattr(value, "detach"):
+        value = value.detach().cpu().numpy()
+    array = np.asarray(value, dtype=np.float32)
+    if array.ndim > 1:
+        array = array.reshape(-1, array.shape[-1])[0]
+    return [float(item) for item in array.reshape(-1)[:limit]]
 
 
 def extract_rgb_images(obs: Any) -> dict[str, np.ndarray]:

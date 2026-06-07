@@ -1814,3 +1814,44 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
     not a paper-comparable STARE number because it uses only a count10,
     100-step PushCube probe checkpoint rather than paper-like task-specific
     SFT with `1000` trajectory samples
+
+### ManiSkill3 PushCube SFT Scale-Up
+
+- Goal:
+  calibrate the policy-only SmolVLA fine-tuning baseline against the STARE
+  ManiSkill3 Table 2 `PushCube-v1` reference before making any agentic-wrapper
+  claim.
+- Reference:
+  STARE Table 2 reports `SmolVLA (fine-tuning)` on `PushCube-v1` at `86.3%`
+  success and states SmolVLA uses `1000` trajectory samples for SFT per task.
+- Data:
+  official `PushCube-v1` RGB replay was generated without `--use-env-states`,
+  saving `1000/1000=100.00%` demos.
+- Converted dataset:
+  `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_no_env_states`
+  with `1000` episodes and `68978` frames.
+- Training:
+  `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_feature_override_9000step`
+  completed `9000` steps, about `1.04` epochs, with final logged loss `0.029`.
+- Evaluation:
+  `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_9000step_qpos_horizon100_shared_runner_eval_50ep`
+  scored `29/50`, `58.0%`.
+- Delta:
+  `58.0%` vs STARE `86.3%`, so current gap is `-28.3pp`.
+- Earlier scale probe:
+  count100/1000-step SFT scored `20/50`, `40.0%`; a shorter 20ep run scored
+  `11/20`, `55.0%`.
+- Correctness fixes:
+  - `scripts/run_maniskill3_smolvla_eval.py` now passes
+    `max_episode_steps=args.max_steps` into `gym.make(...)`; without this,
+    `PushCube-v1` truncated at the default 50-step horizon.
+  - The eval observation builder now prefers `obs["agent"]["qpos"]` as
+    `observation.state`, matching the LeRobot conversion path.
+  - The eval path uses `LeRobotPolicyRunner`, preserving the
+    `UnnormalizerProcessorStep` postprocessor.
+- Interpretation:
+  this is meaningful as policy-only baseline calibration, not as the project
+  contribution. The next wrapper comparison must use this or a better-matched
+  checkpoint as the fixed baseline. The remaining work is to narrow or explain
+  the `-28.3pp` gap before expanding to `StackCube-v1`, `PullCube-v1`, and
+  `LiftPegUpright-v1`.
