@@ -24,6 +24,10 @@ Why:
   `lerobot/smolvla_robocasa` evaluation over 3-task and 5-task subsets.
 - RoboTwin/Isaac/SimplerEnv/CALVIN are plausible later lanes, but they require
   new model/action-space compatibility work before a fair SmolVLA comparison.
+- VLA evaluation harness is now the best infrastructure lane for future
+  cross-benchmark table reproduction, but the current RunPod image does not
+  include Docker, and the public harness model-server configs do not include
+  SmolVLA yet.
 
 ## Primary Reference Anchors
 
@@ -100,6 +104,22 @@ Reference:
 - https://arxiv.org/abs/2506.01844
 - https://huggingface.co/docs/lerobot/v0.4.3/metaworld
 - https://huggingface.co/lerobot/smolvla_metaworld
+
+### VLA evaluation harness
+
+The `allenai/vla-evaluation-harness` project is a unified evaluation harness
+with public leaderboard coverage across many robot simulation benchmarks. Its
+README lists Dockerized benchmark support for LIBERO, CALVIN, SimplerEnv,
+ManiSkill2, RoboCasa, RoboTwin, VLABench, RLBench, and others, plus official
+model-server configs for OpenVLA, pi0, pi0-FAST, GR00T, X-VLA, CogACT, and
+related models. SmolVLA is not currently listed as an official model-server
+config in the checked `v0.2.0` source tree.
+
+Reference:
+
+- https://github.com/allenai/vla-evaluation-harness
+- https://allenai.github.io/vla-evaluation-harness/leaderboard/
+- https://arxiv.org/abs/2603.13966
 
 ## Our Current Non-LIBERO Evidence
 
@@ -514,6 +534,68 @@ paper-comparable Meta-World result remains the first full MT50 run
 candidates are now more likely to be LeRobot/Meta-World version differences,
 task reset distributions beyond the exposed seed, or a training/eval protocol
 detail not encoded in the released model card.
+
+### 10. VLA evaluation harness RunPod install audit
+
+Command family:
+
+```bash
+cd /workspace/physical-ai
+python3.11 -m venv /root/physical-ai/envs/vla_eval_py311
+/root/physical-ai/envs/vla_eval_py311/bin/python -m pip install vla-eval==0.2.0
+git clone --depth 1 --branch v0.2.0 https://github.com/allenai/vla-evaluation-harness.git
+cd /workspace/physical-ai/vla-evaluation-harness
+/root/physical-ai/envs/vla_eval_py311/bin/python -m pip install -e .
+/root/physical-ai/envs/vla_eval_py311/bin/vla-eval test --list
+/root/physical-ai/envs/vla_eval_py311/bin/vla-eval test --validate
+/root/physical-ai/envs/vla_eval_py311/bin/vla-eval test --benchmark maniskill2 --timeout 30 --verbose
+```
+
+Result:
+
+| Check | Result |
+| --- | --- |
+| RunPod Docker | not installed: `docker: command not found` |
+| RunPod `uv` | not installed |
+| `vla-eval==0.2.0` isolated install | passed in `/root/physical-ai/envs/vla_eval_py311` |
+| source checkout | passed at `/workspace/physical-ai/vla-evaluation-harness`, tag `v0.2.0` |
+| config validation | passed: `155/155 configs valid` |
+| server inventory | 16 configs, but blocked for smoke because `uv` is missing |
+| benchmark inventory | 17 configs, but blocked for smoke because Docker is missing |
+| ManiSkill2 benchmark smoke | skipped, not failed: `docker not found on PATH` |
+
+Installation footprint:
+
+| Path | Size |
+| --- | ---: |
+| `/workspace/physical-ai/vla-evaluation-harness` | 124M |
+| `/root/physical-ai/envs/vla_eval_py311` | 230M |
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| harness inventory log | `_workspace/runpod_results/vla_eval_harness_audit_20260607/test_list.log` |
+| harness validation log | `_workspace/runpod_results/vla_eval_harness_audit_20260607/validate.log` |
+| ManiSkill2 benchmark smoke blocker log | `_workspace/runpod_results/vla_eval_harness_audit_20260607/maniskill2_benchmark_smoke.log` |
+
+Relevant harness configs observed:
+
+| Benchmark | Config | Harness scope |
+| --- | --- | --- |
+| ManiSkill2 | `configs/benchmarks/maniskill2/eval.yaml` | `PickCube-v0`, `StackCube-v0`, `PickSingleYCB-v0`, `PickSingleEGAD-v0`, `PickClutterYCB-v0`; `50` episodes/task; `max_steps=400`; `base_camera` |
+| RoboCasa | `configs/benchmarks/robocasa/eval.yaml` | Dockerized RoboCasa quick eval config; README describes full RoboCasa evaluation as `24` tasks x `50` episodes/task |
+| SimplerEnv | `configs/benchmarks/simpler/*.yaml` | Google Robot and WidowX task configs |
+| CALVIN | `configs/benchmarks/calvin/eval.yaml` | chained language-conditioned benchmark config |
+
+Interpretation:
+
+This is a useful infrastructure lane, but not yet a direct SmolVLA number. The
+current RunPod image can validate the harness and inspect configs, but cannot
+execute Dockerized benchmark smoke tests. To use this for paper-comparable
+non-LIBERO numbers, the next cloud setup needs Docker-enabled RunPod or a
+compatible host image, plus a SmolVLA model-server adapter because upstream
+`v0.2.0` does not ship one.
 
 Interpretation:
 
