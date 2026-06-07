@@ -1,6 +1,6 @@
 # Evaluation Candidate Matrix After LIBERO Baseline
 
-Date: 2026-06-06
+Date: 2026-06-07
 
 ## Current Anchor Result
 
@@ -20,7 +20,7 @@ Use this as the policy-only baseline for wrapper experiments.
 | Candidate | Why It Matters | Comparable Public Numbers | Local/RunPod Viability | Fit For Agentic Wrapper | Recommendation |
 | --- | --- | --- | --- | --- | --- |
 | LIBERO agentic retry repeat | Same benchmark as the anchor result; isolates wrapper effect without adding a new simulator variable. | Same-run baseline vs success-once can be compared internally; policy-only can still be shown next to ActionX SmolVLA. | Already runnable on RunPod. | High. Current full Long probe recovered `15/29` failed episodes and moved Long from `71.0` to `86.0` success-once over 100 episodes. | Do this first: repeat full Long, then expand to all 4 suites if stable. |
-| RoboCasa365 / RoboCasa | Strong household-manipulation relevance; current leaderboard is explicitly multi-task generalist robot policy evaluation over atomic and composite kitchen tasks. | RoboCasa365 leaderboard reports 50-task Overall / Atomic-Seen / Composite-Seen / Composite-Unseen, e.g. RLDX-1 `33.2`, GR00T N1.5 `23.9`, pi0.5 `16.9`, pi0 `14.8`. | RunPod likely; assets and datasets are heavier than LIBERO. Mac may be useful for code inspection, not serious eval. | Very high. Long-horizon composite tasks are a natural target for planner/verifier/retry. | Best next external benchmark, but start with install smoke plus 1-2 atomic tasks before 50-task leaderboard scale. |
+| RoboCasa365 / RoboCasa | Strong household-manipulation relevance; current leaderboard is explicitly multi-task generalist robot policy evaluation over atomic and composite kitchen tasks. | RoboCasa365 leaderboard reports 50-task Overall / Atomic-Seen / Composite-Seen / Composite-Unseen, e.g. RLDX-1 `33.2`, GR00T N1.5 `23.9`, pi0.5 `16.9`, pi0 `14.8`. | CP25 probe gate is repo-local. Strict reset/step and policy eval need RunPod or another environment with RoboCasa assets installed. | Very high. Long-horizon composite tasks are a natural target for planner/verifier/retry. | Best next external benchmark. CP25 now records install/eval commands and reference table; next step is strict `CloseFridge` reset/step, then 20ep `lerobot/smolvla_robocasa`. |
 | ManiSkill-HAB / MS-HAB | ICLR 2025 low-level home rearrangement benchmark; metrics include subtask success-once and progressive completion. | Paper reports 1000 episodes per evaluation run; subtask success-once examples include TidyHouse Pick val `77.48` RL-per and PrepareGroceries Pick val `72.32` RL-per. | Mac supports ManiSkill CPU simulation and standard rendering, but no Mac GPU simulation. RunPod may need NVIDIA Vulkan/SAPIEN validation; previous PickCube path hit driver issues. | Medium-high. It is useful for low-level verifier/subtask recovery, but less directly aligned to SmolVLA LIBERO policy checkpoints. | Keep as partial, smaller-scale checkpoint. Use for subtask-level research, not as the next main paper number. |
 | vla-evaluation-harness cross-benchmark smoke | New unified VLA evaluation framework with Dockerized benchmarks and model servers; supports LIBERO, CALVIN, SimplerEnv, ManiSkill, RoboCasa, and more. | Harness paper/proposal lists LIBERO `4 suites x 10 tasks x 50 episodes`, CALVIN `1000` chained sequences, SimplerEnv `4` WidowX tasks x `24` episodes. | RunPod only for serious use. Current public model server list does not show SmolVLA, so SmolVLA may need a custom server. | High as infrastructure. It can make multi-benchmark comparison less bespoke if SmolVLA integration is added. | Run an installation/config audit next; do not replace the working LIBERO path until SmolVLA server feasibility is confirmed. |
 | CALVIN | Classic language-conditioned long-horizon manipulation benchmark; directly relevant to language-conditioned sequence completion. | Public protocols commonly report chained sequence success; vla-evaluation-harness lists `ABC->D`, `1000` chained sequences. | RunPod likely; separate dependency stack. | Medium. Good for long-horizon language policy evaluation, but our current SmolVLA LIBERO checkpoint is not automatically CALVIN-compatible. | Candidate after RoboCasa or harness integration; first task is checkpoint/model compatibility, not success table generation. |
@@ -37,15 +37,17 @@ table should be non-LIBERO only:
 | Mac-local pilot | ManiSkill `PickCube-v1` | 20 episodes per policy | task success | random `0.0`, zero `0.05` | RDT repo reports OpenVLA `8%`, DP `40%`, RDT `77.2%` on PickCube under a different trained-policy protocol | Pilot only; not comparable yet |
 | Mac-local pilot | ManiSkill-HAB SetTable / PrepareGroceries validation tasks | 20 episodes per task/policy | success-once | random/zero `0.0` | MS-HAB paper-scale runs use success-once over much larger evaluation; paper baselines are trained RL/IL policies | Executable pilot; not comparable policy |
 | Current blocker | ManiSkill `PickCube-v1` no-fallback strict | 1 episode | direct target env execution | blocked by `ErrorIncompatibleDriver` on current Mac renderer path | n/a | Needs RunPod/driver-compatible ManiSkill renderer |
-| Planned first strict external benchmark | RoboCasa365 / RoboCasa | 50-task benchmark, 3 splits | average task success | pending | RLDX-1 `33.2`, GR00T N1.5 `23.9`, pi0.5 `16.9`, pi0 `14.8`, DP `6.1` | Best next external lane |
+| CP25 local probe | RoboCasa365 / RoboCasa | import/reset-step gate | runtime readiness | non-strict blocker: `robocasa` missing on this Mac | n/a | Gate implemented; strict RunPod reset/step is next |
+| Planned first strict external benchmark | RoboCasa365 / RoboCasa | 50-task benchmark, 3 splits | average task success | pending | RLDX-1 `33.2`, GR00T N1.5 `23.9`, pi0.5 `16.9`, pi0 `14.8`, DP `6.1` | Run after CP25 strict reset/step and 20ep single-task smoke |
 
 For the current goal, do not spend more cycles on LIBERO repeat tables unless
 the user explicitly asks. The next meaningful work is either:
 
 1. make ManiSkill `PickCube-v1` strict rendering work on a suitable RunPod
    host and run a trained-policy-compatible comparison, or
-2. install/probe RoboCasa and produce a 1-2 task smoke before attempting the
-   RoboCasa365 50-task leaderboard scale.
+2. run CP25 strict RoboCasa reset/step on RunPod, then evaluate
+   `lerobot/smolvla_robocasa` on `CloseFridge` for 20 episodes before
+   attempting the RoboCasa365 50-task leaderboard scale.
 
 ## External Sources
 
