@@ -131,15 +131,19 @@ def build_lerobot_observation(runner: LeRobotPolicyRunner, obs: Any, *, instruct
         "task": [instruction],
     }
     images = extract_rgb_images(obs)
-    zero_image = np.zeros((1, 3, 128, 128), dtype=np.float32)
-    base_camera = images.get("base_camera")
-    observation["observation.images.base_camera"] = (
-        np.expand_dims(image_to_lerobot_chw(base_camera), axis=0) if base_camera is not None else zero_image
-    )
+    zero_image = empty_lerobot_image()
+    camera_key_map = {
+        "observation.images.base_camera": "base_camera",
+        "observation.images.hand_camera": "hand_camera",
+        "observation.images.camera1": "base_camera",
+        "observation.images.camera2": "hand_camera",
+    }
+    for observation_key, camera_name in camera_key_map.items():
+        if camera_name in images:
+            observation[observation_key] = lerobot_image_batch(images[camera_name])
+
     for image_key in getattr(config, "image_features", {}):
-        if str(image_key).endswith("camera1"):
-            continue
-        observation[str(image_key)] = zero_image
+        observation.setdefault(str(image_key), zero_image)
     return observation
 
 
@@ -211,6 +215,14 @@ def image_to_lerobot_chw(image: np.ndarray) -> np.ndarray:
     if image.shape[0] != 128 or image.shape[1] != 128:
         image = resize_nearest(image, height=128, width=128)
     return np.transpose(image.astype(np.float32) / 255.0, (2, 0, 1))
+
+
+def lerobot_image_batch(image: np.ndarray) -> np.ndarray:
+    return np.expand_dims(image_to_lerobot_chw(image), axis=0)
+
+
+def empty_lerobot_image() -> np.ndarray:
+    return np.zeros((1, 3, 128, 128), dtype=np.float32)
 
 
 def resize_nearest(image: np.ndarray, *, height: int, width: int) -> np.ndarray:

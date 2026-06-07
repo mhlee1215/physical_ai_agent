@@ -1220,6 +1220,68 @@ are protocol/data distribution details: exact STARE eval seeds, demonstration
 source, observation/camera resolution and preprocessing, and whether the paper
 uses a different ManiSkill task/control-mode variant.
 
+## ManiSkill3 StackCube SFT Scale-Up
+
+This is the second STARE-style SmolVLA SFT calibration row. It expands beyond
+PushCube, but it does **not** establish parity.
+
+Reference boundary:
+
+| Source | Task | Policy row | Reported success |
+| --- | --- | --- | ---: |
+| STARE Table 2 | `StackCube-v1` | `SmolVLA (fine-tuning)`, `1000` trajectory samples for SFT | 12.7% |
+
+Protocol and data:
+
+| Item | Value |
+| --- | --- |
+| source demos | official `StackCube-v1` motion-planning trajectory |
+| RGB replay | `999/1000` demos saved successfully |
+| LeRobot conversion | `999` episodes, `107420` frames |
+| idle filter | qpos delta threshold `0.05` |
+| filtered dataset | `999` episodes, `26728` frames, mean length `26.8`, p50 `26`, p90 `34`, max `76` |
+| cameras | `base_camera` and `hand_camera` |
+| training | `lerobot/smolvla_base`, 9000 SFT steps, two-camera rename map |
+| checkpoint | `/root/physical-ai/tmp_train_smolvla_base_maniskill3_stackcube_count999_qpos_filter005_9000step_2cam/checkpoints/009000/pretrained_model` |
+
+Current results:
+
+| Run | Eval episodes | Horizon | Success | Delta vs STARE StackCube |
+| --- | ---: | ---: | ---: | ---: |
+| smoke | 1 | 30 | 0.0% (`0/1`) | -12.7pp |
+| paper-horizon seed1000 | 300 | 30 | 0.33% (`1/300`) | -12.37pp |
+| debug long-horizon seed1000 | 100 | 100 | 0.0% (`0/100`) | n/a |
+
+Important fixes made before treating the StackCube eval as valid:
+
+- The custom ManiSkill3 eval observation builder now maps both raw simulator
+  camera names and LeRobot feature names:
+  `base_camera -> camera1` and `hand_camera -> camera2`.
+- This matters because the StackCube SFT checkpoint was trained with two
+  camera streams. Zero-filling `camera2` would make the evaluation artificially
+  weak.
+- The shared LeRobot runner path still applies saved policy processors; the
+  StackCube metrics confirm `UnnormalizerProcessorStep` and
+  `DeviceProcessorStep` in the postprocessor.
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| local fetched result bundle | `_workspace/runpod_results/20260607_maniskill3_stackcube_qpos005_9000_2cam` |
+| 1ep smoke metrics | `_workspace/runpod_results/20260607_maniskill3_stackcube_qpos005_9000_2cam/stackcube_count999_qpos_filter005_9000step_2cam_smoke_1ep_seed1000/metrics.json` |
+| 300ep horizon-30 metrics | `_workspace/runpod_results/20260607_maniskill3_stackcube_qpos005_9000_2cam/stackcube_count999_qpos_filter005_9000step_2cam_horizon30_eval_300ep_seed1000/metrics.json` |
+| 100ep horizon-100 debug metrics | `_workspace/runpod_results/20260607_maniskill3_stackcube_qpos005_9000_2cam/stackcube_count999_qpos_filter005_9000step_2cam_horizon100_eval_100ep_seed1000/metrics.json` |
+
+Interpretation:
+
+StackCube is now a real table-backed row in our non-LIBERO comparison, but the
+result is far below STARE. The long-horizon debug run also failed, so the
+current failure is not just a policy that needs more than `30` steps to finish.
+The most likely remaining causes are source/protocol mismatch, the skipped
+replay episode, action/control-mode details, or insufficient StackCube-specific
+SFT quality under the current idle-filter rule.
+
 ## Claim Boundary
 
 Current non-LIBERO state is **partially paper-facing but not yet leaderboard
@@ -1232,10 +1294,13 @@ comparable**:
   pretrained `lerobot/smolvla_base` 1-step training passes on all four
   selected tasks with `rename_map`, and the custom eval path now uses the
   shared LeRobot runner with `UnnormalizerProcessorStep`. `PushCube-v1`
-  count1000 SFT now has a best policy-only result, `58.0%` over 50 episodes,
-  but it remains `-28.3pp` below the STARE PushCube reference. A longer
-  27000-step run scored `52.0%`, and `n_action_steps=1/10/15` ablations were
-  worse than the default `50`.
+  qpos-filtered count1000 SFT has the current best policy-only paper-horizon
+  result, `62.2%` over five 300-episode seeds, but it remains `-24.1pp` below
+  the STARE PushCube reference. `StackCube-v1` qpos-filtered count999 SFT now
+  has a first paper-horizon result, `0.33%` over one 300-episode seed, which is
+  `-12.37pp` below the STARE StackCube reference. The StackCube horizon-100
+  debug result was also `0.0%`, so the StackCube failure is not only an
+  evaluation-horizon problem.
 - RoboCasa: CP25 strict reset/step passed on RunPod, and
   `lerobot/smolvla_robocasa` ran on `CloseFridge` for 20 episodes with a
   measured `0/20` success rate.
