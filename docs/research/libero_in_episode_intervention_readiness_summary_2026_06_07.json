@@ -1,0 +1,73 @@
+{
+  "checks": [
+    {
+      "evidence": "_workspace/lerobot_source_snapshot_20260607/lerobot_eval.py: contains def rollout(",
+      "name": "lerobot_rollout_function",
+      "status": "pass"
+    },
+    {
+      "evidence": "rollout returns stacked ACTION tensor",
+      "name": "rollout_records_actions",
+      "status": "pass"
+    },
+    {
+      "evidence": "rollout returns success and done sequences",
+      "name": "rollout_records_success_done",
+      "status": "pass"
+    },
+    {
+      "evidence": "hook can be inserted immediately before/after env.step(action_numpy)",
+      "name": "online_hook_location",
+      "status": "pass"
+    },
+    {
+      "evidence": "default eval_info per_episode lacks action_steps",
+      "name": "default_eval_info_action_steps",
+      "status": "fail"
+    },
+    {
+      "evidence": "LiberoEnv.step exposes check_success via info['is_success']",
+      "name": "libero_step_exposes_success",
+      "status": "pass"
+    },
+    {
+      "evidence": "LiberoEnv.step auto-resets after terminated; custom intervention loop must account for this",
+      "name": "libero_step_auto_resets_on_terminal",
+      "status": "warn"
+    },
+    {
+      "evidence": "overall.eval_s=438.583",
+      "name": "eval_info:eval_info.json:eval_seconds",
+      "status": "pass"
+    },
+    {
+      "evidence": "success entries=100",
+      "name": "eval_info:eval_info.json:successes",
+      "status": "pass"
+    },
+    {
+      "evidence": "no per-episode action-step count fields found",
+      "name": "eval_info:eval_info.json:action_step_counts",
+      "status": "fail"
+    }
+  ],
+  "eval_infos": [
+    "_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1001_1002_20260607T012517Z/libero_goal/baseline_seed1001/eval_logs/eval_info.json"
+  ],
+  "lerobot_eval_source": "_workspace/lerobot_source_snapshot_20260607/lerobot_eval.py",
+  "libero_env_source": "_workspace/lerobot_source_snapshot_20260607/libero.py",
+  "next_experiment_contract": [
+    "Use a custom rollout path or patch LeRobot rollout to emit per-episode action_step_count.",
+    "Insert the online verifier immediately before or after env.step(action_numpy).",
+    "Log verifier_triggered, trigger_step, intervention_type, action_steps, eval_seconds, and final benchmark success.",
+    "Treat LiberoEnv auto-reset after terminal success/failure as a boundary; in-episode interventions must occur before terminated=True.",
+    "Compare policy-only, blind retry, horizon-switch retry, and in-episode intervention under the same task/seed/action budget."
+  ],
+  "summary": {
+    "fail": 2,
+    "missing": 0,
+    "pass": 7,
+    "unknown": 0,
+    "warn": 1
+  }
+}

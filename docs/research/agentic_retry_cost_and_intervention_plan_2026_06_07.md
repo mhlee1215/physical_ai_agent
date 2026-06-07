@@ -33,6 +33,19 @@ video paths, but does not record per-episode action-step counts. Therefore,
 action-step-normalized metrics require an instrumented rollout path before they
 can be used as paper evidence.
 
+Readiness audit:
+`docs/research/libero_in_episode_intervention_readiness_report_2026_06_07.md`
+
+Audit result:
+
+- LeRobot `rollout()` returns stacked action, success, and done tensors, so a
+  custom rollout can compute action-step-normalized metrics.
+- The online verifier hook can be inserted immediately before or after
+  `env.step(action_numpy)`.
+- `LiberoEnv.step()` exposes `info["is_success"]`, but auto-resets after
+  terminal states; in-episode interventions must trigger before `terminated`.
+- Default `eval_info.json` does not include per-episode action-step counts.
+
 ## Why Blind Retry Is Not Enough
 
 Blind retry is a strong control. If an agentic wrapper only says "try again
@@ -65,6 +78,17 @@ experiment is:
 5. Report benchmark success, verifier trigger rate, intervention success,
    false-positive trigger rate, total action steps, total attempts, and eval
    seconds.
+
+Executable preflight:
+
+```bash
+python3 scripts/build_libero_in_episode_intervention_readiness_report.py \
+  --lerobot-eval-source _workspace/lerobot_source_snapshot_20260607/lerobot_eval.py \
+  --libero-env-source _workspace/lerobot_source_snapshot_20260607/libero.py \
+  --eval-info _workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1001_1002_20260607T012517Z/libero_goal/baseline_seed1001/eval_logs/eval_info.json \
+  --output-md docs/research/libero_in_episode_intervention_readiness_report_2026_06_07.md \
+  --output-json docs/research/libero_in_episode_intervention_readiness_summary_2026_06_07.json
+```
 
 ## Experiment Table Shape
 
