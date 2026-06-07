@@ -1314,3 +1314,28 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   or timeout risk and intervenes before environment reset.
 - Compare against policy-only, blind retry, and horizon-switch retry with the
   same success, attempt, reset, eval-time, and action-step metrics.
+
+### In-Episode Intervention Readiness Audit
+
+- Added executable readiness audit:
+  `scripts/build_libero_in_episode_intervention_readiness_report.py`.
+- Report:
+  `docs/research/libero_in_episode_intervention_readiness_report_2026_06_07.md`.
+- Summary:
+  - pass `7`
+  - warn `1`
+  - fail `2`
+  - missing `0`
+- Findings:
+  - LeRobot `rollout()` already returns stacked action, success, and done
+    tensors, so action-step-normalized metrics are feasible in a custom or
+    patched rollout path.
+  - The online verifier can be inserted immediately before or after
+    `env.step(action_numpy)`.
+  - `LiberoEnv.step()` exposes `info["is_success"]`, but auto-resets after
+    terminal states; intervention must trigger before `terminated=True`.
+  - Default `eval_info.json` does not include per-episode action-step counts.
+- Next gate:
+  implement a custom LIBERO rollout wrapper that logs `action_step_count`,
+  `verifier_triggered`, `trigger_step`, `intervention_type`, and final benchmark
+  success before launching more paper-facing GPU runs.
