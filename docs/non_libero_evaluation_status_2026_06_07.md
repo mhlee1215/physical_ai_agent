@@ -245,6 +245,16 @@ RGB replay and LeRobot conversion smoke:
 | `PullCube-v1` | RL `pd_joint_delta_pos` | `1/1=100.00%` demos saved | passed | 26 | `base_camera` | action `[8]`, state `[9]` |
 | `LiftPegUpright-v1` | RL `pd_joint_delta_pos` | `1/1=100.00%` demos saved | passed | 50 | `base_camera` | action `[8]`, state `[9]` |
 
+LeRobot loader and SmolVLA training smoke:
+
+| Check | Result |
+| --- | --- |
+| raw tiny converted dataset load | blocked by LeRobot metadata validation because `data_files_size_in_mb` is `0` for tiny smoke datasets |
+| sanitized tiny dataset load | passed for all four selected tasks after setting `data_files_size_in_mb=1` in temporary local copies |
+| sanitized sample tensors | image tensors are `torch.float32` with shape `[3, 128, 128]`; `action` is `[8]`; `observation.state` is `[9]` |
+| pretrained `lerobot/smolvla_base` 1-step SFT smoke | blocked by feature mismatch: checkpoint expects `observation.images.camera1/2/3`, `observation.state` shape `[6]`, and `action` shape `[6]`; converted `PushCube-v1` has `observation.images.base_camera`, state `[9]`, and action `[8]` |
+| fresh `policy.type=smolvla` 1-step SFT smoke | passed on sanitized `PushCube-v1`; `steps=1`, `batch_size=1`, `dataset.num_frames=71`, `dataset.num_episodes=1`, `100M` learnable params, `450M` total params, training reached `1/1` and logged `End of training` |
+
 Interpretation:
 
 This is still **not** a paper-comparable SmolVLA number. It does, however,
@@ -252,11 +262,14 @@ remove the first practical blocker for the STARE-style table lane: all four
 selected ManiSkill3 tasks have official successful trajectory data at roughly
 the required `1000`-sample scale, and all four can be replayed into RGB
 observation trajectories and converted to LeRobot format on a 1-episode smoke.
-The remaining work is full task-specific SFT/evaluation over `StackCube-v1`,
-`PushCube-v1`, `PullCube-v1`, and `LiftPegUpright-v1`, then side-by-side
-comparison with STARE Table 2. The paper-facing caveat is that the official
-data source/control mode and camera set are not identical for every task, so
-the exact SFT protocol must be declared.
+The fresh SmolVLA architecture can also consume the `PushCube-v1` local dataset
+and complete a one-step training update. The remaining work is pretrained
+SmolVLA-compatible schema adaptation and full task-specific SFT/evaluation over
+`StackCube-v1`, `PushCube-v1`, `PullCube-v1`, and `LiftPegUpright-v1`, then
+side-by-side comparison with STARE Table 2. The paper-facing caveat is that
+the official data source/control mode, camera set, and pretrained checkpoint
+feature schema are not automatically aligned, so the exact SFT protocol must
+be declared.
 
 Artifacts:
 
@@ -278,6 +291,11 @@ Artifacts:
 | PullCube RGB LeRobot conversion smoke | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/convert_PullCube-v1_rgb_count1_128.log` |
 | LiftPegUpright RGB replay smoke | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/replay_LiftPegUpright-v1_rgb_count1.log` |
 | LiftPegUpright RGB LeRobot conversion smoke | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/convert_LiftPegUpright-v1_rgb_count1_128.log` |
+| LeRobot local dataset loader raw failure | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/lerobot_local_dataset_load_smoke.log` |
+| LeRobot local dataset loader sanitized success | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/lerobot_local_dataset_load_sanitized_smoke.log` |
+| SmolVLA checkpoint feature schema audit | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/smolvla_checkpoint_feature_audit_registered.log` |
+| pretrained SmolVLA train mismatch | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/smolvla_pushcube_train_1step_retry_nohub.log` |
+| fresh SmolVLA architecture 1-step train success | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/smolvla_arch_pushcube_train_1step.log` |
 | failed local generator smoke | `_workspace/runpod_results/maniskill3_sft_feasibility_20260607/pushcube_motionplanning_1traj.log` |
 
 #### SafeVLA-Bench
@@ -1013,9 +1031,11 @@ Next executable path:
 2. Treat ManiSkill3 selected Franka tasks as the next table-backed training
    lane, not as zero-shot checkpoint evaluation. The first `PushCube-v1`
    data-preparation smoke is now green, official successful trajectories are
-   available for all four selected tasks, and all four pass a 1-episode RGB
-   replay plus LeRobot conversion smoke. Next steps are running a tiny SmolVLA
-   SFT smoke before scaling to `1000` trajectories per task.
+   available for all four selected tasks, all four pass a 1-episode RGB replay
+   plus LeRobot conversion smoke, and a fresh SmolVLA architecture 1-step train
+   smoke succeeds on `PushCube-v1`. Next steps are adapting the dataset schema
+   to a pretrained SmolVLA checkpoint, then scaling SFT to `1000` trajectories
+   per task.
 3. Keep RoboCasa as the household manipulation lane, but label current results
    as internal/protocol-compatible unless a public SmolVLA RoboCasa reference
    number is found or a full RoboCasa365 leaderboard-scale run is completed.
@@ -1032,7 +1052,8 @@ comparable**:
 - ManiSkill3: selected Franka task runtime is green on RunPod; official
   successful trajectories are downloadable for all four selected STARE tasks;
   all four selected tasks pass 1-episode RGB replay and RGB LeRobot conversion,
-  but no SmolVLA SFT/eval number has been run yet.
+  and fresh SmolVLA architecture 1-step training passes on `PushCube-v1`; no
+  pretrained SmolVLA SFT/eval number has been run yet.
 - RoboCasa: CP25 strict reset/step passed on RunPod, and
   `lerobot/smolvla_robocasa` ran on `CloseFridge` for 20 episodes with a
   measured `0/20` success rate.
