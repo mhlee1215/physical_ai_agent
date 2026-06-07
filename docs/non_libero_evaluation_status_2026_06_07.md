@@ -490,6 +490,7 @@ the largest gap against SmolVLA Table 2 (`20.0%` ours versus `60.0%` reported).
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z` | Temporarily patch the LeRobot Meta-World wrapper from `corner2` to `top` because the feature key is named `pixels/top`; restore source after run | 0/50, 0.0% | -20.0 | -60.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z` | Temporarily patch Meta-World suite construction from `MT1(..., seed=42)` to `seed=1000` while keeping eval seed, batch size, camera, and empty-camera settings fixed | 18/50, 36.0% | +16.0 | -24.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_actual400_20260607T134500Z` | Temporarily patch the LeRobot Meta-World wrapper from `_max_episode_steps = 500` to `400` to test the released checkpoint `train_config.json` horizon clue directly; restore source after run | 17/50, 34.0% | +14.0 | -26.0 |
+| `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_freezerand_20260607T142500Z` | Temporarily patch the LeRobot Meta-World wrapper from `_freeze_rand_vec = False` to `True` to test whether fixed object/goal reset vectors recover the paper split score; restore source after run | 8/50, 16.0% | -4.0 | -44.0 |
 
 Notes:
 
@@ -548,6 +549,14 @@ Notes:
   (`18/50 = 36.0%`). Per-task success was `60.0`, `60.0`, `20.0`, `20.0`,
   and `10.0` for tasks `0..4`. This rules out episode horizon as the
   standalone explanation for the Table 2 very-hard parity gap.
+- The fixed reset-vector patch was another negative control. The current
+  LeRobot wrapper sets `env._freeze_rand_vec = False` after the initial reset
+  to enable Meta-World reset randomization. Temporarily forcing this value to
+  `True` produced only `8/50 = 16.0%` on `very_hard`, with per-task success
+  `0.0`, `70.0`, `0.0`, `10.0`, and `0.0`. The remote source was restored to
+  `_freeze_rand_vec = False` after the run. This rules out the simple
+  hypothesis that fixed reset vectors alone recover the Table 2 `60.0%`
+  very-hard score.
 - Checkpoint processor stats were inspected in
   `lerobot/smolvla_metaworld`. Although `policy_preprocessor.json` lists
   `observation.state` with feature shape `[6]`, the saved normalizer tensors
@@ -607,6 +616,10 @@ Artifacts:
 | actual 400-step horizon metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_actual400_20260607T134500Z/eval_info.json` |
 | actual 400-step horizon command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_actual400_20260607T134500Z/run_command.txt` |
 | actual 400-step horizon patch backup | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_actual400_20260607T134500Z/metaworld.py.before_actual400_patch` |
+| fixed reset-vector metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_freezerand_20260607T142500Z/eval_info.json` |
+| fixed reset-vector command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_freezerand_20260607T142500Z/run_command.txt` |
+| fixed reset-vector preflight | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_freezerand_20260607T142500Z/preflight.txt` |
+| fixed reset-vector patch backup | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_freezerand_20260607T142500Z/metaworld.py.before_freezerand_patch` |
 | checkpoint preprocessor stats inspected on RunPod | `/workspace/physical-ai/hf_home/hub/models--lerobot--smolvla_metaworld/snapshots/cd6778d2cfa724c1bf5fc637490548e54d81dc4c/policy_preprocessor_step_5_normalizer_processor.safetensors` |
 | dataset metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/info.json` |
 | dataset task metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/tasks.parquet` |
