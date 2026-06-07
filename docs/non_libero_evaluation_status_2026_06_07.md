@@ -751,6 +751,7 @@ the largest gap against SmolVLA Table 2 (`20.0%` ours versus `60.0%` reported).
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z` | Temporarily patch Meta-World suite construction from `MT1(..., seed=42)` to `seed=1000` while keeping eval seed, batch size, camera, and empty-camera settings fixed | 18/50, 36.0% | +16.0 | -24.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_actual400_20260607T134500Z` | Temporarily patch the LeRobot Meta-World wrapper from `_max_episode_steps = 500` to `400` to test the released checkpoint `train_config.json` horizon clue directly; restore source after run | 17/50, 34.0% | +14.0 | -26.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_freezerand_20260607T142500Z` | Temporarily patch the LeRobot Meta-World wrapper from `_freeze_rand_vec = False` to `True` to test whether fixed object/goal reset vectors recover the paper split score; restore source after run | 8/50, 16.0% | -4.0 | -44.0 |
+| `metaworld_veryhard_seed_sweep_20260607T231900Z` | Sweep eval seeds under the same `very_hard`, `batch_size=10`, `empty_cameras=0` condition to test whether seed/reset selection alone can approach Table 2 | seed `1`: 14.0%; `10`: 12.0%; `42`: 14.0%; `100`: 22.0%; `500`: 30.0%; `2000`: 16.0%; prior seed `1000`: 36.0% | best sweep result +16.0 | best sweep result -24.0 |
 
 Notes:
 
@@ -768,6 +769,13 @@ Notes:
 - Seed `1000` improves `very_hard` from `20.0%` to `26.0%`, but this is far
   short of the paper's `60.0%`. Seed/reset variance alone is therefore not
   enough to explain the parity gap.
+- A later seed sweep kept the strongest standalone settings fixed
+  (`very_hard`, `batch_size=10`, `empty_cameras=0`, `corner2`, 10 trials/task)
+  and varied eval seeds `1`, `10`, `42`, `100`, `500`, and `2000`. The results
+  ranged from `12.0%` to `30.0%`; the previously run seed `1000` result
+  remains the best observed standalone score at `36.0%`. This makes it
+  unlikely that a simple eval-seed choice alone explains the paper's `60.0%`
+  very-hard row.
 - Matching checkpoint `empty_cameras=0` produced the same `26.0%` as
   `empty_cameras=2` under seed `1000`. Empty-camera padding is therefore not a
   leading explanation for the `very_hard` gap.
@@ -880,6 +888,13 @@ Artifacts:
 | fixed reset-vector command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_freezerand_20260607T142500Z/run_command.txt` |
 | fixed reset-vector preflight | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_freezerand_20260607T142500Z/preflight.txt` |
 | fixed reset-vector patch backup | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_freezerand_20260607T142500Z/metaworld.py.before_freezerand_patch` |
+| seed sweep metrics/log bundle | `_workspace/runpod_results/metaworld_veryhard_seed_sweep_20260607T231900Z/metaworld_veryhard_seed_sweep_metrics_logs.tar.gz` |
+| seed sweep seed1 metrics | `_workspace/runpod_results/metaworld_veryhard_seed_sweep_20260607T231900Z/seed1_batch10_empty0_rerun/eval_info.json` |
+| seed sweep seed10 metrics | `_workspace/runpod_results/metaworld_veryhard_seed_sweep_20260607T231900Z/seed10_batch10_empty0_rerun/eval_info.json` |
+| seed sweep seed42 metrics | `_workspace/runpod_results/metaworld_veryhard_seed_sweep_20260607T231900Z/seed42_batch10_empty0/eval_info.json` |
+| seed sweep seed100 metrics | `_workspace/runpod_results/metaworld_veryhard_seed_sweep_20260607T231900Z/seed100_batch10_empty0_rerun/eval_info.json` |
+| seed sweep seed500 metrics | `_workspace/runpod_results/metaworld_veryhard_seed_sweep_20260607T231900Z/seed500_batch10_empty0_rerun/eval_info.json` |
+| seed sweep seed2000 metrics | `_workspace/runpod_results/metaworld_veryhard_seed_sweep_20260607T231900Z/seed2000_batch10_empty0_rerun/eval_info.json` |
 | checkpoint preprocessor stats inspected on RunPod | `/workspace/physical-ai/hf_home/hub/models--lerobot--smolvla_metaworld/snapshots/cd6778d2cfa724c1bf5fc637490548e54d81dc4c/policy_preprocessor_step_5_normalizer_processor.safetensors` |
 | dataset metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/info.json` |
 | dataset task metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/tasks.parquet` |
