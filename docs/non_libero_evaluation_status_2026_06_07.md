@@ -139,6 +139,61 @@ Reference:
 - https://allenai.github.io/vla-evaluation-harness/leaderboard/
 - https://arxiv.org/abs/2603.13966
 
+### Latest source audit: non-LIBERO table-backed candidates
+
+The current public-source audit keeps Meta-World as the only direct
+released-checkpoint SmolVLA non-LIBERO table target. Other candidates are
+useful, but each has an extra comparability condition.
+
+#### RoboCasa / LeRobot SmolVLA docs
+
+The current LeRobot RoboCasa docs now explicitly provide
+`lerobot/smolvla_robocasa` evaluation commands. The single-task quick command
+uses `CloseFridge`, `20` episodes, `batch_size=1`, CUDA, async envs disabled,
+and the three-camera rename map. The multi-task command includes
+`CloseFridge,OpenCabinet,OpenDrawer,TurnOnMicrowave,TurnOffStove` with the same
+20-episode-per-task protocol. The page says these snippets mirror the CI
+command and are the way the released checkpoint is evaluated, but it does not
+publish a numeric success target for SmolVLA. Therefore our RoboCasa results
+remain protocol-compatible internal baselines, not a public SmolVLA parity
+table yet.
+
+Reference:
+
+- https://huggingface.co/docs/lerobot/main/robocasa
+
+#### ManiSkill3 selected Franka tasks
+
+A recent STARE paper provides a table-backed non-LIBERO SmolVLA target on
+selected ManiSkill3 Franka tasks. Table 2 reports `SmolVLA (fine-tuning)` Avg
+`51.5%`, with StackCube `12.7`, PushCube `86.3`, PullCube `90.7`, and
+LiftPegUpright `16.3`. The same table states Octo and SmolVLA use `1000`
+trajectory samples for SFT per task, while OpenVLA/Pi0.5 rows use different
+preference/fine-tuning setups. This is a good future table-backed benchmark,
+but it is **not** directly comparable to a released SmolVLA checkpoint rollout:
+we would need task-specific SFT data/training and a working ManiSkill3 runtime
+before claiming parity.
+
+Reference:
+
+- https://openreview.net/attachment?id=qBcgyxDeMM&name=pdf
+
+#### SafeVLA-Bench
+
+SafeVLA-Bench is a post-hoc safety layer over native LIBERO and RoboCasa-365
+rollouts. It preserves the host benchmark success predicate and adds safety
+metrics: SR, Safety, SBU, and VSI. The public summary reports that high-SR
+LIBERO baselines still leave `13-15%` unsafe episodes, and `36-56%` of
+successful RoboCasa-365 rollouts violate active safety clauses. This is
+promising for an agentic verifier/safety angle, but it is secondary to native
+RoboCasa success parity: it requires simulator signal instrumentation for
+contacts, object poses, bystander displacement, held-object motion, robot
+state, and self-contact.
+
+Reference:
+
+- https://safevla.org/
+
 ## Our Current Non-LIBERO Evidence
 
 ### 1. Current strict PickCube target is blocked on this Mac
