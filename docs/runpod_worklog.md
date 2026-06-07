@@ -1400,3 +1400,23 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   not an intervention-improvement result. The next comparison should run
   no-op hook vs non-trivial intervention under identical task/seed/action
   budget.
+
+### Real LIBERO Same-Seed In-Episode Ablation
+
+- Added ablation report builder:
+  `scripts/build_libero_in_episode_ablation_report.py`.
+- Added report:
+  `docs/research/libero_in_episode_smolvla_ablation_2026_06_07.md`.
+- Conditions:
+  - no-op hook: scale `1.0`, `libero_goal`, task `[0]`, seed `1200`
+  - non-trivial intervention: scale `0.5`, same task and seed
+- Result:
+  - no-op hook: success `true`, action steps `131`, eval seconds `7.3373`,
+    success/action-step `0.007634`
+  - scale `0.5`: success `true`, action steps `132`, eval seconds `7.3378`,
+    success/action-step `0.007576`
+- Interpretation:
+  the scale `0.5` intervention preserved success but did not improve action
+  cost or eval-time cost in this one-episode smoke. This is useful negative
+  evidence: the project now has a same-task, same-seed, cost-normalized
+  comparison protocol, but not yet a positive in-episode intervention result.

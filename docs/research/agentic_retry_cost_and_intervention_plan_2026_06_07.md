@@ -136,6 +136,18 @@ intervention scale was `1.0`, so this is a no-op hook validation, not an
 improvement claim. The next experiment must compare no-op hook against a
 non-trivial intervention under fixed task/seed/action budget.
 
+First same-seed ablation:
+`docs/research/libero_in_episode_smolvla_ablation_2026_06_07.md`
+
+- no-op hook, scale `1.0`: success `true`, action steps `131`,
+  success/action-step `0.007634`
+- non-trivial intervention, scale `0.5`: success `true`, action steps `132`,
+  success/action-step `0.007576`
+
+Interpretation: scale `0.5` did not improve cost on this single smoke. Keep it
+as a negative/neutral ablation and search for verifier/intervention choices
+that improve success or cost against the no-op hook.
+
 ## Experiment Table Shape
 
 | Condition | Reset budget | In-episode intervention | Success | Attempts | Resets | Eval min | Success/attempt | Success/eval min | Action steps |
