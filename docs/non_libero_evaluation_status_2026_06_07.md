@@ -552,6 +552,14 @@ Notes:
   the clipped action `[1, -1, 1, 1]`. The same held for the negative direction.
   This weakens the hypothesis that the dataset's large action statistics are
   causing a simple action-scale mismatch during evaluation.
+- A no-CLI-rename smoke run was executed with `--rename_map` omitted. It failed
+  before rollout with a policy/environment feature mismatch: missing
+  `observation.images.camera1/2/3` and extra `observation.image`. Inspection of
+  `lerobot_eval.py` shows the eval script overrides the checkpoint
+  `rename_observations_processor` with `cfg.rename_map`; therefore the explicit
+  CLI rename `{"observation.image": "observation.images.camera1"}` is required
+  for Meta-World evaluation and is not an accidental duplicate preprocessing
+  step.
 
 Artifacts:
 
@@ -579,6 +587,7 @@ Artifacts:
 | dataset metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/info.json` |
 | dataset task metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/tasks.parquet` |
 | dataset episode metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/episodes/chunk-000/file-000.parquet` |
+| no-rename smoke failure log | `_workspace/runpod_results/metaworld_smolvla_veryhard_1ep_seed1000_norenamemap_20260607T133000Z/eval.log` |
 
 #### Full MT50 batch-size parity rerun
 
