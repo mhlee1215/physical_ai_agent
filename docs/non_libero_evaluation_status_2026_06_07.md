@@ -476,6 +476,7 @@ the largest gap against SmolVLA Table 2 (`20.0%` ours versus `60.0%` reported).
 | `metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z` | Match the released checkpoint `train_config.json` eval hints more closely: `seed=1000`, `empty_cameras=0`, `eval.n_episodes=50`, `eval.batch_size=50`; `very_hard` only | 61/250, 24.4% | +4.4 | -35.6 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z` | Temporarily patch the LeRobot Meta-World wrapper from `corner2` to `top` because the feature key is named `pixels/top`; restore source after run | 0/50, 0.0% | -20.0 | -60.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z` | Temporarily patch Meta-World suite construction from `MT1(..., seed=42)` to `seed=1000` while keeping eval seed, batch size, camera, and empty-camera settings fixed | 18/50, 36.0% | +16.0 | -24.0 |
+| `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_actual400_20260607T134500Z` | Temporarily patch the LeRobot Meta-World wrapper from `_max_episode_steps = 500` to `400` to test the released checkpoint `train_config.json` horizon clue directly; restore source after run | 17/50, 34.0% | +14.0 | -26.0 |
 
 Notes:
 
@@ -527,6 +528,13 @@ Notes:
   with `seed=1000`, they were `60.0`, `80.0`, `10.0`, `20.0`, `10.0`.
   This means the suite seed changes individual task samples but does not
   explain the gap to the paper's `60.0%` very-hard aggregate on its own.
+- The actual 400-step horizon patch was a direct check of the checkpoint
+  `train_config.json` `episode_length=400` clue. The log confirmed
+  `Running rollout with at most 400 steps`, but the result was
+  `17/50 = 34.0%`, slightly below the same-condition 500-step standalone run
+  (`18/50 = 36.0%`). Per-task success was `60.0`, `60.0`, `20.0`, `20.0`,
+  and `10.0` for tasks `0..4`. This rules out episode horizon as the
+  standalone explanation for the Table 2 very-hard parity gap.
 - Checkpoint processor stats were inspected in
   `lerobot/smolvla_metaworld`. Although `policy_preprocessor.json` lists
   `observation.state` with feature shape `[6]`, the saved normalizer tensors
@@ -583,6 +591,9 @@ Artifacts:
 | top-camera negative-control command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z/run_command.txt` |
 | MT1 seed1000 negative-control metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z/eval_info.json` |
 | MT1 seed1000 negative-control command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z/run_command.txt` |
+| actual 400-step horizon metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_actual400_20260607T134500Z/eval_info.json` |
+| actual 400-step horizon command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_actual400_20260607T134500Z/run_command.txt` |
+| actual 400-step horizon patch backup | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_actual400_20260607T134500Z/metaworld.py.before_actual400_patch` |
 | checkpoint preprocessor stats inspected on RunPod | `/workspace/physical-ai/hf_home/hub/models--lerobot--smolvla_metaworld/snapshots/cd6778d2cfa724c1bf5fc637490548e54d81dc4c/policy_preprocessor_step_5_normalizer_processor.safetensors` |
 | dataset metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/info.json` |
 | dataset task metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/tasks.parquet` |
