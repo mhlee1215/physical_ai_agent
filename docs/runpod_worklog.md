@@ -2195,3 +2195,84 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   success rate, likely suspects are source-demo type, control-mode/action
   replay semantics, exact STARE idle-action filtering, and training-protocol
   mismatch rather than evaluation sample count.
+
+### ManiSkill3 LiftPegUpright Qpos Filter 0.05 SFT
+
+- Status: completed on RunPod; five-seed 300ep results fetched locally; Pod
+  left running for follow-up parity/debug work.
+- Purpose:
+  add the fourth STARE-style non-LIBERO SmolVLA fine-tuning row.
+- Reference:
+  STARE Table 2 reports `LiftPegUpright-v1` SmolVLA fine-tuning success
+  `16.3%`. Appendix B.5 reports horizon `30`, `300` episodes, and `5` random
+  seeds.
+- Source audit:
+  official `LiftPegUpright-v1` RL demos include `pd_ee_delta_pose` with `1015`
+  successes and `pd_joint_delta_pos` with `993` successes. The
+  `pd_joint_delta_pos` source was selected to match the current 8D action
+  SFT/eval lane.
+- Replay audit:
+  - `pd_ee_delta_pose` count100 no-env-state replay:
+    `3/100`, `3.0%`.
+  - `pd_joint_delta_pos` count100 no-env-state replay:
+    `0/100`, `0.0%`.
+  - `pd_ee_delta_pose` count100 `--use-env-states` replay:
+    `90/100`, `90.0%`.
+  - `pd_joint_delta_pos` count100 `--use-env-states` replay:
+    `93/100`, `93.0%`.
+  - full selected `pd_joint_delta_pos` `--use-env-states` replay:
+    `878/993`, `88.42%` demos saved.
+- LeRobot conversion:
+  - output:
+    `/root/physical-ai/tmp_lerobot_stare_liftpeg_rgb_count878_rgbmode_128_use_env_states`
+  - result:
+    `878` episodes, `35726` frames.
+  - features:
+    action shape `[8]`, state shape `[9]`, camera `base_camera`.
+- Qpos idle-filtered dataset:
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_liftpeg_rgb_count878_rgbmode_128_use_env_states_qpos_filter005`
+  - threshold:
+    qpos delta `0.05`.
+  - size:
+    `878` episodes, `34663` frames, mean length `39.48`, p50 `41`, p90 `48`,
+    max `50`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_liftpeg_count878_qpos_filter005_9000step`
+  - checkpoint:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_liftpeg_count878_qpos_filter005_9000step/checkpoints/009000/pretrained_model`
+  - base:
+    `lerobot/smolvla_base`
+  - steps:
+    `9000`
+  - rename map:
+    `base_camera -> camera1`
+  - training completion:
+    `9000/9000`.
+- Evaluation:
+  - 10ep smoke seed `1000`:
+    `0/10`, `0.0%`.
+  - 300ep seed `1000`:
+    `0/300`, `0.0%`.
+  - 300ep seed `1001`:
+    `0/300`, `0.0%`.
+  - 300ep seed `1002`:
+    `0/300`, `0.0%`.
+  - 300ep seed `1003`:
+    `0/300`, `0.0%`.
+  - 300ep seed `1004`:
+    `0/300`, `0.0%`.
+  - five-seed aggregate:
+    `0/1500`, `0.0%`.
+- Local fetched bundle:
+  `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed`.
+- Delta:
+  five-seed aggregate is `0.0%` vs STARE LiftPegUpright `16.3%`, a `-16.3pp`
+  gap.
+- Interpretation:
+  this is now a paper-scale row by episode and seed count, but not a parity
+  result. Because the selected source required `--use-env-states` and still
+  dropped `115` of `993` episodes, likely suspects are exact source-demo
+  selection, control-mode/action replay semantics, STARE's idle-action filter,
+  and training-protocol details rather than evaluation sample count.
