@@ -475,6 +475,7 @@ the largest gap against SmolVLA Table 2 (`20.0%` ours versus `60.0%` reported).
 | `metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z` | Run LeRobot `v0.5.1` source instead of current HEAD to test version drift; Python 3.12 required a SmolVLA-only patch that removes unrelated GR00T registry imports | 6/50, 12.0% | -8.0 | -48.0 |
 | `metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z` | Match the released checkpoint `train_config.json` eval hints more closely: `seed=1000`, `empty_cameras=0`, `eval.n_episodes=50`, `eval.batch_size=50`; `very_hard` only | 61/250, 24.4% | +4.4 | -35.6 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z` | Temporarily patch the LeRobot Meta-World wrapper from `corner2` to `top` because the feature key is named `pixels/top`; restore source after run | 0/50, 0.0% | -20.0 | -60.0 |
+| `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z` | Temporarily patch Meta-World suite construction from `MT1(..., seed=42)` to `seed=1000` while keeping eval seed, batch size, camera, and empty-camera settings fixed | 18/50, 36.0% | +16.0 | -24.0 |
 
 Notes:
 
@@ -519,6 +520,13 @@ Notes:
   This rules out the simple hypothesis that the checkpoint feature key
   `pixels/top` implies the released policy should be evaluated with the actual
   Meta-World top camera.
+- The temporary `MT1(..., seed=1000)` patch was also a negative control for
+  overall parity. It matched the same-condition `MT1(..., seed=42)` standalone
+  run at `18/50 = 36.0%`. The per-task distribution changed only slightly:
+  with `seed=42`, tasks `0..4` were `60.0`, `80.0`, `30.0`, `10.0`, `0.0`;
+  with `seed=1000`, they were `60.0`, `80.0`, `10.0`, `20.0`, `10.0`.
+  This means the suite seed changes individual task samples but does not
+  explain the gap to the paper's `60.0%` very-hard aggregate on its own.
 
 Artifacts:
 
@@ -540,6 +548,8 @@ Artifacts:
 | train-config-style 250ep representative video | `_workspace/runpod_results/metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z/videos/very_hard_0/eval_episode_0.mp4` |
 | top-camera negative-control metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z/eval_info.json` |
 | top-camera negative-control command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z/run_command.txt` |
+| MT1 seed1000 negative-control metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z/eval_info.json` |
+| MT1 seed1000 negative-control command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z/run_command.txt` |
 
 #### Full MT50 batch-size parity rerun
 
