@@ -73,6 +73,17 @@ class LiberoInEpisodeSmolVLAInstrumentedTest(TestCase):
             "semantic_push_receptacle",
         )
 
+    def test_format_semantic_reach_then_push_intervention_type(self) -> None:
+        self.assertEqual(
+            format_intervention_type(
+                mode="semantic_reach_then_push",
+                intervention_scale=1.0,
+                action_clamp_norm=1.0,
+                smooth_alpha=0.5,
+            ),
+            "semantic_reach_then_push",
+        )
+
     def test_semantic_no_progress_trigger(self) -> None:
         history = [{"target_pos": [0.0, 0.0, 0.0]} for _ in range(6)]
 

@@ -1598,3 +1598,33 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   closer to the object. However, it has not yet produced benchmark success or
   action-step efficiency improvement. The next useful intervention should be
   contact-aware placement/release rather than generic reach or push vectors.
+
+### LIBERO Goal Task 6 Reach-Then-Push Phase Intervention
+
+- Added `semantic_reach_then_push` intervention mode.
+- Mechanism:
+  - trigger on late semantic no-progress
+  - if EEF-to-target is above a contact threshold, move EEF toward the target
+  - once EEF-to-target is below the threshold, push the target toward the bowl
+- RunPod matrix:
+  - suite: `libero_goal`
+  - task id: `6`
+  - seed: `1200`
+  - baseline: `task6_late_probe_none`
+- Result:
+  - all phase-intervention conditions still failed benchmark success at `300`
+    action steps
+  - `task6_phase_push_c06_g2p5_close`: final EEF-to-target improved from
+    `0.080481` to `0.059052`, but object placement did not improve
+  - `task6_phase_push_c08_g2p5_close`: first tiny object-placement improvement,
+    minimum target-to-bowl distance improved from `0.062636` to `0.062615`
+  - open-gripper variants worsened final target-to-bowl distance
+- Report:
+  - `docs/research/libero_goal_task6_phase_intervention_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task6_phase_intervention_matrix_summary_2026_06_07.json`
+- Interpretation:
+  this is still not a positive task-level agentic result. It is the first
+  diagnostic evidence that a contact-seeking phase intervention can nudge the
+  object-placement metric in the desired direction. The next intervention
+  should use raw MuJoCo contact state or a short placement macro rather than a
+  single vector push.
