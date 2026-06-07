@@ -545,6 +545,13 @@ Notes:
   `stick-pull-v3 -> 44`, `stick-push-v3 -> 45`, and
   `pick-place-wall-v3 -> 32`. This rules out a simple very-hard task-id
   mismatch between the current LeRobot config and the dataset metadata.
+- Meta-World action clipping was probed on RunPod for representative
+  `very_hard` tasks. For `shelf-place-v3`, `disassemble-v3`, and
+  `stick-pull-v3`, stepping once from the same reset with large actions such as
+  `[10, -10, 10, 1]` produced the same next observation, reward, and info as
+  the clipped action `[1, -1, 1, 1]`. The same held for the negative direction.
+  This weakens the hypothesis that the dataset's large action statistics are
+  causing a simple action-scale mismatch during evaluation.
 
 Artifacts:
 
