@@ -467,6 +467,7 @@ the largest gap against SmolVLA Table 2 (`20.0%` ours versus `60.0%` reported).
 | `metaworld_smolvla_veryhard_10ep_seed1000_20260607T103256Z` | Try checkpoint/training seed `1000` as a reset-distribution candidate | 13/50, 26.0% | +6.0 | -34.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_empty0_20260607T104608Z` | Match checkpoint `empty_cameras=0` instead of padding missing `camera2/3` with blank images | 13/50, 26.0% | +6.0 | -34.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_20260607T105427Z` | Match `n_episodes=10` with `batch_size=10`, so each task uses one vectorized batch of seeds `1000..1009` | 18/50, 36.0% | +16.0 | -24.0 |
+| `metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z` | Run LeRobot `v0.5.1` source instead of current HEAD to test version drift; Python 3.12 required a SmolVLA-only patch that removes unrelated GR00T registry imports | 6/50, 12.0% | -8.0 | -48.0 |
 
 Notes:
 
@@ -490,6 +491,13 @@ Notes:
 - `batch_size=10` improved the standalone `very_hard` split to `36.0%`, but a
   full MT50 rerun with the same setting did not preserve that improvement.
   Treat standalone split ablations as useful probes, not final parity numbers.
+- The LeRobot `v0.5.1` source check did not recover the reported `very_hard`
+  score. It ran after removing only unrelated GR00T top-level registry/import
+  paths that fail under Python 3.12 before SmolVLA evaluation starts. The
+  completed SmolVLA-only `v0.5.1` result was `6/50 = 12.0%`, worse than the
+  current HEAD seed-0 `very_hard` result (`20.0%`). This weakens the hypothesis
+  that the main parity gap is explained by moving from LeRobot `v0.5.1` to the
+  current LeRobot source alone.
 
 Artifacts:
 
@@ -503,6 +511,9 @@ Artifacts:
 | seed1000/empty0 command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_empty0_20260607T104608Z/run_command.txt` |
 | seed1000/batch10/empty0 very hard metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_20260607T105427Z/eval_info.json` |
 | seed1000/batch10/empty0 very hard command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_20260607T105427Z/run_command.txt` |
+| v0.5.1 SmolVLA-only very hard metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z/eval_info.json` |
+| v0.5.1 SmolVLA-only very hard command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z/run_command.txt` |
+| v0.5.1 SmolVLA-only representative video | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z/videos/very_hard_0/eval_episode_0.mp4` |
 
 #### Full MT50 batch-size parity rerun
 
