@@ -2054,3 +2054,75 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   `62.2%`. Further improvement likely requires matching STARE's exact
   action-filter/source-demo protocol rather than sweeping qpos thresholds
   alone.
+
+### ManiSkill3 StackCube Qpos Filter 0.05 Two-Camera SFT
+
+- Status: completed on RunPod; results fetched locally; Pod left running for
+  follow-up parity work.
+- Purpose:
+  add a second STARE-style non-LIBERO SmolVLA fine-tuning row after PushCube.
+- Reference:
+  STARE Table 2 reports `StackCube-v1` SmolVLA fine-tuning success `12.7%`.
+  Appendix B.5 reports horizon `30`, `300` episodes, and `5` random seeds.
+- Repo/runtime note:
+  the eval script was updated so StackCube observations populate both
+  `base_camera/camera1` and `hand_camera/camera2`. This avoids evaluating a
+  two-camera checkpoint with a zero-filled wrist/hand camera stream.
+- RGB replay:
+  - source:
+    `/root/physical-ai/tmp_maniskill_official_demos/StackCube-v1/motionplanning/trajectory.h5`
+  - output:
+    `/root/physical-ai/tmp_maniskill_official_demos/StackCube-v1/motionplanning/trajectory.rgb.pd_joint_pos.physx_cpu.h5`
+  - result:
+    `999/1000` demos saved successfully; one replay episode was skipped, so
+    this is close to but not exact `1000`-trajectory parity.
+- LeRobot conversion:
+  - output:
+    `/root/physical-ai/tmp_lerobot_stare_stackcube_rgb_count999_rgbmode_128_no_env_states`
+  - result:
+    `999` episodes, `107420` frames.
+  - features:
+    action shape `[8]`, state shape `[9]`, cameras `base_camera` and
+    `hand_camera`.
+- Qpos idle-filtered dataset:
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_stackcube_rgb_count999_rgbmode_128_qpos_filter005`
+  - threshold:
+    qpos delta `0.05`.
+  - size:
+    `999` episodes, `26728` frames, mean length `26.8`, p50 `26`, p90 `34`,
+    max `76`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_stackcube_count999_qpos_filter005_9000step_2cam`
+  - checkpoint:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_stackcube_count999_qpos_filter005_9000step_2cam/checkpoints/009000/pretrained_model`
+  - base:
+    `lerobot/smolvla_base`
+  - steps:
+    `9000`
+  - rename map:
+    `base_camera -> camera1`, `hand_camera -> camera2`
+  - training completion:
+    `9000/9000`, final logged loss `0.092`.
+- Evaluation:
+  - 1ep smoke:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/stackcube_count999_qpos_filter005_9000step_2cam_smoke_1ep_seed1000`
+    scored `0/1`, `0.0%`.
+  - 300ep horizon-30 eval, seed `1000`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/stackcube_count999_qpos_filter005_9000step_2cam_horizon30_eval_300ep_seed1000`
+    scored `1/300`, `0.33%`.
+  - 100ep horizon-100 debug eval, seed `1000`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/stackcube_count999_qpos_filter005_9000step_2cam_horizon100_eval_100ep_seed1000`
+    scored `0/100`, `0.0%`.
+- Local fetched bundle:
+  `_workspace/runpod_results/20260607_maniskill3_stackcube_qpos005_9000_2cam`.
+- Delta:
+  paper-horizon seed `1000` is `0.33%` vs STARE StackCube `12.7%`, a
+  `-12.37pp` gap.
+- Interpretation:
+  this is a real table-backed row but not a parity result. The horizon-100
+  debug run also failed, so the low StackCube score is not merely a
+  short-horizon timing issue. Continue by checking StackCube source trajectory,
+  action/control-mode details, exact idle-action filtering, and whether the
+  skipped replay episode or two-camera preprocessing differs from STARE.
