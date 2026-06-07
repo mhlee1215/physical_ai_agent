@@ -90,6 +90,28 @@ python3 scripts/build_libero_in_episode_intervention_readiness_report.py \
   --output-json docs/research/libero_in_episode_intervention_readiness_summary_2026_06_07.json
 ```
 
+## First Executable Instrumentation Gate
+
+The first repo-local gate is a no-dependency smoke that proves the trace
+contract before touching LeRobot internals:
+
+```bash
+PYTHONPATH=src:. python3 scripts/run_libero_in_episode_instrumented_smoke.py \
+  --output-dir _workspace/libero_in_episode_smoke_20260607
+```
+
+Expected evidence:
+
+- `_workspace/libero_in_episode_smoke_20260607/in_episode_metrics.json`
+- `_workspace/libero_in_episode_smoke_20260607/in_episode_report.md`
+- `_workspace/libero_in_episode_smoke_20260607/in_episode_trace.jsonl`
+
+The smoke uses a toy LIBERO-like step loop that intentionally stagnates, then
+fires an online verifier before terminal reset. The intervention scales one
+action in-episode, after which the episode can reach environment success. This
+does not claim LIBERO task improvement yet; it proves the logging and control
+contract needed for the next RunPod implementation.
+
 ## Experiment Table Shape
 
 | Condition | Reset budget | In-episode intervention | Success | Attempts | Resets | Eval min | Success/attempt | Success/eval min | Action steps |
