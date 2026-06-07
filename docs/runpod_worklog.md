@@ -1420,3 +1420,137 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   cost or eval-time cost in this one-episode smoke. This is useful negative
   evidence: the project now has a same-task, same-seed, cost-normalized
   comparison protocol, but not yet a positive in-episode intervention result.
+
+### Real LIBERO Same-Seed Spike Intervention Matrix
+
+- Extended real-path wrapper:
+  `scripts/run_libero_in_episode_smolvla_instrumented.py`.
+- Added verifier/intervention options:
+  - trigger modes: `fixed_step`, `action_norm_threshold`,
+    `fixed_or_action_norm`
+  - intervention modes: `none`, `scale`, `clamp`, `smooth`
+  - per-step trace records pre/post intervention action norms
+- RunPod task:
+  - policy: `lerobot/smolvla_libero`
+  - suite: `libero_goal`
+  - task ids: `[0]`
+  - seed: `1200`
+  - episodes: `1`
+  - `n_action_steps`: `15`
+- Local archive:
+  `_workspace/runpod_results/in_episode_20260607/libero_in_episode_matrix_20260607T035853_no_videos.tar.gz`
+- Report:
+  `docs/research/libero_in_episode_smolvla_spike_intervention_matrix_2026_06_07.md`
+- Result:
+  - `hook_none`: success `true`, action steps `131`, eval seconds `7.4206`
+  - `spike_clamp145_to120`: success `true`, action steps `135`, delta `+4`
+  - `spike_smooth145_a070`: success `true`, action steps `132`, delta `+1`
+  - `spike_scale145_085`: success `true`, action steps `134`, delta `+3`
+- Interpretation:
+  conditional action-norm spike interventions preserved success but did not
+  improve action-step efficiency on this same-seed one-task matrix. This is a
+  stronger negative result than the earlier fixed-step scale smoke: the
+  in-episode protocol is real and cost-normalized, but the current simple
+  action-space interventions are not yet a positive agentic improvement.
+
+### LIBERO Goal Task Scout and Task 3 Intervention Follow-Up
+
+- Ran a 5-task baseline scout with no in-episode intervention:
+  - suite: `libero_goal`
+  - task ids: `0, 1, 2, 3, 4`
+  - seed: `1200`
+  - episodes per task: `1`
+- Scout result:
+  - task `0`: success `true`, action steps `131`
+  - task `1`: success `true`, action steps `85`
+  - task `2`: success `true`, action steps `87`
+  - task `3`: success `true`, action steps `177`
+  - task `4`: success `true`, action steps `90`
+- Task `3` was selected for follow-up because it was the longest successful
+  rollout in the scout.
+- Task `3` baseline action-norm spikes were concentrated at steps `148-156`
+  with threshold `>=1.45`, suggesting a late execution/approach phase rather
+  than early instability.
+- Task `3` intervention follow-up:
+  - `task3_hook_none`: success `true`, action steps `177`, eval seconds
+    `8.5576`
+  - `task3_spike_scale145_110`: success `true`, action steps `178`, delta
+    `+1`
+  - `task3_spike_scale145_120`: success `true`, action steps `177`, delta
+    `+0`
+  - `task3_spike_clamp145_to135`: success `true`, action steps `177`, delta
+    `+0`
+  - `task3_spike_smooth145_a050`: success `true`, action steps `177`, delta
+    `+0`
+- Reports:
+  - `docs/research/libero_goal_task3_in_episode_intervention_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task3_in_episode_intervention_matrix_summary_2026_06_07.json`
+- Interpretation:
+  task `3` confirms the same pattern: simple action-space interventions
+  preserve success but do not yet reduce action-step cost. The next positive
+  candidate should move beyond scalar action post-processing toward a semantic
+  verifier/intervention, such as detecting no-progress windows and forcing a
+  policy reset/action-queue refresh inside the episode, or selecting known weak
+  seeds/tasks where baseline fails before comparing intervention variants.
+
+### LIBERO Goal Task 3 Policy Reset Matrix
+
+- Added `policy_reset` intervention mode to the real-path wrapper.
+- Mechanism:
+  when the verifier triggers, call `policy.reset()` inside the same episode
+  and reselect an action from the same observation before `env.step()`.
+- This is closer to the intended agentic physical AI loop than scalar action
+  post-processing because it refreshes the policy action queue/state without
+  resetting the environment.
+- Task:
+  - suite: `libero_goal`
+  - task id: `3`
+  - seed: `1200`
+  - baseline action steps: `177`
+- Result:
+  - `task3_reset_step80`: success `true`, action steps `178`, delta `+1`
+  - `task3_reset_step120`: success `true`, action steps `177`, delta `+0`
+  - `task3_reset_step145`: success `true`, action steps `177`, delta `+0`
+  - `task3_reset_norm145`: success `true`, action steps `177`, delta `+0`
+- Report:
+  - `docs/research/libero_goal_task3_policy_reset_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task3_policy_reset_matrix_summary_2026_06_07.json`
+- Interpretation:
+  in-episode policy reset/queue refresh preserved benchmark success but did not
+  reduce action-step cost on the selected long successful rollout. This is a
+  verified negative/neutral result, not a positive improvement. The next
+  experiment should first identify weak seeds/tasks where baseline fails or
+  times out, then compare policy reset or semantic retry against that fixed
+  subset.
+
+### LIBERO Goal Task 5-9 Scout and Task 6 Failure Intervention Matrix
+
+- Ran a second no-intervention scout over `libero_goal` task ids `5-9`.
+- Scout result:
+  - task `5`: success `true`, action steps `130`
+  - task `6`: success `false`, action steps `300`
+  - task `7`: success `true`, action steps `86`
+  - task `8`: success `true`, action steps `78`
+  - task `9`: success `true`, action steps `142`
+- Task `6` is the first identified same-seed baseline failure case in the
+  in-episode intervention search.
+- Task `6` baseline action-norm distribution:
+  - max norm: `1.4562`
+  - threshold `>=1.35`: `48` trigger candidates
+  - threshold `>=1.45`: `1` trigger candidate
+- Task `6` intervention matrix:
+  - `task6_hook_none`: success `false`, action steps `300`
+  - `task6_reset_step30`: success `false`, action steps `300`
+  - `task6_reset_step60`: success `false`, action steps `300`
+  - `task6_reset_step120`: success `false`, action steps `300`
+  - `task6_reset_norm135`: success `false`, action steps `300`
+  - `task6_smooth_norm135_a050`: success `false`, action steps `300`
+- Report:
+  - `docs/research/libero_goal_task6_failure_intervention_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task6_failure_intervention_matrix_summary_2026_06_07.json`
+- Interpretation:
+  this is a verified negative result on a true baseline failure case. The
+  current in-episode interventions can preserve success on successful tasks,
+  but they do not recover this failure. To get a positive paper-facing result,
+  the next intervention likely needs semantic state feedback from LIBERO/MuJoCo
+  info or rendered observations, not only action norm or policy queue reset.

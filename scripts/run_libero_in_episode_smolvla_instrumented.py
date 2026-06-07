@@ -13,7 +13,32 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run lerobot-eval with an instrumented in-episode rollout hook.")
     parser.add_argument("--trace-path", type=Path, required=True)
     parser.add_argument("--intervention-step", type=int, default=3)
+    parser.add_argument(
+        "--trigger-mode",
+        choices=("fixed_step", "action_norm_threshold", "fixed_or_action_norm"),
+        default="fixed_step",
+        help="Verifier trigger rule used before env.step().",
+    )
+    parser.add_argument(
+        "--action-norm-threshold",
+        type=float,
+        default=1.0,
+        help="Trigger threshold for action-norm verifier modes.",
+    )
+    parser.add_argument(
+        "--intervention-mode",
+        choices=("none", "scale", "clamp", "smooth", "policy_reset"),
+        default="scale",
+        help="Action-space intervention applied after the verifier triggers.",
+    )
     parser.add_argument("--intervention-scale", type=float, default=1.0)
+    parser.add_argument("--action-clamp-norm", type=float, default=1.0)
+    parser.add_argument(
+        "--smooth-alpha",
+        type=float,
+        default=0.5,
+        help="For smooth mode: alpha * previous_action + (1 - alpha) * current_action.",
+    )
     args, lerobot_args = parser.parse_known_args()
 
     args.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -24,13 +49,27 @@ def main() -> None:
     lerobot_eval.rollout = build_instrumented_rollout(
         trace_path=args.trace_path,
         intervention_step=args.intervention_step,
+        trigger_mode=args.trigger_mode,
+        action_norm_threshold=args.action_norm_threshold,
+        intervention_mode=args.intervention_mode,
         intervention_scale=args.intervention_scale,
+        action_clamp_norm=args.action_clamp_norm,
+        smooth_alpha=args.smooth_alpha,
     )
     sys.argv = ["lerobot-eval", *lerobot_args]
     lerobot_eval.main()
 
 
-def build_instrumented_rollout(trace_path: Path, intervention_step: int, intervention_scale: float):
+def build_instrumented_rollout(
+    trace_path: Path,
+    intervention_step: int,
+    trigger_mode: str,
+    action_norm_threshold: float,
+    intervention_mode: str,
+    intervention_scale: float,
+    action_clamp_norm: float,
+    smooth_alpha: float,
+):
     def instrumented_rollout(
         env,
         policy,
@@ -65,6 +104,7 @@ def build_instrumented_rollout(trace_path: Path, intervention_step: int, interve
         all_successes = []
         all_dones = []
         trace_records: list[dict[str, Any]] = []
+        previous_action = None
 
         step = 0
         done = np.array([False] * env.num_envs)
@@ -98,15 +138,48 @@ def build_instrumented_rollout(trace_path: Path, intervention_step: int, interve
             action_transition = {ACTION: action}
             action_transition = env_postprocessor(action_transition)
             action = action_transition[ACTION]
+            policy_reset_reselected = False
 
-            verifier_triggered = step == intervention_step and not np.all(done)
+            pre_intervention_action_norm = float(torch.linalg.vector_norm(action).item())
+            verifier_triggered, verifier_reason = should_trigger_verifier(
+                step=step,
+                action_norm=pre_intervention_action_norm,
+                intervention_step=intervention_step,
+                trigger_mode=trigger_mode,
+                action_norm_threshold=action_norm_threshold,
+                is_done=bool(np.all(done)),
+            )
             intervention_type = None
-            if verifier_triggered:
-                intervention_type = f"scale_action_{intervention_scale:g}"
-                action = action * intervention_scale
+            if verifier_triggered and intervention_mode != "none":
+                intervention_type = format_intervention_type(
+                    mode=intervention_mode,
+                    intervention_scale=intervention_scale,
+                    action_clamp_norm=action_clamp_norm,
+                    smooth_alpha=smooth_alpha,
+                )
+                if intervention_mode == "scale":
+                    action = action * intervention_scale
+                elif intervention_mode == "clamp":
+                    action = clamp_action_norm(action, action_clamp_norm)
+                elif intervention_mode == "smooth":
+                    if previous_action is not None:
+                        action = smooth_alpha * previous_action + (1.0 - smooth_alpha) * action
+                    else:
+                        intervention_type = "smooth_skipped_no_previous_action"
+                elif intervention_mode == "policy_reset":
+                    policy.reset()
+                    with torch.inference_mode():
+                        action = policy.select_action(observation)
+                    action = postprocessor(action)
+                    action_transition = {ACTION: action}
+                    action_transition = env_postprocessor(action_transition)
+                    action = action_transition[ACTION]
+                    policy_reset_reselected = True
+            post_intervention_action_norm = float(torch.linalg.vector_norm(action).item())
 
             action_numpy = action.to("cpu").numpy()
             assert action_numpy.ndim == 2, "Action dimensions should be (batch, action_dim)"
+            previous_action = action.detach().clone()
 
             observation, reward, terminated, truncated, info = env.step(action_numpy)
             if render_callback is not None:
@@ -136,14 +209,17 @@ def build_instrumented_rollout(trace_path: Path, intervention_step: int, interve
                     "step": step,
                     "action_shape": list(action_numpy.shape),
                     "action_norm": float(np.linalg.norm(action_numpy)),
+                    "pre_intervention_action_norm": pre_intervention_action_norm,
+                    "post_intervention_action_norm": post_intervention_action_norm,
                     "reward": _tolist(reward),
                     "terminated": _tolist(terminated),
                     "truncated": _tolist(truncated),
                     "done": _tolist(done),
                     "successes": [bool(value) for value in successes],
                     "verifier_triggered": bool(verifier_triggered),
-                    "verifier_reason": "timeout_risk_step_threshold" if verifier_triggered else "not_triggered",
+                    "verifier_reason": verifier_reason,
                     "intervention_type": intervention_type,
+                    "policy_reset_reselected": policy_reset_reselected,
                 }
             )
 
@@ -177,6 +253,13 @@ def build_instrumented_rollout(trace_path: Path, intervention_step: int, interve
                         "event": "rollout_summary",
                         "seeds": list(seeds) if seeds else None,
                         "max_steps": max_steps,
+                        "trigger_mode": trigger_mode,
+                        "action_norm_threshold": action_norm_threshold,
+                        "intervention_mode": intervention_mode,
+                        "intervention_step": intervention_step,
+                        "intervention_scale": intervention_scale,
+                        "action_clamp_norm": action_clamp_norm,
+                        "smooth_alpha": smooth_alpha,
                         "action_step_count": len(trace_records),
                         "verifier_trigger_count": sum(1 for record in trace_records if record["verifier_triggered"]),
                         "intervention_count": sum(1 for record in trace_records if record["intervention_type"]),
@@ -194,6 +277,60 @@ def build_instrumented_rollout(trace_path: Path, intervention_step: int, interve
         return ret
 
     return instrumented_rollout
+
+
+def should_trigger_verifier(
+    *,
+    step: int,
+    action_norm: float,
+    intervention_step: int,
+    trigger_mode: str,
+    action_norm_threshold: float,
+    is_done: bool,
+) -> tuple[bool, str]:
+    if is_done:
+        return False, "episode_done"
+    fixed_step = step == intervention_step
+    action_norm_spike = action_norm >= action_norm_threshold
+    if trigger_mode == "fixed_step" and fixed_step:
+        return True, "fixed_step_threshold"
+    if trigger_mode == "action_norm_threshold" and action_norm_spike:
+        return True, "action_norm_threshold"
+    if trigger_mode == "fixed_or_action_norm":
+        if fixed_step and action_norm_spike:
+            return True, "fixed_step_and_action_norm_threshold"
+        if fixed_step:
+            return True, "fixed_step_threshold"
+        if action_norm_spike:
+            return True, "action_norm_threshold"
+    return False, "not_triggered"
+
+
+def clamp_action_norm(action: Any, max_norm: float) -> Any:
+    if max_norm <= 0:
+        raise ValueError("--action-clamp-norm must be positive")
+    norm = action.norm()
+    if float(norm.item()) <= max_norm:
+        return action
+    return action * (max_norm / norm.clamp_min(1e-8))
+
+
+def format_intervention_type(
+    *,
+    mode: str,
+    intervention_scale: float,
+    action_clamp_norm: float,
+    smooth_alpha: float,
+) -> str:
+    if mode == "scale":
+        return f"scale_action_{intervention_scale:g}"
+    if mode == "clamp":
+        return f"clamp_action_norm_{action_clamp_norm:g}"
+    if mode == "smooth":
+        return f"smooth_action_alpha_{smooth_alpha:g}"
+    if mode == "policy_reset":
+        return "policy_reset_reselect_action"
+    return mode
 
 
 def _tolist(value: Any) -> Any:
