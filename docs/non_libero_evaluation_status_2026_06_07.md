@@ -174,9 +174,28 @@ but it is **not** directly comparable to a released SmolVLA checkpoint rollout:
 we would need task-specific SFT data/training and a working ManiSkill3 runtime
 before claiming parity.
 
+Protocol details used for current parity debugging:
+
+- Appendix B.5 reports ManiSkill3 evaluation with horizon `30`, `300`
+  episodes, and `5` random seeds.
+- Appendix C.2 reports filtering idle actions before training.
+- Therefore, raw official-demo SFT numbers at horizon `100` are debugging
+  evidence only; the paper-comparable lane should prioritize horizon `30` and
+  filtered or otherwise time-compressed trajectories.
+
 Reference:
 
 - https://openreview.net/attachment?id=qBcgyxDeMM&name=pdf
+- https://github.com/haosulab/ManiSkill
+- https://github.com/haosulab/ManiSkill/blob/main/mani_skill/envs/tasks/tabletop/push_cube.py
+
+Source-code audit note:
+
+A quick public web search found the STARE paper PDF and the official ManiSkill3
+task source, but did not find a public STARE repository that exposes the exact
+SmolVLA SFT data filtering, train command, or ManiSkill3 evaluation seeds. Until
+that source appears, report this lane as a close-protocol reproduction attempt,
+not as an exact reproduction.
 
 RunPod runtime audit:
 
@@ -283,6 +302,34 @@ SFT/evaluation over `StackCube-v1`, `PushCube-v1`, `PullCube-v1`, and
 `LiftPegUpright-v1`, then side-by-side comparison with STARE Table 2. The
 paper-facing caveat is that the official data source/control mode, camera set,
 and exact training split/protocol must be declared.
+
+PushCube SFT parity status:
+
+| Run | Train data | Train steps | Eval episodes | Horizon | Success | Delta vs STARE PushCube `86.3` |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| raw count1000 SFT | official-demo replay, `68978` frames | 9000 | 50 | 100 | `58.0%` | `-28.3pp` |
+| raw count1000 SFT | same checkpoint | 9000 | 50 | 30 | `0.0%` | `-86.3pp` |
+| raw count1000 longer SFT | official-demo replay, `68978` frames | 27000 | 50 | 100 | `52.0%` | `-34.3pp` |
+| qpos idle-filtered count1000 SFT | official-demo replay filtered at qpos delta `0.04`, `25104` frames | 9000 | 50 | 30 | `40.0%` | `-46.3pp` |
+| qpos idle-filtered count1000 SFT | official-demo replay filtered at qpos delta `0.05`, `21802` frames | 9000 | 50 | 30 | `68.0%` | `-18.3pp` |
+| qpos idle-filtered count1000 SFT | same checkpoint | 9000 | 300 | 30 | `60.7%` | `-25.6pp` |
+| qpos idle-filtered count1000 SFT | same checkpoint, seeds `1000..1004` | 9000 | 1500 total | 30 | `62.2%` (`933/1500`) | `-24.1pp` |
+| qpos idle-filtered count1000 SFT | official-demo replay filtered at qpos delta `0.06`, `18850` frames | 9000 | 50 | 30 | `62.0%` | `-24.3pp` |
+
+Interpretation:
+
+Fine-tuning here is a baseline-calibration step, not the agentic contribution.
+The useful result is that STARE-style idle/action filtering materially changed
+the outcome: the raw 9000-step checkpoint collapsed to `0.0%` under horizon
+`30`, while qpos-filtered SFT recovered to `62.2%` over five 300-episode
+seeds, matching STARE's reported seed count. The
+`0.04` threshold ablation was negative despite keeping more frames, so looser
+filtering is not the likely fix. The `0.06` threshold improved over `0.04` but
+still trailed `0.05` on the same 50-episode check, so the current best qpos
+threshold remains `0.05`. The remaining gap to `86.3%` is still too large for
+a parity claim, so the next debug target is closer reproduction of STARE's
+exact filtering/source trajectory protocol before expanding this lane to
+StackCube, PullCube, and LiftPegUpright.
 
 Artifacts:
 
