@@ -112,6 +112,30 @@ action in-episode, after which the episode can reach environment success. This
 does not claim LIBERO task improvement yet; it proves the logging and control
 contract needed for the next RunPod implementation.
 
+## First Real LIBERO/SmolVLA Hook Smoke
+
+RunPod smoke report:
+`docs/research/libero_in_episode_smolvla_smoke_2026_06_07.md`
+
+Result:
+
+- suite/task: `libero_goal`, task id `[0]`
+- episodes: `1`
+- policy: `lerobot/smolvla_libero`
+- benchmark success: `true`
+- action steps: `131`
+- verifier triggers: `1`
+- interventions: `1`
+- environment resets: `1`
+- eval seconds: `7.3373`
+- success/action-step: `0.007634`
+
+The real smoke monkeypatches the LeRobot `rollout()` function and records
+per-step action metadata plus an in-episode intervention marker. The
+intervention scale was `1.0`, so this is a no-op hook validation, not an
+improvement claim. The next experiment must compare no-op hook against a
+non-trivial intervention under fixed task/seed/action budget.
+
 ## Experiment Table Shape
 
 | Condition | Reset budget | In-episode intervention | Success | Attempts | Resets | Eval min | Success/attempt | Success/eval min | Action steps |

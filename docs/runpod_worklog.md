@@ -1373,3 +1373,30 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   this is not a LIBERO benchmark result yet. It proves the in-episode logging
   contract: verifier trigger and intervention occur before terminal reset, and
   the result reports action-step-normalized cost.
+
+### Real LIBERO/SmolVLA In-Episode Hook Smoke
+
+- Added real-path wrapper:
+  `scripts/run_libero_in_episode_smolvla_instrumented.py`.
+- Method:
+  monkeypatch LeRobot `rollout()` at runtime, keep the standard
+  `lerobot-eval` environment/policy setup, and append per-step trace rows.
+- RunPod command shape:
+  `python /tmp/run_libero_in_episode_smolvla_instrumented.py --trace-path ... --intervention-step 3 --intervention-scale 1.0 --output_dir=... --policy.path=lerobot/smolvla_libero --env.type=libero --env.task=libero_goal --env.task_ids=[0] --eval.n_episodes=1 ...`
+- Remote root:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/libero_in_episode_smolvla_smoke_20260607T034632`
+- Local archive:
+  `_workspace/runpod_results/in_episode_20260607/libero_in_episode_smolvla_smoke_20260607T034632_no_videos.tar.gz`
+- Result:
+  - benchmark success `true`
+  - action steps `131`
+  - verifier triggers `1`
+  - interventions `1`
+  - environment resets `1`
+  - eval seconds `7.3373`
+  - success/action-step `0.007634`
+- Claim boundary:
+  intervention scale was `1.0`, so this is a real LIBERO hook/logging smoke,
+  not an intervention-improvement result. The next comparison should run
+  no-op hook vs non-trivial intervention under identical task/seed/action
+  budget.
