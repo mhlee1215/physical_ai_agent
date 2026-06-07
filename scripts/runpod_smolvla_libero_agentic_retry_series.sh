@@ -15,6 +15,8 @@ BASE_SEEDS="${BASE_SEEDS:-1000 1001 1002}"
 BASELINE_ACTION_STEPS="${BASELINE_ACTION_STEPS:-15}"
 BLIND_RETRY_ACTION_STEPS="${BLIND_RETRY_ACTION_STEPS:-15}"
 ALTERNATE_RETRY_ACTION_STEPS="${ALTERNATE_RETRY_ACTION_STEPS:-10}"
+BLIND_CONDITION_NAME="${BLIND_CONDITION_NAME:-blind_new_seed}"
+ALTERNATE_CONDITION_NAME="${ALTERNATE_CONDITION_NAME:-alternate_steps$ALTERNATE_RETRY_ACTION_STEPS}"
 RETRY_SEED_OFFSET="${RETRY_SEED_OFFSET:-100}"
 POLICY_EMPTY_CAMERAS="${POLICY_EMPTY_CAMERAS:-0}"
 if [ -z "${LIBERO_CAMERA_NAME_MAPPING+x}" ]; then
@@ -43,7 +45,9 @@ cat > "$OUTPUT_ROOT/README.md" <<EOF
 - episodes_per_task: \`$LIBERO_N_EPISODES\`
 - base_seeds: \`$BASE_SEEDS\`
 - baseline_action_steps: \`$BASELINE_ACTION_STEPS\`
+- blind_condition: \`$BLIND_CONDITION_NAME\`
 - blind_retry_action_steps: \`$BLIND_RETRY_ACTION_STEPS\`
+- alternate_condition: \`$ALTERNATE_CONDITION_NAME\`
 - alternate_retry_action_steps: \`$ALTERNATE_RETRY_ACTION_STEPS\`
 - retry_seed_offset: \`$RETRY_SEED_OFFSET\`
 - verifier: \`libero_benchmark_success_flag\`
@@ -52,9 +56,9 @@ cat > "$OUTPUT_ROOT/README.md" <<EOF
 
 ## Semantics
 
-- \`blind_new_seed\`: retry failed task/episode indexes with the same action
+- \`$BLIND_CONDITION_NAME\`: retry failed task/episode indexes with the same action
   horizon and a different seed.
-- \`alternate_steps10\`: retry failed task/episode indexes with
+- \`$ALTERNATE_CONDITION_NAME\`: retry failed task/episode indexes with
   \`n_action_steps=$ALTERNATE_RETRY_ACTION_STEPS\` and a different seed.
 - This is an episode-level retry wrapper, not an in-episode subgoal replanner.
 EOF
@@ -134,23 +138,23 @@ for base_seed in $BASE_SEEDS; do
 
   retry_seed=$((base_seed + RETRY_SEED_OFFSET))
 
-  blind_dir="$OUTPUT_ROOT/blind_new_seed_seed$base_seed"
+  blind_dir="$OUTPUT_ROOT/${BLIND_CONDITION_NAME}_seed$base_seed"
   blind_args="--policy.num_steps=10 --policy.n_action_steps=$BLIND_RETRY_ACTION_STEPS --policy.device=cuda --seed=$retry_seed"
-  echo "running blind_new_seed base_seed=$base_seed retry_seed=$retry_seed task_ids=$retry_task_ids"
+  echo "running $BLIND_CONDITION_NAME base_seed=$base_seed retry_seed=$retry_seed task_ids=$retry_task_ids"
   run_eval "$blind_dir/retry" "$retry_task_ids" "$blind_args"
   mkdir -p "$blind_dir/baseline" "$blind_dir/agentic"
   cp "$baseline_info" "$blind_dir/baseline/eval_info.json"
   cp "$plan_json" "$blind_dir/agentic/retry_plan.json"
-  aggregate_condition "blind_new_seed" "$base_seed" "$retry_seed" "$blind_dir/baseline/eval_info.json" "$blind_dir/retry/eval_logs/eval_info.json" "$blind_dir"
+  aggregate_condition "$BLIND_CONDITION_NAME" "$base_seed" "$retry_seed" "$blind_dir/baseline/eval_info.json" "$blind_dir/retry/eval_logs/eval_info.json" "$blind_dir"
 
-  alternate_dir="$OUTPUT_ROOT/alternate_steps10_seed$base_seed"
+  alternate_dir="$OUTPUT_ROOT/${ALTERNATE_CONDITION_NAME}_seed$base_seed"
   alternate_args="--policy.num_steps=10 --policy.n_action_steps=$ALTERNATE_RETRY_ACTION_STEPS --policy.device=cuda --seed=$retry_seed"
-  echo "running alternate_steps10 base_seed=$base_seed retry_seed=$retry_seed task_ids=$retry_task_ids"
+  echo "running $ALTERNATE_CONDITION_NAME base_seed=$base_seed retry_seed=$retry_seed task_ids=$retry_task_ids"
   run_eval "$alternate_dir/retry" "$retry_task_ids" "$alternate_args"
   mkdir -p "$alternate_dir/baseline" "$alternate_dir/agentic"
   cp "$baseline_info" "$alternate_dir/baseline/eval_info.json"
   cp "$plan_json" "$alternate_dir/agentic/retry_plan.json"
-  aggregate_condition "alternate_steps10" "$base_seed" "$retry_seed" "$alternate_dir/baseline/eval_info.json" "$alternate_dir/retry/eval_logs/eval_info.json" "$alternate_dir"
+  aggregate_condition "$ALTERNATE_CONDITION_NAME" "$base_seed" "$retry_seed" "$alternate_dir/baseline/eval_info.json" "$alternate_dir/retry/eval_logs/eval_info.json" "$alternate_dir"
 done
 
 PYTHONPATH="$PROJECT_DIR/src" "$PY312_VENV/bin/python" "$SCRIPT_DIR/build_agentic_retry_series_report.py" "$OUTPUT_ROOT"
