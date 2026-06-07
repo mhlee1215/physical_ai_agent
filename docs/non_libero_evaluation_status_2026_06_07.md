@@ -178,6 +178,39 @@ Reference:
 
 - https://openreview.net/attachment?id=qBcgyxDeMM&name=pdf
 
+RunPod runtime audit:
+
+An isolated RunPod env was created at
+`/root/physical-ai/envs/maniskill_py311`. It installed `mani_skill==3.0.1`,
+`sapien==3.0.3`, `gymnasium==1.3.0`, and `torch==2.12.0`. The runtime emitted
+warnings that system Vulkan libraries and ICD files were not found, but SAPIEN
+used its builtin Vulkan fallback and rendered successfully.
+
+Smoke result:
+
+| Env id | Reset | Step | Render |
+| --- | --- | --- | --- |
+| `PushCube-v1` | passed | passed | RGB tensor `[1, 512, 512, 3]` |
+| `PullCube-v1` | passed | passed | RGB tensor `[1, 512, 512, 3]` |
+| `StackCube-v1` | passed | passed | RGB tensor `[1, 512, 512, 3]` |
+| `LiftPegUpright-v1` | passed | passed | RGB tensor `[1, 512, 512, 3]` |
+
+Interpretation:
+
+The renderer/runtime blocker for the four selected ManiSkill3 table tasks is
+cleared on the current RunPod. The remaining blocker is policy comparability:
+the public reference row is `SmolVLA (fine-tuning)` with `1000` trajectory
+samples for SFT per task, not a released checkpoint rollout. The next step for
+this lane is therefore SFT data/training protocol setup, not immediate
+zero-shot SmolVLA evaluation.
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| ManiSkill3 install log | `_workspace/runpod_results/maniskill3_runtime_audit_20260607/install.log` |
+| ManiSkill3 reset/step/render smoke log | `_workspace/runpod_results/maniskill3_runtime_audit_20260607/smoke.log` |
+
 #### SafeVLA-Bench
 
 SafeVLA-Bench is a post-hoc safety layer over native LIBERO and RoboCasa-365
