@@ -2280,3 +2280,36 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   are exact source-demo selection, control-mode/action replay semantics,
   STARE's idle-action filter, and training-protocol details rather than
   evaluation sample count.
+
+### RunPod Cleanup and Meta-World Very-Hard Seed Sweep
+
+- Cleanup:
+  deleted five already-documented old/negative PushCube SFT checkpoints from
+  `/root/physical-ai/tmp_train_*`.
+- Disk result:
+  overlay moved from `50G/60G`, `84%` used to `43G/60G`, `72%` used.
+- Kept:
+  current qpos-filter `0.05` checkpoints for PushCube, StackCube, PullCube,
+  and LiftPegUpright.
+- Meta-World purpose:
+  test whether the very-hard gap to SmolVLA Table 2 can be explained by a
+  simple eval-seed/reset choice.
+- Fixed condition:
+  `lerobot/smolvla_metaworld`, `very_hard`, `batch_size=10`,
+  `empty_cameras=0`, `corner2`, 10 trials per task, 50 total episodes per seed.
+- Results:
+  - seed `1`: `14.0%`.
+  - seed `10`: `12.0%`.
+  - seed `42`: `14.0%`.
+  - seed `100`: `22.0%`.
+  - seed `500`: `30.0%`.
+  - seed `2000`: `16.0%`.
+  - prior matching seed `1000`: `36.0%`.
+- Local fetched bundle:
+  `_workspace/runpod_results/metaworld_veryhard_seed_sweep_20260607T231900Z`.
+- Interpretation:
+  seed/reset variation exists, but none of the tested seeds approach the paper
+  `very_hard` reference `60.0%`. The prior seed `1000` run remains the best
+  observed standalone setting at `36.0%`. This weakens the simple
+  eval-seed-only explanation and keeps task/protocol-specific reset details as
+  the leading Meta-World parity suspect.
