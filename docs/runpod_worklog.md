@@ -1215,3 +1215,102 @@ previous `lerobot/smolvla_libero` run.
   - The next paper-useful step is repeating the four-suite portfolio probe over
     more seeds, or implementing a stronger verifier-guided selector that can
     beat the blind/portfolio controls with less retry budget.
+
+## 2026-06-07 CP24B LIBERO Oracle Overlay Readiness
+
+### Current State
+
+- Status: completed, fetched locally, and probe Pod stopped.
+- Goal: verify real LIBERO/MuJoCo oracle affordance overlay generation on diverse actual simulation frames without interfering with baseline evaluation.
+- Probe Pod: `v5yckik4qv9y85`.
+- GPU: L4-class low-cost probe lane at `$0.39/hr` when running.
+- Network volume: `tchm4gxfvd`.
+- Separate clone path:
+  `/workspace/physical-ai/physical_ai_agent_affordance_probe`.
+- Final local artifact root:
+  `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/`.
+
+### Result
+
+- Broad pool: 19 real LIBERO/MuJoCo samples across `libero_spatial`, `libero_object`, and `libero_goal`.
+- Curated evidence set: 13 visually distinct samples after excluding near-duplicates and a weak edge-clipped case.
+- Targeting method: raw MuJoCo segmentation for semantic object geoms plus a cabinet drawer/handle resolver for open-drawer tasks.
+- Figure orientation: native `agentview` frames looked vertically inverted relative to LIBERO paper figures, so the paper-facing figure pack applies a visualization-only vertical flip and transforms overlay points as `y_fixed = H - 1 - y_native`.
+- Policy-input note: native simulator coordinates are preserved in the manifest; the fixed orientation is for report/figure artifacts.
+
+### Evidence
+
+- Corrected contact sheet:
+  `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/libero_mujoco_oracle_curated_diverse_contact_sheet.jpg`
+- Corrected manifest:
+  `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/libero_mujoco_oracle_curated_manifest.json`
+- Corrected report:
+  `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/verification_report_final.md`
+
+### Claim Boundary
+
+This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo frames can be annotated with simulator-oracle affordance points in a visually inspected, paper-facing orientation. It does not prove SmolVLA success-rate improvement. The next checkpoint should be CP24C, an overlay ablation comparing `smolvla_rgb_only` against `smolvla_rgb_oracle_point`, optionally with `agentic_retry`.
+
+## 2026-06-07 LIBERO Retry Cost Normalization and Claim Boundary
+
+### Current State
+
+- Status: in progress.
+- Active RunPod evaluation root:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_portfolio_remaining_suites_seed1001_1002_20260607T012517Z`
+- Current run purpose: finish Spatial/Object/Goal seeds `1001` and `1002` so
+  the Long 3-seed retry series can be joined into a 4-suite, 3-seed table.
+- Direction change: success-only retry tables are not enough for the paper
+  claim. The current retry wrapper uses the same frozen `lerobot/smolvla_libero`
+  policy and should not be described as a better one-shot model.
+
+### Completed Partial Results
+
+- Spatial seeds `1001,1002`:
+  - baseline mean `88.00`
+  - `blind_new_seed` success-once mean `96.50`, delta `+8.50`
+  - `alternate_steps15` success-once mean `94.50`, delta `+6.50`
+- Object seeds `1001,1002`:
+  - baseline mean `92.50`
+  - `alternate_steps10` success-once mean `97.00`, delta `+4.50`
+  - `blind_new_seed` success-once mean `95.00`, delta `+2.50`
+- Goal seed `1001`:
+  - baseline `87.00`
+  - `alternate_steps10` success-once `97.00`, delta `+10.00`
+  - `blind_new_seed` success-once `94.00`, delta `+7.00`
+
+### Cost-Normalized Metric Update
+
+- Added cost fields to `physical_ai_agent.agent_core.libero_agentic_retry`:
+  - total attempts
+  - extra environment resets
+  - total eval seconds
+  - success-once per attempt
+  - recovered episodes per retry attempt
+  - success-once per eval minute
+- Added cost fields to the four-suite portfolio report builder:
+  `scripts/build_agentic_retry_four_suite_portfolio_report.py`.
+- Current LeRobot `eval_info.json` records `overall.eval_s` but does not record
+  per-episode action-step counts, so action-step-normalized metrics require an
+  instrumented rollout path before being used as paper evidence.
+
+### Claim Boundary
+
+- Current retry evidence supports:
+  "same frozen SmolVLA plus explicit reset/retry budget improves realized
+  benchmark success."
+- Current retry evidence does not support:
+  "SmolVLA model weights improved" or "one-shot policy success improved."
+- A stronger agentic physical AI claim needs either:
+  - better performance than blind retry under the same retry budget,
+  - better success per attempt/eval minute than blind retry,
+  - or in-episode verifier intervention before reset.
+
+### Next Required Experiment
+
+- Build or reuse an instrumented LIBERO rollout loop that logs per-step action
+  counts and exposes an online verifier hook.
+- Test an in-episode verifier that detects stagnation, failed grasp progress,
+  or timeout risk and intervenes before environment reset.
+- Compare against policy-only, blind retry, and horizon-switch retry with the
+  same success, attempt, reset, eval-time, and action-step metrics.
