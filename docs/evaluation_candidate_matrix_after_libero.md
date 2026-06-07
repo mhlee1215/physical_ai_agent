@@ -27,23 +27,25 @@ Use this as the policy-only baseline for wrapper experiments.
 | SimplerEnv | Real-to-sim VLA evaluation benchmark with Google Robot/WidowX style tasks; useful for generalization and real-world proxy claims. | Harness lists `4` WidowX tasks x `24` episodes; recent VLA papers use SimplerEnv alongside LIBERO. | RunPod likely; Vulkan/simulator details need validation. | Medium. More about policy generalization than household planner/retry. | Useful for broader VLA comparison, but not first choice for our agentic-wrapper claim. |
 | Meta-World / robosuite classic tasks | Stable manipulation baselines and easier environment setup. | Many public success-rate tables exist, but policy/action setup differs strongly from VLA household benchmarks. | Mac and RunPod feasible. | Low-medium. Good debugging benchmark, weak paper relevance for SmolVLA agentic household claims. | Do not spend main evaluation budget here unless we need a fast control-system sanity check. |
 
-## Comparison Table To Build Next
+## Non-LIBERO Comparison Table To Build Next
 
-The next useful table is not a completely new benchmark yet. It is a stable
-agentic-vs-policy comparison inside LIBERO Long:
+LIBERO now has a frozen policy-only baseline and wrapper evidence. The next
+table should be non-LIBERO only:
 
-| Row | Suite | Episodes | Metric | Baseline | Agentic Retry | Delta | Reference |
-| --- | --- | ---: | --- | ---: | ---: | ---: | --- |
-| Completed first probe | LIBERO Long | 100 | success once | 71.0 | 86.0 | +15.0 | internal same-run |
-| Needed repeat | LIBERO Long | 100 | success once | pending | pending | pending | internal same-run |
-| Policy anchor | LIBERO Long | 100 | task success | 75.0 | n/a | n/a | internal routed baseline |
-| External policy reference | LIBERO Long | 100 | task success | 77.0 | n/a | n/a | ActionX Table 1 SmolVLA |
+| Row | Benchmark | Scale | Metric | Our current number | Reference number | Status |
+| --- | --- | ---: | --- | ---: | ---: | --- |
+| Mac-local pilot | ManiSkill `PickCube-v1` | 20 episodes per policy | task success | random `0.0`, zero `0.05` | RDT repo reports OpenVLA `8%`, DP `40%`, RDT `77.2%` on PickCube under a different trained-policy protocol | Pilot only; not comparable yet |
+| Mac-local pilot | ManiSkill-HAB SetTable / PrepareGroceries validation tasks | 20 episodes per task/policy | success-once | random/zero `0.0` | MS-HAB paper-scale runs use success-once over much larger evaluation; paper baselines are trained RL/IL policies | Executable pilot; not comparable policy |
+| Current blocker | ManiSkill `PickCube-v1` no-fallback strict | 1 episode | direct target env execution | blocked by `ErrorIncompatibleDriver` on current Mac renderer path | n/a | Needs RunPod/driver-compatible ManiSkill renderer |
+| Planned first strict external benchmark | RoboCasa365 / RoboCasa | 50-task benchmark, 3 splits | average task success | pending | RLDX-1 `33.2`, GR00T N1.5 `23.9`, pi0.5 `16.9`, pi0 `14.8`, DP `6.1` | Best next external lane |
 
-After the repeat is stable, expand to all four LIBERO suites before moving to
-RoboCasa365. That gives a cleaner paper story: first reproduce SmolVLA on a
-known benchmark, then show an agentic retry gain on the same benchmark, then
-test whether the idea transfers to household tasks where agentic control should
-matter more.
+For the current goal, do not spend more cycles on LIBERO repeat tables unless
+the user explicitly asks. The next meaningful work is either:
+
+1. make ManiSkill `PickCube-v1` strict rendering work on a suitable RunPod
+   host and run a trained-policy-compatible comparison, or
+2. install/probe RoboCasa and produce a 1-2 task smoke before attempting the
+   RoboCasa365 50-task leaderboard scale.
 
 ## External Sources
 
