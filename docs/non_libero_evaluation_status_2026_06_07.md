@@ -468,6 +468,7 @@ the largest gap against SmolVLA Table 2 (`20.0%` ours versus `60.0%` reported).
 | `metaworld_smolvla_veryhard_10ep_seed1000_empty0_20260607T104608Z` | Match checkpoint `empty_cameras=0` instead of padding missing `camera2/3` with blank images | 13/50, 26.0% | +6.0 | -34.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_20260607T105427Z` | Match `n_episodes=10` with `batch_size=10`, so each task uses one vectorized batch of seeds `1000..1009` | 18/50, 36.0% | +16.0 | -24.0 |
 | `metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z` | Run LeRobot `v0.5.1` source instead of current HEAD to test version drift; Python 3.12 required a SmolVLA-only patch that removes unrelated GR00T registry imports | 6/50, 12.0% | -8.0 | -48.0 |
+| `metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z` | Match the released checkpoint `train_config.json` eval hints more closely: `seed=1000`, `empty_cameras=0`, `eval.n_episodes=50`, `eval.batch_size=50`; `very_hard` only | 61/250, 24.4% | +4.4 | -35.6 |
 
 Notes:
 
@@ -498,6 +499,14 @@ Notes:
   current HEAD seed-0 `very_hard` result (`20.0%`). This weakens the hypothesis
   that the main parity gap is explained by moving from LeRobot `v0.5.1` to the
   current LeRobot source alone.
+- The 250-episode `train_config`-style `very_hard` run also did not recover
+  Table 2 parity. It produced `61/250 = 24.4%`. Per-task success was highly
+  uneven: task `0` `18/50 = 36.0%`, task `1` `30/50 = 60.0%`, task `2`
+  `5/50 = 10.0%`, task `3` `1/50 = 2.0%`, and task `4` `7/50 = 14.0%`.
+  This means one `very_hard` task can match the paper's aggregate `60.0%`,
+  but the group average remains far below it. The parity gap is therefore more
+  likely tied to task/reset/protocol details for specific `very_hard` tasks,
+  not merely to the number of trials per task.
 
 Artifacts:
 
@@ -514,6 +523,9 @@ Artifacts:
 | v0.5.1 SmolVLA-only very hard metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z/eval_info.json` |
 | v0.5.1 SmolVLA-only very hard command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z/run_command.txt` |
 | v0.5.1 SmolVLA-only representative video | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z/videos/very_hard_0/eval_episode_0.mp4` |
+| train-config-style 250ep very hard metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z/eval_info.json` |
+| train-config-style 250ep very hard command | `_workspace/runpod_results/metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z/run_command.txt` |
+| train-config-style 250ep representative video | `_workspace/runpod_results/metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z/videos/very_hard_0/eval_episode_0.mp4` |
 
 #### Full MT50 batch-size parity rerun
 
