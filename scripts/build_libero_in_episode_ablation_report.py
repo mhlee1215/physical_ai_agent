@@ -41,7 +41,8 @@ def main() -> None:
     if not rows:
         raise ValueError("At least one --condition NAME=ROOT is required")
     payload = {
-        "rows": [serialize_row(row) for row in rows],
+        "baseline_condition": rows[0].condition,
+        "rows": [serialize_row(row, baseline=rows[0]) for row in rows],
         "summary": summarize(rows),
     }
     args.output_md.write_text(render_markdown(rows, payload), encoding="utf-8")
@@ -93,15 +94,20 @@ def summarize(rows: list[ConditionRow]) -> dict[str, float]:
 
 
 def render_markdown(rows: list[ConditionRow], payload: dict[str, Any]) -> str:
+    baseline = rows[0]
     lines = [
         "# LIBERO In-Episode Intervention Ablation Report",
         "",
         "## Conditions",
         "",
-        "| Condition | Success | PC success | Action steps | Triggers | Interventions | Resets | Eval seconds | Success/action step | Success/eval min |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        f"Baseline condition: `{baseline.condition}`.",
+        "",
+        "| Condition | Success | PC success | Action steps | Delta steps | Triggers | Interventions | Resets | Eval seconds | Delta eval s | Success/action step | Success/eval min |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
+        delta_steps = row.action_step_count - baseline.action_step_count
+        delta_eval = row.eval_seconds - baseline.eval_seconds
         lines.append(
             "| "
             + " | ".join(
@@ -110,10 +116,12 @@ def render_markdown(rows: list[ConditionRow], payload: dict[str, Any]) -> str:
                     str(row.success).lower(),
                     f"{row.pc_success:.2f}",
                     str(row.action_step_count),
+                    _format_delta(delta_steps),
                     str(row.verifier_trigger_count),
                     str(row.intervention_count),
                     str(row.environment_resets),
                     f"{row.eval_seconds:.4f}",
+                    _format_delta(delta_eval, precision=4),
                     f"{row.success_per_action_step:.6f}",
                     f"{row.success_per_eval_minute:.6f}",
                 ]
@@ -144,15 +152,24 @@ def render_markdown(rows: list[ConditionRow], payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def serialize_row(row: ConditionRow) -> dict[str, Any]:
+def serialize_row(row: ConditionRow, baseline: ConditionRow | None = None) -> dict[str, Any]:
+    baseline = baseline or row
     return row.__dict__ | {
         "success_per_action_step": row.success_per_action_step,
         "success_per_eval_minute": row.success_per_eval_minute,
+        "delta_action_steps_vs_baseline": row.action_step_count - baseline.action_step_count,
+        "delta_eval_seconds_vs_baseline": row.eval_seconds - baseline.eval_seconds,
     }
 
 
 def _ratio(numerator: int, denominator: float) -> float:
     return 0.0 if denominator <= 0 else numerator / denominator
+
+
+def _format_delta(value: float, precision: int = 0) -> str:
+    if precision == 0:
+        return f"{value:+.0f}"
+    return f"{value:+.{precision}f}"
 
 
 if __name__ == "__main__":
