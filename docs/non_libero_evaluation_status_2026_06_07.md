@@ -17,7 +17,8 @@ Why:
 - ManiSkill/HAB already has repo-local execution plumbing and Mac-local pilot
   artifacts.
 - RoboCasa365 is more paper-relevant for household long-horizon agentic
-  wrappers, but needs a separate install/asset gate before evaluation.
+  wrappers, and now has a separate CP25 install/reset-step probe gate before
+  full evaluation.
 - RoboTwin/Isaac/SimplerEnv/CALVIN are plausible later lanes, but they require
   new model/action-space compatibility work before a fair SmolVLA comparison.
 
@@ -187,6 +188,33 @@ This proves partial HAB tasks can execute locally with authoritative task ids
 and fallback disabled. It is not comparable to MS-HAB policy results because
 random/zero are weak controls and the run is 20 episodes, not paper scale.
 
+### 5. RoboCasa365 / RoboCasa CP25 probe gate
+
+Commands:
+
+```bash
+sh scripts/checkpoint_25.sh
+sh scripts/checkpoint_25.sh --probe-reset-step --require-robocasa --task CloseFridge
+```
+
+Expected artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| checkpoint report | `_workspace/checkpoints/checkpoint_25_robocasa/checkpoint_report.json` |
+| blocker or no-blocker note | `_workspace/checkpoints/checkpoint_25_robocasa/robocasa_blocker.md` |
+| install/eval command handoff | `_workspace/checkpoints/checkpoint_25_robocasa/robocasa_install_and_eval.md` |
+| reference comparison table | `_workspace/checkpoints/checkpoint_25_robocasa/robocasa365_reference_table.md` |
+
+Interpretation:
+
+The non-strict CP25 run is allowed to pass with a documented missing-dependency
+blocker. The strict run is the first real RoboCasa execution gate: it must
+import `robocasa` and `robosuite`, create a `CloseFridge` environment through
+`robocasa.utils.env_utils.create_env()`, reset it, and execute at least one
+zero-action step. This is still not a paper-comparable score; it is the
+installation/runtime gate before `lerobot/smolvla_robocasa` evaluation.
+
 ## Recommendation
 
 Next executable path:
@@ -197,8 +225,9 @@ Next executable path:
    ManiSkill table over `PickCube`, `PushCube`, `StackCube`,
    `PegInsertionSide`, and `PlugCharger` only if model/action compatibility is
    available.
-3. In parallel, start a RoboCasa install smoke because RoboCasa365 is the more
-   meaningful household long-horizon benchmark for the agentic wrapper claim.
+3. Run CP25 on RunPod. If the non-strict probe only records missing
+   dependencies, install RoboCasa/robosuite plus lightweight assets and rerun
+   the strict reset-step gate.
 4. Do not compare random/zero pilots to trained-policy paper numbers except as
    sanity controls. A fair table needs either the same policy family or an
    explicitly labeled weak-control row.
@@ -209,6 +238,9 @@ Current non-LIBERO state is **not yet paper-comparable**. It is a readiness
 audit:
 
 - ManiSkill/HAB: local pilots and current renderer blocker are documented.
-- RoboCasa365: reference numbers are identified; execution has not started.
+- RoboCasa365: reference numbers are identified; CP25 probe gate exists, while
+  strict reset-step and SmolVLA policy evaluation still require installed
+  RoboCasa assets.
 - Next required milestone: a strict non-LIBERO task-success run on a
-  renderer-compatible machine, or a RoboCasa install/reset-step smoke.
+  renderer-compatible ManiSkill machine, or a RoboCasa strict reset-step smoke
+  followed by `lerobot/smolvla_robocasa` evaluation.
