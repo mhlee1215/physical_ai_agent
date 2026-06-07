@@ -5,6 +5,7 @@ from scripts.run_libero_in_episode_smolvla_instrumented import (
     distance,
     format_intervention_type,
     semantic_no_progress_trigger,
+    semantic_near_receptacle_trigger,
     should_trigger_verifier,
 )
 
@@ -84,6 +85,17 @@ class LiberoInEpisodeSmolVLAInstrumentedTest(TestCase):
             "semantic_reach_then_push",
         )
 
+    def test_format_semantic_place_intervention_type(self) -> None:
+        self.assertEqual(
+            format_intervention_type(
+                mode="semantic_place_receptacle",
+                intervention_scale=1.0,
+                action_clamp_norm=1.0,
+                smooth_alpha=0.5,
+            ),
+            "semantic_place_receptacle",
+        )
+
     def test_semantic_no_progress_trigger(self) -> None:
         history = [{"target_pos": [0.0, 0.0, 0.0]} for _ in range(6)]
 
@@ -120,3 +132,14 @@ class LiberoInEpisodeSmolVLAInstrumentedTest(TestCase):
     def test_distance_handles_missing_vectors(self) -> None:
         self.assertIsNone(distance(None, [0.0, 0.0, 0.0]))
         self.assertEqual(distance([0.0, 0.0, 0.0], [0.0, 3.0, 4.0]), 5.0)
+
+    def test_semantic_near_receptacle_trigger(self) -> None:
+        triggered, reason = semantic_near_receptacle_trigger(
+            step=230,
+            semantic_history=[{"target_to_receptacle_dist": 0.062}],
+            min_step=220,
+            distance_threshold=0.07,
+        )
+
+        self.assertTrue(triggered)
+        self.assertIn("semantic_near_receptacle", reason)

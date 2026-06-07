@@ -1628,3 +1628,38 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   object-placement metric in the desired direction. The next intervention
   should use raw MuJoCo contact state or a short placement macro rather than a
   single vector push.
+
+### LIBERO Goal Task 6 Near-Receptacle Placement Macro
+
+- Tried to probe raw MuJoCo contacts, but the exposed `sim` candidates in the
+  current LeRobot/LIBERO wrapper did not surface named geom/contact pairs
+  through the quick probe.
+- Added `semantic_near_receptacle` trigger:
+  trigger once target-to-receptacle distance is below a threshold after a
+  minimum step.
+- Added `semantic_place_receptacle` intervention:
+  - if EEF is far from target, reach target
+  - if EEF is within contact threshold, push target toward receptacle in XY
+    and apply a configurable downward Z command
+  - optionally close/open gripper via action dimension 6
+- RunPod task:
+  - suite: `libero_goal`
+  - task id: `6`
+  - seed: `1200`
+  - baseline: `task6_late_probe_none`
+- Benchmark result:
+  all tested placement-macro conditions still failed benchmark success at
+  `300` action steps.
+- Subgoal metric result:
+  - baseline min target-to-bowl distance: `0.062636`
+  - `task6_place_c06_p5_zm02_close`: `0.058806`
+  - `task6_place_c08_p8_zm02_close`: `0.060582`
+  - `task6_place_c08_p5_zm05_close`: `0.055952`
+- Report:
+  - `docs/research/libero_goal_task6_place_macro_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task6_place_macro_matrix_summary_2026_06_07.json`
+- Interpretation:
+  this is still not a positive benchmark success result, but it is the
+  strongest in-episode evidence so far: a semantic subgoal intervention
+  improves an intermediate physical metric by moving the target closer to the
+  bowl. The next search should tune this macro or test nearby weak seeds/tasks.
