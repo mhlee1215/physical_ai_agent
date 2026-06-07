@@ -179,7 +179,7 @@ def render_markdown(series_root: Path, rows: list[SeriesRow]) -> str:
             "## Interpretation Guardrail",
             "",
             "- `blind_new_seed` is the control for retry budget without changing the policy action horizon.",
-            "- `alternate_steps10` tests whether changing the retry action horizon recovers additional failed episodes.",
+            "- non-blind conditions test whether changing the retry action horizon recovers additional failed episodes.",
             "- This remains an episode-level retry wrapper. It is not yet a subgoal-level in-episode replanning controller.",
             "",
         ]

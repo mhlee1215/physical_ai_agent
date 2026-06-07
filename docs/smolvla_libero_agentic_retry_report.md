@@ -88,6 +88,25 @@ execute both retry variants and count success if either retry succeeds. This
 suggests the next method should be reported as retry-budget scaling or
 portfolio retry before claiming intelligent failure diagnosis.
 
+## Four-Suite Seed-1000 Portfolio Probe
+
+After the Long 3-seed analysis, the remaining LIBERO suites were evaluated with
+seed `1000` to estimate a first four-suite portfolio-retry table. The Long row
+uses the existing 3-seed series seed `1000` run; Spatial/Object/Goal use the
+remaining-suite probe.
+
+| Suite | Baseline | Best single retry | Portfolio budget2 | Delta vs baseline | Recovered |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Spatial | 91.00 | 98.00 (`blind_new_seed`) | 98.00 | +7.00 | 7/9 |
+| Object | 94.00 | 96.00 (`alternate_steps10`) | 97.00 | +3.00 | 3/6 |
+| Goal | 89.00 | 97.00 (`alternate_steps10`) | 99.00 | +10.00 | 10/11 |
+| Long | 79.00 | 90.00 (`alternate_steps10`) | 92.00 | +13.00 | 13/21 |
+| Macro avg | 88.25 | 95.25 | 96.50 | +8.25 |  |
+
+This is the strongest current agentic-retry table, but it must be presented as
+`retry_budget=2` portfolio evaluation. It is not directly comparable to
+policy-only ActionX numbers unless the extra retry budget is disclosed.
+
 ## Full Long Per-Task Recovery
 
 | Task | Baseline | Recovered | Success once |
@@ -129,11 +148,18 @@ portfolio retry before claiming intelligent failure diagnosis.
   `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z/agentic_retry_series_report.md`
 - Long retry selection local report:
   `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z/agentic_retry_selection_report.md`
+- Remaining-suite portfolio remote:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z`
+- Remaining-suite portfolio local archive:
+  `_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z_no_videos.tar.gz`
+- Remaining-suite portfolio local extracted report:
+  `_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z/agentic_retry_portfolio_report.md`
 
 ## Next Step
 
 The repeat/control series confirms that retry budget improves realized success
 on Long, but it also shows that blind retry is competitive and task-id-only
-selection is weak. The next paper-useful GPU experiment is a portfolio retry
-condition with retry budget `2`, first on Long and then on all four LIBERO
-suites if the Long result remains strong.
+selection is weak. The next paper-useful GPU experiment is to repeat the
+four-suite portfolio probe across additional seeds, then decide whether the
+claim should be framed as retry-budget scaling or as a stronger verifier-guided
+method.

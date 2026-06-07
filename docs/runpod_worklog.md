@@ -1168,3 +1168,50 @@ previous `lerobot/smolvla_libero` run.
     if either retry succeeds.
   - next GPU experiment should formalize `retry_budget=2` portfolio retry on
     Long first, then expand to all four LIBERO suites if still strong.
+
+### 2026-06-07 Remaining-Suite Portfolio Probe
+
+- Ran remaining LIBERO suites for seed `1000`:
+  - remote root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z`
+  - local archive without videos:
+    `_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z_no_videos.tar.gz`
+  - local extracted portfolio report:
+    `_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z/agentic_retry_portfolio_report.md`
+- Spatial protocol:
+  - baseline `n_action_steps=10`
+  - blind retry `n_action_steps=10`, seed `1100`
+  - alternate retry `n_action_steps=15`, seed `1100`
+  - result: baseline `91.00`, blind `98.00`, alternate `94.00`,
+    portfolio `98.00`
+- Object protocol:
+  - baseline `n_action_steps=15`
+  - blind retry `n_action_steps=15`, seed `1100`
+  - alternate retry `n_action_steps=10`, seed `1100`
+  - result: baseline `94.00`, blind `96.00`, alternate `96.00`,
+    portfolio `97.00`
+- Goal protocol:
+  - baseline `n_action_steps=15`
+  - blind retry `n_action_steps=15`, seed `1100`
+  - alternate retry `n_action_steps=10`, seed `1100`
+  - result: baseline `89.00`, blind `97.00`, alternate `97.00`,
+    portfolio `99.00`
+- Four-suite seed-1000 portfolio table, using the existing Long seed-1000 row
+  from the 3-seed Long series:
+  - Spatial: baseline `91.00`, best single `98.00`, portfolio `98.00`,
+    delta `+7.00`
+  - Object: baseline `94.00`, best single `96.00`, portfolio `97.00`,
+    delta `+3.00`
+  - Goal: baseline `89.00`, best single `97.00`, portfolio `99.00`,
+    delta `+10.00`
+  - Long: baseline `79.00`, best single `90.00`, portfolio `92.00`,
+    delta `+13.00`
+  - Macro average: baseline `88.25`, best single `95.25`, portfolio `96.50`,
+    delta `+8.25`
+- Interpretation:
+  - This is the strongest current four-suite agentic retry result.
+  - It is a `retry_budget=2` portfolio result, not a fair policy-only
+    comparison against ActionX or base SmolVLA.
+  - The next paper-useful step is repeating the four-suite portfolio probe over
+    more seeds, or implementing a stronger verifier-guided selector that can
+    beat the blind/portfolio controls with less retry budget.
