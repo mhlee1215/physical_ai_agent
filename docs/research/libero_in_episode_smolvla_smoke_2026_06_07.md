@@ -62,3 +62,18 @@ scale was `1.0`, so it intentionally preserved the policy action while testing
 the hook and logging path. The next experiment should compare policy-only,
 no-op hook, and non-trivial intervention settings under the same task, seed,
 and action budget.
+
+## First Same-Seed Ablation
+
+Follow-up report:
+`docs/research/libero_in_episode_smolvla_ablation_2026_06_07.md`
+
+| Condition | Success | Action steps | Eval seconds | Success/action step |
+| --- | --- | ---: | ---: | ---: |
+| no-op hook, scale `1.0` | true | 131 | 7.3373 | 0.007634 |
+| intervention, scale `0.5` | true | 132 | 7.3378 | 0.007576 |
+
+Interpretation: the non-trivial scale intervention preserved success but did
+not improve cost on this single task/seed smoke. That is still useful: it
+establishes the comparison protocol and prevents us from calling every
+intervention "agentic improvement" without cost-normalized evidence.

@@ -1,0 +1,38 @@
+{
+  "rows": [
+    {
+      "action_step_count": 131,
+      "condition": "noop_scale1",
+      "environment_resets": 1,
+      "eval_seconds": 7.337318658828735,
+      "intervention_count": 1,
+      "pc_success": 100.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_in_episode_smolvla_smoke_20260607T034632",
+      "success": true,
+      "success_per_action_step": 0.007633587786259542,
+      "success_per_eval_minute": 8.177374159401422,
+      "verifier_trigger_count": 1
+    },
+    {
+      "action_step_count": 132,
+      "condition": "scale05",
+      "environment_resets": 1,
+      "eval_seconds": 7.337782621383667,
+      "intervention_count": 1,
+      "pc_success": 100.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_in_episode_smolvla_scale05_20260607T035135",
+      "success": true,
+      "success_per_action_step": 0.007575757575757576,
+      "success_per_eval_minute": 8.176857110096012,
+      "verifier_trigger_count": 1
+    }
+  ],
+  "summary": {
+    "conditions": 2.0,
+    "mean_action_step_count": 131.5,
+    "mean_eval_seconds": 7.337550640106201,
+    "mean_success_per_action_step": 0.007604672681008558,
+    "mean_success_per_eval_minute": 8.177115634748716,
+    "success_rate": 100.0
+  }
+}
