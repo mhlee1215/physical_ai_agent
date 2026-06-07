@@ -1073,3 +1073,71 @@ previous `lerobot/smolvla_libero` run.
     should be repeated before paper-scale claims, and reported against its
     same-run baseline because the policy-only routed parity baseline used a
     different split-suite protocol.
+
+### 2026-06-06 Post-LIBERO Evaluation Candidate Scan
+
+- Added `docs/evaluation_candidate_matrix_after_libero.md`.
+- Main conclusion:
+  - keep LIBERO as the immediate paper-comparable anchor because the
+    repeat-confirmed SmolVLA baseline is already within `-1.05` average points
+    of the ActionX Table 1 SmolVLA reference.
+  - next executable comparison should be a repeat of the full Long-suite
+    agentic retry run, then all-suite LIBERO agentic retry if the recovery
+    signal persists.
+  - best next external benchmark is RoboCasa365/RoboCasa because the current
+    leaderboard is a 50-task household manipulation benchmark with atomic,
+    composite-seen, and composite-unseen splits, which matches the
+    planner/verifier/retry research question better than generic short-horizon
+    manipulation suites.
+  - ManiSkill-HAB remains useful for smaller subtask success-once experiments,
+    but it is lower priority for SmolVLA paper comparability because the
+    published baselines are mostly RL/IL low-level mobile manipulation policies,
+    and serious GPU-scale execution needs Linux/NVIDIA/SAPIEN validation.
+  - vla-evaluation-harness is promising infrastructure for cross-benchmark
+    evaluation, but SmolVLA may require a custom model server before it can
+    replace the repo's working LIBERO path.
+
+### 2026-06-07 LIBERO Long Retry Control Series
+
+- Added and ran a Long-suite series runner:
+  - `scripts/runpod_smolvla_libero_agentic_retry_series.sh`
+  - `scripts/build_agentic_retry_series_report.py`
+- Remote output:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_series_long_3seed_20260606T220158Z`
+- Local archive without videos:
+  `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z_no_videos.tar.gz`
+- Local extracted report:
+  `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z/agentic_retry_series_report.md`
+- Protocol:
+  - suite: `libero_10`
+  - episodes: `10` per task, `100` per baseline seed
+  - baseline seeds: `1000`, `1001`, `1002`
+  - baseline action horizon: `n_action_steps=15`
+  - retry seeds: `1100`, `1101`, `1102`
+  - condition `blind_new_seed`: retry with `n_action_steps=15`
+  - condition `alternate_steps10`: retry with `n_action_steps=10`
+- Per-run results:
+  - `alternate_steps10`, seed `1000`: baseline `79.00`, success-once `90.00`,
+    delta `+11.00`, recovered `11/21`
+  - `alternate_steps10`, seed `1001`: baseline `66.00`, success-once `81.00`,
+    delta `+15.00`, recovered `15/34`
+  - `alternate_steps10`, seed `1002`: baseline `70.00`, success-once `79.00`,
+    delta `+9.00`, recovered `9/30`
+  - `blind_new_seed`, seed `1000`: baseline `79.00`, success-once `85.00`,
+    delta `+6.00`, recovered `6/21`
+  - `blind_new_seed`, seed `1001`: baseline `66.00`, success-once `75.00`,
+    delta `+9.00`, recovered `9/34`
+  - `blind_new_seed`, seed `1002`: baseline `70.00`, success-once `86.00`,
+    delta `+16.00`, recovered `16/30`
+- Summary:
+  - `alternate_steps10`: baseline `71.67 +/- 5.44`, success-once
+    `83.33 +/- 4.78`, delta `+11.67 +/- 2.49`, recovery `42.17 +/- 9.24`
+  - `blind_new_seed`: baseline `71.67 +/- 5.44`, success-once
+    `82.00 +/- 4.97`, delta `+10.33 +/- 4.19`, recovery `36.13 +/- 12.20`
+- Interpretation:
+  - retry budget itself is a strong baseline, not a weak strawman.
+  - `alternate_steps10` has a slightly higher mean than `blind_new_seed`, but
+    the margin is small and seed `1002` favored blind retry.
+  - next paper-useful experiment should be a real verifier-guided retry policy
+    that chooses retry strategy from failure/task predicates, and it must be
+    compared against the blind retry control.
