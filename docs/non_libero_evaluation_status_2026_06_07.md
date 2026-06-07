@@ -9,8 +9,8 @@ paper or official leaderboard values.
 ## Current Decision
 
 The best next external benchmark is **RoboCasa365 / RoboCasa**. CP25 has now
-advanced from install/runtime readiness to a real SmolVLA single-task
-evaluation.
+advanced from install/runtime readiness to real SmolVLA single-task and
+small-subset evaluations.
 
 Why:
 
@@ -19,7 +19,7 @@ Why:
   available policy rows are random/zero controls.
 - RoboCasa365 is more paper-relevant for household long-horizon agentic
   wrappers, and the RunPod path now supports strict reset/step plus
-  `lerobot/smolvla_robocasa` evaluation.
+  `lerobot/smolvla_robocasa` evaluation over a 3-task subset.
 - RoboTwin/Isaac/SimplerEnv/CALVIN are plausible later lanes, but they require
   new model/action-space compatibility work before a fair SmolVLA comparison.
 
@@ -218,6 +218,95 @@ Expected/generated artifacts:
 | blocker or no-blocker note | `_workspace/checkpoints/checkpoint_25_robocasa/robocasa_blocker.md` |
 | install/eval command handoff | `_workspace/checkpoints/checkpoint_25_robocasa/robocasa_install_and_eval.md` |
 | reference comparison table | `_workspace/checkpoints/checkpoint_25_robocasa/robocasa365_reference_table.md` |
+
+### 6. RoboCasa SmolVLA 3-task subset evaluation
+
+Command family:
+
+```bash
+PY=/root/physical-ai/envs/lerobot_py312/bin/python
+COMBO=/workspace/physical-ai/robocasa:/workspace/physical-ai/robosuite:/workspace/physical-ai/vendor/lerobot/src
+export MUJOCO_GL=egl
+export HF_HOME=/workspace/physical-ai/hf_home
+export TRANSFORMERS_CACHE=/workspace/physical-ai/hf_home/transformers
+export HF_HUB_CACHE=/workspace/physical-ai/hf_home/hub
+
+PYTHONPATH="$COMBO:${PYTHONPATH:-}" "$PY" -m lerobot.scripts.lerobot_eval \
+  --output_dir="_workspace/runpod_results/robocasa_smolvla_3task_20ep_default_horizon_20260607T073804Z" \
+  --policy.path=lerobot/smolvla_robocasa \
+  --env.type=robocasa \
+  --env.task=CloseFridge,OpenCabinet,OpenDrawer \
+  --eval.n_episodes=20 \
+  --eval.batch_size=1 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --rename_map='{"observation.images.robot0_agentview_left":"observation.images.camera1","observation.images.robot0_eye_in_hand":"observation.images.camera2","observation.images.robot0_agentview_right":"observation.images.camera3"}' \
+  --seed=0
+```
+
+Result:
+
+| Task | Policy | Episodes | Horizon | Success | Success rate |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `CloseFridge` | `lerobot/smolvla_robocasa` | 20 | default LeRobot/RoboCasa `1000` | 0/20 | 0.0% |
+| `OpenCabinet` | `lerobot/smolvla_robocasa` | 20 | default LeRobot/RoboCasa `1000` | 0/20 | 0.0% |
+| `OpenDrawer` | `lerobot/smolvla_robocasa` | 20 | default LeRobot/RoboCasa `1000` | 0/20 | 0.0% |
+| Overall 3-task subset | `lerobot/smolvla_robocasa` | 60 | default LeRobot/RoboCasa `1000` | 0/60 | 0.0% |
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| metrics | `_workspace/runpod_results/robocasa_smolvla_3task_20ep_default_horizon_20260607T073804Z/eval_info.json` |
+| command | `_workspace/runpod_results/robocasa_smolvla_3task_20ep_default_horizon_20260607T073804Z/run_command.txt` |
+| `CloseFridge` representative video | `_workspace/runpod_results/robocasa_smolvla_3task_20ep_default_horizon_20260607T073804Z/videos/CloseFridge_0/eval_episode_0.mp4` |
+| `OpenCabinet` representative video | `_workspace/runpod_results/robocasa_smolvla_3task_20ep_default_horizon_20260607T073804Z/videos/OpenCabinet_0/eval_episode_0.mp4` |
+| `OpenDrawer` representative video | `_workspace/runpod_results/robocasa_smolvla_3task_20ep_default_horizon_20260607T073804Z/videos/OpenDrawer_0/eval_episode_0.mp4` |
+
+Visual inspection:
+
+- `CloseFridge_0/frame_000.png`: RoboCasa kitchen scene with open fridge door
+  and robot arm.
+- `OpenCabinet_0/frame_000.png`: RoboCasa kitchen sink/cabinet scene with
+  robot arm.
+- `OpenDrawer_0/frame_000.png`: RoboCasa kitchen fixture scene with robot arm.
+
+Interpretation:
+
+This is a protocol-compatible small-subset RoboCasa policy evaluation: real
+SmolVLA weights, real visual observations, 20 episodes per task, default
+RoboCasa horizon, and benchmark success metric. It is still **not** directly
+comparable to the RoboCasa365 leaderboard overall number because the
+leaderboard averages 50 tasks over Atomic-Seen, Composite-Seen, and
+Composite-Unseen splits. It is, however, now a concrete external benchmark row
+we can scale from.
+
+### 7. RoboCasa 5-task scale-up blocker
+
+Attempted task list:
+
+```text
+CloseFridge,OpenCabinet,OpenDrawer,TurnOnMicrowave,TurnOffStove
+```
+
+Result:
+
+| Field | Value |
+| --- | --- |
+| completed before blocker | `CloseFridge`, `OpenCabinet`, `OpenDrawer` |
+| blocker task | `TurnOnMicrowave` |
+| error | `ValueError: a cannot be empty unless no samples are taken` |
+| source line | `robocasa/models/objects/kitchen_object_utils.py`, `rng.choice(valid_categories)` |
+| artifact | `_workspace/runpod_results/robocasa_smolvla_5task_20ep_default_horizon_20260607T065632Z/eval.log` |
+
+Interpretation:
+
+The 5-task run is blocked by lightweight asset coverage, not by SmolVLA
+inference or RoboCasa runtime. The current RunPod setup installed lightweight
+`tex`, `tex_generative`, `fixtures_lw`, and `objs_lw` assets. Some microwave
+or stove task categories require fuller object assets or a task subset that is
+known to be covered by the lightweight registry.
 
 Interpretation:
 
