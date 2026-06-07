@@ -1704,3 +1704,37 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   condition inside the rollout and switches to a placement subgoal. The result
   is still a single task/seed smoke, but it gives a real seed for paper-scale
   follow-up.
+
+### LIBERO Goal Task 6 Placement Macro Multi-Seed Check
+
+- Expanded the positive placement macro from one task/seed to seeds `1200`,
+  `1201`, and `1202` on the same `libero_goal` task id `6`.
+- Baseline condition:
+  - SmolVLA policy-only rollout
+  - no in-episode intervention
+  - environment resets: `1`
+- Wrapper condition:
+  - same `lerobot/smolvla_libero` weights
+  - `semantic_near_receptacle` trigger
+  - `semantic_place_receptacle` macro
+  - environment resets: `1`
+- Paired result:
+  - seed `1200`: baseline failed at `300` steps; wrapper succeeded at `224`
+    steps with `4` interventions
+  - seed `1201`: baseline failed; wrapper also failed because the object never
+    entered the near-receptacle trigger threshold
+  - seed `1202`: baseline failed; wrapper also failed because the object never
+    entered the near-receptacle trigger threshold
+- Aggregate paired success:
+  - baseline: `0/3`
+  - wrapper: `1/3`
+- Report:
+  - `docs/research/libero_goal_task6_place_multiseed_report_2026_06_07.md`
+  - `docs/research/libero_goal_task6_place_multiseed_summary_2026_06_07.json`
+- Interpretation:
+  the small in-episode intervention did produce a benchmark-success conversion
+  on one seed without adding an environment reset, so there is improvement
+  signal. The blocker is trigger coverage: the current wrapper only helps when
+  the base policy has already moved the target close enough to the receptacle.
+  The next improvement should broaden trigger/reach coverage inside the same
+  episode rather than using reset retry.
