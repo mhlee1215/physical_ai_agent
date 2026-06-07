@@ -12,6 +12,11 @@ The best table-backed external benchmark is now **Meta-World MT50**. RoboCasa
 remains the best household-manipulation lane, but no public SmolVLA RoboCasa
 reference table has been found yet.
 
+For the next evaluation cycles, prioritize benchmarks with an existing paper
+or official leaderboard table that can be placed side by side with our result.
+Use benchmarks without a direct reference row as plumbing or qualitative
+evidence only, not as the main paper-comparison target.
+
 Why:
 
 - ManiSkill/HAB already has repo-local execution plumbing and Mac-local pilot
@@ -469,6 +474,7 @@ the largest gap against SmolVLA Table 2 (`20.0%` ours versus `60.0%` reported).
 | `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_20260607T105427Z` | Match `n_episodes=10` with `batch_size=10`, so each task uses one vectorized batch of seeds `1000..1009` | 18/50, 36.0% | +16.0 | -24.0 |
 | `metaworld_smolvla_veryhard_10ep_seed0_v051_smolvlaonly3_20260607T120405Z` | Run LeRobot `v0.5.1` source instead of current HEAD to test version drift; Python 3.12 required a SmolVLA-only patch that removes unrelated GR00T registry imports | 6/50, 12.0% | -8.0 | -48.0 |
 | `metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z` | Match the released checkpoint `train_config.json` eval hints more closely: `seed=1000`, `empty_cameras=0`, `eval.n_episodes=50`, `eval.batch_size=50`; `very_hard` only | 61/250, 24.4% | +4.4 | -35.6 |
+| `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z` | Temporarily patch the LeRobot Meta-World wrapper from `corner2` to `top` because the feature key is named `pixels/top`; restore source after run | 0/50, 0.0% | -20.0 | -60.0 |
 
 Notes:
 
@@ -507,6 +513,12 @@ Notes:
   but the group average remains far below it. The parity gap is therefore more
   likely tied to task/reset/protocol details for specific `very_hard` tasks,
   not merely to the number of trials per task.
+- The temporary top-camera patch was a negative control. `top` rendered
+  successfully under `MUJOCO_GL=egl`, but policy success fell to `0/50`.
+  The remote source was restored to `camera_name="corner2"` after the run.
+  This rules out the simple hypothesis that the checkpoint feature key
+  `pixels/top` implies the released policy should be evaluated with the actual
+  Meta-World top camera.
 
 Artifacts:
 
@@ -526,6 +538,8 @@ Artifacts:
 | train-config-style 250ep very hard metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z/eval_info.json` |
 | train-config-style 250ep very hard command | `_workspace/runpod_results/metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z/run_command.txt` |
 | train-config-style 250ep representative video | `_workspace/runpod_results/metaworld_smolvla_veryhard_50ep_seed1000_batch50_empty0_20260607T121323Z/videos/very_hard_0/eval_episode_0.mp4` |
+| top-camera negative-control metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z/eval_info.json` |
+| top-camera negative-control command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z/run_command.txt` |
 
 #### Full MT50 batch-size parity rerun
 
