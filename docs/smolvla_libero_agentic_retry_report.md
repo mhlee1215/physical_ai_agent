@@ -66,6 +66,28 @@ compare against it rather than against policy-only alone. The alternate
 `n_action_steps=10` retry had the higher mean gain in this series, but the
 margin over blind retry is small and seed `1002` favored blind retry.
 
+## Task-Guided Selection Analysis
+
+Using the completed blind and alternate retry traces, an offline selector was
+evaluated without additional GPU rollout. The selector used only task identity
+and baseline failure as inputs.
+
+| Selector | Runs | Baseline mean | Success-once mean | Delta mean | Recovery mean |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| alternate_steps10 | 3 | 71.67 +/- 5.44 | 83.33 +/- 4.78 | +11.67 +/- 2.49 | 42.17 +/- 9.24 |
+| blind_new_seed | 3 | 71.67 +/- 5.44 | 82.00 +/- 4.97 | +10.33 +/- 4.19 | 36.13 +/- 12.20 |
+| portfolio_budget2 | 3 | 71.67 +/- 5.44 | 87.33 +/- 3.68 | +15.67 +/- 1.89 | 56.19 +/- 4.87 |
+| task_guided_loso | 3 | 71.67 +/- 5.44 | 80.00 +/- 3.74 | +8.33 +/- 1.70 | 29.33 +/- 0.59 |
+| task_oracle_same_seed | 3 | 71.67 +/- 5.44 | 85.67 +/- 3.68 | +14.00 +/- 2.16 | 49.94 +/- 4.14 |
+
+Interpretation: task identity alone is not a good enough verifier/planner
+signal. The leave-one-seed-out task-guided selector underperformed both blind
+and alternate retry. However, `portfolio_budget2` is a deployable two-retry
+condition if the protocol allows both retry variants after baseline failures:
+execute both retry variants and count success if either retry succeeds. This
+suggests the next method should be reported as retry-budget scaling or
+portfolio retry before claiming intelligent failure diagnosis.
+
 ## Full Long Per-Task Recovery
 
 | Task | Baseline | Recovered | Success once |
@@ -105,11 +127,13 @@ margin over blind retry is small and seed `1002` favored blind retry.
   `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z_no_videos.tar.gz`
 - Long retry control series local extracted report:
   `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z/agentic_retry_series_report.md`
+- Long retry selection local report:
+  `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z/agentic_retry_selection_report.md`
 
 ## Next Step
 
 The repeat/control series confirms that retry budget improves realized success
-on Long, but it also shows that blind retry is competitive. The next paper-useful
-step is to implement a stronger verifier-guided retry condition that selects
-retry strategy from failure/task predicates, then compare it against
-`blind_new_seed` and `alternate_steps10`.
+on Long, but it also shows that blind retry is competitive and task-id-only
+selection is weak. The next paper-useful GPU experiment is a portfolio retry
+condition with retry budget `2`, first on Long and then on all four LIBERO
+suites if the Long result remains strong.

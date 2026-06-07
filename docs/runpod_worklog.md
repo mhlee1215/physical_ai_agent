@@ -1141,3 +1141,30 @@ previous `lerobot/smolvla_libero` run.
   - next paper-useful experiment should be a real verifier-guided retry policy
     that chooses retry strategy from failure/task predicates, and it must be
     compared against the blind retry control.
+
+### 2026-06-07 Task-Guided Retry Selection Analysis
+
+- Added offline trace analysis:
+  - `scripts/build_agentic_retry_selection_report.py`
+  - local report:
+    `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z/agentic_retry_selection_report.md`
+- This analysis used the completed 3-seed Long blind and alternate retry traces;
+  it did not launch extra GPU rollouts.
+- Summary:
+  - `alternate_steps10`: success-once `83.33 +/- 4.78`, delta
+    `+11.67 +/- 2.49`, recovery `42.17 +/- 9.24`
+  - `blind_new_seed`: success-once `82.00 +/- 4.97`, delta
+    `+10.33 +/- 4.19`, recovery `36.13 +/- 12.20`
+  - `portfolio_budget2`: success-once `87.33 +/- 3.68`, delta
+    `+15.67 +/- 1.89`, recovery `56.19 +/- 4.87`
+  - `task_guided_loso`: success-once `80.00 +/- 3.74`, delta
+    `+8.33 +/- 1.70`, recovery `29.33 +/- 0.59`
+  - `task_oracle_same_seed`: success-once `85.67 +/- 3.68`, delta
+    `+14.00 +/- 2.16`, recovery `49.94 +/- 4.14`
+- Interpretation:
+  - task identity alone is not enough for a robust verifier-guided selector.
+  - a two-retry portfolio is more promising than task-id-only routing: run both
+    blind and alternate retry variants for baseline failures and count success
+    if either retry succeeds.
+  - next GPU experiment should formalize `retry_budget=2` portfolio retry on
+    Long first, then expand to all four LIBERO suites if still strong.
