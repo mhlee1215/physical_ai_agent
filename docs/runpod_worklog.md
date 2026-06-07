@@ -1362,6 +1362,13 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   - interventions `1`
   - environment resets `1`
   - success/action-step `0.166667`
+- RunPod Linux smoke:
+  - executed from a temporary `git archive FETCH_HEAD` checkout to avoid
+    touching the dirty remote working tree
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/libero_in_episode_smoke_runpod_20260607`
+  - success `true`, action steps `6`, verifier triggers `1`, interventions
+    `1`, environment resets `1`, success/action-step `0.166667`
 - Interpretation:
   this is not a LIBERO benchmark result yet. It proves the in-episode logging
   contract: verifier trigger and intervention occur before terminal reset, and
