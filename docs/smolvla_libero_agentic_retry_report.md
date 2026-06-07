@@ -41,6 +41,31 @@ agentic retry signal. Compare it against its own baseline in the same run; do
 not mix it with the earlier routed policy-only full-suite baseline without
 disclosing the protocol difference.
 
+## Long-Suite Retry Control Series
+
+The first paper-oriented control series repeated Long-suite episode-level retry
+over three baseline seeds. Each baseline used `n_action_steps=15`; retry used
+the same failed task/episode indexes from the matching baseline seed.
+
+| Condition | Base seed | Retry seed | Episodes | Baseline | Success once | Delta | Recovery | Recovered |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| alternate_steps10 | 1000 | 1100 | 100 | 79.00 | 90.00 | +11.00 | 52.38 | 11/21 |
+| alternate_steps10 | 1001 | 1101 | 100 | 66.00 | 81.00 | +15.00 | 44.12 | 15/34 |
+| alternate_steps10 | 1002 | 1102 | 100 | 70.00 | 79.00 | +9.00 | 30.00 | 9/30 |
+| blind_new_seed | 1000 | 1100 | 100 | 79.00 | 85.00 | +6.00 | 28.57 | 6/21 |
+| blind_new_seed | 1001 | 1101 | 100 | 66.00 | 75.00 | +9.00 | 26.47 | 9/34 |
+| blind_new_seed | 1002 | 1102 | 100 | 70.00 | 86.00 | +16.00 | 53.33 | 16/30 |
+
+| Condition | Runs | Baseline mean | Success-once mean | Delta mean | Recovery mean |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| alternate_steps10 | 3 | 71.67 +/- 5.44 | 83.33 +/- 4.78 | +11.67 +/- 2.49 | 42.17 +/- 9.24 |
+| blind_new_seed | 3 | 71.67 +/- 5.44 | 82.00 +/- 4.97 | +10.33 +/- 4.19 | 36.13 +/- 12.20 |
+
+Interpretation: blind retry is a strong control, so future agentic claims must
+compare against it rather than against policy-only alone. The alternate
+`n_action_steps=10` retry had the higher mean gain in this series, but the
+margin over blind retry is small and seed `1002` favored blind retry.
+
 ## Full Long Per-Task Recovery
 
 | Task | Baseline | Recovered | Success once |
@@ -74,10 +99,17 @@ disclosing the protocol difference.
   `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_alt_long_full_20260606T2108Z`
 - alternate full-Long local:
   `_workspace/runpod_results/agentic_retry_probe_20260606/smolvla_agentic_retry_alt_long_full_20260606T2108Z`
+- Long retry control series remote:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_series_long_3seed_20260606T220158Z`
+- Long retry control series local archive:
+  `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z_no_videos.tar.gz`
+- Long retry control series local extracted report:
+  `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z/agentic_retry_series_report.md`
 
 ## Next Step
 
-Repeat the full Long-suite agentic retry run to estimate variance before making
-a paper-scale claim. If recovery remains positive, compare against the
-repeat-confirmed policy-only routed baseline and then decide whether to expand
-to all four LIBERO suites.
+The repeat/control series confirms that retry budget improves realized success
+on Long, but it also shows that blind retry is competitive. The next paper-useful
+step is to implement a stronger verifier-guided retry condition that selects
+retry strategy from failure/task predicates, then compare it against
+`blind_new_seed` and `alternate_steps10`.
