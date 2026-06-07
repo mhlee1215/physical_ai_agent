@@ -644,6 +644,62 @@ candidates are now more likely to be LeRobot/Meta-World version differences,
 task reset distributions beyond the exposed seed, or a training/eval protocol
 detail not encoded in the released model card.
 
+#### Full MT50 official-docs-shaped empty-camera rerun
+
+A later full MT50 rerun kept the official-docs-shaped axes fixed at
+`seed=0`, `batch_size=1`, 10 trials per task, `corner2`, 4D state/action, and
+the current LeRobot wrapper's 500-step horizon, but changed
+`--policy.empty_cameras` from `2` to `0`.
+
+Command:
+
+```bash
+MUJOCO_GL=egl PYTHONPATH=/workspace/physical-ai/vendor/lerobot/src \
+/root/physical-ai/envs/lerobot_py312/bin/python -m lerobot.scripts.lerobot_eval \
+  --policy.path=lerobot/smolvla_metaworld \
+  --env.type=metaworld \
+  --env.task=easy,medium,hard,very_hard \
+  --eval.n_episodes=10 \
+  --eval.batch_size=1 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --policy.empty_cameras=0 \
+  --rename_map='{"observation.image":"observation.images.camera1"}' \
+  --seed=0
+```
+
+Result versus SmolVLA paper Table 2:
+
+| Split | Ours, seed0/batch1/empty0 | SmolVLA paper 0.45B | Delta | Episodes |
+| --- | ---: | ---: | ---: | ---: |
+| Easy | 66.1 | 82.5 | -16.4 | 280 |
+| Medium | 42.7 | 41.8 | +0.9 | 110 |
+| Hard | 33.3 | 45.0 | -11.7 | 60 |
+| Very Hard | 16.0 | 60.0 | -44.0 | 50 |
+| Table-style avg | 39.5 | 57.3 | -17.8 | 500 |
+| Episode-weighted overall | 52.0 | n/a | n/a | 500 |
+
+Per-task `very_hard` success was `30.0`, `50.0`, `0.0`, `0.0`, and `0.0`.
+The run completed with exit code `0` and overall `pc_success=52.0`.
+
+Interpretation:
+
+This result does not improve the main comparison table. It improves `medium`
+relative to the first full MT50 run (`42.7` vs `38.2`) and improves `hard`
+relative to the seed1000/batch10 rerun (`33.3` vs `23.3`), but it worsens
+`very_hard` to `16.0`. Therefore `empty_cameras=2` in the first full run was
+not the main reason for the paper Table 2 gap.
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| official-docs-shaped full MT50 metrics | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_seed0_batch1_empty0_officialdocs_20260607T133100Z/eval_info.json` |
+| official-docs-shaped full MT50 command | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_seed0_batch1_empty0_officialdocs_20260607T133100Z/run_command.txt` |
+| official-docs-shaped full MT50 preflight | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_seed0_batch1_empty0_officialdocs_20260607T133100Z/preflight.txt` |
+| official-docs-shaped full MT50 log | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_seed0_batch1_empty0_officialdocs_20260607T133100Z/eval.log` |
+
 ### 10. VLA evaluation harness RunPod install audit
 
 Command family:
