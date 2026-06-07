@@ -446,6 +446,7 @@ the largest gap against SmolVLA Table 2 (`20.0%` ours versus `60.0%` reported).
 | `metaworld_smolvla_veryhard_10ep_ep400_seed0_fixedrename_20260607T102444Z` | Try the checkpoint `train_config.json` `episode_length=400` clue with correct `rename_map` parsing | 10/50, 20.0% | 0.0 | -40.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_20260607T103256Z` | Try checkpoint/training seed `1000` as a reset-distribution candidate | 13/50, 26.0% | +6.0 | -34.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_empty0_20260607T104608Z` | Match checkpoint `empty_cameras=0` instead of padding missing `camera2/3` with blank images | 13/50, 26.0% | +6.0 | -34.0 |
+| `metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_20260607T105427Z` | Match `n_episodes=10` with `batch_size=10`, so each task uses one vectorized batch of seeds `1000..1009` | 18/50, 36.0% | +16.0 | -24.0 |
 
 Notes:
 
@@ -466,6 +467,9 @@ Notes:
 - Matching checkpoint `empty_cameras=0` produced the same `26.0%` as
   `empty_cameras=2` under seed `1000`. Empty-camera padding is therefore not a
   leading explanation for the `very_hard` gap.
+- `batch_size=10` improved the standalone `very_hard` split to `36.0%`, but a
+  full MT50 rerun with the same setting did not preserve that improvement.
+  Treat standalone split ablations as useful probes, not final parity numbers.
 
 Artifacts:
 
@@ -477,6 +481,39 @@ Artifacts:
 | seed1000 command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_20260607T103256Z/run_command.txt` |
 | seed1000/empty0 metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_empty0_20260607T104608Z/eval_info.json` |
 | seed1000/empty0 command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_empty0_20260607T104608Z/run_command.txt` |
+| seed1000/batch10/empty0 very hard metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_20260607T105427Z/eval_info.json` |
+| seed1000/batch10/empty0 very hard command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_20260607T105427Z/run_command.txt` |
+
+#### Full MT50 batch-size parity rerun
+
+The most paper-like rerun after the targeted probes used all 50 tasks again
+with `seed=1000`, `batch_size=10`, `empty_cameras=0`, and 10 trials per task.
+
+| Split | Ours, batch10/seed1000/empty0 | SmolVLA paper 0.45B | Delta | Episodes |
+| --- | ---: | ---: | ---: | ---: |
+| Easy | 67.1 | 82.5 | -15.4 | 280 |
+| Medium | 43.6 | 41.8 | +1.8 | 110 |
+| Hard | 23.3 | 45.0 | -21.7 | 60 |
+| Very Hard | 20.0 | 60.0 | -40.0 | 50 |
+| Table-style avg | 38.5 | 57.3 | -18.8 | 500 |
+| Episode-weighted overall | 52.0 | n/a | n/a | 500 |
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| full MT50 batch10 metrics | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_seed1000_batch10_empty0_20260607T110031Z/eval_info.json` |
+| full MT50 batch10 command | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_seed1000_batch10_empty0_20260607T110031Z/run_command.txt` |
+
+Interpretation:
+
+This rerun does not improve the main comparison table. It slightly improves
+`medium` but worsens `hard` and leaves `very_hard` at `20.0%`. The best current
+paper-comparable Meta-World result remains the first full MT50 run
+(`table-style avg 40.5%`, episode-weighted `51.6%`). Remaining parity
+candidates are now more likely to be LeRobot/Meta-World version differences,
+task reset distributions beyond the exposed seed, or a training/eval protocol
+detail not encoded in the released model card.
 
 Interpretation:
 
