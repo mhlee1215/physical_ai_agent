@@ -1738,3 +1738,36 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   the base policy has already moved the target close enough to the receptacle.
   The next improvement should broaden trigger/reach coverage inside the same
   episode rather than using reset retry.
+
+### LIBERO Goal Task 6 No-Progress Trigger Coverage Check
+
+- Tested a no-code trigger-coverage variant on the same `libero_goal` task id
+  `6` and seeds `1200`, `1201`, `1202`.
+- Variant:
+  - trigger: `semantic_no_progress`
+  - intervention: `semantic_place_receptacle`
+  - min step: `220`
+  - progress window: `20`
+  - progress threshold: `0.002`
+  - environment resets: `1`
+- Aggregate benchmark result:
+  - baseline: `0/3`
+  - near-receptacle placement macro: `1/3`
+  - no-progress placement macro: `0/3`
+- Intervention load:
+  - near-receptacle placement macro: mean `1.33` interventions across seeds
+  - no-progress placement macro: mean `73.33` interventions across seeds
+- Subgoal metric:
+  - seed `1201` min target-to-bowl improved from `0.146379` to `0.112685`
+  - seed `1202` min target-to-bowl improved from `0.142073` to `0.061886`
+  - seed `1200` regressed from the near-receptacle success case to failure
+- Report:
+  - `docs/research/libero_goal_task6_trigger_coverage_report_2026_06_07.md`
+  - `docs/research/libero_goal_task6_trigger_coverage_summary_2026_06_07.json`
+- Interpretation:
+  no-progress detection fixes the trigger coverage problem only partially. It
+  creates in-episode interventions on previously untouched seeds and improves
+  an intermediate physical metric, but it over-intervenes and hurts benchmark
+  success. The next candidate should be a phased/gated trigger: use
+  no-progress to recover approach/reach, then switch to placement only under
+  contact or near-receptacle conditions.
