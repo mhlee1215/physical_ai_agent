@@ -2126,3 +2126,72 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   short-horizon timing issue. Continue by checking StackCube source trajectory,
   action/control-mode details, exact idle-action filtering, and whether the
   skipped replay episode or two-camera preprocessing differs from STARE.
+
+### ManiSkill3 PullCube Qpos Filter 0.05 SFT
+
+- Status: completed on RunPod; five-seed 300ep results fetched locally; Pod
+  left running for follow-up parity work.
+- Purpose:
+  add a third STARE-style non-LIBERO SmolVLA fine-tuning row after PushCube and
+  StackCube.
+- Reference:
+  STARE Table 2 reports `PullCube-v1` SmolVLA fine-tuning success `90.7%`.
+  Appendix B.5 reports horizon `30`, `300` episodes, and `5` random seeds.
+- Replay finding:
+  action replay without env states saved only `130/1000`, `13.0%`, so it was
+  rejected for SFT. Replaying the same official `pd_joint_delta_pos` RL source
+  with `--use-env-states` saved `989/1000`, `98.90%`.
+- LeRobot conversion:
+  - output:
+    `/root/physical-ai/tmp_lerobot_stare_pullcube_rgb_count989_rgbmode_128_use_env_states`
+  - result:
+    `989` episodes, `20941` frames.
+  - features:
+    action shape `[8]`, state shape `[9]`, camera `base_camera`.
+- Qpos idle-filtered dataset:
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_pullcube_rgb_count989_rgbmode_128_use_env_states_qpos_filter005`
+  - threshold:
+    qpos delta `0.05`.
+  - size:
+    `989` episodes, `19753` frames, mean length `20.0`, p50 `19`, p90 `24`,
+    max `37`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pullcube_count989_qpos_filter005_9000step`
+  - checkpoint:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pullcube_count989_qpos_filter005_9000step/checkpoints/009000/pretrained_model`
+  - base:
+    `lerobot/smolvla_base`
+  - steps:
+    `9000`
+  - rename map:
+    `base_camera -> camera1`
+  - training completion:
+    `9000/9000`, final logged loss `0.083`.
+- Evaluation:
+  - 10ep smoke seed `1000`:
+    `1/10`, `10.0%`.
+  - 300ep seed `1000`:
+    `29/300`, `9.67%`.
+  - 300ep seed `1001`:
+    `29/300`, `9.67%`.
+  - 300ep seed `1002`:
+    `34/300`, `11.33%`.
+  - 300ep seed `1003`:
+    `28/300`, `9.33%`.
+  - 300ep seed `1004`:
+    `25/300`, `8.33%`.
+  - five-seed aggregate:
+    `145/1500`, `9.67%`.
+- Local fetched bundle:
+  `_workspace/runpod_results/20260607_maniskill3_pullcube_qpos005_9000_5seed`.
+- Delta:
+  five-seed aggregate is `9.67%` vs STARE PullCube `90.7%`, a `-81.03pp`
+  gap.
+- Interpretation:
+  this is now a paper-scale row by episode and seed count, but not a parity
+  result. Because `--use-env-states` was required to recover the replay
+  success rate, likely suspects are source-demo type, control-mode/action
+  replay semantics, exact STARE idle-action filtering, and training-protocol
+  mismatch rather than evaluation sample count.
