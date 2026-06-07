@@ -1282,6 +1282,64 @@ The most likely remaining causes are source/protocol mismatch, the skipped
 replay episode, action/control-mode details, or insufficient StackCube-specific
 SFT quality under the current idle-filter rule.
 
+## ManiSkill3 PullCube SFT Scale-Up
+
+This is the third STARE-style SmolVLA SFT calibration row. It reaches the
+paper evaluation sample count, but it does **not** establish parity.
+
+Reference boundary:
+
+| Source | Task | Policy row | Reported success |
+| --- | --- | --- | ---: |
+| STARE Table 2 | `PullCube-v1` | `SmolVLA (fine-tuning)`, `1000` trajectory samples for SFT | 90.7% |
+
+Protocol and data:
+
+| Item | Value |
+| --- | --- |
+| source demos | official `PullCube-v1` RL trajectory, `pd_joint_delta_pos` |
+| action replay without env states | `130/1000`, `13.0%`; rejected as unstable for SFT conversion |
+| RGB replay with `--use-env-states` | `989/1000`, `98.90%` demos saved |
+| LeRobot conversion | `989` episodes, `20941` frames |
+| idle filter | qpos delta threshold `0.05` |
+| filtered dataset | `989` episodes, `19753` frames, mean length `20.0`, p50 `19`, p90 `24`, max `37` |
+| cameras | `base_camera` |
+| training | `lerobot/smolvla_base`, 9000 SFT steps, `base_camera -> camera1` rename map |
+| checkpoint | `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pullcube_count989_qpos_filter005_9000step/checkpoints/009000/pretrained_model` |
+| training completion | `9000/9000`, final logged loss `0.083` |
+
+Current results:
+
+| Run | Eval episodes | Horizon | Success | Delta vs STARE PullCube |
+| --- | ---: | ---: | ---: | ---: |
+| smoke seed1000 | 10 | 30 | 10.0% (`1/10`) | -80.7pp |
+| seed1000 | 300 | 30 | 9.67% (`29/300`) | -81.03pp |
+| seed1001 | 300 | 30 | 9.67% (`29/300`) | -81.03pp |
+| seed1002 | 300 | 30 | 11.33% (`34/300`) | -79.37pp |
+| seed1003 | 300 | 30 | 9.33% (`28/300`) | -81.37pp |
+| seed1004 | 300 | 30 | 8.33% (`25/300`) | -82.37pp |
+| five-seed aggregate | 1500 | 30 | 9.67% (`145/1500`) | -81.03pp |
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| local fetched result bundle | `_workspace/runpod_results/20260607_maniskill3_pullcube_qpos005_9000_5seed` |
+| seed1000 metrics | `_workspace/runpod_results/20260607_maniskill3_pullcube_qpos005_9000_5seed/pullcube_count989_qpos_filter005_9000step_horizon30_eval_300ep_seed1000/metrics.json` |
+| seed1001 metrics | `_workspace/runpod_results/20260607_maniskill3_pullcube_qpos005_9000_5seed/pullcube_count989_qpos_filter005_9000step_horizon30_eval_300ep_seed1001/metrics.json` |
+| seed1002 metrics | `_workspace/runpod_results/20260607_maniskill3_pullcube_qpos005_9000_5seed/pullcube_count989_qpos_filter005_9000step_horizon30_eval_300ep_seed1002/metrics.json` |
+| seed1003 metrics | `_workspace/runpod_results/20260607_maniskill3_pullcube_qpos005_9000_5seed/pullcube_count989_qpos_filter005_9000step_horizon30_eval_300ep_seed1003/metrics.json` |
+| seed1004 metrics | `_workspace/runpod_results/20260607_maniskill3_pullcube_qpos005_9000_5seed/pullcube_count989_qpos_filter005_9000step_horizon30_eval_300ep_seed1004/metrics.json` |
+
+Interpretation:
+
+PullCube is now evaluated at the STARE episode and seed scale, but the current
+policy-only result is far below the reference. Because the replay needed
+`--use-env-states` to recover from `13.0%` to `98.90%`, the most likely issue is
+not evaluation sample count. The strongest remaining suspects are source-demo
+type, control-mode/action replay semantics, exact STARE idle-action filtering,
+and training-protocol mismatch.
+
 ## Claim Boundary
 
 Current non-LIBERO state is **partially paper-facing but not yet leaderboard
@@ -1300,7 +1358,10 @@ comparable**:
   has a first paper-horizon result, `0.33%` over one 300-episode seed, which is
   `-12.37pp` below the STARE StackCube reference. The StackCube horizon-100
   debug result was also `0.0%`, so the StackCube failure is not only an
-  evaluation-horizon problem.
+  evaluation-horizon problem. `PullCube-v1` qpos-filtered count989 SFT now has
+  a five-seed paper-horizon result, `9.67%` over `1500` episodes, which is
+  `-81.03pp` below the STARE PullCube reference; the replay path itself needed
+  `--use-env-states` to recover `989/1000` usable demos.
 - RoboCasa: CP25 strict reset/step passed on RunPod, and
   `lerobot/smolvla_robocasa` ran on `CloseFridge` for 20 episodes with a
   measured `0/20` success rate.
