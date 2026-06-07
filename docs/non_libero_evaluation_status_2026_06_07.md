@@ -527,6 +527,13 @@ Notes:
   with `seed=1000`, they were `60.0`, `80.0`, `10.0`, `20.0`, `10.0`.
   This means the suite seed changes individual task samples but does not
   explain the gap to the paper's `60.0%` very-hard aggregate on its own.
+- Checkpoint processor stats were inspected in
+  `lerobot/smolvla_metaworld`. Although `policy_preprocessor.json` lists
+  `observation.state` with feature shape `[6]`, the saved normalizer tensors
+  contain `observation.state.mean/std/min/max` with shape `(4,)`, matching the
+  current Meta-World wrapper's `agent_pos = raw_obs[:4]`. This weakens the
+  hypothesis that the current low score is caused by a simple state-dimension
+  mismatch between training and evaluation.
 
 Artifacts:
 
@@ -550,6 +557,7 @@ Artifacts:
 | top-camera negative-control command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_topcam_20260607T124317Z/run_command.txt` |
 | MT1 seed1000 negative-control metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z/eval_info.json` |
 | MT1 seed1000 negative-control command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z/run_command.txt` |
+| checkpoint preprocessor stats inspected on RunPod | `/workspace/physical-ai/hf_home/hub/models--lerobot--smolvla_metaworld/snapshots/cd6778d2cfa724c1bf5fc637490548e54d81dc4c/policy_preprocessor_step_5_normalizer_processor.safetensors` |
 
 #### Full MT50 batch-size parity rerun
 
