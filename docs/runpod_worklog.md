@@ -1663,3 +1663,44 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   strongest in-episode evidence so far: a semantic subgoal intervention
   improves an intermediate physical metric by moving the target closer to the
   bowl. The next search should tune this macro or test nearby weak seeds/tasks.
+
+### LIBERO Goal Task 6 Placement Macro Positive Tuning
+
+- Tuned the best near-receptacle placement macro around:
+  - trigger step: `220`
+  - contact threshold: `0.08`
+  - push gain: `5.0`
+  - downward Z command: `-0.7` and `-1.0`
+  - gripper command: `1.0`
+- Baseline:
+  - `task6_late_probe_none`
+  - benchmark success: `false`
+  - action steps: `300`
+  - eval seconds: `10.0566`
+  - environment resets: `1`
+- Positive in-episode intervention results:
+  - `task6_tune_s220_zm07`
+    - benchmark success: `true`
+    - action steps: `224`
+    - interventions: `4`
+    - eval seconds: `9.3361`
+    - min target-to-bowl: `0.058218`
+  - `task6_tune_s220_zm10`
+    - benchmark success: `true`
+    - action steps: `224`
+    - interventions: `4`
+    - eval seconds: `9.3117`
+    - min target-to-bowl: `0.053997`
+- Negative controls:
+  - delaying trigger to step `224` or `228` failed despite improving placement
+    metrics
+  - weaker push gain `3.0` failed despite transient placement improvement
+- Report:
+  - `docs/research/libero_goal_task6_place_tuning_success_2026_06_07.md`
+  - `docs/research/libero_goal_task6_place_tuning_success_summary_2026_06_07.json`
+- Interpretation:
+  this is the first positive benchmark result for the in-episode agentic layer.
+  It is not a reset retry: the wrapper detects a semantic near-receptacle
+  condition inside the rollout and switches to a placement subgoal. The result
+  is still a single task/seed smoke, but it gives a real seed for paper-scale
+  follow-up.
