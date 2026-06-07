@@ -534,6 +534,17 @@ Notes:
   current Meta-World wrapper's `agent_pos = raw_obs[:4]`. This weakens the
   hypothesis that the current low score is caused by a simple state-dimension
   mismatch between training and evaluation.
+- Dataset metadata from `lerobot/metaworld_mt50` was inspected without
+  downloading the full dataset. `meta/info.json` reports `total_episodes=2500`
+  and `total_tasks=49`, while episode metadata contains 50 distinct `task_id`
+  values (`0..49`) with 50 episodes each. The `total_tasks=49` count comes from
+  description-level `task_index`: two tasks share the same instruction text
+  (`Push the puck to a goal`) and collapse to one `task_index`. The current
+  `very_hard` task names still match dataset `task_id` values by instruction
+  text: `shelf-place-v3 -> 42`, `disassemble-v3 -> 12`,
+  `stick-pull-v3 -> 44`, `stick-push-v3 -> 45`, and
+  `pick-place-wall-v3 -> 32`. This rules out a simple very-hard task-id
+  mismatch between the current LeRobot config and the dataset metadata.
 
 Artifacts:
 
@@ -558,6 +569,9 @@ Artifacts:
 | MT1 seed1000 negative-control metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z/eval_info.json` |
 | MT1 seed1000 negative-control command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_batch10_empty0_mt1seed1000_20260607T130000Z/run_command.txt` |
 | checkpoint preprocessor stats inspected on RunPod | `/workspace/physical-ai/hf_home/hub/models--lerobot--smolvla_metaworld/snapshots/cd6778d2cfa724c1bf5fc637490548e54d81dc4c/policy_preprocessor_step_5_normalizer_processor.safetensors` |
+| dataset metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/info.json` |
+| dataset task metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/tasks.parquet` |
+| dataset episode metadata inspected on RunPod | `/workspace/physical-ai/hf_home/hub/datasets--lerobot--metaworld_mt50/snapshots/a59f742d218c903328164257ecf180f9b18018a1/meta/episodes/chunk-000/file-000.parquet` |
 
 #### Full MT50 batch-size parity rerun
 
