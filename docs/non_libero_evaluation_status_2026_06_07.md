@@ -445,6 +445,7 @@ the largest gap against SmolVLA Table 2 (`20.0%` ours versus `60.0%` reported).
 | --- | --- | ---: | ---: | ---: |
 | `metaworld_smolvla_veryhard_10ep_ep400_seed0_fixedrename_20260607T102444Z` | Try the checkpoint `train_config.json` `episode_length=400` clue with correct `rename_map` parsing | 10/50, 20.0% | 0.0 | -40.0 |
 | `metaworld_smolvla_veryhard_10ep_seed1000_20260607T103256Z` | Try checkpoint/training seed `1000` as a reset-distribution candidate | 13/50, 26.0% | +6.0 | -34.0 |
+| `metaworld_smolvla_veryhard_10ep_seed1000_empty0_20260607T104608Z` | Match checkpoint `empty_cameras=0` instead of padding missing `camera2/3` with blank images | 13/50, 26.0% | +6.0 | -34.0 |
 
 Notes:
 
@@ -462,6 +463,9 @@ Notes:
 - Seed `1000` improves `very_hard` from `20.0%` to `26.0%`, but this is far
   short of the paper's `60.0%`. Seed/reset variance alone is therefore not
   enough to explain the parity gap.
+- Matching checkpoint `empty_cameras=0` produced the same `26.0%` as
+  `empty_cameras=2` under seed `1000`. Empty-camera padding is therefore not a
+  leading explanation for the `very_hard` gap.
 
 Artifacts:
 
@@ -471,6 +475,8 @@ Artifacts:
 | ep400/seed0 command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_ep400_seed0_fixedrename_20260607T102444Z/run_command.txt` |
 | seed1000 metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_20260607T103256Z/eval_info.json` |
 | seed1000 command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_20260607T103256Z/run_command.txt` |
+| seed1000/empty0 metrics | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_empty0_20260607T104608Z/eval_info.json` |
+| seed1000/empty0 command | `_workspace/runpod_results/metaworld_smolvla_veryhard_10ep_seed1000_empty0_20260607T104608Z/run_command.txt` |
 
 Interpretation:
 
