@@ -8,18 +8,20 @@ paper or official leaderboard values.
 
 ## Current Decision
 
-The best next external benchmark is **RoboCasa365 / RoboCasa**. CP25 has now
-advanced from install/runtime readiness to real SmolVLA single-task and
-small-subset evaluations.
+The best table-backed external benchmark is now **Meta-World MT50**. RoboCasa
+remains the best household-manipulation lane, but no public SmolVLA RoboCasa
+reference table has been found yet.
 
 Why:
 
 - ManiSkill/HAB already has repo-local execution plumbing and Mac-local pilot
   artifacts, but the current strict Mac renderer path is blocked and the
   available policy rows are random/zero controls.
+- Meta-World is directly reported in the SmolVLA paper Table 2 and has a
+  released checkpoint, `lerobot/smolvla_metaworld`.
 - RoboCasa365 is more paper-relevant for household long-horizon agentic
   wrappers, and the RunPod path now supports strict reset/step plus
-  `lerobot/smolvla_robocasa` evaluation over a 3-task subset.
+  `lerobot/smolvla_robocasa` evaluation over 3-task and 5-task subsets.
 - RoboTwin/Isaac/SimplerEnv/CALVIN are plausible later lanes, but they require
   new model/action-space compatibility work before a fair SmolVLA comparison.
 
@@ -75,6 +77,29 @@ Reference:
 
 - https://sites.google.com/view/maniskill-hab
 - https://openreview.net/forum?id=6bKEWevgSd
+
+### Meta-World MT50
+
+SmolVLA paper Table 2 reference:
+
+| Policy | Easy | Medium | Hard | Very Hard | Avg |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Diffusion Policy | 23.1 | 10.7 | 1.9 | 6.1 | 10.5 |
+| TinyVLA | 77.6 | 21.5 | 11.4 | 15.8 | 31.6 |
+| SmolVLA 0.45B | 82.5 | 41.8 | 45.0 | 60.0 | 57.3 |
+| SmolVLA 2.25B | 87.14 | 51.82 | 70.0 | 64.0 | 68.24 |
+
+Protocol notes:
+
+- SmolVLA paper reports 10 trials per task.
+- LeRobot Meta-World groups are `easy`, `medium`, `hard`, and `very_hard`.
+- The released checkpoint is `lerobot/smolvla_metaworld`.
+
+Reference:
+
+- https://arxiv.org/abs/2506.01844
+- https://huggingface.co/docs/lerobot/v0.4.3/metaworld
+- https://huggingface.co/lerobot/smolvla_metaworld
 
 ## Our Current Non-LIBERO Evidence
 
@@ -307,6 +332,109 @@ inference or RoboCasa runtime. The current RunPod setup installed lightweight
 `tex`, `tex_generative`, `fixtures_lw`, and `objs_lw` assets. Some microwave
 or stove task categories require fuller object assets or a task subset that is
 known to be covered by the lightweight registry.
+
+### 8. RoboCasa lightweight-compatible 5-task subset
+
+Task list:
+
+```text
+OpenFridge,AdjustWaterTemperature,OpenBlenderLid,CloseBlenderLid,TurnOnToaster
+```
+
+Result:
+
+| Task | Policy | Episodes | Horizon | Success | Success rate |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `OpenFridge` | `lerobot/smolvla_robocasa` | 20 | default LeRobot/RoboCasa `1000` | 0/20 | 0.0% |
+| `AdjustWaterTemperature` | `lerobot/smolvla_robocasa` | 20 | default LeRobot/RoboCasa `1000` | 0/20 | 0.0% |
+| `OpenBlenderLid` | `lerobot/smolvla_robocasa` | 20 | default LeRobot/RoboCasa `1000` | 0/20 | 0.0% |
+| `CloseBlenderLid` | `lerobot/smolvla_robocasa` | 20 | default LeRobot/RoboCasa `1000` | 0/20 | 0.0% |
+| `TurnOnToaster` | `lerobot/smolvla_robocasa` | 20 | default LeRobot/RoboCasa `1000` | 4/20 | 20.0% |
+| Overall 5-task subset | `lerobot/smolvla_robocasa` | 100 | default LeRobot/RoboCasa `1000` | 4/100 | 4.0% |
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| metrics | `_workspace/runpod_results/robocasa_smolvla_5task_20ep_default_horizon_20260607T094500Z/eval_info.json` |
+| command | `_workspace/runpod_results/robocasa_smolvla_5task_20ep_default_horizon_20260607T094500Z/run_command.txt` |
+
+Interpretation:
+
+This completed run confirms SmolVLA/RoboCasa is not uniformly broken: one
+lightweight-compatible atomic task, `TurnOnToaster`, produced nonzero success.
+It remains a secondary baseline because no public SmolVLA RoboCasa reference
+table has been found.
+
+### 9. Meta-World MT50 SmolVLA Table 2 catch-up run
+
+Command family:
+
+```bash
+PY=/root/physical-ai/envs/lerobot_py312/bin/python
+COMBO=/workspace/physical-ai/vendor/lerobot/src
+RENAME_MAP='{"observation.image":"observation.images.camera1"}'
+export MUJOCO_GL=egl
+export HF_HOME=/workspace/physical-ai/hf_home
+export TRANSFORMERS_CACHE=/workspace/physical-ai/hf_home/transformers
+export HF_HUB_CACHE=/workspace/physical-ai/hf_home/hub
+
+PYTHONPATH="$COMBO:${PYTHONPATH:-}" "$PY" -m lerobot.scripts.lerobot_eval \
+  --output_dir="_workspace/runpod_results/metaworld_smolvla_mt50_10ep_table2_20260607T115500Z" \
+  --policy.path=lerobot/smolvla_metaworld \
+  --env.type=metaworld \
+  --env.task=easy,medium,hard,very_hard \
+  --eval.n_episodes=10 \
+  --eval.batch_size=1 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --policy.empty_cameras=2 \
+  --rename_map="$RENAME_MAP" \
+  --seed=0
+```
+
+The rename and empty-camera arguments are required because the Meta-World env
+exposes one visual observation key, `observation.image`, while the released
+SmolVLA checkpoint expects `observation.images.camera1`,
+`observation.images.camera2`, and `observation.images.camera3`.
+
+Result versus SmolVLA paper Table 2:
+
+| Split | Ours | SmolVLA paper 0.45B | Delta | Episodes |
+| --- | ---: | ---: | ---: | ---: |
+| Easy | 65.4 | 82.5 | -17.1 | 280 |
+| Medium | 38.2 | 41.8 | -3.6 | 110 |
+| Hard | 38.3 | 45.0 | -6.7 | 60 |
+| Very Hard | 20.0 | 60.0 | -40.0 | 50 |
+| Table-style avg | 40.5 | 57.3 | -16.9 | 500 |
+| Episode-weighted overall | 51.6 | n/a | n/a | 500 |
+
+Artifacts:
+
+| Artifact | Path |
+| --- | --- |
+| metrics | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_table2_20260607T115500Z/eval_info.json` |
+| command | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_table2_20260607T115500Z/run_command.txt` |
+| easy representative success video | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_table2_20260607T115500Z/videos/easy_0/eval_episode_0.mp4` |
+| medium representative success video | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_table2_20260607T115500Z/videos/medium_0/eval_episode_5.mp4` |
+| hard representative success video | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_table2_20260607T115500Z/videos/hard_0/eval_episode_2.mp4` |
+| very hard representative success video | `_workspace/runpod_results/metaworld_smolvla_mt50_10ep_table2_20260607T115500Z/videos/very_hard_0/eval_episode_3.mp4` |
+
+Visual inspection:
+
+Representative frames from all four difficulty groups were inspected locally.
+They show valid Meta-World Sawyer tabletop scenes with task objects and are not
+blank renderer artifacts.
+
+Interpretation:
+
+This is the first non-LIBERO result in this thread with the right scale and a
+direct SmolVLA paper reference table. The result is not yet parity: medium and
+hard are close, but easy and especially very hard are far below the paper
+reference. The highest-probability parity issues are the one-camera
+`observation.image` mapping with two empty camera placeholders, possible
+version differences in LeRobot/Meta-World, and seed/task reset differences.
 
 Interpretation:
 

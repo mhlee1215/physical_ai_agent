@@ -20,12 +20,13 @@ Use this as the policy-only baseline for wrapper experiments.
 | Candidate | Why It Matters | Comparable Public Numbers | Local/RunPod Viability | Fit For Agentic Wrapper | Recommendation |
 | --- | --- | --- | --- | --- | --- |
 | LIBERO agentic retry repeat | Same benchmark as the anchor result; isolates wrapper effect without adding a new simulator variable. | Same-run baseline vs success-once can be compared internally; policy-only can still be shown next to ActionX SmolVLA. | Already runnable on RunPod. | High. Current full Long probe recovered `15/29` failed episodes and moved Long from `71.0` to `86.0` success-once over 100 episodes. | Do this first: repeat full Long, then expand to all 4 suites if stable. |
-| RoboCasa365 / RoboCasa | Strong household-manipulation relevance; current leaderboard is explicitly multi-task generalist robot policy evaluation over atomic and composite kitchen tasks. | RoboCasa365 leaderboard reports 50-task Overall / Atomic-Seen / Composite-Seen / Composite-Unseen, e.g. RLDX-1 `33.2`, GR00T N1.5 `23.9`, pi0.5 `16.9`, pi0 `14.8`. LeRobot docs expose `CloseFridge` single-task 20ep evaluation for quick iteration. | CP25 probe gate, strict RunPod reset/step, SmolVLA `CloseFridge` 20ep, and a 3-task 60ep subset now run. 5-task scale-up hit a lightweight-asset blocker at `TurnOnMicrowave`. | Very high. Long-horizon composite tasks are a natural target for planner/verifier/retry. | Current best external benchmark. We have a 3-task subset result: `lerobot/smolvla_robocasa` on `CloseFridge`, `OpenCabinet`, `OpenDrawer` default horizon scored `0/60`. Next step is either fuller assets or a lightweight-covered atomic subset. |
+| Meta-World MT50 | SmolVLA paper Table 2 reports direct SmolVLA Meta-World numbers, so this is the cleanest non-LIBERO "reference table catch-up" target. | SmolVLA paper Table 2 reports Meta-World success rates: SmolVLA 0.45B `Easy 82.5`, `Medium 41.8`, `Hard 45.0`, `Very Hard 60.0`, `Avg 57.3`; SmolVLA 2.25B `Avg 68.24`; Diffusion Policy `Avg 10.5`; TinyVLA `Avg 31.6`. | RunPod passed full MT50 10ep/task with `lerobot/smolvla_metaworld` after mapping `observation.image -> observation.images.camera1` and setting `--policy.empty_cameras=2`. | Medium. Good for broad manipulation reference parity; less household-specific than RoboCasa but much stronger for published-table comparison. | Current main external benchmark. Our table-style average is `40.5%` vs paper `57.3%` (`-16.9pp`); weighted episode average is `51.6%`. Needs parity debugging, especially `very_hard`. |
+| RoboCasa365 / RoboCasa | Strong household-manipulation relevance; current leaderboard is explicitly multi-task generalist robot policy evaluation over atomic and composite kitchen tasks. | RoboCasa365 leaderboard reports 50-task Overall / Atomic-Seen / Composite-Seen / Composite-Unseen, e.g. RLDX-1 `33.2`, GR00T N1.5 `23.9`, pi0.5 `16.9`, pi0 `14.8`. LeRobot docs expose `CloseFridge` single-task 20ep evaluation for quick iteration, but no public SmolVLA RoboCasa success table has been found yet. | CP25 probe gate, strict RunPod reset/step, SmolVLA `CloseFridge` 20ep, a 3-task 60ep subset, and a lightweight-compatible 5-task 100ep subset now run. The first 5-task scale-up with microwave/stove hit a lightweight-asset blocker at `TurnOnMicrowave`. | Very high. Long-horizon composite tasks are a natural target for planner/verifier/retry. | Keep as secondary household benchmark. Current 5-task subset scored `4/100`, entirely from `TurnOnToaster` `4/20`; useful for our own baseline, but less useful for public SmolVLA reference catch-up. |
 | ManiSkill-HAB / MS-HAB | ICLR 2025 low-level home rearrangement benchmark; metrics include subtask success-once and progressive completion. | Paper reports 1000 episodes per evaluation run; subtask success-once examples include TidyHouse Pick val `77.48` RL-per and PrepareGroceries Pick val `72.32` RL-per. | Mac supports ManiSkill CPU simulation and standard rendering, but no Mac GPU simulation. RunPod may need NVIDIA Vulkan/SAPIEN validation; previous PickCube path hit driver issues. | Medium-high. It is useful for low-level verifier/subtask recovery, but less directly aligned to SmolVLA LIBERO policy checkpoints. | Keep as partial, smaller-scale checkpoint. Use for subtask-level research, not as the next main paper number. |
 | vla-evaluation-harness cross-benchmark smoke | New unified VLA evaluation framework with Dockerized benchmarks and model servers; supports LIBERO, CALVIN, SimplerEnv, ManiSkill, RoboCasa, and more. | Harness paper/proposal lists LIBERO `4 suites x 10 tasks x 50 episodes`, CALVIN `1000` chained sequences, SimplerEnv `4` WidowX tasks x `24` episodes. | RunPod only for serious use. Current public model server list does not show SmolVLA, so SmolVLA may need a custom server. | High as infrastructure. It can make multi-benchmark comparison less bespoke if SmolVLA integration is added. | Run an installation/config audit next; do not replace the working LIBERO path until SmolVLA server feasibility is confirmed. |
 | CALVIN | Classic language-conditioned long-horizon manipulation benchmark; directly relevant to language-conditioned sequence completion. | Public protocols commonly report chained sequence success; vla-evaluation-harness lists `ABC->D`, `1000` chained sequences. | RunPod likely; separate dependency stack. | Medium. Good for long-horizon language policy evaluation, but our current SmolVLA LIBERO checkpoint is not automatically CALVIN-compatible. | Candidate after RoboCasa or harness integration; first task is checkpoint/model compatibility, not success table generation. |
 | SimplerEnv | Real-to-sim VLA evaluation benchmark with Google Robot/WidowX style tasks; useful for generalization and real-world proxy claims. | Harness lists `4` WidowX tasks x `24` episodes; recent VLA papers use SimplerEnv alongside LIBERO. | RunPod likely; Vulkan/simulator details need validation. | Medium. More about policy generalization than household planner/retry. | Useful for broader VLA comparison, but not first choice for our agentic-wrapper claim. |
-| Meta-World / robosuite classic tasks | Stable manipulation baselines and easier environment setup. | Many public success-rate tables exist, but policy/action setup differs strongly from VLA household benchmarks. | Mac and RunPod feasible. | Low-medium. Good debugging benchmark, weak paper relevance for SmolVLA agentic household claims. | Do not spend main evaluation budget here unless we need a fast control-system sanity check. |
+| Meta-World / robosuite classic tasks | Covered above as the current table-backed SmolVLA target. | SmolVLA paper Table 2 and LeRobot Meta-World docs provide direct protocol anchors. | RunPod feasible after dependency install. | Medium. | Treat as the immediate post-RoboCasa execution lane. |
 
 ## Non-LIBERO Comparison Table To Build Next
 
@@ -34,28 +35,38 @@ table should be non-LIBERO only:
 
 | Row | Benchmark | Scale | Metric | Our current number | Reference number | Status |
 | --- | --- | ---: | --- | ---: | ---: | --- |
+| Table-backed result | Meta-World MT50 | 50 tasks, 10 trials per task in SmolVLA paper | task success | Easy `65.4`, Medium `38.2`, Hard `38.3`, Very Hard `20.0`, table avg `40.5`; weighted overall `51.6` | SmolVLA 0.45B Avg `57.3`; Easy `82.5`, Medium `41.8`, Hard `45.0`, Very Hard `60.0` | Completed; comparable protocol, but `-16.9pp` table-average delta needs parity debugging |
 | Mac-local pilot | ManiSkill `PickCube-v1` | 20 episodes per policy | task success | random `0.0`, zero `0.05` | RDT repo reports OpenVLA `8%`, DP `40%`, RDT `77.2%` on PickCube under a different trained-policy protocol | Pilot only; not comparable yet |
 | Mac-local pilot | ManiSkill-HAB SetTable / PrepareGroceries validation tasks | 20 episodes per task/policy | success-once | random/zero `0.0` | MS-HAB paper-scale runs use success-once over much larger evaluation; paper baselines are trained RL/IL policies | Executable pilot; not comparable policy |
 | Current blocker | ManiSkill `PickCube-v1` no-fallback strict | 1 episode | direct target env execution | blocked by `ErrorIncompatibleDriver` on current Mac renderer path | n/a | Needs RunPod/driver-compatible ManiSkill renderer |
 | CP25 RunPod strict probe | RoboCasa365 / RoboCasa | import/reset-step gate | runtime readiness | passed for `CloseFridge` reset + one zero-action step | n/a | Runtime gate passed with lightweight assets |
 | First strict external benchmark | RoboCasa / LeRobot single-task | 20 episodes, default 1000-step horizon | task success | `lerobot/smolvla_robocasa` on `CloseFridge`: `0/20`, `0.0%` | LeRobot documents this exact single-task 20ep protocol; not a leaderboard value | Completed; pipeline runs but baseline is weak on this task |
 | First strict multi-task subset | RoboCasa / LeRobot 3-task subset | 20 episodes per task, 60 total, default 1000-step horizon | task success | `CloseFridge` `0/20`, `OpenCabinet` `0/20`, `OpenDrawer` `0/20`; overall `0/60`, `0.0%` | Same LeRobot RoboCasa evaluation protocol; still not the full RoboCasa365 50-task leaderboard | Completed; protocol-compatible subset with video evidence |
+| Lightweight-compatible multi-task subset | RoboCasa / LeRobot 5-task subset | 20 episodes per task, 100 total, default 1000-step horizon | task success | overall `4/100`, `4.0%`; `TurnOnToaster` `4/20`, all other selected tasks `0/20` | No public SmolVLA RoboCasa reference table found | Completed; secondary internal baseline |
 | Current scale-up blocker | RoboCasa / LeRobot 5-task subset | intended 20 episodes per task | reset/eval creation | completed first 3 task groups, then blocked at `TurnOnMicrowave` | n/a | Lightweight `objs_lw` asset registry lacks required categories; use fuller assets or a covered task subset |
 | Planned full external benchmark | RoboCasa365 / RoboCasa | 50-task benchmark, 3 splits | average task success | pending | RLDX-1 `33.2`, GR00T N1.5 `23.9`, pi0.5 `16.9`, pi0 `14.8`, DP `6.1` | Next scale-up after single-task validation |
 
 For the current goal, do not spend more cycles on LIBERO repeat tables unless
 the user explicitly asks. The next meaningful work is either:
 
-1. make ManiSkill `PickCube-v1` strict rendering work on a suitable RunPod
-   host and run a trained-policy-compatible comparison, or
-2. expand RoboCasa from the completed 3-task 60ep subset to a fuller
-   lightweight-covered atomic subset, then install fuller assets before
-   attempting all RoboCasa365 leaderboard splits.
+1. debug Meta-World parity: our run is comparable scale but below Table 2,
+   mostly due to `easy` and `very_hard`;
+2. keep RoboCasa as a secondary household benchmark, using the current subset
+   results as our own baseline rather than a public SmolVLA reference catch-up;
+   and
+3. make ManiSkill `PickCube-v1` strict rendering work on a suitable RunPod
+   host only after Meta-World parity is understood.
 
 ## External Sources
 
 - ActionX Table 1 SmolVLA LIBERO reference:
   <https://www.frontiersin.org/journals/neurorobotics/articles/10.3389/fnbot.2026.1806605/full>
+- SmolVLA paper Table 2 Meta-World reference:
+  <https://arxiv.org/abs/2506.01844>
+- LeRobot Meta-World docs:
+  <https://huggingface.co/docs/lerobot/v0.4.3/metaworld>
+- `lerobot/smolvla_metaworld` model:
+  <https://huggingface.co/lerobot/smolvla_metaworld>
 - RoboCasa365 leaderboard:
   <https://robocasa.ai/leaderboard.html>
 - RoboCasa benchmarking documentation:
