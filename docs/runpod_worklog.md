@@ -1554,3 +1554,47 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   but they do not recover this failure. To get a positive paper-facing result,
   the next intervention likely needs semantic state feedback from LIBERO/MuJoCo
   info or rendered observations, not only action norm or policy queue reset.
+
+### LIBERO Goal Task 6 Semantic State Probe and Late Placement Intervention
+
+- Added semantic probe:
+  `scripts/probe_libero_env_semantic_state.py`.
+- Probe result:
+  LeRobot/LIBERO exposes raw object and robot state through the underlying
+  `LiberoEnv._env.env._get_observations()` path inside rollout.
+- Available task `6` semantic keys:
+  - `cream_cheese_1_pos`
+  - `akita_black_bowl_1_pos`
+  - `robot0_eef_pos`
+  - `robot0_gripper_qpos`
+- Extended real in-episode wrapper with:
+  - `semantic_no_progress` trigger
+  - semantic trace fields: target position, receptacle position, EEF position,
+    target-to-receptacle distance, EEF-to-target distance
+  - `semantic_reach_target` intervention
+  - `semantic_push_receptacle` intervention
+- Early semantic intervention result:
+  - `task6_semantic_probe_none`: success `false`, action steps `300`
+  - `task6_semantic_reach_g2`: success `false`, action steps `300`
+  - `task6_semantic_reach_g4`: success `false`, action steps `300`
+  - `task6_semantic_reach_g4_open`: success `false`, action steps `300`
+- Late-stage semantic intervention result:
+  - `task6_late_probe_none`: success `false`, action steps `300`
+  - `task6_late_push_g5_close`: success `false`, action steps `300`
+  - `task6_late_push_g10_close`: success `false`, action steps `300`
+  - `task6_late_push_g5_open`: success `false`, action steps `300`
+  - `task6_late_reach_g2_open`: success `false`, action steps `300`
+- Semantic diagnostic:
+  - baseline minimum target-to-bowl distance: `0.062636` at step `229`
+  - baseline final target-to-bowl distance: `0.062821`
+  - `late_reach_g2_open` final EEF-to-target improved from `0.080481` to
+    `0.047316`, but target-to-bowl stayed `0.062821`
+- Report:
+  - `docs/research/libero_goal_task6_semantic_intervention_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task6_semantic_intervention_matrix_summary_2026_06_07.json`
+- Interpretation:
+  small semantic interventions reveal improvement potential at the diagnostic
+  level: the wrapper can identify a late placement stall and move the gripper
+  closer to the object. However, it has not yet produced benchmark success or
+  action-step efficiency improvement. The next useful intervention should be
+  contact-aware placement/release rather than generic reach or push vectors.
