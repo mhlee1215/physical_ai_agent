@@ -8,7 +8,7 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 
 - Project plan: `docs/agentic_physical_ai_plan.md`
 - Simulation config: `configs/sim/libero.yaml`
-- Checkpoint smoke command: `sh scripts/checkpoint_01.sh`
+- Current smoke command: `PYTHONPATH=src python3 -B -m unittest tests.test_checkpoint_25 tests.test_real_so100_checkpoint_26_gate`
 
 ## Outputs
 
@@ -48,18 +48,9 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 - output files: command output summarized in final response
 - completion criteria: verification passes, or blocker is explicit and reproducible
 
-## Required Checkpoint 01 Verification
+## Retired Checkpoint Gates
 
-Run these commands before completing checkpoint 01:
-
-```bash
-sh scripts/bootstrap_checkpoint_01.sh
-sh scripts/checkpoint_01.sh
-sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco
-sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env
-```
-
-The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightweight command must pass in the scaffold environment and writes evidence to `_workspace/checkpoints/checkpoint_01_smoke.json`. The Mac-local simulation command writes evidence to `_workspace/checkpoints/checkpoint_01_local_sim.json`; it must pass before claiming checkpoint 01 works on the target Mac. The full LIBERO/LeRobot command writes evidence to `_workspace/checkpoints/checkpoint_01_libero_strict.json`; current LeRobot documentation says LIBERO requires Linux, so on macOS this gate should be reported as a future Linux/cloud blocker rather than the Mac-local checkpoint.
+CP01-CP24 were completed milestone gates and are no longer part of the active verification surface. Do not add new work that depends on deleted `scripts/checkpoint_*.sh` commands or retired `physical_ai_agent.checkpoints.checkpoint_01` through `checkpoint_24` modules. Use the maintained evaluation, CP25 RoboCasa, and CP26 real SO-100 paths below.
 
 ## Failure Policy
 
@@ -166,265 +157,20 @@ that has been pulled on RunPod. Ad hoc `rsync` or uncommitted remote edits may
 be used for quick debugging, but they are not acceptable evidence for a
 reported benchmark table.
 
-## Oracle Overlay Validation Workflow
+## Retired Oracle Overlay Workflow
 
-Oracle Point Overlay validation has a reuse-only cloud policy:
-
-- Do not create a new RunPod automatically for overlay visualization.
-- Do not start a stopped Pod automatically for overlay visualization.
-- Use `scripts/runpod_reuse_live_oracle_probe.sh` as the reuse-only cloud
-  entrypoint; it must fail fast when `RUNPOD_SSH` is missing rather than
-  creating or starting a Pod.
-- Reuse an already-running probe Pod only when `RUNPOD_SSH` points to it and
-  the user has agreed that the Pod is safe to use.
-- Never use or stop the active baseline/parity Pod for overlay probes unless
-  the user explicitly identifies it as safe.
-- If an overlay-only probe Pod is still running and no live renderer work is
-  needed, stop that overlay Pod to avoid cost leakage.
-- Do not upload local workspace source/image artifacts to RunPod as a
-  workaround. Use committed code on the remote clone or local-only validation.
-
-Canonical local overlay rebuild:
-
-```bash
-sh scripts/rebuild_oracle_overlay_milestones.sh
-```
-
-This command must regenerate the local non-RunPod overlay evidence:
-
-- diverse non-center object projection HTML/contact sheets
-- center-bias audit HTML/PNG/JSON
-- raw-vs-overlay and zoomed representative figures
-- paper-facing figure pack
-- live blocker audit from fetched artifacts
-- milestone dashboard
-
-Preferred representative figures are:
-
-- `_workspace/runpod_results/affordance_overlay_validation_20260606T1955Z/diverse_object_projection/diverse_object_full_contact_sheet.png`
-- `_workspace/runpod_results/affordance_overlay_validation_20260606T1955Z/diverse_object_projection/diverse_object_zoom_contact_sheet.png`
-
-Do not use center-looking debug contact sheets as paper-facing representative
-figures. They are regression/debug artifacts only.
-
-Strict live acceptance gate:
-
-- at least 10 live overlay frames
-- live RGB, object pose, and camera parameters from the same simulator timesteps
-- generated overlay gallery HTML/contact sheet/GIF
-- strict live audit status `passed`
-- no `maniskill_blocker.md`
-
-If live ManiSkill rendering fails with Vulkan/SAPIEN errors, report the live
-gate as blocked rather than substituting synthetic or saved-frame evidence.
-
-Image artifact acceptance gate:
-
-- Any milestone that produces, edits, compares, or claims correctness from
-  images, videos, overlays, contact sheets, GIFs, plots, or visual reports must
-  include visual inspection before it can be called passed.
-- The final answer must explicitly state what was inspected and whether the
-  visual artifact matches the intended semantics.
-- Do not infer visual correctness from JSON pass counts, script exit codes, or
-  generated file existence alone.
-- For overlays and projections, inspect at least one representative contact
-  sheet plus the most suspicious or user-questioned crop/frame when available.
-- If the image visibly contradicts the claimed result, mark the milestone
-  failed or blocked, not passed, even when the manifest says `passed`.
-- If a projection point appears on the wrong object, wrong side, vertically
-  mirrored, center-biased, or otherwise visually implausible, report it as a
-  projection/target-selection bug and do not use it as paper-facing evidence.
-- For paper-facing image evidence, require both machine-readable metadata and
-  human-visible visual alignment. The metadata proves provenance; the visual
-  inspection proves the artifact is semantically credible.
-
-Actual simulation true-oracle evidence gate:
-
-- Final paper-facing Oracle Point Overlay evidence must come from actual
-  simulation rollout frames, not only synthetic diagnostics.
-- The accepted artifact is
-  `maniskill_rollout/smolvla_affordance_true_oracle_steps.json` from a CP24
-  `smolvla_affordance_oracle --real-images` run.
-- Each counted step must bind actual sim RGB, overlay frame, object pose, camera
-  metadata, episode, and step from the same action-input observation.
-- Use `sh scripts/run_actual_sim_true_oracle_cp24.sh` inside an already-approved
-  renderer-capable environment. This wrapper does not create or manage RunPod
-  Pods.
-- If the wrapper produces the true-oracle manifest, import it with
-  `sh scripts/import_actual_sim_true_oracle_milestone.sh <manifest>`; the wrapper
-  does this automatically.
-- Until `strict_true_oracle_step_count >= 10`, report
-  `actual_sim_true_oracle_projection` as blocked.
-
-Current lifecycle convention:
-
-- Overlay/probe-only Pods should be stopped after the local artifacts and
-  blocker audit are fetched.
-- Baseline/parity Pods should remain running if they are carrying the active
-  baseline experiment; report when they might be useful next instead of
-  stopping them opportunistically.
+The CP24-era oracle overlay workflow is retired from the active checkpoint surface. Historical reports may remain under `docs/research/`, but new validation should use maintained benchmark evaluation entrypoints or the CP26 real SO-100 gate rather than CP24 overlay wrappers.
 
 ## Validation Checks
 
-- `sh scripts/bootstrap_checkpoint_01.sh`
-- `sh scripts/checkpoint_01.sh`
-- `sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco`
-- `sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env`
-- `sh scripts/checkpoint_02_04.sh`
-- `sh scripts/bootstrap_checkpoint_05_06.sh`
-- `sh scripts/checkpoint_05_06.sh`
-- `sh scripts/checkpoint_05_06.sh --require-real-smolvla --output-dir _workspace/checkpoints/checkpoint_05_06_require_real`
-- `sh scripts/bootstrap_checkpoint_07_13.sh`
-- `sh scripts/checkpoint_07_13.sh`
-- `sh scripts/bootstrap_checkpoint_14_15.sh`
-- `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`
-- `sh scripts/checkpoint_16.sh`
-- `sh scripts/checkpoint_17.sh`
-- `sh scripts/checkpoint_18.sh`
-- `sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla`
+- `sh scripts/checkpoint_25.sh`
+- `sh scripts/checkpoint_25.sh --probe-reset-step --require-robocasa --task CloseFridge`
 - `sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download --smolvla-action-steps 15 --show-inputs --fps 2 --max-steps 1`
-- `sh scripts/checkpoint_20.sh`
-- `sh scripts/checkpoint_21.sh`
-- `sh scripts/checkpoint_22.sh`
-- `sh scripts/checkpoint_23.sh`
-- `sh scripts/bootstrap_checkpoint_24.sh`
-- `sh scripts/checkpoint_24.sh`
-- `sh scripts/checkpoint_24.sh --require-maniskill`
-- `sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_1ep_1step`
-- `sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --real-images --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_images_1ep_1step`
-- `sh scripts/eval_smolvla_libero_mac.sh`
-- `LIBERO_TASKS=libero_spatial LIBERO_N_EPISODES=1 sh scripts/eval_smolvla_libero_linux.sh`
-- `LIBERO_TASKS=libero_spatial LIBERO_TASK_IDS='[0,1,2]' LIBERO_N_EPISODES=5 sh scripts/eval_smolvla_libero_linux.sh`
-- `sh scripts/runpod_smolvla_libero_eval.sh`
 - `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
-- `python3 -B -c "import ast, pathlib; ..."` as a no-dependency fallback syntax check
+- `PYTHONPATH=src python3 -B -c "import ast, pathlib; files=list(pathlib.Path('src').rglob('*.py'))+list(pathlib.Path('tests').rglob('*.py')); [ast.parse(p.read_text()) for p in files]; print(f'parsed {len(files)} files')"` as a no-dependency fallback syntax check
 
-## Required Checkpoint 07-13 Verification
-
-Run these commands before completing checkpoints 07-13:
-
-```bash
-sh scripts/bootstrap_checkpoint_07_13.sh
-sh scripts/checkpoint_07_13.sh
-```
-
-The bootstrap command installs SO101-Nexus MuJoCo into `.venv`. The checkpoint command runs a real SO101-Nexus reset/step, saves a deterministic rollout trace, writes schematic PNG/GIF visualizations, verifies a LeRobot EnvHub-compatible `make_env` surface, executes an SO101 action-chunk policy, validates the SO101-to-SmolVLA dry input mapping, runs a dry SmolVLA action chunk through the simulator, and writes a LeRobot-like JSONL demo dataset. Native MuJoCo RGB rendering can fail on headless macOS, so CP08/CP12 visualization is intentionally trace-derived while the physics steps still execute in SO101-Nexus.
-
-## Required Checkpoint 14-15 Verification
-
-Run these commands before completing checkpoints 14-15:
-
-```bash
-sh scripts/bootstrap_checkpoint_14_15.sh
-sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla
-```
-
-The strict checkpoint command must save a real SO101-Nexus 3D render PNG/GIF, load LeRobot's pretrained `lerobot/smolvla_base` through `SmolVLAPolicy.from_pretrained()`, execute `select_action()`, step SO101-Nexus with the resulting action for at least one rollout, and save a 3D SmolVLA rollout PNG/GIF plus JSONL trace. A non-strict run may pass with documented blockers, but it is not sufficient to claim CP14 or CP15 are complete.
-
-## Required Checkpoint 16 Verification
-
-Run this command before completing checkpoint 16:
-
-```bash
-sh scripts/checkpoint_16.sh
-```
-
-The checkpoint command must list available SO101 camera inputs, capture real MuJoCo camera RGB frames, save the state/action/camera input manifest, and write a preview PNG/GIF showing what the policy input would contain. This checkpoint must pass before changing SmolVLA rollout code to depend on visual input.
-
-## Required Checkpoint 17 Verification
-
-Run this command before completing checkpoint 17:
-
-```bash
-sh scripts/checkpoint_17.sh
-```
-
-The checkpoint command must save both `wrist_cam` and `top_down` RGB frames for each captured step, write a multi-input manifest, and save a preview PNG/GIF showing both visual inputs alongside the state/action summary. The manifest should record planned LeRobot image feature keys for the later real SmolVLA image-input rollout.
-
-## Required Checkpoint 18-19 Verification
-
-Run these commands before completing checkpoints 18-19:
-
-```bash
-sh scripts/checkpoint_18.sh
-sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla
-```
-
-Checkpoint 18 must record `wrist_cam` and `egocentric_cam` as policy inputs and `top_down` as a debug input. Checkpoint 19 must load pretrained `lerobot/smolvla_base`, feed real SO101 RGB frames into SmolVLA image features without zero image tensors, step SO101-Nexus with the resulting action, and save input preview, rollout trace, and 3D rollout PNG/GIF artifacts.
-
-## Required Checkpoint 20-23 Verification
-
-Run these commands before completing checkpoints 20-23:
-
-```bash
-sh scripts/checkpoint_20.sh
-sh scripts/checkpoint_21.sh
-sh scripts/checkpoint_22.sh
-sh scripts/checkpoint_23.sh
-```
-
-Checkpoint 20 must write a rule-based SO101 subgoal plan. Checkpoint 21 must execute a real SO101 simulator step and save a simulation-state verifier decision based on `tcp_to_target_dist` and `success`. Checkpoint 22 must execute planned subgoals with a retry event after a verifier failure and save planner/verifier/retry trace records. Checkpoint 23 must compare `policy_only` and `agentic_retry` outputs and save both JSON metrics and a Markdown comparison report.
-
-## Required Checkpoint 24 Verification
-
-Run these commands before completing checkpoint 24:
-
-```bash
-sh scripts/bootstrap_checkpoint_24.sh
-sh scripts/checkpoint_24.sh --require-maniskill
-sh scripts/checkpoint_24.sh --require-maniskill --episodes 20 --steps 100 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_pickcube_baselines_20ep_100step
-sh scripts/checkpoint_24.sh --require-maniskill --episodes 10 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_dry_10ep_50step
-sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_1ep_1step
-sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --real-images --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_images_1ep_1step
-sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADSetTableVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_hab_settable_val_2ep_50step
-sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADPrepareGroceriesVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_hab_preparegroceries_val_2ep_50step
-sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADSetTableVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_hab_settable_val_smolvla_dry_2ep_50step
-sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADPrepareGroceriesVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_hab_preparegroceries_val_smolvla_dry_2ep_50step
-```
-
-Checkpoint 24 must register ManiSkill / ManiSkill-HAB as the first research-relevant Mac-local evaluation gate, execute a real ManiSkill reset/step rollout when dependencies are installed, save rollout JSONL metrics and summary artifacts, and write a SmolVLA-to-ManiSkill evaluation plan. The non-strict command may pass with a documented dependency blocker, but `--require-maniskill` is required before claiming the benchmark pipeline is executable on the target Mac. The longer baseline command must produce per-policy `random` and `zero` metrics on `PickCube-v1`, including success rate, mean reward sum, and mean episode steps. `smolvla_dry` must write `maniskill_rollout/smolvla_dry_bridge_manifest.json` and is only a bridge-shape baseline, not pretrained model performance. `smolvla_real` must load LeRobot's pretrained `lerobot/smolvla_base`, execute `select_action()`, clip the action into the ManiSkill action space, and step the environment; the smallest probe may use zero image tensors, while the `--real-images` probe must map ManiSkill `sensor_data.base_camera.rgb` into SmolVLA image features and save `maniskill_rollout/smolvla_real_input.png`. The HAB partial probes must use `--no-fallback-env` so the requested `ReplicaCAD...SceneManipulation` task is authoritative. They require `ReplicaCAD`, `ReplicaCADRearrange`, and `ycb` assets. On macOS, install `vulkan-loader`, `vulkan-tools`, and `molten-vk` with Homebrew before strict manipulation-task evaluation. If the default `PickCube-v1` manipulation task is blocked by a headless SAPIEN render-device failure, CP24 may execute the fallback `Empty-v1` rollout and must preserve the `PickCube-v1` blocker in `maniskill_blocker.md`.
-
-## Required CP24B LIBERO Oracle Overlay Readiness Verification
-
-CP24B is a LIBERO real-simulation oracle affordance overlay readiness milestone.
-It is separate from ManiSkill task-quality performance.
-
-Accepted current evidence:
-
-- `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/libero_mujoco_oracle_curated_diverse_contact_sheet.jpg`
-- `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/libero_mujoco_oracle_curated_manifest.json`
-- `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/verification_report_final.md`
-
-The CP24B evidence must include:
-
-- actual LIBERO/MuJoCo RGB frames, not synthetic diagnostics;
-- raw MuJoCo segmentation or LIBERO simulator-state provenance;
-- semantic object targets and drawer/handle targets where appropriate;
-- a curated diverse sample set with near-duplicates excluded;
-- visual inspection of the contact sheet and suspicious individual frames;
-- explicit image orientation handling against official LIBERO figure convention.
-
-For paper-facing figures, do not use native `agentview` frames directly unless
-orientation has been checked visually. If a vertical visualization transform is
-applied, preserve native coordinates and displayed coordinates separately in the
-manifest.
-
-## Planned CP24C Verification
-
-CP24C should measure whether the CP24B overlay actually changes SmolVLA
-behavior or task success.
-
-Minimum comparison:
-
-- `smolvla_rgb_only`
-- `smolvla_rgb_oracle_point`
-- optional `smolvla_rgb_oracle_point_agentic_retry`
-
-Do not claim policy improvement from CP24B alone. CP24B proves policy-input
-readiness; CP24C must provide behavior or success-rate evidence.
-
-## Required Checkpoint 25 Verification
+ ## Required Checkpoint 25 Verification
 
 Checkpoint 25 registers RoboCasa / RoboCasa365 as the heavier long-horizon
 household manipulation benchmark. Keep CP25 separate from CP24 because
