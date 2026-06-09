@@ -50,7 +50,7 @@ tests/
 - [ ] Add retry after failed subgoals.
 - [ ] Compare `policy_only` against `agentic_retry`.
 
-See [docs/agentic_physical_ai_plan.md](docs/agentic_physical_ai_plan.md) for the full checklist.
+See [docs/agentic_physical_ai_plan.md](docs/agentic_physical_ai_plan.md) for the full checklist. See [docs/checkpoint_status.md](docs/checkpoint_status.md) for the current checkpoint ledger through CP24 and the exact claim boundary for each completed gate.
 
 ## Development
 
@@ -273,4 +273,13 @@ The SmolVLA layer is not treated as task-quality ManiSkill evaluation until two 
 
 ## Checkpoint 25: RoboCasa
 
-RoboCasa is registered as the heavier long-horizon household manipulation checkpoint. CP25 should remain separate from CP24 because RoboCasa assets are large and the benchmark is better used after the lighter ManiSkill local gate passes. The planned strict gate is a RoboCasa reset/step rollout, task success metrics, trace/video artifacts, and the same `policy_only` vs `agentic_retry` comparison contract used by CP23/CP24.
+Register RoboCasa / RoboCasa365 as the heavier long-horizon household manipulation checkpoint:
+
+```bash
+sh scripts/checkpoint_25.sh
+sh scripts/checkpoint_25.sh --probe-reset-step --require-robocasa --task CloseFridge
+```
+
+The non-strict command writes `_workspace/checkpoints/checkpoint_25_robocasa/checkpoint_report.json`, records a dependency blocker when `robocasa` / `robosuite` are not installed, and saves `robocasa_install_and_eval.md` plus `robocasa365_reference_table.md`. The strict command requires a real RoboCasa reset/step rollout through `robocasa.utils.env_utils.create_env()`.
+
+CP25 is separate from CP24 because RoboCasa assets are larger and the paper-comparable target is RoboCasa365, not a lightweight Mac-local smoke. The generated eval plan records the `lerobot/smolvla_robocasa` command shape, the required RoboCasa camera rename map, and the 20-episodes-per-task protocol used for published RoboCasa365-style results.

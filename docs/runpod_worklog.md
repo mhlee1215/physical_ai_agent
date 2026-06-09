@@ -20,6 +20,234 @@ API responses that may contain secrets.
 - Before stopping or terminating a Pod, fetch result bundles to the local repo
   with `scripts/runpod_fetch_results.sh`.
 
+## 2026-06-08 Meta-World Official LeRobot Reproduction
+
+### Current State
+
+- Status: full public-code MT50 reproduction succeeded after environment fix;
+  evidence fetched locally; active Pod should be stopped after this entry.
+- Goal: run public LeRobot Meta-World evaluation with
+  `lerobot/smolvla_metaworld` and record the full debugging path.
+- Failed Pod: `bd7p82wu1yn2xg`.
+- Minimal successful Pod: `3ix18qgdxc4v21`.
+- Full MT50 successful Pod: `r6jzvw1osez5pm`.
+- GPU: RTX 4090 24GB.
+- Image:
+  `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`.
+- Failed-run local evidence bundle:
+  `_workspace/runpod_results/metaworld_official_repro/metaworld_official_v051_evidence/`.
+- Successful-run local evidence bundle:
+  `_workspace/runpod_results/metaworld_public_minimal_no_gym_pin_20260608T0625Z/`.
+- Full MT50 local evidence bundle:
+  `_workspace/runpod_results/metaworld_public_full_mt50_10ep_20260608T0650Z/metaworld_public_full_mt50_10ep_20260608T0650Z/`.
+- Report:
+  `docs/research/metaworld_official_repro_2026_06_08.md`.
+- Full MT50 report:
+  `docs/research/metaworld_public_full_mt50_2026_06_08.md`.
+
+### Successful Public-Code Full MT50 Run
+
+Fresh public LeRobot clone, no local source patch, no Gymnasium downgrade:
+
+```bash
+MUJOCO_GL=egl lerobot-eval \
+  --output_dir="/tmp/metaworld_public_repro_results/metaworld_public_full_mt50_10ep_20260608T0650Z/eval" \
+  --policy.path=lerobot/smolvla_metaworld \
+  --env.type=metaworld \
+  --env.task=easy,medium,hard,very_hard \
+  --eval.batch_size=1 \
+  --eval.n_episodes=10 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --policy.empty_cameras=0 \
+  --rename_map='{"observation.image":"observation.images.camera1"}' \
+  --seed=0
+```
+
+Successful environment:
+
+- LeRobot source: `v0.5.1-115-g09808183`,
+  commit `09808183ca72c30cbb41b653586f6d0632a4bcca`.
+- Runtime probe:
+  - Python `3.12.13`
+  - `lerobot 0.5.2`
+  - `torch 2.11.0`
+  - `metaworld 3.0.0`
+  - `gymnasium 1.3.0`
+  - `mujoco 3.9.0`
+  - CUDA available on NVIDIA GeForce RTX 4090
+- Exit code: `0`.
+- Episodes: `500` (`50` tasks x `10` episodes per task).
+- LeRobot weighted overall: `55.00%`.
+- Paper-style arithmetic split average: `42.07%`.
+
+Comparison against SmolVLA paper Table 2, 0.45B row:
+
+| Meta-World split | Ours success % | SmolVLA 0.45B Table 2 % | Delta |
+| --- | ---: | ---: | ---: |
+| Easy | 68.21 | 82.50 | -14.29 |
+| Medium | 52.73 | 41.80 | +10.93 |
+| Hard | 23.33 | 45.00 | -21.67 |
+| Very Hard | 24.00 | 60.00 | -36.00 |
+| Arithmetic split avg | 42.07 | 57.30 | -15.23 |
+
+Visual check:
+
+```text
+_workspace/runpod_results/metaworld_public_full_mt50_10ep_20260608T0650Z/metaworld_public_full_mt50_10ep_20260608T0650Z/frames/eval_videos_very_hard_4_eval_episode_9_frame30.png
+```
+
+The inspected frame shows a valid Meta-World Sawyer tabletop scene, not a blank
+renderer artifact.
+
+### Pending Follow-Up: `n_action_steps=15` Full MT50
+
+User requested a full MT50 rerun with:
+
+```text
+--policy.n_action_steps=15
+```
+
+Runner update:
+
+- `scripts/runpod_smolvla_metaworld_official_repro.sh` now accepts
+  `POLICY_N_ACTION_STEPS`.
+- When unset, it preserves checkpoint default behavior.
+- For the requested rerun, launch with:
+
+```bash
+RUN_ID=metaworld_public_full_mt50_10ep_nas15_$(date -u +%Y%m%dT%H%M%SZ) \
+TASK=easy,medium,hard,very_hard \
+EPISODES=10 \
+BATCH_SIZE=1 \
+POLICY_N_ACTION_STEPS=15 \
+OUT=/tmp/metaworld_public_repro_results/$RUN_ID \
+sh /tmp/runpod_smolvla_metaworld_official_repro.sh
+```
+
+RunPod availability attempts on 2026-06-08:
+
+- Restart attempts failed for existing stopped Pods:
+  `r6jzvw1osez5pm`, `3ix18qgdxc4v21`, `bd7p82wu1yn2xg`,
+  `ldwpvij20awxqi`, `nu2iyu4s8nqmbl`, and L4 Pod `v5yckik4qv9y85`.
+  All returned insufficient host GPU availability.
+- Fresh SECURE creation probe failed across the curated GPU list.
+- Fresh COMMUNITY creation with network volume `tchm4gxfvd` also failed across
+  the curated GPU list.
+- No-network-volume COMMUNITY RTX 3090 Pods could be created, but direct SSH
+  access failed even after `PUBLIC_KEY` env injection and after an explicit
+  `dockerStartCmd` SSH daemon setup. The inaccessible no-volume test Pods were
+  stopped and terminated:
+  `zfpc3psrgrz7q3`, `ux0f13uc4ph4m1`, `eaq5lsxgfgcl5g`,
+  `ppm1uytxzlg5ks`.
+- Final check found no remaining `RUNNING` Pods.
+
+Next action when capacity is available:
+
+1. Prefer restarting a prior network-volume Pod or creating a new SECURE Pod
+   with network volume `tchm4gxfvd`.
+2. Upload the updated Meta-World runner.
+3. Launch the `POLICY_N_ACTION_STEPS=15` full MT50 command above.
+4. Fetch results before stopping if using an ephemeral/no-volume Pod.
+
+### Successful Public-Code Minimal Run
+
+Fresh public LeRobot clone, no local source patch, no Gymnasium downgrade:
+
+```bash
+MUJOCO_GL=egl lerobot-eval \
+  --output_dir="/tmp/metaworld_public_minimal_results/metaworld_public_minimal_no_gym_pin_20260608T0625Z/eval" \
+  --policy.path=lerobot/smolvla_metaworld \
+  --env.type=metaworld \
+  --env.task=assembly-v3 \
+  --eval.batch_size=1 \
+  --eval.n_episodes=1 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --policy.empty_cameras=0 \
+  --rename_map='{"observation.image":"observation.images.camera1"}' \
+  --seed=0
+```
+
+Successful environment:
+
+- LeRobot source: `v0.5.1-115-g09808183`,
+  commit `09808183ca72c30cbb41b653586f6d0632a4bcca`.
+- Runtime probe:
+  - Python `3.12.13`
+  - `lerobot 0.5.2`
+  - `torch 2.11.0`
+  - `metaworld 3.0.0`
+  - `gymnasium 1.3.0`
+  - `mujoco 3.9.0`
+  - CUDA available on NVIDIA GeForce RTX 4090
+- Exit code: `0`.
+- Rollout: completed `1` episode on `assembly-v3`, 500 max steps.
+- Metric: `pc_success=0.0`, `n_episodes=1`, `eval_s=5.14`.
+- Video:
+  `_workspace/runpod_results/metaworld_public_minimal_no_gym_pin_20260608T0625Z/metaworld_public_minimal_no_gym_pin_20260608T0625Z/eval/videos/assembly-v3_0/eval_episode_0.mp4`.
+- Visual check:
+  `_workspace/runpod_results/metaworld_public_minimal_no_gym_pin_20260608T0625Z/frames/assembly_v3_frame30.png`
+  shows a valid Meta-World Sawyer tabletop scene.
+
+Key fix:
+
+- Do **not** force the LeRobot docs' old `gymnasium==1.1.0` workaround. Current
+  public LeRobot main resolved `gymnasium==1.3.0`, which allowed env creation
+  and rollout to complete.
+- Write logs/results under `/tmp` first. The network volume has quota pressure,
+  and writing directly to `/workspace` caused `Disk quota exceeded` during the
+  first successful-Pod attempt.
+
+### Failed Official-Docs-Shaped Run
+
+```bash
+MUJOCO_GL=egl lerobot-eval \
+  --output_dir="/tmp/official_lerobot_metaworld_repro/metaworld_official_v051_medium_20260608T0604Z/results" \
+  --policy.path=lerobot/smolvla_metaworld \
+  --env.type=metaworld \
+  --env.task=medium \
+  --eval.batch_size=1 \
+  --eval.n_episodes=10 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --rename_map='{"observation.image":"observation.images.camera1"}'
+```
+
+### Result
+
+- LeRobot source: `v0.5.1`,
+  commit `1396b9fab7aecddd10006c33c47a487ffdcb54b4`.
+- Runtime probe:
+  - Python `3.12.13`
+  - `lerobot 0.5.1`
+  - `torch 2.10.0`
+  - `metaworld 3.0.0`
+  - `gymnasium 1.1.0`
+  - `mujoco 3.9.0`
+  - CUDA available on NVIDIA GeForce RTX 4090
+- Exit code: `1`.
+- Failure: Meta-World env construction failed before rollout:
+  `AssertionError: ['human', 'rgb_array', 'depth_array']` in
+  `gymnasium/envs/mujoco/mujoco_env.py`.
+- Interpretation: no benchmark success number exists for this official-code
+  attempt. This is not a 0% score.
+
+### Debug Notes
+
+- `main` branch first failed on missing EGL/OpenGL libraries; installing
+  `libegl1`, `libopengl0`, `libgl1`, `libosmesa6`, and `libglfw3` moved the
+  failure to the Gymnasium/MetaWorld render mode assertion.
+- The LeRobot docs recommend `gymnasium==1.1.0` for this exact assertion, but it
+  did not fix the issue on this Pod with `metaworld==3.0.0`.
+- `gymnasium==1.0.0` is not viable with `metaworld==3.0.0`; MetaWorld import
+  fails with missing `gymnasium.vector.AutoresetMode`.
+- Do not copy a full venv or LeRobot checkout into the network volume for
+  evidence. The volume hit quota; fetch only small logs and probes.
+
 ## 2026-06-05 SmolVLA LIBERO Full Eval
 
 ### Current State
@@ -2313,3 +2541,173 @@ This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo
   observed standalone setting at `36.0%`. This weakens the simple
   eval-seed-only explanation and keeps task/protocol-specific reset details as
   the leading Meta-World parity suspect.
+
+### Meta-World Full MT50 `n_action_steps=15` Rerun Attempt
+
+- Request:
+  rerun the full public Meta-World MT50 evaluation with
+  `POLICY_N_ACTION_STEPS=15`.
+- Local runner changes:
+  - `scripts/runpod_smolvla_metaworld_official_repro.sh` now accepts optional
+    `POLICY_N_ACTION_STEPS` and passes it through as
+    `--policy.n_action_steps=<value>`.
+  - `scripts/runpod_create_pod.sh` now supports:
+    `RUNPOD_NETWORK_VOLUME_ID=none`, `RUNPOD_DOCKER_START_CMD_JSON`,
+    `RUNPOD_DOCKER_ENTRYPOINT_JSON`, and public-key env injection under both
+    `SSH_PUBLIC_KEY` and `PUBLIC_KEY`.
+  - `scripts/runpod_probe_gpus.sh` now forwards the Docker entrypoint/start
+    overrides to Pod creation.
+  - RunPod API/status output now redacts `dockerStartCmd` because startup
+    commands can contain auth material.
+- Desired remote command:
+
+```bash
+RUN_ID=metaworld_public_full_mt50_10ep_nas15_$(date -u +%Y%m%dT%H%M%SZ) \
+TASK=easy,medium,hard,very_hard \
+EPISODES=10 \
+BATCH_SIZE=1 \
+POLICY_N_ACTION_STEPS=15 \
+OUT=/tmp/metaworld_public_repro_results/$RUN_ID \
+sh /tmp/runpod_smolvla_metaworld_official_repro.sh
+```
+
+- Pod attempts:
+  - Existing successful Pod `r6jzvw1osez5pm` could not restart because the
+    host had no free GPU.
+  - SECURE A100 `ut95e2z5tkfj1r` was created at `$1.39/hr`, but SSH key auth
+    failed. It was terminated before any eval work.
+  - SECURE RTX 4000 Ada `z0vcar9dutdbi8` was created at `$0.26/hr`, but SSH
+    key auth failed. It was terminated before any eval work.
+  - SECURE RTX 4090 `fpx9ilb70ud7cx` with `SSH_PUBLIC_KEY` startup setup was
+    created at `$0.69/hr`, but SSH key auth failed. It was terminated before
+    any eval work.
+  - SECURE RTX 4090 `u8pu6cni1nt96c` with literal public key startup setup was
+    created at `$0.69/hr`, but SSH key auth still failed for `root`, `runpod`,
+    `ubuntu`, and `admin`. It was terminated before any eval work.
+- Security note:
+  password-based root SSH fallback was considered but not used because it would
+  weaken an internet-accessible Pod. Continue with key-based SSH only unless
+  the user explicitly authorizes a different access method.
+- Current state:
+  no `RUNNING` Pods remain. The `n_action_steps=15` full evaluation has not
+  started yet.
+- User action needed:
+  add this Mac's current `~/.ssh/id_ed25519.pub` key to RunPod account
+  settings, or provide the exact SSH command from the RunPod Pod Connect tab
+  for the newly created Pod.
+
+### Meta-World Full MT50 `n_action_steps=15` Completed
+
+- Pod:
+  `4pxof2vs44h9cb`, SECURE RTX 4090, `$0.69/hr`, network volume `tchm4gxfvd`.
+- SSH issue resolved:
+  RunPod accepted the key, but Codex could not sign with the encrypted private
+  key until the user ran `ssh-add ~/.ssh/id_ed25519`.
+- Network volume cleanup:
+  removed old already-fetched Meta-World repro output
+  `metaworld_official_smolvla_mt50_20260608T0528Z` and failed empty nas15 probe
+  directories to clear quota for the new result.
+- Run:
+  `metaworld_public_full_mt50_10ep_nas15_20260608T1635Z`
+  - command delta: `--policy.n_action_steps=15`
+  - task suites: `easy,medium,hard,very_hard`
+  - episodes: `10` per task, `500` total
+  - batch size: `1`
+  - exit code: `0`
+  - total eval time: `7248.79s`
+- Runtime caveat:
+  public LeRobot `main` resolved to `torch 2.11.0`; the RunPod driver was too
+  old for that CUDA wheel, so `environment_probe.txt` reported
+  `cuda_available False`. The run still completed but was slow.
+- Results:
+  - LeRobot weighted overall: `65.20%`.
+  - Easy: `78.21%` over `280` episodes.
+  - Medium: `58.18%` over `110` episodes.
+  - Hard: `40.00%` over `60` episodes.
+  - Very Hard: `38.00%` over `50` episodes.
+  - paper-style arithmetic split average: `53.60%`.
+- Comparison:
+
+| Metric | Default/checkpoint | `n_action_steps=15` | SmolVLA Table 2 | `15` delta vs paper |
+| --- | ---: | ---: | ---: | ---: |
+| Easy | 68.21 | 78.21 | 82.50 | -4.29 |
+| Medium | 52.73 | 58.18 | 41.80 | +16.38 |
+| Hard | 23.33 | 40.00 | 45.00 | -5.00 |
+| Very Hard | 24.00 | 38.00 | 60.00 | -22.00 |
+| Arithmetic split avg | 42.07 | 53.60 | 57.30 | -3.70 |
+| Weighted overall | 55.00 | 65.20 | n/a | n/a |
+
+- Local evidence:
+  `_workspace/runpod_results/metaworld_public_full_mt50_10ep_nas15_20260608T1635Z/metaworld_public_full_mt50_10ep_nas15_20260608T1635Z/`
+- Visual QA:
+  extracted and inspected representative frames from `easy`, `medium`, `hard`,
+  and `very_hard`; all showed valid Meta-World robot/table/object scenes.
+
+### Meta-World Full MT50 `n_action_steps=10` and `20` CUDA-Pinned Runs
+
+- Pod:
+  `4pxof2vs44h9cb`, SECURE RTX 4090, `$0.69/hr`, network volume `tchm4gxfvd`.
+- Runner update:
+  `scripts/runpod_smolvla_metaworld_official_repro.sh` now supports optional
+  torch/CUDA pin env vars:
+  - `TORCH_INDEX_URL`
+  - `TORCH_VERSION_SPEC`
+  - `TORCHVISION_VERSION_SPEC`
+  - `TORCHAUDIO_VERSION_SPEC`
+- CUDA pin used:
+  - `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124`
+  - `TORCH_VERSION_SPEC=torch==2.5.1+cu124`
+  - `TORCHVISION_VERSION_SPEC=torchvision==0.20.1+cu124`
+- Smoke:
+  `metaworld_smoke_nas10_cu124_20260608T1905Z`
+  - task: `assembly-v3`
+  - episodes: `1`
+  - exit code: `0`
+  - probe: `cuda_available True`, `cuda_device NVIDIA GeForce RTX 4090`
+- Full run:
+  `metaworld_public_full_mt50_10ep_nas10_cu124_20260608T1906Z`
+  - task suites: `easy,medium,hard,very_hard`
+  - episodes: `10` per task, `500` total
+  - batch size: `1`
+  - `--policy.n_action_steps=10`
+  - exit code: `0`
+  - probe: `torch 2.5.1+cu124`, `cuda_available True`
+  - total eval time: `2742.43s`
+  - LeRobot weighted overall: `66.20%`
+  - Easy: `82.86%` over `280` episodes
+  - Medium: `50.91%` over `110` episodes
+  - Hard: `43.33%` over `60` episodes
+  - Very Hard: `34.00%` over `50` episodes
+  - paper-style arithmetic split average: `52.77%`
+- Full run:
+  `metaworld_public_full_mt50_10ep_nas20_cu124_20260608T1955Z`
+  - task suites: `easy,medium,hard,very_hard`
+  - episodes: `10` per task, `500` total
+  - batch size: `1`
+  - `--policy.n_action_steps=20`
+  - exit code: `0`
+  - probe: `torch 2.5.1+cu124`, `cuda_available True`
+  - total eval time: `1425.98s`
+  - LeRobot weighted overall: `65.40%`
+  - Easy: `80.36%` over `280` episodes
+  - Medium: `52.73%` over `110` episodes
+  - Hard: `43.33%` over `60` episodes
+  - Very Hard: `36.00%` over `50` episodes
+  - paper-style arithmetic split average: `53.10%`
+- Comparison:
+  - Best weighted overall is now CUDA `n_action_steps=10` at `66.20%`.
+  - Best paper-style split average remains `n_action_steps=15` at `53.60%`,
+    `-3.70pp` vs SmolVLA Table 2's `57.30%`.
+  - CUDA `n_action_steps=10` is `-4.53pp` vs paper split average.
+  - CUDA `n_action_steps=20` is `-4.20pp` vs paper split average.
+- Caveat:
+  public LeRobot `0.5.2` declares `torch>=2.7`, but the CUDA pin uses
+  `torch 2.5.1+cu124` to match the RunPod driver. The runs completed and used
+  GPU, but this dependency mismatch should be reported.
+- Local evidence:
+  - `_workspace/runpod_results/metaworld_public_full_mt50_10ep_nas10_cu124_20260608T1906Z/metaworld_public_full_mt50_10ep_nas10_cu124_20260608T1906Z/`
+  - `_workspace/runpod_results/metaworld_public_full_mt50_10ep_nas20_cu124_20260608T1955Z/metaworld_public_full_mt50_10ep_nas20_cu124_20260608T1955Z/`
+- Visual QA:
+  generated and inspected representative midpoint frames from `easy`,
+  `medium`, `hard`, and `very_hard` for both CUDA-pinned runs. All frames show
+  valid Meta-World robot/table/object scenes.

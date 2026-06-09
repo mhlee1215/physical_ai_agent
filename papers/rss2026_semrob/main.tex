@@ -1,0 +1,149 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{times}
+\usepackage[numbers]{natbib}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage[bookmarks=true]{hyperref}
+
+\pdfinfo{
+   /Author (Anonymous)
+   /Title  (Agentic Recovery for Lightweight Vision-Language-Action Policies)
+   /CreationDate (D:20260606140000)
+   /Subject (Robotics)
+   /Keywords (robot learning; vision-language-action; failure recovery; semantic reasoning)
+}
+
+\begin{document}
+
+\title{Agentic Recovery for Lightweight Vision-Language-Action Policies}
+
+% Replace [add your ID here] after OpenReview assigns the SemRob submission ID.
+\author{Author Names Omitted for Anonymous Review. Paper-ID [add your ID here]}
+
+\maketitle
+
+\begin{abstract}
+% Author-written abstract only. RSS-style policy prohibits submitting text
+% generated entirely by LLMs. Keep this concise: problem, method, evaluation,
+% strongest quantitative result, and why SemRob should care.
+TODO.
+\end{abstract}
+
+\IEEEpeerreviewmaketitle
+
+\section{Introduction}
+% Target: 4-page workshop version. Suggested shape:
+% 1 paragraph: lightweight VLA policies are now practical but brittle.
+% 1 paragraph: long-horizon failures often need detection and recovery.
+% 1 paragraph: this work studies an external agentic recovery wrapper.
+% 1 short contribution list.
+
+TODO.
+
+\section{Related Work}
+% Keep this tight for SemRob. Three clusters are enough:
+% efficient VLA models, agentic/planning robotics, and evaluation/recovery.
+
+\subsection{Efficient Vision-Language-Action Policies}
+TODO cite SmolVLA~\cite{shukor2025smolvla}, TinyVLA~\cite{wen2024tinyvla},
+OpenVLA~\cite{kim2024openvla}, and broader robot foundation policies such as
+RT-1~\cite{brohan2022rt1} and RT-2~\cite{zitkovich2023rt2}.
+
+\subsection{Agentic Planning and Feedback}
+TODO cite SayCan~\cite{ahn2022saycan}, Inner Monologue~\cite{huang2022inner},
+Code as Policies~\cite{liang2022code}, ReAct~\cite{yao2022react}, and
+Reflexion~\cite{shinn2023reflexion}. Tie this to SemRob topics: semantic
+goal interpretation, policy steering, online correction, and uncertainty or
+failure monitoring.
+
+\subsection{Benchmarks and Failure-Recovery Evaluation}
+TODO cite LIBERO~\cite{liu2023libero}. State why final success must remain the
+benchmark success flag rather than a wrapper-internal verifier decision.
+
+\section{Method}
+% Core claim: no base policy weight changes. The wrapper controls when and how
+% a fixed lightweight VLA is retried or replanned.
+
+\subsection{Base Policy and Evaluation Harness}
+TODO describe the fixed SmolVLA policy, observation/action interface, LIBERO
+or ManiSkill environment, seeds, action budgets, and logging artifacts.
+
+\subsection{Agentic Recovery Wrapper}
+TODO define planner, verifier, retry scheduler, and replan policy. Distinguish
+episode-level retry from subgoal-level in-episode recovery if both appear.
+
+\subsection{Success Semantics}
+TODO state explicitly: final task success is the environment benchmark success
+signal, e.g., \texttt{info["success"]} or \texttt{is\_success}. Wrapper
+verifier predicates are used only for control decisions such as continue,
+retry, or replan.
+
+\section{Experiments}
+% Keep this evidence-first. Use matched seeds, same base policy, same action
+% budget where possible. Do not overclaim from small probes.
+
+\subsection{Setup}
+TODO list suites, task IDs, episodes per task, compute environment, simulator
+versions, policy checkpoint, and action-step protocol.
+
+\subsection{Policy-Only Baseline}
+TODO summarize the current routed SmolVLA baseline and cite the local artifact
+paths in the camera-ready or supplement, not in the blinded submission.
+
+\begin{table}[t]
+\centering
+\caption{Policy-only baseline reproduction on LIBERO. Fill with final
+paper-scale numbers only.}
+\label{tab:baseline}
+\begin{tabular}{lrrrrr}
+\toprule
+Condition & Goal & Object & Spatial & Long & Avg \\
+\midrule
+Policy-only & TODO & TODO & TODO & TODO & TODO \\
+Reference & TODO & TODO & TODO & TODO & TODO \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Recovery Results}
+TODO compare \texttt{policy\_only}, \texttt{agentic\_retry}, and, if ready,
+\texttt{agentic\_replan}. Report recovery-after-failure, retries per episode,
+latency, and failure categories.
+
+\begin{table}[t]
+\centering
+\caption{Agentic recovery ablation. Keep all conditions matched by seeds,
+base policy, and action budget unless explicitly stated.}
+\label{tab:recovery}
+\begin{tabular}{lrrrr}
+\toprule
+Condition & Episodes & Success & Recovery & Retries \\
+\midrule
+Policy-only & TODO & TODO & -- & -- \\
+Agentic retry & TODO & TODO & TODO & TODO \\
+Agentic replan & TODO & TODO & TODO & TODO \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+TODO explain when recovery helps, when it fails, and what this says about
+semantic reasoning around lightweight VLA policies.
+
+\section{Limitations}
+% RSS requires a limitations section for main papers; SemRob follows RSS paper
+% policy, so include it here too.
+TODO include limited task coverage, simulator-only evidence, verifier
+dependence, no weight updates, possible extra action budget, and no real robot
+claim unless real evidence is added.
+
+\section{Conclusion}
+TODO one paragraph: what was tested, strongest measured result, and why the
+wrapper is useful as an evaluation and recovery layer for lightweight VLA
+policies.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

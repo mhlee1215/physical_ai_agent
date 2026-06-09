@@ -11,13 +11,22 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from physical_ai_agent.perception.affordance_overlay import build_oracle_affordance_overlay
+from physical_ai_agent.perception.overlay_gallery import build_overlay_gallery
 from physical_ai_agent.policies.smolvla_adapter import DEFAULT_SMOLVLA_MODEL_ID, probe_smolvla
 
 
 DEFAULT_MANISKILL_ENV_ID = "PickCube-v1"
 DEFAULT_MANISKILL_FALLBACK_ENV_IDS = ("Empty-v1",)
 DEFAULT_MANISKILL_POLICIES = ("random",)
-SUPPORTED_MANISKILL_POLICIES = ("random", "zero", "smolvla_dry", "smolvla_real")
+SUPPORTED_MANISKILL_POLICIES = (
+    "random",
+    "zero",
+    "smolvla_dry",
+    "smolvla_real",
+    "smolvla_affordance_oracle",
+    "affordance_oracle_probe",
+)
 
 
 @dataclass(frozen=True)
@@ -171,6 +180,16 @@ def _run_maniskill_rollout(
     smolvla_real_image_path = output_dir / "smolvla_real_input.png"
     smolvla_real_frames_dir = output_dir / "smolvla_real_frames"
     smolvla_real_gif_path = output_dir / "smolvla_real_rollout.gif"
+    smolvla_affordance_path = output_dir / "smolvla_affordance_oracle_manifest.json"
+    smolvla_affordance_true_oracle_path = output_dir / "smolvla_affordance_true_oracle_steps.json"
+    smolvla_affordance_frames_dir = output_dir / "smolvla_affordance_oracle_frames"
+    smolvla_affordance_gallery_dir = output_dir / "smolvla_affordance_oracle_gallery"
+    smolvla_affordance_gif_path = output_dir / "smolvla_affordance_oracle_rollout.gif"
+    affordance_probe_path = output_dir / "affordance_oracle_probe_manifest.json"
+    affordance_probe_true_oracle_path = output_dir / "affordance_oracle_probe_true_oracle_steps.json"
+    affordance_probe_frames_dir = output_dir / "affordance_oracle_probe_frames"
+    affordance_probe_gallery_dir = output_dir / "affordance_oracle_probe_gallery"
+    affordance_probe_gif_path = output_dir / "affordance_oracle_probe_rollout.gif"
     rollout_frames_dir = output_dir / "rollout_frames"
     rollout_gifs_dir = output_dir / "rollout_gifs"
     for path in (
@@ -181,14 +200,28 @@ def _run_maniskill_rollout(
         smolvla_real_path,
         smolvla_real_image_path,
         smolvla_real_gif_path,
+        smolvla_affordance_path,
+        smolvla_affordance_true_oracle_path,
+        smolvla_affordance_gif_path,
+        affordance_probe_path,
+        affordance_probe_true_oracle_path,
+        affordance_probe_gif_path,
     ):
         if path.exists():
             path.unlink()
-    for directory in (smolvla_real_frames_dir, rollout_frames_dir, rollout_gifs_dir):
+    for directory in (
+        smolvla_real_frames_dir,
+        smolvla_affordance_frames_dir,
+        affordance_probe_frames_dir,
+        rollout_frames_dir,
+        rollout_gifs_dir,
+    ):
         if directory.exists():
             shutil.rmtree(directory)
     if real_images:
         smolvla_real_frames_dir.mkdir(parents=True, exist_ok=True)
+        smolvla_affordance_frames_dir.mkdir(parents=True, exist_ok=True)
+        affordance_probe_frames_dir.mkdir(parents=True, exist_ok=True)
         rollout_frames_dir.mkdir(parents=True, exist_ok=True)
         rollout_gifs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -246,13 +279,16 @@ def _run_maniskill_rollout(
         )
 
     policy_runtime: dict[str, Any] = {}
-    if "smolvla_real" in policies:
+    real_smolvla_policies = {"smolvla_real", "smolvla_affordance_oracle"}.intersection(policies)
+    if real_smolvla_policies:
         try:
             policy_runtime["smolvla_real"] = _load_smolvla_real_policy(
                 model_id=model_id,
                 local_files_only=not allow_download,
             )
             policy_runtime["smolvla_real_use_real_images"] = real_images
+            policy_runtime["smolvla_affordance_frames_dir"] = smolvla_affordance_frames_dir
+            policy_runtime["smolvla_affordance_frame_index"] = 0
         except Exception as exc:  # noqa: BLE001
             close = getattr(env, "close", None)
             if callable(close):
@@ -287,6 +323,10 @@ def _run_maniskill_rollout(
                 metrics_path=str(metrics_path),
                 summary_path=str(summary_path),
             )
+    if "affordance_oracle_probe" in policies:
+        policy_runtime["affordance_probe_frames_dir"] = affordance_probe_frames_dir
+        policy_runtime["affordance_probe_frame_index"] = 0
+        policy_runtime["affordance_probe_use_real_images"] = real_images
 
     records: list[dict[str, Any]] = []
     episode_summaries: list[dict[str, Any]] = []
@@ -301,6 +341,8 @@ def _run_maniskill_rollout(
                 episode_gif_path = rollout_gifs_dir / f"{policy}_episode_{episode:03d}.gif"
                 if policy == "smolvla_real" and real_images and not smolvla_real_image_path.exists():
                     _write_observation_image(obs, smolvla_real_image_path)
+                reset_rollout_frame_path = None
+                reset_overlay_path = None
                 if real_images:
                     frame_path = _write_rollout_frame(
                         obs,
@@ -310,6 +352,7 @@ def _run_maniskill_rollout(
                         step=0,
                         phase="reset",
                     )
+                    reset_rollout_frame_path = str(frame_path)
                     episode_frame_paths.append(str(frame_path))
                     if policy == "smolvla_real":
                         legacy_frame_path = _write_rollout_frame(
@@ -321,10 +364,22 @@ def _run_maniskill_rollout(
                             phase="reset",
                         )
                         rollout_frame_paths.append(str(legacy_frame_path))
+                    if policy == "smolvla_affordance_oracle":
+                        overlay_path = smolvla_affordance_frames_dir / (
+                            f"{policy}_episode_{episode:03d}_reset_0000.png"
+                        )
+                        build_oracle_affordance_overlay(obs, output_path=overlay_path)
+                        reset_overlay_path = str(overlay_path)
+                    if policy == "affordance_oracle_probe":
+                        overlay_path = affordance_probe_frames_dir / (
+                            f"{policy}_episode_{episode:03d}_reset_0000.png"
+                        )
+                        build_oracle_affordance_overlay(obs, output_path=overlay_path)
                 episode_success = False
                 episode_reward = 0.0
                 episode_steps = 0
                 for step in range(steps):
+                    action_input_frame_path = episode_frame_paths[-1] if episode_frame_paths else None
                     action, policy_metadata = _policy_action(
                         env,
                         obs=obs,
@@ -334,6 +389,8 @@ def _run_maniskill_rollout(
                     )
                     step_result = env.step(action)
                     obs, reward, terminated, truncated, info = _normalize_step(step_result)
+                    step_rollout_frame_path = None
+                    step_overlay_path = None
                     if real_images:
                         frame_path = _write_rollout_frame(
                             obs,
@@ -343,6 +400,7 @@ def _run_maniskill_rollout(
                             step=step + 1,
                             phase="step",
                         )
+                        step_rollout_frame_path = str(frame_path)
                         episode_frame_paths.append(str(frame_path))
                         if policy == "smolvla_real":
                             legacy_frame_path = _write_rollout_frame(
@@ -354,6 +412,17 @@ def _run_maniskill_rollout(
                                 phase="step",
                             )
                             rollout_frame_paths.append(str(legacy_frame_path))
+                        if policy == "smolvla_affordance_oracle":
+                            overlay_path = smolvla_affordance_frames_dir / (
+                                f"{policy}_episode_{episode:03d}_step_{step + 1:04d}.png"
+                            )
+                            build_oracle_affordance_overlay(obs, output_path=overlay_path)
+                            step_overlay_path = str(overlay_path)
+                        if policy == "affordance_oracle_probe":
+                            overlay_path = affordance_probe_frames_dir / (
+                                f"{policy}_episode_{episode:03d}_step_{step + 1:04d}.png"
+                            )
+                            build_oracle_affordance_overlay(obs, output_path=overlay_path)
                     step_success = _info_success(info)
                     episode_success = episode_success or step_success
                     episode_reward += _float_value(reward)
@@ -370,6 +439,12 @@ def _run_maniskill_rollout(
                             "observation_summary": _summarize_observation(obs),
                             "action_summary": _summarize_action(action),
                             "policy_metadata": policy_metadata,
+                            "raw_frame_path": action_input_frame_path,
+                            "overlay_frame_path": (
+                                policy_metadata.get("oracle_affordance", {}).get("overlay_image_path")
+                                if isinstance(policy_metadata.get("oracle_affordance"), dict)
+                                else step_overlay_path
+                            ),
                         }
                     )
                     if terminated or truncated:
@@ -430,6 +505,55 @@ def _run_maniskill_rollout(
             str(smolvla_real_gif_path) if smolvla_real_gif_path.exists() else None,
             rollout_frame_paths,
         )
+    if "smolvla_affordance_oracle" in policies:
+        overlay_frames = sorted(smolvla_affordance_frames_dir.glob("*.png"))
+        if overlay_frames:
+            _write_rollout_gif(overlay_frames, smolvla_affordance_gif_path)
+        gallery = build_overlay_gallery(
+            image_root=smolvla_affordance_frames_dir,
+            output_dir=smolvla_affordance_gallery_dir,
+            title="SmolVLA Oracle Affordance Overlay Gallery",
+            min_frames=10,
+        )
+        _write_smolvla_affordance_manifest(
+            smolvla_affordance_path,
+            runtime=policy_runtime,
+            records=records,
+            model_id=model_id,
+            local_files_only=not allow_download,
+            overlay_frame_paths=[str(path) for path in overlay_frames],
+            rollout_gif_path=str(smolvla_affordance_gif_path) if smolvla_affordance_gif_path.exists() else None,
+            gallery=gallery,
+        )
+        _write_true_oracle_step_manifest(
+            smolvla_affordance_true_oracle_path,
+            records=records,
+            min_steps=10,
+            policy="smolvla_affordance_oracle",
+        )
+    if "affordance_oracle_probe" in policies:
+        overlay_frames = sorted(affordance_probe_frames_dir.glob("*.png"))
+        if overlay_frames:
+            _write_rollout_gif(overlay_frames, affordance_probe_gif_path)
+        gallery = build_overlay_gallery(
+            image_root=affordance_probe_frames_dir,
+            output_dir=affordance_probe_gallery_dir,
+            title="Affordance Oracle Probe Overlay Gallery",
+            min_frames=10,
+        )
+        _write_affordance_probe_manifest(
+            affordance_probe_path,
+            records=records,
+            overlay_frame_paths=[str(path) for path in overlay_frames],
+            rollout_gif_path=str(affordance_probe_gif_path) if affordance_probe_gif_path.exists() else None,
+            gallery=gallery,
+        )
+        _write_true_oracle_step_manifest(
+            affordance_probe_true_oracle_path,
+            records=records,
+            min_steps=10,
+            policy="affordance_oracle_probe",
+        )
 
     policy_metrics = _policy_metrics(episode_summaries)
     metrics = {
@@ -478,6 +602,38 @@ def _run_maniskill_rollout(
             else None
         ),
         "smolvla_real_rollout_frames": rollout_frame_paths if "smolvla_real" in policies else [],
+        "smolvla_affordance_oracle_manifest": (
+            str(smolvla_affordance_path) if "smolvla_affordance_oracle" in policies else None
+        ),
+        "smolvla_affordance_true_oracle_steps": (
+            str(smolvla_affordance_true_oracle_path) if "smolvla_affordance_oracle" in policies else None
+        ),
+        "smolvla_affordance_oracle_rollout_gif": (
+            str(smolvla_affordance_gif_path)
+            if "smolvla_affordance_oracle" in policies and smolvla_affordance_gif_path.exists()
+            else None
+        ),
+        "smolvla_affordance_oracle_frames": (
+            [str(path) for path in sorted(smolvla_affordance_frames_dir.glob("*.png"))]
+            if "smolvla_affordance_oracle" in policies
+            else []
+        ),
+        "affordance_oracle_probe_manifest": (
+            str(affordance_probe_path) if "affordance_oracle_probe" in policies else None
+        ),
+        "affordance_oracle_probe_true_oracle_steps": (
+            str(affordance_probe_true_oracle_path) if "affordance_oracle_probe" in policies else None
+        ),
+        "affordance_oracle_probe_rollout_gif": (
+            str(affordance_probe_gif_path)
+            if "affordance_oracle_probe" in policies and affordance_probe_gif_path.exists()
+            else None
+        ),
+        "affordance_oracle_probe_frames": (
+            [str(path) for path in sorted(affordance_probe_frames_dir.glob("*.png"))]
+            if "affordance_oracle_probe" in policies
+            else []
+        ),
         "rollout_gifs_dir": str(rollout_gifs_dir) if real_images else None,
         "rollout_frames_dir": str(rollout_frames_dir) if real_images else None,
     }
@@ -638,6 +794,16 @@ def _policy_action(
             runtime["smolvla_real"],
             use_real_images=bool(runtime.get("smolvla_real_use_real_images")),
         )
+    if policy == "smolvla_affordance_oracle":
+        return _smolvla_affordance_oracle_action(
+            env,
+            obs,
+            runtime["smolvla_real"],
+            runtime=runtime,
+            use_real_images=bool(runtime.get("smolvla_real_use_real_images")),
+        )
+    if policy == "affordance_oracle_probe":
+        return _affordance_oracle_probe_action(env, obs, runtime=runtime)
     raise ValueError(f"Unsupported policy: {policy}")
 
 
@@ -712,6 +878,29 @@ def _bounded_dry_action(env: Any, feature_mean: float) -> Any:
         return action.astype(getattr(action_space, "dtype", numpy.float32), copy=False)
     except Exception:  # noqa: BLE001
         return _zero_action(env)
+
+
+def _affordance_oracle_probe_action(
+    env: Any,
+    obs: Any,
+    runtime: dict[str, Any],
+) -> tuple[Any, dict[str, Any]]:
+    if not bool(runtime.get("affordance_probe_use_real_images")):
+        raise RuntimeError("affordance_oracle_probe requires --real-images")
+    frame_index = int(runtime.get("affordance_probe_frame_index", 0))
+    frames_dir = runtime.get("affordance_probe_frames_dir")
+    overlay_path = None
+    if isinstance(frames_dir, Path):
+        overlay_path = frames_dir / f"policy_input_{frame_index:04d}.png"
+    oracle_obs = _augment_obs_with_oracle_state(env, obs)
+    _overlay_images, overlay = build_oracle_affordance_overlay(oracle_obs, output_path=overlay_path)
+    runtime["affordance_probe_frame_index"] = frame_index + 1
+    return _zero_action(env), {
+        "bridge": "affordance_oracle_probe",
+        "oracle_affordance": overlay.metadata(),
+        "oracle_obs_augmented": oracle_obs is not obs,
+        "note": "Zero-action probe that validates oracle point overlay calculation without loading SmolVLA.",
+    }
 
 
 def _flatten_numeric_observation(obs: Any, limit: int) -> list[float]:
@@ -803,10 +992,189 @@ def _smolvla_real_action(
     return action, metadata
 
 
+def _smolvla_affordance_oracle_action(
+    env: Any,
+    obs: Any,
+    policy: Any,
+    runtime: dict[str, Any],
+    use_real_images: bool,
+) -> tuple[Any, dict[str, Any]]:
+    if not use_real_images:
+        raise RuntimeError("smolvla_affordance_oracle requires --real-images")
+    frame_index = int(runtime.get("smolvla_affordance_frame_index", 0))
+    frames_dir = runtime.get("smolvla_affordance_frames_dir")
+    overlay_path = None
+    if isinstance(frames_dir, Path):
+        overlay_path = frames_dir / f"policy_input_{frame_index:04d}.png"
+    oracle_obs = _augment_obs_with_oracle_state(env, obs)
+    overlay_images, overlay = build_oracle_affordance_overlay(oracle_obs, output_path=overlay_path)
+    runtime["smolvla_affordance_frame_index"] = frame_index + 1
+    batch, metadata = _build_maniskill_smolvla_batch(
+        policy,
+        obs,
+        use_real_images=True,
+        override_camera_pixels=overlay_images,
+    )
+    raw_action = policy.select_action(batch)
+    flat_action = _tensor_to_float_list(raw_action)
+    action = _clip_to_action_space(env, flat_action)
+    metadata.update(
+        {
+            "bridge": "smolvla_affordance_oracle",
+            "raw_action_dim": len(flat_action),
+            "executed_action_summary": _summarize_action(action),
+            "oracle_affordance": overlay.metadata(),
+            "oracle_obs_augmented": oracle_obs is not obs,
+            "note": "Pretrained SmolVLA select_action executed on oracle affordance overlay images.",
+        }
+    )
+    return action, metadata
+
+
+def _augment_obs_with_oracle_state(env: Any, obs: Any) -> Any:
+    """Add simulator-state hints required for true-oracle projection when available.
+
+    ManiSkill RGB observations are intentionally image-centric. Some versions include
+    `sensor_param`, while others expose pose/camera data through the wrapped env.
+    Keep this helper conservative: never overwrite fields that are already present,
+    and return the original observation when no useful simulator state is found.
+    """
+
+    if not isinstance(obs, dict):
+        return obs
+    object_pose = _extract_env_object_pose(env)
+    camera_params = _extract_env_camera_params(env, obs)
+    if object_pose is None and not camera_params:
+        return obs
+
+    augmented = dict(obs)
+    if object_pose is not None and not any(key in augmented for key in ("obj_pose", "cube_pose", "object_pose")):
+        augmented["object_pose"] = {"p": object_pose}
+    if camera_params:
+        existing_params = augmented.get("sensor_param", {})
+        merged_params = dict(existing_params) if isinstance(existing_params, dict) else {}
+        for camera_name, params in camera_params.items():
+            existing_camera = merged_params.get(camera_name, {})
+            if isinstance(existing_camera, dict):
+                merged_camera = dict(existing_camera)
+                for key, value in params.items():
+                    merged_camera.setdefault(key, value)
+                merged_params[camera_name] = merged_camera
+            else:
+                merged_params[camera_name] = params
+        augmented["sensor_param"] = merged_params
+    return augmented
+
+
+def _extract_env_object_pose(env: Any) -> list[float] | None:
+    for root in _env_roots(env):
+        for attr_path in (
+            ("cube", "pose", "p"),
+            ("obj", "pose", "p"),
+            ("object", "pose", "p"),
+            ("target_object", "pose", "p"),
+            ("goal_site", "pose", "p"),
+        ):
+            found = _get_nested_attr(root, attr_path)
+            xyz = _xyz_list(found)
+            if xyz is not None:
+                return xyz
+        for attr_name in ("cube_pose", "obj_pose", "object_pose", "target_pose"):
+            xyz = _xyz_list(getattr(root, attr_name, None))
+            if xyz is not None:
+                return xyz
+    return None
+
+
+def _extract_env_camera_params(env: Any, obs: dict[str, Any]) -> dict[str, Any]:
+    sensor_data = obs.get("sensor_data", {})
+    camera_names = sorted(str(name) for name in sensor_data) if isinstance(sensor_data, dict) else []
+    params: dict[str, Any] = {}
+    for root in _env_roots(env):
+        sensor_maps = []
+        for attr_name in ("_sensors", "sensors", "_sensor_configs", "sensor_configs"):
+            value = getattr(root, attr_name, None)
+            if isinstance(value, dict):
+                sensor_maps.append(value)
+        for camera_name in camera_names:
+            for sensor_map in sensor_maps:
+                camera = sensor_map.get(camera_name)
+                camera_params = _camera_params_from_object(camera)
+                if camera_params:
+                    params[camera_name] = camera_params
+                    break
+    return params
+
+
+def _camera_params_from_object(camera: Any) -> dict[str, Any]:
+    if camera is None:
+        return {}
+    params: dict[str, Any] = {}
+    for output_name, attr_names in (
+        ("intrinsic_cv", ("intrinsic_cv", "intrinsic", "camera_matrix")),
+        ("extrinsic_cv", ("extrinsic_cv", "extrinsic", "cam2world", "cam2world_gl")),
+    ):
+        for attr_name in attr_names:
+            value = getattr(camera, attr_name, None)
+            if callable(value):
+                try:
+                    value = value()
+                except Exception:  # noqa: BLE001
+                    value = None
+            serializable = _jsonable_array(value)
+            if serializable is not None:
+                params[output_name] = serializable
+                break
+    return params
+
+
+def _env_roots(env: Any) -> list[Any]:
+    roots = []
+    current = env
+    for _ in range(4):
+        if current is None or any(current is root for root in roots):
+            break
+        roots.append(current)
+        current = getattr(current, "unwrapped", None) or getattr(current, "env", None)
+    return roots
+
+
+def _get_nested_attr(root: Any, attr_path: tuple[str, ...]) -> Any:
+    current = root
+    for attr in attr_path:
+        current = getattr(current, attr, None)
+        if current is None:
+            return None
+    return current
+
+
+def _xyz_list(value: Any) -> list[float] | None:
+    try:
+        numpy = importlib.import_module("numpy")
+        array = numpy.asarray(value, dtype=float).reshape(-1)
+        if array.size >= 3:
+            return [float(array[0]), float(array[1]), float(array[2])]
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _jsonable_array(value: Any) -> Any | None:
+    try:
+        numpy = importlib.import_module("numpy")
+        array = numpy.asarray(value, dtype=float)
+        if array.size == 0:
+            return None
+        return array.tolist()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _build_maniskill_smolvla_batch(
     policy: Any,
     obs: Any,
     use_real_images: bool = False,
+    override_camera_pixels: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     import torch
     from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
@@ -823,7 +1191,9 @@ def _build_maniskill_smolvla_batch(
         OBS_LANGUAGE_TOKENS: torch.ones(1, 4, dtype=torch.long),
         OBS_LANGUAGE_ATTENTION_MASK: torch.ones(1, 4, dtype=torch.bool),
     }
-    camera_pixels = _extract_rgb_images(obs) if use_real_images else {}
+    camera_pixels = override_camera_pixels if override_camera_pixels is not None else (
+        _extract_rgb_images(obs) if use_real_images else {}
+    )
     if use_real_images and not camera_pixels:
         raise RuntimeError("No ManiSkill RGB camera observations found for --real-images")
     image_feature_mapping: dict[str, str] = {}
@@ -843,6 +1213,7 @@ def _build_maniskill_smolvla_batch(
             "language_tokens": 4,
             "real_images": bool(camera_pixels),
             "camera_sources": sorted(camera_pixels),
+            "image_conditioning": "oracle_affordance_overlay" if override_camera_pixels is not None else "raw_rgb",
         },
     )
 
@@ -1030,6 +1401,159 @@ def _write_smolvla_real_manifest(
                     "Pretrained SmolVLA was loaded and select_action() executed with real ManiSkill RGB camera observations."
                     if first_metadata.get("real_images", False)
                     else "Pretrained SmolVLA was loaded and select_action() executed; zero image tensors are still used for this minimal ManiSkill probe."
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_smolvla_affordance_manifest(
+    path: Path,
+    runtime: dict[str, Any],
+    records: list[dict[str, Any]],
+    model_id: str,
+    local_files_only: bool,
+    overlay_frame_paths: list[str],
+    rollout_gif_path: str | None,
+    gallery: dict[str, Any],
+) -> None:
+    affordance_records = [
+        record for record in records if record.get("policy") == "smolvla_affordance_oracle"
+    ]
+    first_metadata = (
+        affordance_records[0].get("policy_metadata", {})
+        if affordance_records
+        else {}
+    )
+    first_affordance = first_metadata.get("oracle_affordance", {})
+    path.write_text(
+        json.dumps(
+            {
+                "policy": "smolvla_affordance_oracle",
+                "status": "passed" if affordance_records else "no_steps",
+                "model_id": model_id,
+                "local_files_only": local_files_only,
+                "loaded": "smolvla_real" in runtime,
+                "feature_keys": first_metadata.get("feature_keys", []),
+                "state_dim": first_metadata.get("state_dim", 0),
+                "image_feature_mapping": first_metadata.get("image_feature_mapping", {}),
+                "camera_sources": first_metadata.get("camera_sources", []),
+                "image_conditioning": first_metadata.get("image_conditioning", ""),
+                "oracle_affordance": first_affordance,
+                "raw_action_dim": first_metadata.get("raw_action_dim", 0),
+                "steps": len(affordance_records),
+                "overlay_frames": overlay_frame_paths,
+                "rollout_gif": rollout_gif_path,
+                "overlay_gallery": gallery,
+                "note": (
+                    "Oracle point overlay is a zero-parameter affordance-conditioning "
+                    "baseline. It is intended to test whether explicit spatial hints "
+                    "help SmolVLA before training a tiny affordance predictor."
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_true_oracle_step_manifest(
+    path: Path,
+    records: list[dict[str, Any]],
+    min_steps: int,
+    policy: str = "smolvla_affordance_oracle",
+) -> None:
+    steps = []
+    for record in records:
+        if record.get("policy") != policy:
+            continue
+        metadata = record.get("policy_metadata", {})
+        if not isinstance(metadata, dict):
+            continue
+        oracle = metadata.get("oracle_affordance", {})
+        if not isinstance(oracle, dict):
+            continue
+        raw_frame_path = record.get("raw_frame_path")
+        overlay_frame_path = record.get("overlay_frame_path") or oracle.get("overlay_image_path")
+        camera_keys = oracle.get("camera_metadata_keys")
+        strict_ready = (
+            oracle.get("mode") == "projected_object_pose"
+            and bool(oracle.get("object_pose_xyz"))
+            and isinstance(camera_keys, list)
+            and bool(camera_keys)
+            and bool(raw_frame_path)
+            and bool(overlay_frame_path)
+        )
+        steps.append(
+            {
+                "episode": record.get("episode"),
+                "step": record.get("step"),
+                "raw_frame_path": raw_frame_path,
+                "overlay_frame_path": overlay_frame_path,
+                "oracle_affordance": oracle,
+                "strict_true_oracle_ready": strict_ready,
+            }
+        )
+    strict_count = sum(1 for step in steps if step["strict_true_oracle_ready"])
+    path.write_text(
+        json.dumps(
+            {
+                "policy": policy,
+                "status": "passed" if strict_count >= min_steps else "insufficient_true_oracle_steps",
+                "source_type": "actual_sim_true_oracle_projection",
+                "real_sim_episode": True,
+                "true_oracle_projection": strict_count >= min_steps,
+                "min_steps": min_steps,
+                "step_count": len(steps),
+                "strict_true_oracle_step_count": strict_count,
+                "requirements": [
+                    "actual sim RGB frame path from the action input observation",
+                    "overlay frame path from the same action input observation",
+                    "oracle mode is projected_object_pose",
+                    "object_pose_xyz is present",
+                    "camera metadata keys are present",
+                ],
+                "steps": steps,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_affordance_probe_manifest(
+    path: Path,
+    records: list[dict[str, Any]],
+    overlay_frame_paths: list[str],
+    rollout_gif_path: str | None,
+    gallery: dict[str, Any],
+) -> None:
+    probe_records = [
+        record for record in records if record.get("policy") == "affordance_oracle_probe"
+    ]
+    first_metadata = (
+        probe_records[0].get("policy_metadata", {})
+        if probe_records
+        else {}
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "policy": "affordance_oracle_probe",
+                "status": "passed" if probe_records else "no_steps",
+                "steps": len(probe_records),
+                "oracle_affordance": first_metadata.get("oracle_affordance", {}),
+                "overlay_frames": overlay_frame_paths,
+                "rollout_gif": rollout_gif_path,
+                "overlay_gallery": gallery,
+                "note": (
+                    "Visualization-only probe for oracle point overlay calculation. "
+                    "It uses zero actions and does not load SmolVLA."
                 ),
             },
             indent=2,

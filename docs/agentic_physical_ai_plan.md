@@ -450,11 +450,21 @@ python -m physical_ai_agent.evaluation.run \
   - [x] Add a dry SmolVLA action-chunk-to-ManiSkill action bridge.
   - [x] Add a minimal real pretrained SmolVLA inference probe on ManiSkill state observations and action-space clipping.
   - [x] Add a minimal real ManiSkill RGB observation bridge for SmolVLA using `sensor_data.base_camera.rgb`.
-  - [ ] Scale CP24 real-image SmolVLA evaluation beyond the one-camera local probe before treating it as task-quality VLA performance.
+  - [x] Scale CP24 real-image SmolVLA evaluation beyond the one-camera local probe for plumbing/readiness evidence.
+  - [ ] Show task-quality VLA success improvement; the current real-image probe has `rollout_success_count=0`.
   - [ ] Reuse the `policy_only` vs `agentic_retry` comparison contract.
+- [x] Add LIBERO real-simulation oracle affordance overlay readiness as CP24B.
+  - [x] Generate a broad real LIBERO/MuJoCo sample pool across `libero_spatial`, `libero_object`, and `libero_goal`.
+  - [x] Use raw MuJoCo segmentation masks for semantic object targets.
+  - [x] Add drawer/handle resolver for open-drawer tasks.
+  - [x] Curate visually distinct samples and exclude near-duplicates / weak edge cases.
+  - [x] Apply paper-facing figure orientation correction with native/displayed point provenance.
+  - [x] Save corrected contact sheet, manifest, and final report under `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/`.
+  - [ ] Run CP24C overlay ablation against SmolVLA behavior or success.
 - [ ] Add RoboCasa / RoboCasa365 as the long-horizon household manipulation benchmark.
   - [ ] Keep asset download and install separate from the lightweight ManiSkill gate.
-  - [ ] Run one dependency probe and reset/step rollout first.
+  - [x] Add a CP25 dependency probe gate with blocker artifacts.
+  - [ ] Run one strict reset/step rollout after RoboCasa assets are installed.
   - [ ] Add task success metrics, traces, videos, and comparison reports.
   - [ ] Use RoboCasa for planner, verifier, retry, and replan stress tests after CP24 passes.
 
@@ -613,8 +623,8 @@ robot.stop()
 
 ## Immediate Task Order
 
-- [ ] 1. Create repository skeleton.
-- [ ] 2. Add config system.
+- [x] 1. Create repository skeleton.
+- [x] 2. Add config system.
 - [x] 3. Add Mac-local MuJoCo environment smoke test.
 - [x] 4. Add random policy baseline.
 - [x] 5. Add baseline evaluator.
@@ -636,8 +646,11 @@ robot.stop()
 - [x] 21. Add simulation-state verifier.
 - [x] 22. Add retry loop.
 - [x] 23. Produce first comparison report.
-- [ ] 24. Add Web UI.
-- [ ] 25. Add local VLM verifier.
+- [x] 24. Add ManiSkill / SmolVLA real-image bridge.
+- [x] 25. Add LIBERO oracle affordance overlay readiness.
+- [ ] 26. Run CP24C SmolVLA LIBERO overlay ablation.
+- [ ] 27. Add Web UI.
+- [ ] 28. Add local VLM verifier.
 
 ## Minimal MVP Checklist
 
@@ -663,6 +676,8 @@ robot.stop()
 - [x] Retry once after failed subgoal works.
 - [x] `policy_only` and `agentic_retry` results are compared.
 - [x] A Markdown summary report is generated.
+- [x] CP24 ManiSkill / SmolVLA real-image bridge is executable.
+- [x] CP24B LIBERO oracle overlay policy-input readiness evidence is generated and visually inspected.
 
 ## Notes
 

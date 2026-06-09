@@ -14,6 +14,8 @@ VOLUME_IN_GB="${RUNPOD_VOLUME_IN_GB:-0}"
 PORTS_JSON="${RUNPOD_PORTS_JSON:-[\"8888/http\",\"22/tcp\"]}"
 NAME_PREFIX="${RUNPOD_NEW_POD_NAME_PREFIX:-physical_ai_probe}"
 MAX_ATTEMPTS="${RUNPOD_MAX_ATTEMPTS:-40}"
+DOCKER_START_CMD_JSON="${RUNPOD_DOCKER_START_CMD_JSON:-[]}"
+DOCKER_ENTRYPOINT_JSON="${RUNPOD_DOCKER_ENTRYPOINT_JSON:-[]}"
 
 usage() {
   cat <<'USAGE'
@@ -26,6 +28,8 @@ Optional overrides:
   RUNPOD_CONTAINER_DISK_GB    container disk (default 60)
   RUNPOD_MAX_ATTEMPTS         max types to probe before stop (default 40)
   RUNPOD_NEW_POD_NAME_PREFIX  prefix for temporary pod names
+  RUNPOD_DOCKER_START_CMD_JSON
+  RUNPOD_DOCKER_ENTRYPOINT_JSON
 
 Notes:
 - This script tries a curated set of GPU type IDs and prints API outcome per
@@ -103,6 +107,8 @@ while [ "$#" -gt 0 ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
     RUNPOD_CONTAINER_DISK_GB="$CONTAINER_DISK_GB" \
     RUNPOD_VOLUME_IN_GB="$VOLUME_IN_GB" \
     RUNPOD_PORTS_JSON="$PORTS_JSON" \
+    RUNPOD_DOCKER_START_CMD_JSON="$DOCKER_START_CMD_JSON" \
+    RUNPOD_DOCKER_ENTRYPOINT_JSON="$DOCKER_ENTRYPOINT_JSON" \
     RUNPOD_CLOUD_TYPE="$CLOUD_TYPE" \
     RUNPOD_NEW_POD_NAME="$pod_name" \
     sh scripts/runpod_create_pod.sh --yes-create 2>&1

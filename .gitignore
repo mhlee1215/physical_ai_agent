@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.tools/
 .agents/*
 !.agents/skills/
 .agents/skills/*
@@ -9,6 +10,8 @@
 !.agents/skills/harness/**
 !.agents/skills/physical-ai-orchestrator/
 !.agents/skills/physical-ai-orchestrator/**
+!.agents/skills/real-so100-agentic-smolvla/
+!.agents/skills/real-so100-agentic-smolvla/**
 .codex/*
 !.codex/skills/
 .codex/skills/*
@@ -22,6 +25,7 @@ __pycache__/
 *.pyd
 .Python
 .venv/
+.venv-*/
 venv/
 env/
 .mypy_cache/
@@ -34,7 +38,11 @@ build/
 *.egg-info/
 
 # Experiment outputs and datasets
-experiments/
+experiments/*
+!experiments/so101_smolvla_mac_minimal/
+!experiments/so101_smolvla_mac_minimal/**
+!experiments/xvla_mps_mac_port/
+!experiments/xvla_mps_mac_port/**
 datasets/
 artifacts/
 outputs/

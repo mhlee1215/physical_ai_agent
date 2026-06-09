@@ -9,6 +9,7 @@ from physical_ai_agent.checkpoints.checkpoint_24 import (
     _write_smolvla_real_manifest,
     run_checkpoint,
 )
+from physical_ai_agent.perception.affordance_overlay import build_oracle_affordance_overlay
 
 
 class _FakeActionSpace:
@@ -211,5 +212,170 @@ class Checkpoint24Test(TestCase):
         self.assertTrue(metadata["real_images"])
         self.assertEqual(metadata["camera_sources"], ["base_camera"])
         self.assertEqual(metadata["image_feature_mapping"]["observation.images.camera1"], "base_camera")
+        self.assertEqual(tuple(batch["observation.images.camera1"].shape), (1, 3, 16, 16))
+        self.assertGreater(float(batch["observation.images.camera1"].sum()), 0.0)
+
+    def test_oracle_affordance_overlay_projects_pose_and_writes_image(self) -> None:
+        import numpy as np
+
+        with TemporaryDirectory() as tmpdir:
+            overlay_path = Path(tmpdir) / "oracle_overlay.png"
+            obs = {
+                "extra": {"obj_pose": np.asarray([0.0, 0.0, 1.0], dtype=np.float32)},
+                "sensor_data": {
+                    "base_camera": {
+                        "rgb": np.zeros((1, 8, 10, 3), dtype=np.uint8),
+                    }
+                },
+                "sensor_param": {
+                    "base_camera": {
+                        "intrinsic_cv": np.asarray(
+                            [[100.0, 0.0, 5.0], [0.0, 100.0, 4.0], [0.0, 0.0, 1.0]],
+                            dtype=np.float32,
+                        ),
+                        "extrinsic_cv": np.eye(4, dtype=np.float32),
+                    }
+                },
+            }
+
+            overlays, metadata = build_oracle_affordance_overlay(obs, output_path=overlay_path)
+
+            self.assertTrue(overlay_path.exists())
+            self.assertEqual(metadata.mode, "projected_object_pose")
+            self.assertEqual(metadata.point_xy, [5, 4])
+            self.assertIn("base_camera", overlays)
+            self.assertGreater(int(overlays["base_camera"].sum()), 0)
+
+    def test_oracle_affordance_overlay_accepts_pose_dict(self) -> None:
+        import numpy as np
+
+        obs = {
+            "obj_pose": {"p": np.asarray([0.0, 0.0, 1.0], dtype=np.float32)},
+            "sensor_data": {
+                "base_camera": {
+                    "rgb": np.zeros((8, 10, 3), dtype=np.uint8),
+                }
+            },
+            "sensor_param": {
+                "base_camera": {
+                    "intrinsic_cv": np.asarray(
+                        [[100.0, 0.0, 5.0], [0.0, 100.0, 4.0], [0.0, 0.0, 1.0]],
+                        dtype=np.float32,
+                    ),
+                    "extrinsic_cv": np.eye(4, dtype=np.float32),
+                }
+            },
+        }
+
+        _overlays, metadata = build_oracle_affordance_overlay(obs)
+
+        self.assertEqual(metadata.mode, "projected_object_pose")
+        self.assertEqual(metadata.point_xy, [5, 4])
+
+    def test_oracle_affordance_overlay_uses_sensor_data_camera_params(self) -> None:
+        import numpy as np
+
+        obs = {
+            "obj_pose": {"position": np.asarray([0.0, 0.0, 1.0], dtype=np.float32)},
+            "sensor_data": {
+                "base_camera": {
+                    "rgb": np.zeros((8, 10, 3), dtype=np.uint8),
+                    "intrinsic_cv": np.asarray(
+                        [[100.0, 0.0, 5.0], [0.0, 100.0, 4.0], [0.0, 0.0, 1.0]],
+                        dtype=np.float32,
+                    ),
+                    "extrinsic_cv": np.eye(4, dtype=np.float32),
+                }
+            },
+        }
+
+        _overlays, metadata = build_oracle_affordance_overlay(obs)
+
+        self.assertEqual(metadata.mode, "projected_object_pose")
+        self.assertEqual(metadata.point_xy, [5, 4])
+
+    def test_oracle_affordance_overlay_falls_back_to_available_camera(self) -> None:
+        import numpy as np
+
+        obs = {
+            "obj_pose": {"p": np.asarray([0.0, 0.0, 1.0], dtype=np.float32)},
+            "sensor_data": {
+                "aux_camera": {
+                    "rgb": np.zeros((8, 10, 3), dtype=np.uint8),
+                },
+                "wrist_camera": {
+                    "rgb": np.zeros((6, 6, 3), dtype=np.uint8),
+                },
+            },
+            "sensor_param": {
+                "aux_camera": {
+                    "intrinsic_cv": np.asarray(
+                        [[100.0, 0.0, 5.0], [0.0, 100.0, 4.0], [0.0, 0.0, 1.0]],
+                        dtype=np.float32,
+                    ),
+                    "extrinsic_cv": np.eye(4, dtype=np.float32),
+                },
+                "wrist_camera": {
+                    "intrinsic_cv": np.asarray(
+                        [[80.0, 0.0, 3.0], [0.0, 80.0, 3.0], [0.0, 0.0, 1.0]],
+                        dtype=np.float32,
+                    ),
+                    "extrinsic_cv": np.eye(4, dtype=np.float32),
+                },
+            },
+        }
+
+        _overlays, metadata = build_oracle_affordance_overlay(obs, preferred_camera="base_camera")
+
+        self.assertEqual(metadata.camera_name, "aux_camera")
+        self.assertEqual(metadata.mode, "projected_object_pose")
+        self.assertEqual(metadata.point_xy, [5, 4])
+
+    def test_oracle_affordance_overlay_falls_back_for_invalid_projection(self) -> None:
+        import numpy as np
+
+        obs = {
+            "obj_pose": {"p": np.asarray([0.0, 0.0, -1.0], dtype=np.float32)},
+            "sensor_data": {
+                "base_camera": {
+                    "rgb": np.zeros((8, 10, 3), dtype=np.uint8),
+                }
+            },
+            "sensor_param": {
+                "base_camera": {
+                    "intrinsic_cv": np.asarray(
+                        [[100.0, 0.0, 5.0], [0.0, 100.0, 4.0], [0.0, 0.0, 1.0]],
+                        dtype=np.float32,
+                    ),
+                    "extrinsic_cv": np.eye(4, dtype=np.float32),
+                }
+            },
+        }
+
+        _overlays, metadata = build_oracle_affordance_overlay(obs)
+
+        self.assertEqual(metadata.mode, "image_center_fallback")
+        self.assertEqual(metadata.point_xy, [5, 4])
+
+    def test_smolvla_batch_can_use_oracle_affordance_overlay_images(self) -> None:
+        import numpy as np
+
+        obs = {
+            "sensor_data": {
+                "base_camera": {
+                    "rgb": np.zeros((1, 8, 10, 3), dtype=np.uint8),
+                }
+            },
+        }
+        overlays, overlay_metadata = build_oracle_affordance_overlay(obs)
+        batch, metadata = _build_maniskill_smolvla_batch(
+            _FakePolicy(),
+            obs,
+            use_real_images=True,
+            override_camera_pixels=overlays,
+        )
+
+        self.assertEqual(overlay_metadata.mode, "image_center_fallback")
+        self.assertEqual(metadata["image_conditioning"], "oracle_affordance_overlay")
         self.assertEqual(tuple(batch["observation.images.camera1"].shape), (1, 3, 16, 16))
         self.assertGreater(float(batch["observation.images.camera1"].sum()), 0.0)
