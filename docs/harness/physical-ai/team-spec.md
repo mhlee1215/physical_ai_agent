@@ -48,6 +48,81 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 - output files: command output summarized in final response
 - completion criteria: verification passes, or blocker is explicit and reproducible
 
+## Imagine-Then-Act Entrypoint Contract
+
+Use `scripts/run_imagine_then_act.py` as the single entrypoint for all
+Imagine-Then-Act chunk-selection experiments. Local smoke, local dry-run,
+RunPod LIBERO, simulator-rollout imagination, VLM judging, oracle-state
+selection, and future learned predictor variants should attach behind this
+entrypoint rather than adding parallel scripts.
+
+Canonical first-pass entrypoint:
+
+```bash
+PYTHONPATH=src python3 -B scripts/run_imagine_then_act.py --mode smoke --target local
+```
+
+Required rules:
+
+- Keep one script entrypoint per experiment family and select behavior with
+  explicit flags such as `--mode` and `--target`.
+- Support a deterministic local validation path before any RunPod request.
+- Keep the main Python function phase-oriented and signposted with large
+  comment blocks so future contributors can scan parse -> imagine -> judge ->
+  select -> post-check -> persist stages.
+- Put reusable dataclass/protocol contracts in
+  `src/physical_ai_agent/imagine_then_act/interfaces.py`.
+- Put reusable stage helpers under
+  `src/physical_ai_agent/imagine_then_act/utils.py` and keep the script thin
+  enough that backend swaps stay localized.
+- Keep the first local proof stdlib-only. Do not download simulation, VLM, or
+  SmolVLA/LIBERO dependencies for the MVP smoke path.
+- Persist the current reproducible artifact bundle under
+  `_workspace/imagine_then_act/`: `config.json`, `execution_contract.json`,
+  `trace.jsonl`, `report.json`, `summary.md`, and `replay_command.sh`.
+- Separate pre-execution imagined outcome selection from post-execution
+  progress checks. Do not use the selector or VLM judge as the final benchmark
+  success detector.
+- Final success must come from the benchmark/environment success signal such as
+  `info["success"]`, `is_success`, `pc_success`, or an equivalent task-level
+  environment metric.
+- When the first RunPod backend adapter invokes an existing baseline runner,
+  report it as benchmark-success plumbing until the selected imagined candidate
+  is actually applied to environment actions. Do not claim agentic performance
+  gains from a run with `selected_candidate_applied=false`.
+- Before cloud work, run the new family-specific tests first, then the repo
+  standard-library suite when feasible.
+- Every RunPod handoff must include the exact command, expected output
+  directory, result-fetch step, and an explicit reminder to stop the Pod after
+  the fetch is complete.
+
+Current Imagine-Then-Act checkpoints should preview these two commands:
+
+```bash
+PYTHONPATH=src python3 -B scripts/run_imagine_then_act.py \
+  --mode local-dry-run \
+  --target local \
+  --candidate-seeds 0,1,2 \
+  --num-candidates 3 \
+  --imagination-backend sim-rollout \
+  --judge-backend heuristic \
+  --post-check-backend heuristic \
+  --output-dir _workspace/imagine_then_act/local_smoke
+```
+
+```bash
+PYTHONPATH=src python3 -B scripts/run_imagine_then_act.py \
+  --mode runpod-libero \
+  --target runpod \
+  --candidate-seeds 1200,1201,1202,1203 \
+  --num-candidates 4 \
+  --imagination-backend sim-rollout \
+  --judge-backend heuristic \
+  --post-check-backend heuristic \
+  --output-dir _workspace/imagine_then_act/runpod_libero_contract \
+  --dry-run
+```
+
 ## Required Checkpoint 01 Verification
 
 Run these commands before completing checkpoint 01:
