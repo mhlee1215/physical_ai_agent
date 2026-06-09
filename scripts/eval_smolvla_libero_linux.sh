@@ -4,7 +4,7 @@ set -eu
 PROJECT_DIR="${PROJECT_DIR:-/workspace/physical-ai/physical_ai_agent}"
 WORK_ROOT="${WORK_ROOT:-/workspace/physical-ai}"
 LEROBOT_DIR="${LEROBOT_DIR:-$WORK_ROOT/vendor/lerobot}"
-PY312_VENV="${PY312_VENV:-$WORK_ROOT/envs/lerobot_py312}"
+PY312_VENV="${PY312_VENV:-/root/physical-ai/envs/lerobot_py312}"
 LEROBOT_REF="${LEROBOT_REF:-main}"
 LIBERO_CONFIG_DIR="${LIBERO_CONFIG_DIR:-$HOME/.libero}"
 LIBERO_ASSETS_DIR="${LIBERO_ASSETS_DIR:-$WORK_ROOT/libero_assets}"

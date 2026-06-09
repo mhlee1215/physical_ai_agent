@@ -165,6 +165,38 @@ sh scripts/runpod_pod.sh status
 RUNPOD_SSH="$RUNPOD_SSH" sh scripts/runpod_check.sh
 ```
 
+RunPod capacity policy:
+
+- If the preferred existing Pod or exact GPU spec is unavailable, do not stop at
+  `blocked_capacity` when the user has approved RunPod experimentation.
+- Create or start the cheapest available same-class or lower-cost GPU that can
+  run the target benchmark, preferring an existing network volume such as
+  `tchm4gxfvd` and SSH access. Reasonable fallbacks include L4, A10/A10G,
+  RTX 30xx, RTX A4000/A4500/A5000, or another similar/cheaper NVIDIA GPU.
+- Avoid moving to a materially more expensive GPU without explicit approval.
+- When using an ephemeral or no-volume Pod, write all results under a known
+  result directory and fetch them before stopping. Stop confirmation is still
+  mandatory.
+- Record the GPU, hourly cost, Pod ID, volume choice, SSH endpoint, and fallback
+  reason in `docs/runpod_worklog.md`.
+
+RunPod environment policy:
+
+- Environment setup failures are not final blockers until the agent has checked
+  `docs/runpod_worklog.md`, the repo scripts, and relevant official install
+  instructions or package metadata for a known working path.
+- For LIBERO/SmolVLA, first reuse or bootstrap the LeRobot Python environment at
+  `/root/physical-ai/envs/lerobot_py312`; keep pip/model/data caches under
+  `/workspace/physical-ai` but avoid creating package-heavy virtualenvs on the
+  network volume unless persistence is more important than install speed.
+- Preferred LIBERO bootstrap/eval entrypoint:
+  `scripts/eval_smolvla_libero_linux.sh`, with `WORK_ROOT=/workspace/physical-ai`
+  and `PY312_VENV=/root/physical-ai/envs/lerobot_py312`.
+- If `lerobot` is missing, bootstrap it instead of reporting a benchmark
+  blocker. Only stop after either the benchmark artifact is produced or the
+  bootstrap has a concrete, logged dependency failure that cannot be fixed
+  within the current approved cost envelope.
+
 Then, on the Pod:
 
 ```bash
