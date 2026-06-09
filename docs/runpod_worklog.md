@@ -2858,3 +2858,74 @@ sh /tmp/runpod_smolvla_metaworld_official_repro.sh
   Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
   `h1yxes6375ymbd`, `7pkhrhmb657w4c`, and `4pxof2vs44h9cb` all `EXITED`; no
   `RUNNING` Pods remained.
+
+### Imagine-Then-Act L4 Environment Recovery and Backend Run
+
+- User direction:
+  future RunPod experiments may fall back to cheaper or similar specs when the
+  preferred instance is unavailable, and environment issues should be debugged
+  from prior worklog evidence or install references instead of ending the run
+  prematurely.
+- Harness update:
+  `docs/harness/physical-ai/team-spec.md` now records the cheap/similar GPU
+  fallback policy and the LIBERO environment recovery policy.
+- Script update:
+  `scripts/eval_smolvla_libero_linux.sh` now defaults `PY312_VENV` to
+  `/root/physical-ai/envs/lerobot_py312` so package-heavy virtualenv writes use
+  faster container disk while pip/HF/assets remain under `/workspace`.
+- Commit evaluated on RunPod:
+  `d3250dc` on branch `codex/real-so100-green-doll-dryrun`, using clean clone
+  `/workspace/physical-ai/eval_worktrees/physical_ai_agent_ita`.
+- Pod:
+  resumed `h1yxes6375ymbd`, NVIDIA L4, `$0.39/hr`, network volume
+  `tchm4gxfvd`, SSH `213.173.105.29:30053`.
+- Environment recovery:
+  - installed Python 3.12 apt dependencies and EGL/ffmpeg packages;
+  - created `/root/physical-ai/envs/lerobot_py312`;
+  - installed editable public LeRobot `0.5.2` from `main` with
+    `[smolvla,libero]`;
+  - installed `hf-libero`, `robosuite`, `robomimic`, and `mujoco==3.3.2`;
+  - downloaded `lerobot/libero-assets` and wrote LIBERO config under
+    `/root/.libero`.
+- Bootstrap sanity command:
+  `scripts/eval_smolvla_libero_linux.sh` with `libero_goal`, task id `[6]`,
+  `LIBERO_N_EPISODES=1`, `POLICY_EMPTY_CAMERAS=0`, and `--seed=1200`.
+  - exit code: `0`
+  - `eval_info.json`: produced
+  - `pc_success`: `0.0`
+  - `eval_s`: `46.1683`
+  - video: produced at
+    `eval_logs/videos/libero_goal_6/eval_episode_0.mp4`
+- Imagine-Then-Act non-dry-run command:
+  `/root/physical-ai/envs/lerobot_py312/bin/python -B
+  scripts/run_imagine_then_act.py --mode runpod-libero --target runpod
+  --env-type libero --task-suite libero_goal --task-id 6 --num-candidates 3
+  --candidate-seeds 1200,1201,1202 --output-dir
+  .../imagine_then_act_libero_goal_task6_after_bootstrap --json`
+  with `PHYSICAL_AI_ALLOW_RUNPOD_BACKEND=1` because the clean clone is outside
+  the canonical RunPod repo path.
+  - entrypoint exit code: `0`
+  - status: `passed`
+  - selected candidate: `candidate_02`
+  - benchmark result source: `eval_info.json`
+  - backend exit code: `0`
+  - `pc_success`: `0.0`
+  - benchmark success: `false`
+  - action steps: `300`
+  - `eval_s`: `15.9252`
+  - selected candidate applied to benchmark actions: `false`
+- Claim boundary:
+  this proves the RunPod/LIBERO environment and backend-success-signal plumbing
+  are executable on the cheap L4 fallback. It is not an agentic improvement
+  result because the chosen candidate is still analysis-only and is not applied
+  to environment actions.
+- Local evidence:
+  `_workspace/runpod_results/ita_l4_h1yxes6375ymbd_rerun/`
+- Visual QA:
+  generated a QuickLook thumbnail from the fetched benchmark video and inspected
+  it. The frame shows a valid LIBERO/robosuite tabletop scene with the robot,
+  objects, and cabinet rendered correctly.
+- Stop confirmation:
+  Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
+  `h1yxes6375ymbd`, `7pkhrhmb657w4c`, and `4pxof2vs44h9cb` all `EXITED`; no
+  `RUNNING` Pods remained.
