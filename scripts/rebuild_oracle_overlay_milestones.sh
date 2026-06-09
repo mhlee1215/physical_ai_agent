@@ -137,6 +137,11 @@ PYTHONPATH=src "$PYTHON_BIN" -B scripts/build_actual_sim_true_oracle_readiness_g
   --output-dir "$ROOT/actual_sim_true_oracle_readiness_gap" \
   --limit 12
 
+PYTHONPATH=src "$PYTHON_BIN" -B scripts/build_actual_rgb_synthetic_metadata_true_oracle_codepath_report.py \
+  --root "$ROOT" \
+  --output-dir "$ROOT/actual_rgb_synthetic_metadata_true_oracle_codepath" \
+  --limit 12
+
 if [ -f "_workspace/checkpoints/checkpoint_24_actual_sim_true_oracle_probe/checkpoint_report.json" ]; then
   PYTHONPATH=src "$PYTHON_BIN" -B scripts/build_actual_sim_true_oracle_probe_blocker_report.py \
     --checkpoint-dir "_workspace/checkpoints/checkpoint_24_actual_sim_true_oracle_probe" \
@@ -152,7 +157,7 @@ cat > "$ROOT/actual_sim_true_oracle_remote_handoff/actual_sim_true_oracle_remote
   "source_type": "actual_sim_true_oracle_remote_handoff",
   "sample_count": 12,
   "true_oracle_projection": false,
-  "two_stage_script": "retired_cp24_true_oracle_probe",
+  "two_stage_script": "scripts/run_actual_sim_true_oracle_probe_then_policy_cp24.sh",
   "claim_boundary": "Remote handoff plan only; does not create pods or prove Tier O."
 }
 EOF

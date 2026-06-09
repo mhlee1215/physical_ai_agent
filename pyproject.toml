@@ -49,6 +49,20 @@ maniskill = [
 
 [project.scripts]
 physical-ai-agent = "physical_ai_agent.cli:main"
+pai-checkpoint-01 = "physical_ai_agent.checkpoints.checkpoint_01:main"
+pai-checkpoint-02-04 = "physical_ai_agent.checkpoints.checkpoint_02_04:main"
+pai-checkpoint-05-06 = "physical_ai_agent.checkpoints.checkpoint_05_06:main"
+pai-checkpoint-07-13 = "physical_ai_agent.checkpoints.checkpoint_07_13:main"
+pai-checkpoint-14-15 = "physical_ai_agent.checkpoints.checkpoint_14_15:main"
+pai-checkpoint-16 = "physical_ai_agent.checkpoints.checkpoint_16:main"
+pai-checkpoint-17 = "physical_ai_agent.checkpoints.checkpoint_17:main"
+pai-checkpoint-18 = "physical_ai_agent.checkpoints.checkpoint_18:main"
+pai-checkpoint-19 = "physical_ai_agent.checkpoints.checkpoint_19:main"
+pai-checkpoint-20 = "physical_ai_agent.checkpoints.checkpoint_20:main"
+pai-checkpoint-21 = "physical_ai_agent.checkpoints.checkpoint_21:main"
+pai-checkpoint-22 = "physical_ai_agent.checkpoints.checkpoint_22:main"
+pai-checkpoint-23 = "physical_ai_agent.checkpoints.checkpoint_23:main"
+pai-checkpoint-24 = "physical_ai_agent.checkpoints.checkpoint_24:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

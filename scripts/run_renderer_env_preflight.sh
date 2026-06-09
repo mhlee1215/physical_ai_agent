@@ -84,7 +84,7 @@ payload = {
     "commands": commands,
     "required_imports_ok": required_imports_ok,
     "gpu_or_vulkan_visible": gpu_or_vulkan_visible,
-    "next_command_if_passed": "retired_cp24_true_oracle_probe",
+    "next_command_if_passed": "sh scripts/run_actual_sim_true_oracle_probe_then_policy_cp24.sh",
     "claim_boundary": "Preflight only; does not run simulation, create pods, or prove Tier O.",
 }
 report_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
