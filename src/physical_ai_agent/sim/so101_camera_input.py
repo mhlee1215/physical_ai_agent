@@ -5,6 +5,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from physical_ai_agent.real_so100.contract import (
+    SIM_DEBUG_CAMERA_NAMES,
+    SIM_POLICY_CAMERA_NAMES,
+    classify_sim_camera_names,
+    sim_policy_feature_keys,
+)
 from physical_ai_agent.sim.so101_nexus_env import DEFAULT_SO101_ENV_ID, sample_action
 
 
@@ -46,14 +52,17 @@ DEFAULT_SO101_ENV_IDS = (
     "MuJoCoPickAndPlace-v1",
 )
 
-POLICY_CAMERA_NAMES = ("wrist_cam", "egocentric_cam")
-DEBUG_CAMERA_NAMES = ("top_down",)
+POLICY_CAMERA_NAMES = SIM_POLICY_CAMERA_NAMES
+DEBUG_CAMERA_NAMES = SIM_DEBUG_CAMERA_NAMES
 DEFAULT_VIRTUAL_CAMERA_NAMES = ("egocentric_cam", "top_down")
 
 
 def inspect_so101_camera_specs(env_ids: tuple[str, ...] = DEFAULT_SO101_ENV_IDS) -> list[SO101CameraSpec]:
-    import gymnasium as gym
-    import so101_nexus_mujoco  # noqa: F401 - registers Gymnasium env ids.
+    try:
+        import gymnasium as gym
+        import so101_nexus_mujoco  # noqa: F401 - registers Gymnasium env ids.
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("SO101-Nexus camera inspection requires gymnasium and so101-nexus-mujoco") from exc
 
     specs: list[SO101CameraSpec] = []
     for env_id in env_ids:
@@ -85,9 +94,12 @@ def capture_so101_inputs(
     include_virtual_cameras: bool = False,
     camera_names: tuple[str, ...] | None = None,
 ) -> SO101InputCapture:
-    import gymnasium as gym
-    import mujoco
-    import so101_nexus_mujoco  # noqa: F401 - registers Gymnasium env ids.
+    try:
+        import gymnasium as gym
+        import mujoco
+        import so101_nexus_mujoco  # noqa: F401 - registers Gymnasium env ids.
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("SO101-Nexus input capture requires gymnasium, mujoco, and so101-nexus-mujoco") from exc
 
     output_dir.mkdir(parents=True, exist_ok=True)
     frames_dir = output_dir / "frames"
@@ -138,16 +150,18 @@ def capture_so101_inputs(
     manifest_path = output_dir / "input_manifest.json"
     preview_path = output_dir / "input_preview.png"
     preview_gif_path = output_dir / "input_preview.gif"
+    first_camera_names = tuple(records[0].camera_frames) if records else ()
+    policy_input_names, debug_input_names = classify_sim_camera_names(first_camera_names)
     capture = SO101InputCapture(
         env_id=env_id,
         camera_specs=specs,
         frames=records,
-        policy_input_names=[name for name in POLICY_CAMERA_NAMES if records and name in records[0].camera_frames],
-        debug_input_names=[name for name in DEBUG_CAMERA_NAMES if records and name in records[0].camera_frames],
+        policy_input_names=policy_input_names,
+        debug_input_names=debug_input_names,
         lerobot_policy_feature_keys=[
-            f"observation.images.{name}"
-            for name in POLICY_CAMERA_NAMES
-            if records and name in records[0].camera_frames
+            key
+            for key in sim_policy_feature_keys()
+            if key.removeprefix("observation.images.") in policy_input_names
         ],
         manifest_path=str(manifest_path),
         preview_path=str(preview_path),

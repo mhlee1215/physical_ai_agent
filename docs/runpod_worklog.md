@@ -804,7 +804,7 @@ previous `lerobot/smolvla_libero` run.
   - LeRobot source confirms `eval.batch_size` creates multiple envs,
     `eval.use_async_envs` uses async envs, and `env.max_parallel_tasks` runs
     task-level work with a thread pool.
-  - Added `scripts/runpod_smolvla_libero_parallel_probe.sh` to compare:
+  - Added `experiments/libero_runpod_variants/runpod_smolvla_libero_parallel_probe.sh` to compare:
     `b1_sync_t1`, `b4_async_t1`, `b8_async_t1`, and `b4_async_t2` on a small
     fixed subset before changing a full benchmark run.
   - Preferred next acceleration path is `batch_size + async`; task-thread
@@ -898,7 +898,7 @@ previous `lerobot/smolvla_libero` run.
     `max_parallel_tasks=1`
   - latest checked progress at `2026-06-06T17:18:36Z`: `83/400` videos,
     still running; GPU was `32%` with `4237/24564 MiB` used.
-- Added `scripts/runpod_smolvla_libero_multi_process_probe.sh` to test
+- Added `experiments/libero_runpod_variants/runpod_smolvla_libero_multi_process_probe.sh` to test
   triple-process scaling after the active full run completes. Do not run it
   concurrently with the active reported evaluation because it could contaminate
   timing and possibly success.
@@ -1001,7 +1001,7 @@ previous `lerobot/smolvla_libero` run.
 
 - Added the first LIBERO/SmolVLA agentic retry layer:
   - source: `src/physical_ai_agent/agent_core/libero_agentic_retry.py`
-  - runner: `scripts/runpod_smolvla_libero_agentic_retry_probe.sh`
+  - runner: `experiments/libero_runpod_variants/runpod_smolvla_libero_agentic_retry_probe.sh`
   - test: `tests/test_libero_agentic_retry.py`
   - report: `docs/smolvla_libero_agentic_retry_report.md`
 - Semantics:
@@ -1055,7 +1055,7 @@ previous `lerobot/smolvla_libero` run.
   `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_alt_long_full_20260606T2105Z`,
   but stopped it because `LIBERO_TASK_IDS=` fell back to the script default
   `[0,6,8]`. Added `LIBERO_TASK_IDS=all` support in
-  `scripts/runpod_smolvla_libero_agentic_retry_probe.sh` before relaunching.
+  `experiments/libero_runpod_variants/runpod_smolvla_libero_agentic_retry_probe.sh` before relaunching.
 - Completed full Long-suite alternate-protocol agentic retry:
   - output:
     `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_alt_long_full_20260606T2108Z`

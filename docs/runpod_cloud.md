@@ -154,6 +154,43 @@ git pull --ff-only origin main
 
 The current known-good cloud commit is `59f25a1`.
 
+## LeRobot / SmolVLA RunPod Environment
+
+Use the unified LeRobot runner for LIBERO and Meta-World:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+sh scripts/eval_smolvla_lerobot_linux.sh --benchmark libero --agentic-layer baseline
+sh scripts/eval_smolvla_lerobot_linux.sh --benchmark metaworld --agentic-layer baseline
+```
+
+Environment defaults are set to avoid previous RunPod failure modes:
+
+- `PY312_VENV=/root/physical-ai/envs/lerobot_py312` by default. This uses the
+  faster container disk for the Python environment; keep caches/results under
+  `/workspace`.
+- `PIP_CACHE_DIR=/workspace/physical-ai/pip_cache`.
+- `HF_HOME=/workspace/physical-ai/hf_home`.
+- `MUJOCO_GL=egl`.
+- `MUJOCO_VERSION=3.3.2` for LIBERO unless explicitly overridden.
+- `REQUIRE_CUDA=1` by default. If CUDA is not visible to PyTorch, the runner
+  fails before producing misleading CPU-baseline numbers.
+
+Every run writes:
+
+```text
+debug_artifacts/runpod_preflight.txt
+debug_artifacts/environment_probe.txt
+debug_artifacts/eval_manifest.json
+debug_artifacts/command_argv.json
+debug_artifacts/agentic_layer.json
+debug_artifacts/events.jsonl
+```
+
+Read those files first when debugging setup drift. The most important checks
+are Python `>=3.12`, `torch.cuda.is_available() == True`, the evaluated git
+commit, MuJoCo version, and the generated `lerobot-eval` argv.
+
 ## Verified Smoke
 
 The template was verified on the Pod with:
@@ -177,57 +214,11 @@ print("gpu", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no
 PY
 ```
 
-## Verified CP24 Status
+## Retired ManiSkill Checkpoint Note
 
-The current official PyTorch 2.4 / Python 3.11 template is usable as a first
-cloud workstation, but it is not yet a full ManiSkill manipulation evaluation
-machine.
+The former CP24 ManiSkill smoke gate has been retired from the active repo surface. Historical RunPod notes remain useful for environment selection: the official PyTorch 2.4 / Python 3.11 template verified CUDA/PyTorch, but Python 3.11 blocked `lerobot>=0.5.1` SmolVLA and the tested host exposed CUDA without a working NVIDIA Vulkan device for manipulation rendering.
 
-Verified:
-
-```bash
-cd /workspace/physical-ai/physical_ai_agent
-python -m venv --system-site-packages .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e '.[dev,sim,maniskill]'
-PYTHONPATH=src .venv/bin/python -B -m physical_ai_agent.checkpoints.checkpoint_24 \
-  --require-maniskill \
-  --no-fallback-env \
-  --env-id Empty-v1 \
-  --episodes 1 \
-  --steps 1 \
-  --policy zero \
-  --output-dir _workspace/checkpoints/runpod_checkpoint_24_empty_zero_1ep_1step
-```
-
-Result:
-
-```text
-checkpoint_24_maniskill_hab_smolvla_eval_planning: passed
-metrics=env:Empty-v1 episodes:2 rollout:passed success_rate:0/2 smolvla_ready:False
-```
-
-Blocked on this template:
-
-- `.[smolvla]` does not install under Python 3.11 because `lerobot>=0.5.1`
-  requires Python `>=3.12`.
-- `PickCube-v1` is blocked by SAPIEN/Vulkan renderer initialization:
-  `vk::createInstanceUnique: ErrorIncompatibleDriver`.
-- Installing `libvulkan1` and `vulkan-tools` makes `vulkaninfo` available, but
-  the NVIDIA ICD still does not load. `vulkaninfo --summary` reports CPU
-  `llvmpipe` only, not the RTX 4090 Vulkan device.
-
-The generated blocker artifact is:
-
-```text
-_workspace/checkpoints/runpod_checkpoint_24_pickcube_zero_after_vulkan_1ep_1step/maniskill_blocker.md
-```
-
-For full SmolVLA evaluation, use a Python 3.12-capable image or build a Python
-3.12 environment with CUDA PyTorch. For full ManiSkill manipulation tasks, use a
-RunPod template or host configuration where NVIDIA Vulkan appears in
-`vulkaninfo --summary`, not only CUDA in `nvidia-smi`.
+For current benchmark work, use a committed evaluation branch on RunPod with a Python 3.12-capable LeRobot environment and record results under `_workspace/runpod_results/` before stopping the Pod.
 
 ## Cost Hygiene
 

@@ -35,6 +35,10 @@ build/
 
 # Experiment outputs and datasets
 experiments/
+!experiments/
+experiments/*
+!experiments/libero_runpod_variants/
+!experiments/libero_runpod_variants/**
 datasets/
 artifacts/
 outputs/
