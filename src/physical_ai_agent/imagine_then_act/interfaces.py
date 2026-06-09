@@ -116,6 +116,10 @@ class BenchmarkResult:
     seed: int | None
     exit_code: int | None
     selected_candidate_applied: bool
+    selected_candidate_id: str | None
+    selected_action_shape: list[int] | None
+    committed_action_steps: int
+    candidate_generation_source: str | None
 
 
 @dataclass(frozen=True)

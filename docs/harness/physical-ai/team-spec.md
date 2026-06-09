@@ -86,10 +86,24 @@ Required rules:
 - Final success must come from the benchmark/environment success signal such as
   `info["success"]`, `is_success`, `pc_success`, or an equivalent task-level
   environment metric.
-- When the first RunPod backend adapter invokes an existing baseline runner,
-  report it as benchmark-success plumbing until the selected imagined candidate
-  is actually applied to environment actions. Do not claim agentic performance
-  gains from a run with `selected_candidate_applied=false`.
+- The first focused RunPod MVP must enable `--ita-enable` on
+  `scripts/run_libero_in_episode_smolvla_instrumented.py`. Candidate actions
+  must be sampled from the real policy action path, preferably
+  `policy.predict_action_chunk(observation)` and only falling back to
+  one-step `policy.select_action(observation)` when chunk prediction is not
+  available.
+- The rollout trace must prove the selected candidate reached
+  `env.step(action_numpy)`: record candidate generation source, candidate
+  seeds, selected candidate id, selected action shape, committed action-step
+  count, per-step action source, and `selected_candidate_applied=true`.
+- For the canonical first focused experiment, the decisive candidate selection
+  must happen over the real policy-generated candidates inside the instrumented
+  backend. Do not force a backend candidate id selected only by the outer
+  deterministic placeholder selector; `--ita-selected-candidate-id` is reserved
+  for explicit debug/sanity injection checks.
+- `BenchmarkResult.selected_candidate_applied` must be derived from the
+  benchmark trace. Do not hardcode it. Do not claim Imagine-Then-Act method
+  gains from any run with `selected_candidate_applied=false`.
 - Before cloud work, run the new family-specific tests first, then the repo
   standard-library suite when feasible.
 - Every RunPod handoff must include the exact command, expected output
