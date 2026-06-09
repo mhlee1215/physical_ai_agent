@@ -24,6 +24,7 @@ from physical_ai_agent.imagine_then_act.utils import (
     run_post_check,
     should_execute_real_backend,
     build_run_report,
+    build_backend_command_tokens,
     evaluate_execution_readiness,
     load_benchmark_result,
     read_ita_application_summary,
@@ -64,10 +65,14 @@ class ImagineThenActTest(TestCase):
                 episode_seed=1200,
                 chunk_steps=4,
                 action_dim=3,
+                policy_num_steps=10,
+                policy_n_action_steps=15,
                 instruction="move the object toward the target",
                 selector_strategy="baseline_fallback",
             )
             config = build_run_config(args)
+            self.assertEqual(config.policy_num_steps, 10)
+            self.assertEqual(config.policy_n_action_steps, 15)
             artifacts = prepare_run_artifacts(config)
             contract = build_execution_contract(config)
 
@@ -102,6 +107,8 @@ class ImagineThenActTest(TestCase):
             self.assertTrue(candidates[0].is_baseline)
             self.assertTrue(report.baseline_candidate_available)
             self.assertTrue(report.baseline_candidate_selected)
+            self.assertEqual(report.policy_num_steps, 10)
+            self.assertEqual(report.policy_n_action_steps, 15)
             self.assertEqual(report.selector_strategy, "baseline_fallback")
             self.assertTrue(report.selector_fallback_used)
             self.assertFalse(report.method_claim_ready)
@@ -134,6 +141,8 @@ class ImagineThenActTest(TestCase):
                 episode_seed=1200,
                 chunk_steps=10,
                 action_dim=7,
+                policy_num_steps=10,
+                policy_n_action_steps=15,
                 instruction="move the target object toward the receptacle",
                 selector_strategy="baseline_fallback",
             )
@@ -197,6 +206,8 @@ class ImagineThenActTest(TestCase):
             self.assertIn("--env.max_parallel_tasks=1", command)
             self.assertIn("--policy.empty_cameras=0", command)
             self.assertIn("--seed=1200", command)
+            self.assertNotIn("--policy.num_steps=10", command)
+            self.assertNotIn("--policy.n_action_steps=15", command)
             self.assertIn("--ita-enable", command)
             self.assertIn("--ita-candidate-seeds", command)
             self.assertIn("1200,1201,1202", command)
@@ -206,6 +217,14 @@ class ImagineThenActTest(TestCase):
             self.assertIn("10", command)
             self.assertIn("--ita-selector-strategy", command)
             self.assertIn("baseline_fallback", command)
+            tokens = build_backend_command_tokens(
+                config=config,
+                trace_path="trace.jsonl",
+                eval_logs_dir="eval_logs",
+                python_bin="python3",
+            )
+            self.assertNotIn("--policy.num_steps=10", tokens)
+            self.assertNotIn("--policy.n_action_steps=15", tokens)
             self.assertEqual(env["MUJOCO_GL"], "egl")
             self.assertIn("HF_HOME", env)
             selected_command, _selected_env = build_real_backend_command(
@@ -219,6 +238,53 @@ class ImagineThenActTest(TestCase):
             default_command, _default_env = build_real_backend_command(config, artifacts)
             self.assertNotIn("--ita-selected-candidate-id", default_command)
             self.assertNotIn("candidate_02", default_command)
+
+    def test_real_backend_command_passes_optional_policy_horizon_overrides(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            args = Namespace(
+                mode="runpod-libero",
+                target="runpod",
+                policy_path="lerobot/smolvla_libero",
+                env_type=None,
+                task_suite=None,
+                task_id=6,
+                num_candidates=3,
+                candidate_seeds="1200,1201,1202",
+                imagination_backend="sim-rollout",
+                judge_backend="heuristic",
+                post_check_backend="oracle-state-placeholder",
+                retry_budget=1,
+                output_dir=tmpdir,
+                dry_run=False,
+                episode_seed=1200,
+                chunk_steps=10,
+                action_dim=7,
+                policy_num_steps=10,
+                policy_n_action_steps=15,
+                instruction="move the target object toward the receptacle",
+                selector_strategy="baseline_fallback",
+            )
+
+            config = build_run_config(args)
+            artifacts = prepare_run_artifacts(config)
+            command, _env = build_real_backend_command(config, artifacts)
+            tokens = build_backend_command_tokens(
+                config=config,
+                trace_path="trace.jsonl",
+                eval_logs_dir="eval_logs",
+                python_bin="python3",
+            )
+
+            self.assertEqual(config.policy_num_steps, 10)
+            self.assertEqual(config.policy_n_action_steps, 15)
+            self.assertIn("--policy.num_steps=10", command)
+            self.assertIn("--policy.n_action_steps=15", command)
+            self.assertIn("--policy.num_steps=10", tokens)
+            self.assertIn("--policy.n_action_steps=15", tokens)
+            self.assertEqual(command.count("--policy.num_steps=10"), 1)
+            self.assertEqual(command.count("--policy.n_action_steps=15"), 1)
+            self.assertEqual(tokens.count("--policy.num_steps=10"), 1)
+            self.assertEqual(tokens.count("--policy.n_action_steps=15"), 1)
 
     def test_non_dry_run_libero_modes_are_gated_to_backend_readiness(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -412,6 +478,10 @@ class ImagineThenActTest(TestCase):
                 "1200,1201",
                 "--selector-strategy",
                 "baseline_fallback",
+                "--policy-num-steps",
+                "10",
+                "--policy-n-action-steps",
+                "15",
                 "--output-dir",
                 tmpdir,
                 "--dry-run",
@@ -433,8 +503,12 @@ class ImagineThenActTest(TestCase):
             self.assertEqual(payload["selector_strategy"], "baseline_fallback")
             self.assertTrue(payload["selector_fallback_used"])
             self.assertFalse(payload["method_claim_ready"])
+            self.assertEqual(payload["policy_num_steps"], 10)
+            self.assertEqual(payload["policy_n_action_steps"], 15)
             self.assertTrue(report["baseline_candidate_available"])
             self.assertTrue(report["baseline_candidate_selected"])
+            self.assertEqual(report["policy_num_steps"], 10)
+            self.assertEqual(report["policy_n_action_steps"], 15)
             self.assertEqual(report["selector_strategy"], "baseline_fallback")
             self.assertTrue(report["selector_fallback_used"])
             self.assertFalse(report["method_claim_ready"])
@@ -443,6 +517,11 @@ class ImagineThenActTest(TestCase):
             self.assertEqual(selection_record["payload"]["selector_strategy"], "baseline_fallback")
             self.assertTrue(selection_record["payload"]["selector_fallback_used"])
             self.assertFalse(selection_record["payload"]["method_claim_ready"])
+            config_record = next(record for record in trace_records if record["stage"] == "config")
+            self.assertEqual(config_record["payload"]["policy_num_steps"], 10)
+            self.assertEqual(config_record["payload"]["policy_n_action_steps"], 15)
+            self.assertIn("--policy.num_steps=10", report["backend_command"])
+            self.assertIn("--policy.n_action_steps=15", report["backend_command"])
 
     def test_entrypoint_accepts_ita_selector_strategy_alias(self) -> None:
         with TemporaryDirectory() as tmpdir:

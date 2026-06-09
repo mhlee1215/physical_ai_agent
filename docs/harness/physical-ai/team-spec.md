@@ -90,6 +90,12 @@ Required rules:
   action-injection proof. A method claim requires policy-only baseline-near
   success rate on the fixed benchmark protocol; `selected_candidate_applied=true`
   alone is insufficient.
+- When the corrected policy-only baseline requires explicit policy horizon
+  settings, pass the same horizon through the ITA entrypoint with
+  `--policy-num-steps` and `--policy-n-action-steps`; the backend runner must
+  receive these as `--policy.num_steps` and `--policy.n_action_steps`. These
+  flags are for fair baseline parity comparison only. Final success remains the
+  benchmark/environment success metric.
 - The first focused RunPod MVP must enable `--ita-enable` on
   `scripts/run_libero_in_episode_smolvla_instrumented.py`. Candidate actions
   must be sampled from the real policy action path, preferably
@@ -174,6 +180,8 @@ PYTHONPATH=src python3 -B scripts/run_imagine_then_act.py \
   --judge-backend heuristic \
   --post-check-backend heuristic \
   --selector-strategy baseline_fallback \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
   --output-dir _workspace/imagine_then_act/runpod_libero_contract \
   --dry-run
 ```
@@ -247,6 +255,23 @@ RunPod environment policy:
 - Preferred LIBERO bootstrap/eval entrypoint:
   `scripts/eval_smolvla_libero_linux.sh`, with `WORK_ROOT=/workspace/physical-ai`
   and `PY312_VENV=/root/physical-ai/envs/lerobot_py312`.
+- Next LIBERO/SmolVLA RunPod attempts should be volume-first. If network volume
+  `tchm4gxfvd` is available, attach it and keep the repo, Hugging Face cache,
+  LIBERO assets, pip cache, and any repaired `lerobot_py312` environment under
+  `/workspace/physical-ai` so the next run does not repeat the same bootstrap.
+- For no-volume ephemeral Pods, do not hand-install interactively. Use a
+  prebuilt bootstrap script or explicit wheel constraints that pin CUDA PyTorch
+  to `torch==2.5.1+cu124` from the PyTorch CUDA 12.4 wheel index before
+  installing `lerobot[smolvla,libero]`.
+- Prevent dependency drift: install LeRobot with constraints/no-deps where
+  needed, then repair after install by force-reinstalling
+  `torch==2.5.1+cu124`, `torchvision==0.20.1+cu124`, and
+  `torchaudio==2.5.1+cu124`. Do not proceed if pip upgrades to a CUDA 13 or
+  torch 2.11 stack.
+- Benchmark gate before any LIBERO run: verify the source commit SHA, confirm
+  `torch.cuda.is_available() == True`, confirm `torch.version.cuda` reports a
+  CUDA 12.x/cu124-compatible stack, import `lerobot`, `libero`, and `robosuite`,
+  and run the Imagine-Then-Act CLI dry-run successfully.
 - If `lerobot` is missing, bootstrap it instead of reporting a benchmark
   blocker. Only stop after either the benchmark artifact is produced or the
   bootstrap has a concrete, logged dependency failure that cannot be fixed

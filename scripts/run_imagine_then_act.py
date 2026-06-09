@@ -48,6 +48,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--episode-seed", type=int, default=1200)
     parser.add_argument("--chunk-steps", type=int, default=10)
     parser.add_argument("--action-dim", type=int, default=7)
+    parser.add_argument(
+        "--policy-num-steps",
+        type=int,
+        default=None,
+        help="Optional fair-comparison pass-through to the backend as --policy.num_steps=<N>.",
+    )
+    parser.add_argument(
+        "--policy-n-action-steps",
+        type=int,
+        default=None,
+        help="Optional fair-comparison pass-through to the backend as --policy.n_action_steps=<N>.",
+    )
     parser.add_argument("--instruction", default="Move the target object toward the receptacle without overcommitting the chunk.")
     parser.add_argument(
         "--selector-strategy",
@@ -84,7 +96,16 @@ def main(argv: list[str] | None = None) -> int:
     # 2. Materialize the candidate-generation and imagination stages.
     # ------------------------------------------------------------------
     trace_events = [
-        trace_event("config", {"mode": config.mode, "target": config.target, "output_dir": config.output_dir}),
+        trace_event(
+            "config",
+            {
+                "mode": config.mode,
+                "target": config.target,
+                "output_dir": config.output_dir,
+                "policy_num_steps": config.policy_num_steps,
+                "policy_n_action_steps": config.policy_n_action_steps,
+            },
+        ),
         trace_event("execution_contract", {"benchmark_command": contract.benchmark_command}),
     ]
     candidates = generate_candidate_chunks(config)
@@ -187,6 +208,8 @@ def main(argv: list[str] | None = None) -> int:
             "selector_strategy": report.selector_strategy,
             "selector_fallback_used": report.selector_fallback_used,
             "method_claim_ready": report.method_claim_ready,
+            "policy_num_steps": report.policy_num_steps,
+            "policy_n_action_steps": report.policy_n_action_steps,
         }, indent=2, sort_keys=True))
     else:
         print(f"status={report.status}")

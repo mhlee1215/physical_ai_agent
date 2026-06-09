@@ -107,6 +107,8 @@ def build_run_config(args: Any) -> RunConfig:
         episode_seed=args.episode_seed,
         chunk_steps=args.chunk_steps,
         action_dim=args.action_dim,
+        policy_num_steps=getattr(args, "policy_num_steps", None),
+        policy_n_action_steps=getattr(args, "policy_n_action_steps", None),
         instruction=args.instruction,
         selector_strategy=args.selector_strategy,
     )
@@ -126,6 +128,10 @@ def validate_run_config(config: RunConfig) -> list[str]:
         errors.append("chunk-steps must be > 0")
     if config.action_dim <= 0:
         errors.append("action-dim must be > 0")
+    if config.policy_num_steps is not None and config.policy_num_steps <= 0:
+        errors.append("policy-num-steps must be > 0 when set")
+    if config.policy_n_action_steps is not None and config.policy_n_action_steps <= 0:
+        errors.append("policy-n-action-steps must be > 0 when set")
     if config.selector_strategy not in {DEFAULT_SELECTOR_STRATEGY, DEBUG_MIN_ACTION_NORM_SELECTOR}:
         errors.append("selector-strategy must be baseline_fallback or debug_min_action_norm")
     if config.mode == "runpod-libero" and config.target != "runpod":
@@ -201,6 +207,7 @@ def build_execution_contract(config: RunConfig) -> ExecutionContract:
         str(config.chunk_steps),
         "--action-dim",
         str(config.action_dim),
+        *policy_horizon_entrypoint_tokens(config),
         "--instruction",
         config.instruction,
         "--selector-strategy",
@@ -262,6 +269,7 @@ def build_execution_contract(config: RunConfig) -> ExecutionContract:
             str(config.chunk_steps),
             "--action-dim",
             str(config.action_dim),
+            *policy_horizon_entrypoint_tokens(config),
             "--instruction",
             config.instruction,
             "--selector-strategy",
@@ -317,6 +325,24 @@ def shell_command(tokens: list[str], env: dict[str, str], working_dir: str) -> s
     return f"cd {shlex.quote(working_dir)} && {command}"
 
 
+def policy_horizon_entrypoint_tokens(config: RunConfig) -> list[str]:
+    tokens: list[str] = []
+    if config.policy_num_steps is not None:
+        tokens.extend(["--policy-num-steps", str(config.policy_num_steps)])
+    if config.policy_n_action_steps is not None:
+        tokens.extend(["--policy-n-action-steps", str(config.policy_n_action_steps)])
+    return tokens
+
+
+def policy_horizon_backend_tokens(config: RunConfig) -> list[str]:
+    tokens: list[str] = []
+    if config.policy_num_steps is not None:
+        tokens.append(f"--policy.num_steps={config.policy_num_steps}")
+    if config.policy_n_action_steps is not None:
+        tokens.append(f"--policy.n_action_steps={config.policy_n_action_steps}")
+    return tokens
+
+
 def write_config_snapshot(config: RunConfig, artifacts: RunArtifacts) -> None:
     write_json(Path(artifacts.config_path), asdict(config))
 
@@ -369,6 +395,7 @@ def build_backend_command_tokens(
         "--env.max_parallel_tasks=1",
         f"--policy.empty_cameras={CANONICAL_POLICY_EMPTY_CAMERAS}",
         f"--seed={config.episode_seed}",
+        *policy_horizon_backend_tokens(config),
         "--ita-enable",
         "--ita-candidate-seeds",
         ",".join(str(seed) for seed in config.candidate_seeds),
@@ -868,6 +895,11 @@ def evaluate_execution_readiness(config: RunConfig) -> tuple[str, list[str], lis
         notes.append(
             "Baseline-preserving selector defaults to candidate_00_policy_only; debug_min_action_norm is not a method selector."
         )
+        if config.policy_num_steps is not None or config.policy_n_action_steps is not None:
+            notes.append(
+                "Policy horizon overrides are passed through for fair baseline parity comparison only; "
+                "they do not change the benchmark success metric."
+            )
         return "benchmark_backend_ready", blockers, notes
     notes.append("Non-LIBERO local modes are interface-contract runs, not benchmark evaluations.")
     return "contract_only", blockers, notes
@@ -954,6 +986,8 @@ def build_run_report(
         task_suite=config.task_suite,
         task_id=config.task_id,
         policy_path=config.policy_path,
+        policy_num_steps=config.policy_num_steps,
+        policy_n_action_steps=config.policy_n_action_steps,
         dry_run=config.dry_run,
         candidate_count=config.num_candidates + 1,
         selected_candidate_id=report_selected_candidate_id,
@@ -1043,6 +1077,8 @@ def render_markdown(report: RunReport) -> str:
         f"- task_id: `{report.task_id}`",
         f"- dry_run: `{str(report.dry_run).lower()}`",
         f"- policy_path: `{report.policy_path}`",
+        f"- policy_num_steps: `{report.policy_num_steps}`",
+        f"- policy_n_action_steps: `{report.policy_n_action_steps}`",
         f"- selected_candidate: `{report.selected_candidate_id}`",
         f"- selected_score: `{report.selected_score}`",
         f"- baseline_candidate_available: `{str(report.baseline_candidate_available).lower()}`",

@@ -22,6 +22,8 @@ class RunConfig:
     episode_seed: int
     chunk_steps: int
     action_dim: int
+    policy_num_steps: int | None
+    policy_n_action_steps: int | None
     instruction: str
     selector_strategy: str
 
@@ -146,6 +148,8 @@ class RunReport:
     task_suite: str
     task_id: int | None
     policy_path: str
+    policy_num_steps: int | None
+    policy_n_action_steps: int | None
     dry_run: bool
     candidate_count: int
     selected_candidate_id: str | None
