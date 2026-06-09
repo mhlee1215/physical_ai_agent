@@ -116,7 +116,7 @@ install_lerobot_and_runtime_deps() {
     "$NUMPY_SPEC" "$FSSPEC_SPEC" "$SETUPTOOLS_SPEC" \
     "$MUJOCO_SPEC" "$ROBOSUITE_SPEC" "$LIBERO_SPEC" \
     huggingface_hub draccus safetensors datasets transformers accelerate \
-    imageio imageio-ffmpeg opencv-python-headless pyyaml einops
+    imageio imageio-ffmpeg opencv-python-headless pyyaml einops num2words
   # Re-pin torch family after dependency installs as a guard against resolver drift.
   run "$PY312_VENV/bin/python" -m pip install \
     --index-url "$TORCH_INDEX_URL" \
