@@ -91,6 +91,27 @@ No Pod was `RUNNING`, so there was no active billable Pod to stop. No new Pod
 was created, started, terminated, or used for evaluation during this recheck.
 The Imagine-Then-Act RunPod evaluation remains `blocked_capacity_reconfirmed`.
 
+### Approved Capacity Retry
+
+After the user approved new billable capacity on 2026-06-09, the RunPod lane
+retried within the approved scope:
+
+- Reusing stopped Pod `7pkhrhmb657w4c` first: start failed with the same host
+  capacity issue.
+- Creating a new SECURE RTX 4090 Pod on network volume `tchm4gxfvd`: no
+  available instance.
+- Trying the cheaper SECURE RTX 3090 fallback on the same network volume: no
+  available instance.
+
+A final read-only Pod list showed only:
+
+- `7pkhrhmb657w4c`: `desiredStatus: EXITED`.
+- `4pxof2vs44h9cb`: `desiredStatus: EXITED`.
+
+No Pod was `RUNNING`, no new Pod remained allocated, and no Imagine-Then-Act
+LIBERO dry-run or backend-plumbing command reached execution. The RunPod lane
+remains `blocked_capacity_after_approved_retry`.
+
 ## 2026-06-08 Meta-World Official LeRobot Reproduction
 
 ### Current State
