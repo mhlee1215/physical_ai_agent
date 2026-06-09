@@ -86,7 +86,13 @@ def main() -> None:
     parser.add_argument(
         "--ita-selected-candidate-id",
         default="",
-        help="Optional candidate id to force; default selector chooses the lowest action-norm candidate.",
+        help="Optional candidate id to force; use only for debug/sanity checks.",
+    )
+    parser.add_argument(
+        "--ita-selector-strategy",
+        choices=("baseline_fallback", "debug_min_action_norm"),
+        default="baseline_fallback",
+        help="baseline_fallback preserves policy-only chunks; debug_min_action_norm is not a method selector.",
     )
     args, lerobot_args = parser.parse_known_args()
 
@@ -120,6 +126,7 @@ def main() -> None:
         ita_num_candidates=args.ita_num_candidates,
         ita_commit_steps=args.ita_commit_steps,
         ita_selected_candidate_id=args.ita_selected_candidate_id or None,
+        ita_selector_strategy=args.ita_selector_strategy,
     )
     sys.argv = ["lerobot-eval", *lerobot_args]
     lerobot_eval.main()
@@ -150,6 +157,7 @@ def build_instrumented_rollout(
     ita_num_candidates: int = 0,
     ita_commit_steps: int = 1,
     ita_selected_candidate_id: str | None = None,
+    ita_selector_strategy: str = "baseline_fallback",
 ):
     def instrumented_rollout(
         env,
@@ -194,6 +202,11 @@ def build_instrumented_rollout(
         ita_candidate_generation_source = "disabled"
         ita_selected_action_shape: list[int] | None = None
         ita_candidate_generation_done = False
+        ita_baseline_candidate_available = False
+        ita_baseline_candidate_selected = False
+        ita_selector_confidence: float | None = None
+        ita_selector_fallback_used = False
+        ita_method_claim_ready = False
 
         step = 0
         done = np.array([False] * env.num_envs)
@@ -241,6 +254,12 @@ def build_instrumented_rollout(
                 "candidate_count": 0,
                 "committed_action_steps_count": ita_committed_action_steps,
                 "selected_action_shape": None,
+                "baseline_candidate_available": False,
+                "baseline_candidate_selected": False,
+                "selector_strategy": ita_selector_strategy,
+                "selector_confidence": None,
+                "selector_fallback_used": False,
+                "method_claim_ready": False,
                 "limitation": None,
             }
             if ita_enable and not ita_candidate_generation_done:
@@ -256,11 +275,16 @@ def build_instrumented_rollout(
                     num_candidates=ita_num_candidates,
                     commit_steps=ita_commit_steps,
                     forced_candidate_id=ita_selected_candidate_id,
+                    selector_strategy=ita_selector_strategy,
                 )
                 ita_action_queue = list(decision["selected_actions"])
                 ita_active_candidate_id = decision["selected_candidate_id"]
                 ita_candidate_generation_source = str(decision["candidate_generation_source"])
                 ita_selected_action_shape = list(decision["selected_action_shape"])
+                ita_baseline_candidate_available = bool(decision["baseline_candidate_available"])
+                ita_baseline_candidate_selected = bool(decision["baseline_candidate_selected"])
+                ita_selector_confidence = decision["selector_confidence"]
+                ita_selector_fallback_used = bool(decision["selector_fallback_used"])
                 ita_candidate_generation_done = True
                 ita_step_record.update(
                     {
@@ -269,6 +293,12 @@ def build_instrumented_rollout(
                         "candidates": decision["candidates"],
                         "selected_candidate_id": decision["selected_candidate_id"],
                         "selected_action_shape": decision["selected_action_shape"],
+                        "baseline_candidate_available": decision["baseline_candidate_available"],
+                        "baseline_candidate_selected": decision["baseline_candidate_selected"],
+                        "selector_strategy": decision["selector_strategy"],
+                        "selector_confidence": decision["selector_confidence"],
+                        "selector_fallback_used": decision["selector_fallback_used"],
+                        "method_claim_ready": False,
                         "limitation": decision["limitation"],
                     }
                 )
@@ -285,9 +315,16 @@ def build_instrumented_rollout(
                         "committed_action_steps_count": ita_committed_action_steps,
                         "remaining_selected_actions": len(ita_action_queue),
                         "selected_action_shape": _shape_list(action),
+                        "baseline_candidate_available": ita_baseline_candidate_available,
+                        "baseline_candidate_selected": ita_baseline_candidate_selected,
+                        "selector_strategy": ita_selector_strategy,
+                        "selector_confidence": ita_selector_confidence,
+                        "selector_fallback_used": ita_selector_fallback_used,
                     }
                 )
-                if not ita_action_queue:
+                if not ita_action_queue and not (
+                    ita_selector_strategy == "baseline_fallback" and ita_baseline_candidate_selected
+                ):
                     policy.reset()
             else:
                 with torch.inference_mode():
@@ -445,6 +482,8 @@ def build_instrumented_rollout(
                 stacked_observations[key] = torch.stack([obs[key] for obs in all_observations], dim=1)
             ret[OBS_STR] = stacked_observations
 
+        rollout_success = bool(any(any(record["successes"]) for record in trace_records))
+        ita_method_claim_ready = False
         with trace_path.open("a", encoding="utf-8") as handle:
             handle.write(
                 json.dumps(
@@ -473,7 +512,7 @@ def build_instrumented_rollout(
                         "action_step_count": len(trace_records),
                         "verifier_trigger_count": sum(1 for record in trace_records if record["verifier_triggered"]),
                         "intervention_count": sum(1 for record in trace_records if record["intervention_type"]),
-                        "success": bool(any(any(record["successes"]) for record in trace_records)),
+                        "success": rollout_success,
                         "ita_enabled": bool(ita_enable),
                         "ita_candidate_generation_source": ita_candidate_generation_source,
                         "ita_candidate_seeds": normalize_ita_candidate_seeds(
@@ -486,6 +525,12 @@ def build_instrumented_rollout(
                         "ita_selected_action_shape": ita_selected_action_shape,
                         "ita_committed_action_steps": ita_committed_action_steps,
                         "selected_candidate_applied": bool(ita_selected_candidate_applied),
+                        "baseline_candidate_available": bool(ita_baseline_candidate_available),
+                        "baseline_candidate_selected": bool(ita_baseline_candidate_selected),
+                        "selector_strategy": ita_selector_strategy,
+                        "selector_confidence": ita_selector_confidence,
+                        "selector_fallback_used": bool(ita_selector_fallback_used),
+                        "method_claim_ready": ita_method_claim_ready,
                     },
                     sort_keys=True,
                 )
@@ -531,29 +576,54 @@ def build_ita_candidate_decision(
     num_candidates: int,
     commit_steps: int,
     forced_candidate_id: str | None = None,
+    selector_strategy: str = "baseline_fallback",
 ) -> dict[str, Any]:
     seeds = normalize_ita_candidate_seeds(candidate_seeds, num_candidates)
     if not seeds:
         seeds = [0]
     commit_steps = max(1, int(commit_steps))
     candidates = []
-    for index, seed in enumerate(seeds):
-        candidate_id = f"candidate_{index + 1:02d}"
-        set_ita_policy_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
-        policy.reset()
-        candidate = sample_policy_candidate_chunk(
-            policy=policy,
-            observation=observation,
-            postprocessor=postprocessor,
-            env_postprocessor=env_postprocessor,
-            action_key=action_key,
-            torch_module=torch_module,
-            commit_steps=commit_steps,
-        )
-        candidate.update({"candidate_id": candidate_id, "seed": seed})
-        candidates.append(candidate)
-    selected = choose_ita_candidate(candidates, forced_candidate_id)
+    baseline_candidate = sample_policy_candidate_chunk(
+        policy=policy,
+        observation=observation,
+        postprocessor=postprocessor,
+        env_postprocessor=env_postprocessor,
+        action_key=action_key,
+        torch_module=torch_module,
+        commit_steps=commit_steps,
+    )
+    baseline_candidate.update(
+        {
+            "candidate_id": "candidate_00_policy_only",
+            "seed": None,
+            "is_baseline": True,
+            "selection_role": "policy_only_baseline",
+        }
+    )
+    candidates.append(baseline_candidate)
+    should_sample_nonbaseline = bool(forced_candidate_id and forced_candidate_id != "candidate_00_policy_only")
+    should_sample_nonbaseline = should_sample_nonbaseline or selector_strategy == "debug_min_action_norm"
+    if should_sample_nonbaseline:
+        for index, seed in enumerate(seeds):
+            candidate_id = f"candidate_{index + 1:02d}"
+            set_ita_policy_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+            policy.reset()
+            candidate = sample_policy_candidate_chunk(
+                policy=policy,
+                observation=observation,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=action_key,
+                torch_module=torch_module,
+                commit_steps=commit_steps,
+            )
+            candidate.update({"candidate_id": candidate_id, "seed": seed, "is_baseline": False})
+            candidates.append(candidate)
+    selected = choose_ita_candidate(candidates, forced_candidate_id, selector_strategy=selector_strategy)
     selected_actions = list(selected["actions"])
+    baseline_candidate_selected = selected["candidate_id"] == "candidate_00_policy_only"
+    selector_fallback_used = selector_strategy == "baseline_fallback" and not forced_candidate_id
+    selector_confidence = 1.0 if baseline_candidate_selected and selector_fallback_used else 0.0
     return {
         "candidate_generation_source": selected["source"],
         "candidate_count": len(candidates),
@@ -564,6 +634,8 @@ def build_ita_candidate_decision(
                 "source": candidate["source"],
                 "action_shape": candidate["action_shape"],
                 "score": candidate["score"],
+                "is_baseline": bool(candidate.get("is_baseline", False)),
+                "selection_role": candidate.get("selection_role"),
                 "limitation": candidate["limitation"],
             }
             for candidate in candidates
@@ -571,6 +643,11 @@ def build_ita_candidate_decision(
         "selected_candidate_id": selected["candidate_id"],
         "selected_action_shape": selected["action_shape"],
         "selected_actions": selected_actions,
+        "baseline_candidate_available": True,
+        "baseline_candidate_selected": baseline_candidate_selected,
+        "selector_strategy": selector_strategy,
+        "selector_confidence": selector_confidence,
+        "selector_fallback_used": selector_fallback_used,
         "limitation": selected["limitation"],
     }
 
@@ -633,7 +710,11 @@ def extract_env_action_sequence(
     return actions
 
 
-def choose_ita_candidate(candidates: list[dict[str, Any]], forced_candidate_id: str | None = None) -> dict[str, Any]:
+def choose_ita_candidate(
+    candidates: list[dict[str, Any]],
+    forced_candidate_id: str | None = None,
+    selector_strategy: str = "baseline_fallback",
+) -> dict[str, Any]:
     if not candidates:
         raise ValueError("ITA candidate generation produced no candidates")
     if forced_candidate_id:
@@ -641,6 +722,10 @@ def choose_ita_candidate(candidates: list[dict[str, Any]], forced_candidate_id: 
             if candidate["candidate_id"] == forced_candidate_id:
                 return candidate
         raise ValueError(f"forced ITA candidate id not found: {forced_candidate_id}")
+    if selector_strategy == "baseline_fallback":
+        for candidate in candidates:
+            if candidate["candidate_id"] == "candidate_00_policy_only":
+                return candidate
     return min(candidates, key=lambda candidate: (candidate["score"], candidate["candidate_id"]))
 
 

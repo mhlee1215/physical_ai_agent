@@ -23,6 +23,7 @@ class RunConfig:
     chunk_steps: int
     action_dim: int
     instruction: str
+    selector_strategy: str
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,8 @@ class ActionCandidate:
     seed: int
     action_chunk: list[list[float]]
     summary: dict[str, float]
+    source: str = "deterministic_seeded_chunk_generator"
+    is_baseline: bool = False
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,12 @@ class SelectionDecision:
     score: float
     rank: int
     rationale: str
+    selector_strategy: str
+    confidence: float
+    fallback_used: bool
+    baseline_candidate_available: bool
+    baseline_candidate_selected: bool
+    method_claim_ready: bool
 
 
 @dataclass(frozen=True)
@@ -120,6 +129,12 @@ class BenchmarkResult:
     selected_action_shape: list[int] | None
     committed_action_steps: int
     candidate_generation_source: str | None
+    baseline_candidate_available: bool
+    baseline_candidate_selected: bool
+    selector_strategy: str | None
+    selector_confidence: float | None
+    selector_fallback_used: bool
+    method_claim_ready: bool
 
 
 @dataclass(frozen=True)
@@ -135,6 +150,12 @@ class RunReport:
     candidate_count: int
     selected_candidate_id: str | None
     selected_score: float | None
+    baseline_candidate_available: bool
+    baseline_candidate_selected: bool
+    selector_strategy: str | None
+    selector_confidence: float | None
+    selector_fallback_used: bool
+    method_claim_ready: bool
     benchmark_success_available: bool
     benchmark_success: bool | None
     execution_readiness: str

@@ -38,6 +38,9 @@ CANONICAL_POLICY_EMPTY_CAMERAS = 0
 CANONICAL_POLICY_PATH = "lerobot/smolvla_libero"
 CANONICAL_TASK_SUITE = "libero_goal"
 CANONICAL_TASK_ID = 6
+BASELINE_CANDIDATE_ID = "candidate_00_policy_only"
+DEFAULT_SELECTOR_STRATEGY = "baseline_fallback"
+DEBUG_MIN_ACTION_NORM_SELECTOR = "debug_min_action_norm"
 
 
 def parse_candidate_seeds(raw_value: str | None, num_candidates: int, episode_seed: int) -> tuple[int, ...]:
@@ -105,6 +108,7 @@ def build_run_config(args: Any) -> RunConfig:
         chunk_steps=args.chunk_steps,
         action_dim=args.action_dim,
         instruction=args.instruction,
+        selector_strategy=args.selector_strategy,
     )
     errors = validate_run_config(config)
     if errors:
@@ -122,6 +126,8 @@ def validate_run_config(config: RunConfig) -> list[str]:
         errors.append("chunk-steps must be > 0")
     if config.action_dim <= 0:
         errors.append("action-dim must be > 0")
+    if config.selector_strategy not in {DEFAULT_SELECTOR_STRATEGY, DEBUG_MIN_ACTION_NORM_SELECTOR}:
+        errors.append("selector-strategy must be baseline_fallback or debug_min_action_norm")
     if config.mode == "runpod-libero" and config.target != "runpod":
         errors.append("mode runpod-libero requires --target runpod")
     if config.target == "runpod" and config.mode == "smoke":
@@ -197,6 +203,8 @@ def build_execution_contract(config: RunConfig) -> ExecutionContract:
         str(config.action_dim),
         "--instruction",
         config.instruction,
+        "--selector-strategy",
+        config.selector_strategy,
     ]
     if config.task_id is not None:
         current_tokens.extend(["--task-id", str(config.task_id)])
@@ -256,6 +264,8 @@ def build_execution_contract(config: RunConfig) -> ExecutionContract:
             str(config.action_dim),
             "--instruction",
             config.instruction,
+            "--selector-strategy",
+            config.selector_strategy,
         ]
         if config.task_id is not None:
             benchmark_tokens.extend(["--task-id", str(config.task_id)])
@@ -366,6 +376,8 @@ def build_backend_command_tokens(
         str(config.num_candidates),
         "--ita-commit-steps",
         str(config.chunk_steps),
+        "--ita-selector-strategy",
+        config.selector_strategy,
     ]
     if selected_candidate_id:
         tokens.extend(["--ita-selected-candidate-id", selected_candidate_id])
@@ -488,6 +500,12 @@ def load_benchmark_result(
             selected_action_shape=ita_trace["selected_action_shape"],
             committed_action_steps=ita_trace["committed_action_steps"],
             candidate_generation_source=ita_trace["candidate_generation_source"],
+            baseline_candidate_available=ita_trace["baseline_candidate_available"],
+            baseline_candidate_selected=ita_trace["baseline_candidate_selected"],
+            selector_strategy=ita_trace["selector_strategy"],
+            selector_confidence=ita_trace["selector_confidence"],
+            selector_fallback_used=ita_trace["selector_fallback_used"],
+            method_claim_ready=ita_trace["method_claim_ready"],
         )
     else:
         result = BenchmarkResult(
@@ -512,6 +530,12 @@ def load_benchmark_result(
             selected_action_shape=ita_trace["selected_action_shape"],
             committed_action_steps=ita_trace["committed_action_steps"],
             candidate_generation_source=ita_trace["candidate_generation_source"],
+            baseline_candidate_available=ita_trace["baseline_candidate_available"],
+            baseline_candidate_selected=ita_trace["baseline_candidate_selected"],
+            selector_strategy=ita_trace["selector_strategy"],
+            selector_confidence=ita_trace["selector_confidence"],
+            selector_fallback_used=ita_trace["selector_fallback_used"],
+            method_claim_ready=ita_trace["method_claim_ready"],
         )
 
     write_json(Path(artifacts.benchmark_result_path), asdict(result))
@@ -537,6 +561,12 @@ def read_ita_application_summary(trace_path: Path) -> dict[str, Any]:
         "selected_action_shape": None,
         "committed_action_steps": 0,
         "candidate_generation_source": None,
+        "baseline_candidate_available": False,
+        "baseline_candidate_selected": False,
+        "selector_strategy": None,
+        "selector_confidence": None,
+        "selector_fallback_used": False,
+        "method_claim_ready": False,
     }
     if not trace_path.exists():
         return result
@@ -550,6 +580,12 @@ def read_ita_application_summary(trace_path: Path) -> dict[str, Any]:
             result["selected_action_shape"] = record.get("ita_selected_action_shape")
             result["committed_action_steps"] = int(record.get("ita_committed_action_steps", 0) or 0)
             result["candidate_generation_source"] = record.get("ita_candidate_generation_source")
+            result["baseline_candidate_available"] = bool(record.get("baseline_candidate_available", False))
+            result["baseline_candidate_selected"] = bool(record.get("baseline_candidate_selected", False))
+            result["selector_strategy"] = record.get("selector_strategy")
+            result["selector_confidence"] = record.get("selector_confidence")
+            result["selector_fallback_used"] = bool(record.get("selector_fallback_used", False))
+            result["method_claim_ready"] = bool(record.get("method_claim_ready", False))
             continue
         ita = record.get("ita", {}) if isinstance(record, dict) else {}
         if ita.get("selected_candidate_applied") is True or ita.get("action_source") == "ita_selected_candidate":
@@ -563,6 +599,19 @@ def read_ita_application_summary(trace_path: Path) -> dict[str, Any]:
                 result["committed_action_steps"],
                 int(ita.get("committed_action_steps_count", 0) or 0),
             )
+            result["baseline_candidate_available"] = bool(
+                ita.get("baseline_candidate_available", result["baseline_candidate_available"])
+            )
+            result["baseline_candidate_selected"] = bool(
+                ita.get("baseline_candidate_selected", result["baseline_candidate_selected"])
+            )
+            result["selector_strategy"] = ita.get("selector_strategy") or result["selector_strategy"]
+            if ita.get("selector_confidence") is not None:
+                result["selector_confidence"] = ita.get("selector_confidence")
+            result["selector_fallback_used"] = bool(
+                ita.get("selector_fallback_used", result["selector_fallback_used"])
+            )
+            result["method_claim_ready"] = bool(ita.get("method_claim_ready", result["method_claim_ready"]))
     return result
 
 
@@ -590,27 +639,44 @@ def trace_event(stage: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def generate_candidate_chunks(config: RunConfig) -> list[ActionCandidate]:
     candidates: list[ActionCandidate] = []
+    baseline_rng = random.Random(config.episode_seed)
+    baseline_chunk = []
+    for _step in range(config.chunk_steps):
+        baseline_chunk.append([round(baseline_rng.uniform(-1.0, 1.0), 4) for _dim in range(config.action_dim)])
+    candidates.append(
+        ActionCandidate(
+            candidate_id=BASELINE_CANDIDATE_ID,
+            seed=config.episode_seed,
+            action_chunk=baseline_chunk,
+            summary=summarize_action_chunk(baseline_chunk),
+            source="policy_only_baseline_placeholder",
+            is_baseline=True,
+        )
+    )
     for index, seed in enumerate(config.candidate_seeds):
         rng = random.Random(seed)
         chunk = []
         for _step in range(config.chunk_steps):
             chunk.append([round(rng.uniform(-1.0, 1.0), 4) for _dim in range(config.action_dim)])
-        flattened = [abs(value) for row in chunk for value in row]
-        summary = {
-            "mean_abs_action": round(sum(flattened) / max(1, len(flattened)), 6),
-            "first_axis_mean": round(sum(row[0] for row in chunk) / max(1, len(chunk)), 6),
-            "last_axis_mean": round(sum(row[-1] for row in chunk) / max(1, len(chunk)), 6),
-            "chunk_l2_proxy": round(math.sqrt(sum(value * value for row in chunk for value in row)), 6),
-        }
         candidates.append(
             ActionCandidate(
                 candidate_id=f"candidate_{index + 1:02d}",
                 seed=seed,
                 action_chunk=chunk,
-                summary=summary,
+                summary=summarize_action_chunk(chunk),
             )
         )
     return candidates
+
+
+def summarize_action_chunk(chunk: list[list[float]]) -> dict[str, float]:
+    flattened = [abs(value) for row in chunk for value in row]
+    return {
+        "mean_abs_action": round(sum(flattened) / max(1, len(flattened)), 6),
+        "first_axis_mean": round(sum(row[0] for row in chunk) / max(1, len(chunk)), 6),
+        "last_axis_mean": round(sum(row[-1] for row in chunk) / max(1, len(chunk)), 6),
+        "chunk_l2_proxy": round(math.sqrt(sum(value * value for row in chunk for value in row)), 6),
+    }
 
 
 def imagine_candidates(config: RunConfig, candidates: list[ActionCandidate]) -> list[ImaginedCandidate]:
@@ -681,13 +747,64 @@ def judge_candidates(
     return sorted(judged, key=lambda item: (item.rank, item.candidate_id))
 
 
-def select_candidate(judged_candidates: list[JudgedCandidate]) -> SelectionDecision:
+def select_candidate(
+    judged_candidates: list[JudgedCandidate],
+    *,
+    candidates: list[ActionCandidate] | None = None,
+    selector_strategy: str = DEFAULT_SELECTOR_STRATEGY,
+) -> SelectionDecision:
+    candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates or []}
+    baseline_available = BASELINE_CANDIDATE_ID in {item.candidate_id for item in judged_candidates}
+    if selector_strategy == DEFAULT_SELECTOR_STRATEGY and baseline_available:
+        best = next(item for item in judged_candidates if item.candidate_id == BASELINE_CANDIDATE_ID)
+        return SelectionDecision(
+            candidate_id=best.candidate_id,
+            score=best.score,
+            rank=best.rank,
+            rationale=(
+                "Selected policy-only baseline candidate because no non-debug method selector is configured. "
+                "This preserves baseline behavior for first acceptance."
+            ),
+            selector_strategy=selector_strategy,
+            confidence=1.0,
+            fallback_used=True,
+            baseline_candidate_available=True,
+            baseline_candidate_selected=True,
+            method_claim_ready=False,
+        )
+    if selector_strategy == DEBUG_MIN_ACTION_NORM_SELECTOR and candidate_by_id:
+        selected_candidate = min(
+            candidate_by_id.values(),
+            key=lambda item: (item.summary.get("mean_abs_action", 0.0), item.candidate_id),
+        )
+        best = next(item for item in judged_candidates if item.candidate_id == selected_candidate.candidate_id)
+        return SelectionDecision(
+            candidate_id=best.candidate_id,
+            score=selected_candidate.summary.get("mean_abs_action", best.score),
+            rank=best.rank,
+            rationale=(
+                "Debug-only selector chose the minimum mean absolute action norm. "
+                "This is not a method selector and must not support performance claims."
+            ),
+            selector_strategy=selector_strategy,
+            confidence=0.0,
+            fallback_used=False,
+            baseline_candidate_available=baseline_available,
+            baseline_candidate_selected=best.candidate_id == BASELINE_CANDIDATE_ID,
+            method_claim_ready=False,
+        )
     best = min(judged_candidates, key=lambda item: (item.rank, item.candidate_id))
     return SelectionDecision(
         candidate_id=best.candidate_id,
         score=best.score,
         rank=best.rank,
         rationale=f"Selected rank {best.rank} candidate by judge score {best.score:.6f}.",
+        selector_strategy=selector_strategy,
+        confidence=0.5,
+        fallback_used=False,
+        baseline_candidate_available=baseline_available,
+        baseline_candidate_selected=best.candidate_id == BASELINE_CANDIDATE_ID,
+        method_claim_ready=False,
     )
 
 
@@ -726,6 +843,7 @@ def evaluate_execution_readiness(config: RunConfig) -> tuple[str, list[str], lis
     notes: list[str] = []
     if config.dry_run:
         notes.append("Dry-run mode validated the selection pipeline contract without benchmark execution.")
+        notes.append("Baseline policy-only candidate is included and selected by default unless a debug selector is requested.")
         return "dry_run", blockers, notes
     if config.mode in LIBERO_MODES:
         if config.target == "local":
@@ -746,6 +864,9 @@ def evaluate_execution_readiness(config: RunConfig) -> tuple[str, list[str], lis
         )
         notes.append(
             "ITA candidate chunks are sampled from the real policy action path and the selected action is committed through env.step."
+        )
+        notes.append(
+            "Baseline-preserving selector defaults to candidate_00_policy_only; debug_min_action_norm is not a method selector."
         )
         return "benchmark_backend_ready", blockers, notes
     notes.append("Non-LIBERO local modes are interface-contract runs, not benchmark evaluations.")
@@ -795,6 +916,12 @@ def build_run_report(
             selected_action_shape=None,
             committed_action_steps=0,
             candidate_generation_source=None,
+            baseline_candidate_available=selected_candidate.baseline_candidate_available,
+            baseline_candidate_selected=selected_candidate.baseline_candidate_selected,
+            selector_strategy=selected_candidate.selector_strategy,
+            selector_confidence=selected_candidate.confidence,
+            selector_fallback_used=selected_candidate.fallback_used,
+            method_claim_ready=False,
         )
     execution_readiness = "blocked" if blockers else "passed"
     if config.dry_run:
@@ -828,9 +955,21 @@ def build_run_report(
         task_id=config.task_id,
         policy_path=config.policy_path,
         dry_run=config.dry_run,
-        candidate_count=config.num_candidates,
+        candidate_count=config.num_candidates + 1,
         selected_candidate_id=report_selected_candidate_id,
         selected_score=selected_candidate.score,
+        baseline_candidate_available=benchmark_result.baseline_candidate_available
+        or selected_candidate.baseline_candidate_available,
+        baseline_candidate_selected=benchmark_result.baseline_candidate_selected
+        or selected_candidate.baseline_candidate_selected,
+        selector_strategy=benchmark_result.selector_strategy or selected_candidate.selector_strategy,
+        selector_confidence=(
+            benchmark_result.selector_confidence
+            if benchmark_result.selector_confidence is not None
+            else selected_candidate.confidence
+        ),
+        selector_fallback_used=benchmark_result.selector_fallback_used or selected_candidate.fallback_used,
+        method_claim_ready=benchmark_result.method_claim_ready and not bool(blockers),
         benchmark_success_available=benchmark_result.available,
         benchmark_success=benchmark_result.success,
         execution_readiness=execution_readiness,
@@ -906,6 +1045,12 @@ def render_markdown(report: RunReport) -> str:
         f"- policy_path: `{report.policy_path}`",
         f"- selected_candidate: `{report.selected_candidate_id}`",
         f"- selected_score: `{report.selected_score}`",
+        f"- baseline_candidate_available: `{str(report.baseline_candidate_available).lower()}`",
+        f"- baseline_candidate_selected: `{str(report.baseline_candidate_selected).lower()}`",
+        f"- selector_strategy: `{report.selector_strategy}`",
+        f"- selector_confidence: `{report.selector_confidence}`",
+        f"- selector_fallback_used: `{str(report.selector_fallback_used).lower()}`",
+        f"- method_claim_ready: `{str(report.method_claim_ready).lower()}`",
         f"- post_check_passed: `{report.post_check_passed}`",
         f"- post_check_score: `{report.post_check_score}`",
         "",
@@ -921,6 +1066,7 @@ def render_markdown(report: RunReport) -> str:
         "- Imagined outcome selection happens before execution and is not the final task success signal.",
         f"- Post-check rationale: {report.post_check_rationale}",
         "- Final benchmark success must come from the environment, not from the judge backend.",
+        "- First method claims require policy-only baseline parity; selected_candidate_applied alone is not sufficient.",
         f"- Benchmark result source: `{report.benchmark_result.source}`",
         f"- Benchmark result rationale: {report.benchmark_result.rationale}",
         f"- Benchmark success available: `{str(report.benchmark_success_available).lower()}`",
@@ -933,6 +1079,12 @@ def render_markdown(report: RunReport) -> str:
         f"- Benchmark selected_action_shape: `{report.benchmark_result.selected_action_shape}`",
         f"- Benchmark committed_action_steps: `{report.benchmark_result.committed_action_steps}`",
         f"- Benchmark candidate_generation_source: `{report.benchmark_result.candidate_generation_source}`",
+        f"- Benchmark baseline_candidate_available: `{str(report.benchmark_result.baseline_candidate_available).lower()}`",
+        f"- Benchmark baseline_candidate_selected: `{str(report.benchmark_result.baseline_candidate_selected).lower()}`",
+        f"- Benchmark selector_strategy: `{report.benchmark_result.selector_strategy}`",
+        f"- Benchmark selector_confidence: `{report.benchmark_result.selector_confidence}`",
+        f"- Benchmark selector_fallback_used: `{str(report.benchmark_result.selector_fallback_used).lower()}`",
+        f"- Benchmark method_claim_ready: `{str(report.benchmark_result.method_claim_ready).lower()}`",
         "",
         "## Commands",
         "",

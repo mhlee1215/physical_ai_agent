@@ -86,16 +86,37 @@ Required rules:
 - Final success must come from the benchmark/environment success signal such as
   `info["success"]`, `is_success`, `pc_success`, or an equivalent task-level
   environment metric.
+- First-pass Imagine-Then-Act acceptance is baseline preserving, not merely
+  action-injection proof. A method claim requires policy-only baseline-near
+  success rate on the fixed benchmark protocol; `selected_candidate_applied=true`
+  alone is insufficient.
 - The first focused RunPod MVP must enable `--ita-enable` on
   `scripts/run_libero_in_episode_smolvla_instrumented.py`. Candidate actions
   must be sampled from the real policy action path, preferably
   `policy.predict_action_chunk(observation)` and only falling back to
   one-step `policy.select_action(observation)` when chunk prediction is not
   available.
+- The ITA candidate set must include the policy-only baseline chunk as
+  `candidate_00_policy_only`. When no non-debug selector is available, the
+  selector must choose this baseline candidate and record
+  `baseline_candidate_available=true`, `baseline_candidate_selected=true`,
+  `selector_strategy=baseline_fallback`, and `selector_fallback_used=true`.
+- In the `baseline_fallback` + `candidate_00_policy_only` path, do not call
+  `policy.reset()` after the committed baseline queue is exhausted; preserving
+  policy-only continuity is more important than clearing queues for this path.
+  Post-queue reset is allowed only for debug or non-baseline candidate paths.
+- `debug_min_action_norm` is a debug selector only. Do not present it as an
+  Imagine-Then-Act method selector or use it for performance claims.
+- Keep `method_claim_ready=false` for `baseline_fallback`, forced-candidate,
+  and `debug_min_action_norm` runs. A method-readiness claim requires a future
+  aggregate baseline-parity protocol, not one successful baseline fallback
+  rollout.
 - The rollout trace must prove the selected candidate reached
   `env.step(action_numpy)`: record candidate generation source, candidate
   seeds, selected candidate id, selected action shape, committed action-step
-  count, per-step action source, and `selected_candidate_applied=true`.
+  count, per-step action source, selector strategy/confidence/fallback status,
+  baseline candidate availability/selection, `method_claim_ready`, and
+  `selected_candidate_applied=true`.
 - For the canonical first focused experiment, the decisive candidate selection
   must happen over the real policy-generated candidates inside the instrumented
   backend. Do not force a backend candidate id selected only by the outer
@@ -104,11 +125,24 @@ Required rules:
 - `BenchmarkResult.selected_candidate_applied` must be derived from the
   benchmark trace. Do not hardcode it. Do not claim Imagine-Then-Act method
   gains from any run with `selected_candidate_applied=false`.
+- `BenchmarkResult` and reports must keep `baseline_candidate_available`,
+  `baseline_candidate_selected`, `selector_strategy`, `selector_confidence`,
+  `selector_fallback_used`, and `method_claim_ready` separate from the final
+  benchmark success metric.
 - Before cloud work, run the new family-specific tests first, then the repo
   standard-library suite when feasible.
 - Every RunPod handoff must include the exact command, expected output
   directory, result-fetch step, and an explicit reminder to stop the Pod after
   the fetch is complete.
+- Early-stop debug rule for RunPod/LIBERO baseline-parity runs: if a planned
+  seed/episode batch is substantially underway, for example about halfway
+  through, and success rate is still `0`, stop launching further evaluation
+  episodes for that condition and switch to bug/plumbing/setup triage rather
+  than reporting a method regression. Fetch artifacts first, then inspect
+  `benchmark.log`, trace/action norms, camera/contact sheet evidence, and
+  `eval_info` parsing sanity. After artifact fetch, stopping the Pod is
+  mandatory. If the policy-only baseline is `0`, do not continue ITA runs;
+  debug the policy-only protocol first.
 
 Current Imagine-Then-Act checkpoints should preview these two commands:
 
@@ -121,8 +155,14 @@ PYTHONPATH=src python3 -B scripts/run_imagine_then_act.py \
   --imagination-backend sim-rollout \
   --judge-backend heuristic \
   --post-check-backend heuristic \
+  --selector-strategy baseline_fallback \
   --output-dir _workspace/imagine_then_act/local_smoke
 ```
+
+The entrypoint must accept both `--selector-strategy baseline_fallback` and the
+backend-shaped alias `--ita-selector-strategy baseline_fallback`. RunPod
+handoffs may use `--selector-strategy`; the backend runner itself receives
+`--ita-selector-strategy`.
 
 ```bash
 PYTHONPATH=src python3 -B scripts/run_imagine_then_act.py \
@@ -133,6 +173,7 @@ PYTHONPATH=src python3 -B scripts/run_imagine_then_act.py \
   --imagination-backend sim-rollout \
   --judge-backend heuristic \
   --post-check-backend heuristic \
+  --selector-strategy baseline_fallback \
   --output-dir _workspace/imagine_then_act/runpod_libero_contract \
   --dry-run
 ```

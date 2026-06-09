@@ -49,6 +49,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chunk-steps", type=int, default=10)
     parser.add_argument("--action-dim", type=int, default=7)
     parser.add_argument("--instruction", default="Move the target object toward the receptacle without overcommitting the chunk.")
+    parser.add_argument(
+        "--selector-strategy",
+        "--ita-selector-strategy",
+        dest="selector_strategy",
+        choices=("baseline_fallback", "debug_min_action_norm"),
+        default="baseline_fallback",
+        help=(
+            "Candidate selector. baseline_fallback preserves policy-only behavior unless an explicit method "
+            "selector is added. --ita-selector-strategy is accepted as a backward-compatible alias."
+        ),
+    )
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -96,7 +107,11 @@ def main(argv: list[str] | None = None) -> int:
     #    entrypoint so every experiment shares one interface contract.
     # ------------------------------------------------------------------
     judged_candidates = judge_candidates(config, candidates, imagined_candidates)
-    selection = select_candidate(judged_candidates)
+    selection = select_candidate(
+        judged_candidates,
+        candidates=candidates,
+        selector_strategy=config.selector_strategy,
+    )
     post_check = run_post_check(config, selection, judged_candidates)
     trace_events.append(
         trace_event(
@@ -107,7 +122,17 @@ def main(argv: list[str] | None = None) -> int:
     trace_events.append(
         trace_event(
             "selection",
-            {"candidate_id": selection.candidate_id, "score": selection.score, "rationale": selection.rationale},
+            {
+                "candidate_id": selection.candidate_id,
+                "score": selection.score,
+                "rationale": selection.rationale,
+                "selector_strategy": selection.selector_strategy,
+                "selector_confidence": selection.confidence,
+                "selector_fallback_used": selection.fallback_used,
+                "baseline_candidate_available": selection.baseline_candidate_available,
+                "baseline_candidate_selected": selection.baseline_candidate_selected,
+                "method_claim_ready": selection.method_claim_ready,
+            },
         )
     )
     trace_events.append(
@@ -157,6 +182,11 @@ def main(argv: list[str] | None = None) -> int:
             "report_path": artifacts.report_path,
             "summary_path": artifacts.summary_path,
             "selected_candidate_id": report.selected_candidate_id,
+            "baseline_candidate_available": report.baseline_candidate_available,
+            "baseline_candidate_selected": report.baseline_candidate_selected,
+            "selector_strategy": report.selector_strategy,
+            "selector_fallback_used": report.selector_fallback_used,
+            "method_claim_ready": report.method_claim_ready,
         }, indent=2, sort_keys=True))
     else:
         print(f"status={report.status}")
