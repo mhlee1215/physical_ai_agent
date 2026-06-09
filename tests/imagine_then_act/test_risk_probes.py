@@ -7,6 +7,8 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from physical_ai_agent.imagine_then_act.risk_probes import (
+    ActionChunkCandidate,
+    FAIL,
     PASS,
     RiskProbeConfig,
     compute_clone_fidelity_metrics,
@@ -45,6 +47,32 @@ class RiskProbeTest(TestCase):
             self.assertGreater(metrics.min_pairwise_l2, 0.05)
             self.assertGreater(metrics.endpoint_spread_l2, 0.0)
             self.assertGreater(metrics.gripper_command_variance, 0.0)
+
+    def test_diversity_metrics_fail_on_identical_candidates(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = self.make_config(tmpdir)
+            identical_chunk = [[0.01 for _dim in range(config.action_dim)] for _step in range(config.chunk_steps)]
+            candidates = [
+                ActionChunkCandidate(
+                    candidate_id="candidate_00_policy_only",
+                    source="test_identical",
+                    action_chunk=identical_chunk,
+                    privileged_success_proxy=0.1,
+                    is_policy_only=True,
+                ),
+                ActionChunkCandidate(
+                    candidate_id="candidate_01",
+                    source="test_identical",
+                    action_chunk=[row[:] for row in identical_chunk],
+                    privileged_success_proxy=0.1,
+                ),
+            ]
+
+            metrics = compute_diversity_metrics(config, candidates)
+
+            self.assertEqual(metrics.verdict, FAIL)
+            self.assertEqual(metrics.min_pairwise_l2, 0.0)
+            self.assertIn("identical", metrics.rationale)
 
     def test_clone_fidelity_mock_path_matches_committed_path(self) -> None:
         with TemporaryDirectory() as tmpdir:

@@ -42,7 +42,12 @@ def default_output_dir(preset: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run Imagine-Then-Act stage-2 risk probes.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run Imagine-Then-Act stage-2 risk probes. BLOCKED exits 0 because it is an "
+            "expected contract-only outcome; FAIL exits nonzero."
+        )
+    )
     parser.add_argument(
         "--preset",
         choices=("local-dry-run", "runpod-libero-smoke", "runpod-libero-breadth"),
