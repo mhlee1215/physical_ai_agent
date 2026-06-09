@@ -1,0 +1,103 @@
+{
+  "baseline_condition": "task6_late_probe_none",
+  "rows": [
+    {
+      "action_step_count": 300,
+      "condition": "task6_late_probe_none",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": 0.0,
+      "environment_resets": 1,
+      "eval_seconds": 10.05655026435852,
+      "intervention_count": 0,
+      "pc_success": 0.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task6_late_push_20260607T043841/task6_late_probe_none",
+      "success": false,
+      "success_per_action_step": 0.0,
+      "success_per_eval_minute": 0.0,
+      "verifier_trigger_count": 31
+    },
+    {
+      "action_step_count": 300,
+      "condition": "task6_place_c06_p5_zm02_close",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": 0.17290163040161133,
+      "environment_resets": 1,
+      "eval_seconds": 10.229451894760132,
+      "intervention_count": 80,
+      "pc_success": 0.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task6_place_macro_20260607T045912/task6_place_c06_p5_zm02_close",
+      "success": false,
+      "success_per_action_step": 0.0,
+      "success_per_eval_minute": 0.0,
+      "verifier_trigger_count": 80
+    },
+    {
+      "action_step_count": 300,
+      "condition": "task6_place_c08_p5_zm02_close",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": 0.5455150604248047,
+      "environment_resets": 1,
+      "eval_seconds": 10.602065324783325,
+      "intervention_count": 80,
+      "pc_success": 0.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task6_place_macro_20260607T045912/task6_place_c08_p5_zm02_close",
+      "success": false,
+      "success_per_action_step": 0.0,
+      "success_per_eval_minute": 0.0,
+      "verifier_trigger_count": 80
+    },
+    {
+      "action_step_count": 300,
+      "condition": "task6_place_c08_p8_zm02_close",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": 0.5522735118865967,
+      "environment_resets": 1,
+      "eval_seconds": 10.608823776245117,
+      "intervention_count": 80,
+      "pc_success": 0.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task6_place_macro_20260607T045912/task6_place_c08_p8_zm02_close",
+      "success": false,
+      "success_per_action_step": 0.0,
+      "success_per_eval_minute": 0.0,
+      "verifier_trigger_count": 80
+    },
+    {
+      "action_step_count": 300,
+      "condition": "task6_place_c08_p5_zm05_close",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": 0.5778660774230957,
+      "environment_resets": 1,
+      "eval_seconds": 10.634416341781616,
+      "intervention_count": 80,
+      "pc_success": 0.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task6_place_macro_20260607T045912/task6_place_c08_p5_zm05_close",
+      "success": false,
+      "success_per_action_step": 0.0,
+      "success_per_eval_minute": 0.0,
+      "verifier_trigger_count": 80
+    },
+    {
+      "action_step_count": 300,
+      "condition": "task6_place_c08_p5_zm02_open",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": 0.36406445503234863,
+      "environment_resets": 1,
+      "eval_seconds": 10.42061471939087,
+      "intervention_count": 80,
+      "pc_success": 0.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task6_place_macro_20260607T045912/task6_place_c08_p5_zm02_open",
+      "success": false,
+      "success_per_action_step": 0.0,
+      "success_per_eval_minute": 0.0,
+      "verifier_trigger_count": 80
+    }
+  ],
+  "summary": {
+    "conditions": 6.0,
+    "mean_action_step_count": 300,
+    "mean_eval_seconds": 10.425320386886597,
+    "mean_success_per_action_step": 0.0,
+    "mean_success_per_eval_minute": 0.0,
+    "success_rate": 0.0
+  }
+}

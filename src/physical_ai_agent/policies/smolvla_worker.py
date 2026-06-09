@@ -18,6 +18,7 @@ class SmolVLAWorkerConfig:
     model_id: str = DEFAULT_SMOLVLA_MODEL_ID
     local_files_only: bool = True
     action_steps: int = 15
+    device: str = "auto"
 
 
 def run_worker(config: SmolVLAWorkerConfig) -> None:
@@ -25,6 +26,7 @@ def run_worker(config: SmolVLAWorkerConfig) -> None:
         _build_batch_for_policy,
         _clip_action,
         _load_pretrained_policy,
+        _policy_device_metadata,
         _tensor_to_float_list,
     )
 
@@ -32,7 +34,9 @@ def run_worker(config: SmolVLAWorkerConfig) -> None:
         policy = _load_pretrained_policy(
             model_id=config.model_id,
             local_files_only=config.local_files_only,
+            device=config.device,
         )
+    device_metadata = _policy_device_metadata(policy)
     chunk_size = int(getattr(policy.config, "chunk_size", config.action_steps))
     if config.action_steps < 1 or config.action_steps > chunk_size:
         raise ValueError(f"action_steps must be in [1, {chunk_size}], got {config.action_steps}")
@@ -60,6 +64,10 @@ def run_worker(config: SmolVLAWorkerConfig) -> None:
             "predicted_chunk_size": int(action_chunk.shape[1]),
             "executed_action_steps": len(actions),
             "image_feature_mapping": image_feature_mapping,
+            "device_requested": device_metadata["device_requested"],
+            "device_selected": device_metadata["device_selected"],
+            "device_probe": device_metadata["device_probe"],
+            "device_fallback_reason": device_metadata["device_fallback_reason"],
             "latency_s": round(perf_counter() - started_at, 4),
         }
         print(json.dumps(response, sort_keys=True), flush=True)
@@ -82,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-id", default=DEFAULT_SMOLVLA_MODEL_ID)
     parser.add_argument("--allow-download", action="store_true")
     parser.add_argument("--action-steps", type=int, default=15)
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     return parser
 
 
@@ -92,6 +101,7 @@ def main() -> None:
             model_id=args.model_id,
             local_files_only=not args.allow_download,
             action_steps=args.action_steps,
+            device=args.device,
         )
     )
 

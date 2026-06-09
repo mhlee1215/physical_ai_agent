@@ -1,0 +1,29 @@
+[robot]
+id = "so100_local"
+port = "/dev/cu.usbmodem5AE60824791"
+calibration_dir = "../../_workspace/real_so100/calibration"
+use_degrees = true
+disable_torque_on_disconnect = false
+
+[camera]
+# Shaibk/so101-smolvla-thesis style: one external scene camera is injected
+# into the policy as observation.images.camera1.
+scene_index = 1
+width = 640
+height = 480
+fps = 10
+
+[policy]
+# Use either a local checkpoint directory or a Hugging Face policy id.
+# For the thesis reproduction path this was a local pretrained_model folder.
+path = "lerobot/smolvla_base"
+task = "grasp the green block, ignore the yellow block"
+device = "mps"
+
+[runtime]
+fps = 1
+fps = 10
+max_seconds = 24.0
+policy_num_steps = 10
+use_amp = false
+output_dir = "runs"

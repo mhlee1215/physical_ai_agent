@@ -37,9 +37,9 @@ Fix from a normal macOS Terminal with a Homebrew or python.org Python:
 If `/opt/homebrew/bin/python3` does not exist, install Python with Homebrew or
 python.org, then use that interpreter to create `.venv-viewer`.
 
-For a headless browser-streamed smoke with the current venv, use:
+For non-live 3D output with the current venv, use:
 
-  sh scripts/view_so101_live.sh --browser-only --show-inputs --fps 2 --max-steps 1
+  sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla
 EOF
   exit 1
 fi

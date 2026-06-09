@@ -1,0 +1,7 @@
+opencv-python
+torch
+torchvision
+huggingface_hub
+safetensors
+num2words==0.5.14
+

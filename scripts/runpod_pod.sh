@@ -97,6 +97,7 @@ redacted_keys = {
     "api_key",
     "apiKey",
     "authorization",
+    "dockerStartCmd",
     "env",
     "jupyter_password",
     "password",

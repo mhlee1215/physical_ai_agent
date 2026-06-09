@@ -32,6 +32,10 @@ class SmolVLAInferenceResult:
     input_preview_gif_path: str
     image_feature_mapping: dict[str, str]
     used_real_camera_inputs: bool
+    device_requested: str
+    device_selected: str
+    device_probe: dict[str, Any]
+    device_fallback_reason: str | None
 
 
 def run_real_smolvla_inference_probe(
@@ -43,6 +47,7 @@ def run_real_smolvla_inference_probe(
     model_id: str = DEFAULT_SMOLVLA_MODEL_ID,
     local_files_only: bool = True,
     use_real_camera_inputs: bool = False,
+    device: str = "auto",
 ) -> SmolVLAInferenceResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "smolvla_real_inference_report.json"
@@ -68,9 +73,15 @@ def run_real_smolvla_inference_probe(
     blocker = None
     records: list[SO101Step] = []
     image_feature_mapping: dict[str, str] = {}
+    device_metadata: dict[str, Any] = {}
 
     try:
-        policy = _load_pretrained_policy(model_id=model_id, local_files_only=local_files_only)
+        policy = _load_pretrained_policy(
+            model_id=model_id,
+            local_files_only=local_files_only,
+            device=device,
+        )
+        device_metadata = _policy_device_metadata(policy)
         records, frames, image_feature_mapping = _run_policy_rollout(
             policy=policy,
             env_id=env_id,
@@ -115,6 +126,10 @@ def run_real_smolvla_inference_probe(
         input_preview_gif_path=str(input_preview_gif_path),
         image_feature_mapping=image_feature_mapping,
         used_real_camera_inputs=use_real_camera_inputs,
+        device_requested=str(device_metadata.get("device_requested", device)),
+        device_selected=str(device_metadata.get("device_selected", "unknown")),
+        device_probe=dict(device_metadata.get("device_probe", {})),
+        device_fallback_reason=device_metadata.get("device_fallback_reason"),
     )
     report_path.write_text(json.dumps(asdict(result), indent=2, sort_keys=True), encoding="utf-8")
     return result
@@ -233,15 +248,165 @@ def _make_renderer_or_none(env: SO101NexusEnv):
         return None
 
 
-def _load_pretrained_policy(model_id: str, local_files_only: bool):
-    from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+def _load_pretrained_policy(model_id: str, local_files_only: bool, device: str = "auto"):
+    from unittest.mock import patch
 
-    return SmolVLAPolicy.from_pretrained(
-        model_id,
-        local_files_only=local_files_only,
-        map_location="cpu",
-        device="cpu",
+    from huggingface_hub import snapshot_download
+    from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+    import lerobot.policies.smolvla.smolvlm_with_expert as smolvlm_with_expert
+
+    device_plan = _select_policy_device(device)
+
+    def _from_pretrained(selected_device: str):
+        return SmolVLAPolicy.from_pretrained(
+            model_id,
+            local_files_only=local_files_only,
+            map_location=selected_device,
+            device=selected_device,
+        )
+
+    if not local_files_only:
+        return _load_with_cpu_fallback(
+            loader=_from_pretrained,
+            device_plan=device_plan,
+        )
+
+    vlm_snapshot = snapshot_download(
+        repo_id="HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
+        local_files_only=True,
     )
+
+    def _local_from_pretrained(original):
+        def wrapped(pretrained_model_name_or_path, *args, **kwargs):
+            if pretrained_model_name_or_path == "HuggingFaceTB/SmolVLM2-500M-Video-Instruct":
+                pretrained_model_name_or_path = vlm_snapshot
+            kwargs.setdefault("local_files_only", True)
+            return original(pretrained_model_name_or_path, *args, **kwargs)
+
+        return wrapped
+
+    with (
+        patch.object(
+            smolvlm_with_expert.AutoModelForImageTextToText,
+            "from_pretrained",
+            _local_from_pretrained(smolvlm_with_expert.AutoModelForImageTextToText.from_pretrained),
+        ),
+        patch.object(
+            smolvlm_with_expert.AutoProcessor,
+            "from_pretrained",
+            _local_from_pretrained(smolvlm_with_expert.AutoProcessor.from_pretrained),
+        ),
+        patch.object(
+            smolvlm_with_expert.AutoConfig,
+            "from_pretrained",
+            _local_from_pretrained(smolvlm_with_expert.AutoConfig.from_pretrained),
+        ),
+    ):
+        def _local_policy(selected_device: str):
+            return SmolVLAPolicy.from_pretrained(
+                model_id,
+                local_files_only=True,
+                map_location=selected_device,
+                device=selected_device,
+            )
+
+        return _load_with_cpu_fallback(
+            loader=_local_policy,
+            device_plan=device_plan,
+        )
+
+
+def _select_policy_device(device: str, torch_module: Any | None = None) -> dict[str, Any]:
+    normalized = device.lower()
+    if normalized not in {"auto", "cpu", "mps", "cuda"}:
+        raise ValueError(f"Unsupported SmolVLA device '{device}'. Use auto, cpu, mps, or cuda.")
+
+    probe = _torch_device_probe(torch_module)
+    fallback_reason = None
+    selected = normalized
+    if normalized == "auto":
+        if probe["mps_available"]:
+            selected = "mps"
+        else:
+            selected = "cpu"
+            fallback_reason = _mps_unavailable_reason(probe)
+    elif normalized == "mps" and not probe["mps_available"]:
+        selected = "cpu"
+        fallback_reason = _mps_unavailable_reason(probe)
+    elif normalized == "cuda" and not probe["cuda_available"]:
+        selected = "cpu"
+        fallback_reason = "CUDA requested but torch.cuda.is_available() is false."
+
+    return {
+        "requested": normalized,
+        "selected": selected,
+        "probe": probe,
+        "fallback_reason": fallback_reason,
+    }
+
+
+def _torch_device_probe(torch_module: Any | None = None) -> dict[str, Any]:
+    if torch_module is None:
+        import torch as torch_module
+
+    mps_backend = getattr(torch_module.backends, "mps", None)
+    return {
+        "torch_version": getattr(torch_module, "__version__", "unknown"),
+        "mps_built": bool(mps_backend and mps_backend.is_built()),
+        "mps_available": bool(mps_backend and mps_backend.is_available()),
+        "cuda_available": bool(torch_module.cuda.is_available()),
+    }
+
+
+def _mps_unavailable_reason(probe: dict[str, Any]) -> str:
+    if not probe.get("mps_built"):
+        return "MPS requested by auto policy, but this PyTorch build has no MPS backend."
+    return "MPS requested by auto policy, but torch.backends.mps.is_available() is false."
+
+
+def _load_with_cpu_fallback(loader: Any, device_plan: dict[str, Any]):
+    selected = str(device_plan["selected"])
+    fallback_reason = device_plan.get("fallback_reason")
+    try:
+        policy = loader(selected)
+    except Exception as exc:  # noqa: BLE001 - preserve local MPS fallback detail.
+        if selected == "cpu":
+            raise
+        fallback_reason = f"{selected} policy load failed; fell back to CPU: {_short_error(exc)}"
+        policy = loader("cpu")
+        selected = "cpu"
+
+    _attach_policy_device_metadata(
+        policy,
+        requested=str(device_plan["requested"]),
+        selected=selected,
+        probe=dict(device_plan["probe"]),
+        fallback_reason=fallback_reason,
+    )
+    return policy
+
+
+def _attach_policy_device_metadata(
+    policy: Any,
+    *,
+    requested: str,
+    selected: str,
+    probe: dict[str, Any],
+    fallback_reason: str | None,
+) -> None:
+    setattr(policy, "_physical_ai_agent_device_requested", requested)
+    setattr(policy, "_physical_ai_agent_device_selected", selected)
+    setattr(policy, "_physical_ai_agent_device_probe", probe)
+    setattr(policy, "_physical_ai_agent_device_fallback_reason", fallback_reason)
+
+
+def _policy_device_metadata(policy: Any) -> dict[str, Any]:
+    return {
+        "device_requested": getattr(policy, "_physical_ai_agent_device_requested", "unknown"),
+        "device_selected": getattr(policy, "_physical_ai_agent_device_selected", "unknown"),
+        "device_probe": getattr(policy, "_physical_ai_agent_device_probe", {}),
+        "device_fallback_reason": getattr(policy, "_physical_ai_agent_device_fallback_reason", None),
+    }
 
 
 def _render_policy_cameras(env: SO101NexusEnv, renderers: dict[str, Any]) -> dict[str, Any]:
@@ -258,6 +423,8 @@ def _build_batch_for_policy(
     policy: Any,
     observation: list[float],
     camera_pixels: dict[str, Any] | None = None,
+    instruction: str | None = None,
+    local_files_only: bool = True,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     import torch
     from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
@@ -267,11 +434,14 @@ def _build_batch_for_policy(
     state = torch.zeros(1, state_dim, dtype=torch.float32)
     source = torch.tensor(observation[:state_dim], dtype=torch.float32)
     state[0, : len(source)] = source
-    batch: dict[str, Any] = {
-        OBS_STATE: state,
-        OBS_LANGUAGE_TOKENS: torch.ones(1, 4, dtype=torch.long),
-        OBS_LANGUAGE_ATTENTION_MASK: torch.ones(1, 4, dtype=torch.bool),
-    }
+    language_tokens, language_attention_mask = _language_tokens_for_policy(
+        policy,
+        instruction=instruction,
+        local_files_only=local_files_only,
+    )
+    batch: dict[str, Any] = {OBS_STATE: state}
+    batch[OBS_LANGUAGE_TOKENS] = language_tokens
+    batch[OBS_LANGUAGE_ATTENTION_MASK] = language_attention_mask
     image_feature_mapping = {}
     for index, (key, feature) in enumerate(config.image_features.items()):
         source_name = _source_camera_name(index, camera_pixels or {})
@@ -284,6 +454,43 @@ def _build_batch_for_policy(
         {key: value.to(config.device) if hasattr(value, "to") else value for key, value in batch.items()},
         image_feature_mapping,
     )
+
+
+def _language_tokens_for_policy(
+    policy: Any,
+    *,
+    instruction: str | None,
+    local_files_only: bool,
+):
+    import torch
+
+    if not instruction:
+        return torch.ones(1, 4, dtype=torch.long), torch.ones(1, 4, dtype=torch.bool)
+
+    from transformers import AutoTokenizer
+
+    config = policy.config
+    prompt = instruction if instruction.endswith("\n") else f"{instruction}\n"
+    tokenizer_model_name = config.vlm_model_name
+    if local_files_only and tokenizer_model_name == "HuggingFaceTB/SmolVLM2-500M-Video-Instruct":
+        from huggingface_hub import snapshot_download
+
+        tokenizer_model_name = snapshot_download(
+            repo_id=tokenizer_model_name,
+            local_files_only=True,
+        )
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_model_name,
+        local_files_only=local_files_only,
+    )
+    tokenized = tokenizer(
+        [prompt],
+        padding=config.pad_language_to,
+        truncation=True,
+        max_length=config.tokenizer_max_length,
+        return_tensors="pt",
+    )
+    return tokenized["input_ids"].to(torch.long), tokenized["attention_mask"].to(torch.bool)
 
 
 def _source_camera_name(index: int, camera_pixels: dict[str, Any]) -> str:
@@ -338,7 +545,7 @@ def _clip_action(action: list[float], action_dim: int) -> list[float]:
 
 def _write_smolvla_blocker(path: Path, model_id: str, local_files_only: bool, blocker: str) -> None:
     lines = [
-        "# Real SmolVLA Inference Blocker",
+        "# CP15 Real SmolVLA Inference Blocker",
         "",
         f"- Model id: `{model_id}`",
         f"- Local files only: `{local_files_only}`",
@@ -350,7 +557,7 @@ def _write_smolvla_blocker(path: Path, model_id: str, local_files_only: bool, bl
         "To allow Hugging Face download from a normal networked terminal, run:",
         "",
         "```bash",
-        "sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download --smolvla-action-steps 15 --show-inputs --fps 2 --max-steps 1",
+        "sh scripts/checkpoint_14_15.sh --allow-download --require-real-smolvla",
         "```",
         "",
     ]

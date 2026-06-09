@@ -37,6 +37,22 @@ class AgenticRetryMetrics:
     failed_episodes: int
     recovered_episodes: int
     retry_budget: int
+    baseline_successes: int
+    retry_successes: int
+    success_once_successes: int
+    baseline_eval_seconds: float
+    retry_eval_seconds: float
+    total_eval_seconds: float
+    baseline_attempts: int
+    retry_attempts: int
+    total_attempts: int
+    environment_resets: int
+    extra_environment_resets: int
+    success_once_per_attempt: float
+    recovered_per_retry_attempt: float
+    success_once_per_eval_minute: float
+    action_step_count_available: bool
+    action_step_count_source: str
 
 
 def load_eval_info(path: Path) -> dict[str, Any]:
@@ -123,9 +139,15 @@ def aggregate_retry_metrics(
         )
 
     total = len(baseline)
+    baseline_successes = sum(1 for passed in baseline.values() if passed)
+    retry_attempts = len(retry)
+    total_attempts = total + retry_attempts
+    baseline_eval_seconds = _eval_seconds(baseline_data)
+    retry_eval_seconds = _eval_seconds(retry_data)
+    total_eval_seconds = baseline_eval_seconds + retry_eval_seconds
     metrics = AgenticRetryMetrics(
         task_group=task_group,
-        baseline_success_rate=_pct(sum(1 for passed in baseline.values() if passed), total),
+        baseline_success_rate=_pct(baseline_successes, total),
         retry_success_rate=_pct(retry_successes, len(retry)),
         success_once_rate=_pct(success_once, total),
         recovery_success_rate=_pct(recovered, failed),
@@ -133,6 +155,22 @@ def aggregate_retry_metrics(
         failed_episodes=failed,
         recovered_episodes=recovered,
         retry_budget=retry_budget,
+        baseline_successes=baseline_successes,
+        retry_successes=retry_successes,
+        success_once_successes=success_once,
+        baseline_eval_seconds=baseline_eval_seconds,
+        retry_eval_seconds=retry_eval_seconds,
+        total_eval_seconds=total_eval_seconds,
+        baseline_attempts=total,
+        retry_attempts=retry_attempts,
+        total_attempts=total_attempts,
+        environment_resets=total_attempts,
+        extra_environment_resets=retry_attempts,
+        success_once_per_attempt=_ratio(success_once, total_attempts),
+        recovered_per_retry_attempt=_ratio(recovered, retry_attempts),
+        success_once_per_eval_minute=_ratio(success_once, total_eval_seconds / 60.0),
+        action_step_count_available=False,
+        action_step_count_source="not_recorded_in_lerobot_eval_info",
     )
     return metrics, trace
 
@@ -172,11 +210,19 @@ def comparison_markdown(metrics: AgenticRetryMetrics, baseline_eval: Path, retry
             f"| recovery_success_rate | {metrics.recovery_success_rate:.2f} |",
             f"| failed_episodes | {metrics.failed_episodes} |",
             f"| recovered_episodes | {metrics.recovered_episodes} |",
+            f"| total_attempts | {metrics.total_attempts} |",
+            f"| extra_environment_resets | {metrics.extra_environment_resets} |",
+            f"| total_eval_seconds | {metrics.total_eval_seconds:.2f} |",
+            f"| success_once_per_attempt | {metrics.success_once_per_attempt:.4f} |",
+            f"| recovered_per_retry_attempt | {metrics.recovered_per_retry_attempt:.4f} |",
+            f"| success_once_per_eval_minute | {metrics.success_once_per_eval_minute:.4f} |",
             "",
             "## Semantics",
             "",
             "- `baseline_success_rate` is the policy-only benchmark success flag.",
             "- `success_once_rate` counts an episode as successful if the baseline passed or a retry for the same task/episode index passed.",
+            "- Cost metrics count every baseline episode and retry episode as one environment reset/attempt.",
+            "- Per-episode action-step counts are not recorded in current LeRobot `eval_info.json`, so action-step-normalized metrics require additional instrumentation.",
             "- This first wrapper uses the LIBERO benchmark success flag as the verifier. It is a basic retry wrapper, not yet a subgoal-level environment intervention.",
             "",
         ]
@@ -199,6 +245,20 @@ def _pct(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return 100.0 * numerator / denominator
+
+
+def _ratio(numerator: int, denominator: float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return numerator / denominator
+
+
+def _eval_seconds(data: dict[str, Any]) -> float:
+    value = data.get("overall", {}).get("eval_s", 0.0)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def main() -> None:

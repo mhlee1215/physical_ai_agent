@@ -20,6 +20,326 @@ API responses that may contain secrets.
 - Before stopping or terminating a Pod, fetch result bundles to the local repo
   with `scripts/runpod_fetch_results.sh`.
 
+## 2026-06-09 Imagine-Then-Act Backend Plumbing
+
+### Current State
+
+- Status: local implementation, review, commit, and push completed; RunPod
+  execution is blocked by Pod lifecycle/capacity, not by the code path.
+- Branch: `codex/real-so100-green-doll-dryrun`.
+- Commit: `6ac05df0 Add Imagine-Then-Act experiment entrypoint`.
+- Local test gate:
+
+```bash
+PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests/imagine_then_act
+```
+
+Result: `10` tests passed.
+
+### Execution Boundary
+
+- The first RunPod run is backend-success-signal plumbing only.
+- `scripts/run_imagine_then_act.py` records imagined candidate selection and
+  invokes the canonical LIBERO/SmolVLA baseline runner behind the same
+  entrypoint.
+- `selected_candidate_applied=false`, so do not claim agentic performance gains
+  from this run.
+- Final success, if execution reaches LIBERO, must come from benchmark artifacts
+  such as `eval_info.json` / `pc_success`.
+
+### RunPod Lifecycle Blocker
+
+- The `.env` Pod ID was `ldwpvij20awxqi`; status lookup returned `404 pod not
+  found`.
+- The currently accessible existing Pod identified by the RunPod researcher is
+  `4pxof2vs44h9cb`; status is `desiredStatus: EXITED`.
+- Restarting `4pxof2vs44h9cb` failed because the host did not have a free GPU
+  available. The reported API error was: `start pod: There are not enough free
+  GPUs on the host machine to start this pod.`
+- A transient SECURE Pod `7pkhrhmb657w4c` was created before the manager
+  stop-before-cost instruction was processed. It was not used for evaluation,
+  was immediately stopped, and ended in `desiredStatus: EXITED` with
+  `lastStatusChange: Exited by user: Tue Jun 09 2026 08:16:08 GMT+0000`.
+- The RunPod researcher reported no currently billable/running Pods after this
+  cleanup.
+- This is a `blocked_capacity` / lifecycle issue; no LIBERO benchmark result has
+  been produced yet for Imagine-Then-Act.
+- Before creating a new Pod or selecting a more expensive GPU, report the option
+  and expected risk first. Do not start new billable capacity without explicit
+  confirmation in the manager thread.
+- If any Pod is found running, fetch relevant artifacts if they exist and stop
+  the Pod before ending the RunPod lane.
+
+### Next Action
+
+1. Confirm whether any Pod is currently `RUNNING` and therefore billable.
+2. If none are running, report `blocked_capacity` with the failed Pod ID and
+   capacity reason.
+3. When capacity is available or creation is approved, run the committed
+   entrypoint first in dry-run mode, then in non-dry-run backend plumbing mode.
+
+### Safe Recheck
+
+On 2026-06-09, a read-only RunPod list recheck found only two accessible Pods:
+
+- `7pkhrhmb657w4c`: `desiredStatus: EXITED`, no public IP, network volume
+  `tchm4gxfvd`.
+- `4pxof2vs44h9cb`: `desiredStatus: EXITED`, no public IP, network volume
+  `tchm4gxfvd`.
+
+No Pod was `RUNNING`, so there was no active billable Pod to stop. No new Pod
+was created, started, terminated, or used for evaluation during this recheck.
+The Imagine-Then-Act RunPod evaluation remains `blocked_capacity_reconfirmed`.
+
+### Approved Capacity Retry
+
+After the user approved new billable capacity on 2026-06-09, the RunPod lane
+retried within the approved scope:
+
+- Reusing stopped Pod `7pkhrhmb657w4c` first: start failed with the same host
+  capacity issue.
+- Creating a new SECURE RTX 4090 Pod on network volume `tchm4gxfvd`: no
+  available instance.
+- Trying the cheaper SECURE RTX 3090 fallback on the same network volume: no
+  available instance.
+
+A final read-only Pod list showed only:
+
+- `7pkhrhmb657w4c`: `desiredStatus: EXITED`.
+- `4pxof2vs44h9cb`: `desiredStatus: EXITED`.
+
+No Pod was `RUNNING`, no new Pod remained allocated, and no Imagine-Then-Act
+LIBERO dry-run or backend-plumbing command reached execution. The RunPod lane
+remains `blocked_capacity_after_approved_retry`.
+
+## 2026-06-08 Meta-World Official LeRobot Reproduction
+
+### Current State
+
+- Status: full public-code MT50 reproduction succeeded after environment fix;
+  evidence fetched locally; active Pod should be stopped after this entry.
+- Goal: run public LeRobot Meta-World evaluation with
+  `lerobot/smolvla_metaworld` and record the full debugging path.
+- Failed Pod: `bd7p82wu1yn2xg`.
+- Minimal successful Pod: `3ix18qgdxc4v21`.
+- Full MT50 successful Pod: `r6jzvw1osez5pm`.
+- GPU: RTX 4090 24GB.
+- Image:
+  `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`.
+- Failed-run local evidence bundle:
+  `_workspace/runpod_results/metaworld_official_repro/metaworld_official_v051_evidence/`.
+- Successful-run local evidence bundle:
+  `_workspace/runpod_results/metaworld_public_minimal_no_gym_pin_20260608T0625Z/`.
+- Full MT50 local evidence bundle:
+  `_workspace/runpod_results/metaworld_public_full_mt50_10ep_20260608T0650Z/metaworld_public_full_mt50_10ep_20260608T0650Z/`.
+- Report:
+  `docs/research/metaworld_official_repro_2026_06_08.md`.
+- Full MT50 report:
+  `docs/research/metaworld_public_full_mt50_2026_06_08.md`.
+
+### Successful Public-Code Full MT50 Run
+
+Fresh public LeRobot clone, no local source patch, no Gymnasium downgrade:
+
+```bash
+MUJOCO_GL=egl lerobot-eval \
+  --output_dir="/tmp/metaworld_public_repro_results/metaworld_public_full_mt50_10ep_20260608T0650Z/eval" \
+  --policy.path=lerobot/smolvla_metaworld \
+  --env.type=metaworld \
+  --env.task=easy,medium,hard,very_hard \
+  --eval.batch_size=1 \
+  --eval.n_episodes=10 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --policy.empty_cameras=0 \
+  --rename_map='{"observation.image":"observation.images.camera1"}' \
+  --seed=0
+```
+
+Successful environment:
+
+- LeRobot source: `v0.5.1-115-g09808183`,
+  commit `09808183ca72c30cbb41b653586f6d0632a4bcca`.
+- Runtime probe:
+  - Python `3.12.13`
+  - `lerobot 0.5.2`
+  - `torch 2.11.0`
+  - `metaworld 3.0.0`
+  - `gymnasium 1.3.0`
+  - `mujoco 3.9.0`
+  - CUDA available on NVIDIA GeForce RTX 4090
+- Exit code: `0`.
+- Episodes: `500` (`50` tasks x `10` episodes per task).
+- LeRobot weighted overall: `55.00%`.
+- Paper-style arithmetic split average: `42.07%`.
+
+Comparison against SmolVLA paper Table 2, 0.45B row:
+
+| Meta-World split | Ours success % | SmolVLA 0.45B Table 2 % | Delta |
+| --- | ---: | ---: | ---: |
+| Easy | 68.21 | 82.50 | -14.29 |
+| Medium | 52.73 | 41.80 | +10.93 |
+| Hard | 23.33 | 45.00 | -21.67 |
+| Very Hard | 24.00 | 60.00 | -36.00 |
+| Arithmetic split avg | 42.07 | 57.30 | -15.23 |
+
+Visual check:
+
+```text
+_workspace/runpod_results/metaworld_public_full_mt50_10ep_20260608T0650Z/metaworld_public_full_mt50_10ep_20260608T0650Z/frames/eval_videos_very_hard_4_eval_episode_9_frame30.png
+```
+
+The inspected frame shows a valid Meta-World Sawyer tabletop scene, not a blank
+renderer artifact.
+
+### Pending Follow-Up: `n_action_steps=15` Full MT50
+
+User requested a full MT50 rerun with:
+
+```text
+--policy.n_action_steps=15
+```
+
+Runner update:
+
+- `scripts/runpod_smolvla_metaworld_official_repro.sh` now accepts
+  `POLICY_N_ACTION_STEPS`.
+- When unset, it preserves checkpoint default behavior.
+- For the requested rerun, launch with:
+
+```bash
+RUN_ID=metaworld_public_full_mt50_10ep_nas15_$(date -u +%Y%m%dT%H%M%SZ) \
+TASK=easy,medium,hard,very_hard \
+EPISODES=10 \
+BATCH_SIZE=1 \
+POLICY_N_ACTION_STEPS=15 \
+OUT=/tmp/metaworld_public_repro_results/$RUN_ID \
+sh /tmp/runpod_smolvla_metaworld_official_repro.sh
+```
+
+RunPod availability attempts on 2026-06-08:
+
+- Restart attempts failed for existing stopped Pods:
+  `r6jzvw1osez5pm`, `3ix18qgdxc4v21`, `bd7p82wu1yn2xg`,
+  `ldwpvij20awxqi`, `nu2iyu4s8nqmbl`, and L4 Pod `v5yckik4qv9y85`.
+  All returned insufficient host GPU availability.
+- Fresh SECURE creation probe failed across the curated GPU list.
+- Fresh COMMUNITY creation with network volume `tchm4gxfvd` also failed across
+  the curated GPU list.
+- No-network-volume COMMUNITY RTX 3090 Pods could be created, but direct SSH
+  access failed even after `PUBLIC_KEY` env injection and after an explicit
+  `dockerStartCmd` SSH daemon setup. The inaccessible no-volume test Pods were
+  stopped and terminated:
+  `zfpc3psrgrz7q3`, `ux0f13uc4ph4m1`, `eaq5lsxgfgcl5g`,
+  `ppm1uytxzlg5ks`.
+- Final check found no remaining `RUNNING` Pods.
+
+Next action when capacity is available:
+
+1. Prefer restarting a prior network-volume Pod or creating a new SECURE Pod
+   with network volume `tchm4gxfvd`.
+2. Upload the updated Meta-World runner.
+3. Launch the `POLICY_N_ACTION_STEPS=15` full MT50 command above.
+4. Fetch results before stopping if using an ephemeral/no-volume Pod.
+
+### Successful Public-Code Minimal Run
+
+Fresh public LeRobot clone, no local source patch, no Gymnasium downgrade:
+
+```bash
+MUJOCO_GL=egl lerobot-eval \
+  --output_dir="/tmp/metaworld_public_minimal_results/metaworld_public_minimal_no_gym_pin_20260608T0625Z/eval" \
+  --policy.path=lerobot/smolvla_metaworld \
+  --env.type=metaworld \
+  --env.task=assembly-v3 \
+  --eval.batch_size=1 \
+  --eval.n_episodes=1 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --policy.empty_cameras=0 \
+  --rename_map='{"observation.image":"observation.images.camera1"}' \
+  --seed=0
+```
+
+Successful environment:
+
+- LeRobot source: `v0.5.1-115-g09808183`,
+  commit `09808183ca72c30cbb41b653586f6d0632a4bcca`.
+- Runtime probe:
+  - Python `3.12.13`
+  - `lerobot 0.5.2`
+  - `torch 2.11.0`
+  - `metaworld 3.0.0`
+  - `gymnasium 1.3.0`
+  - `mujoco 3.9.0`
+  - CUDA available on NVIDIA GeForce RTX 4090
+- Exit code: `0`.
+- Rollout: completed `1` episode on `assembly-v3`, 500 max steps.
+- Metric: `pc_success=0.0`, `n_episodes=1`, `eval_s=5.14`.
+- Video:
+  `_workspace/runpod_results/metaworld_public_minimal_no_gym_pin_20260608T0625Z/metaworld_public_minimal_no_gym_pin_20260608T0625Z/eval/videos/assembly-v3_0/eval_episode_0.mp4`.
+- Visual check:
+  `_workspace/runpod_results/metaworld_public_minimal_no_gym_pin_20260608T0625Z/frames/assembly_v3_frame30.png`
+  shows a valid Meta-World Sawyer tabletop scene.
+
+Key fix:
+
+- Do **not** force the LeRobot docs' old `gymnasium==1.1.0` workaround. Current
+  public LeRobot main resolved `gymnasium==1.3.0`, which allowed env creation
+  and rollout to complete.
+- Write logs/results under `/tmp` first. The network volume has quota pressure,
+  and writing directly to `/workspace` caused `Disk quota exceeded` during the
+  first successful-Pod attempt.
+
+### Failed Official-Docs-Shaped Run
+
+```bash
+MUJOCO_GL=egl lerobot-eval \
+  --output_dir="/tmp/official_lerobot_metaworld_repro/metaworld_official_v051_medium_20260608T0604Z/results" \
+  --policy.path=lerobot/smolvla_metaworld \
+  --env.type=metaworld \
+  --env.task=medium \
+  --eval.batch_size=1 \
+  --eval.n_episodes=10 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  --policy.use_amp=false \
+  --rename_map='{"observation.image":"observation.images.camera1"}'
+```
+
+### Result
+
+- LeRobot source: `v0.5.1`,
+  commit `1396b9fab7aecddd10006c33c47a487ffdcb54b4`.
+- Runtime probe:
+  - Python `3.12.13`
+  - `lerobot 0.5.1`
+  - `torch 2.10.0`
+  - `metaworld 3.0.0`
+  - `gymnasium 1.1.0`
+  - `mujoco 3.9.0`
+  - CUDA available on NVIDIA GeForce RTX 4090
+- Exit code: `1`.
+- Failure: Meta-World env construction failed before rollout:
+  `AssertionError: ['human', 'rgb_array', 'depth_array']` in
+  `gymnasium/envs/mujoco/mujoco_env.py`.
+- Interpretation: no benchmark success number exists for this official-code
+  attempt. This is not a 0% score.
+
+### Debug Notes
+
+- `main` branch first failed on missing EGL/OpenGL libraries; installing
+  `libegl1`, `libopengl0`, `libgl1`, `libosmesa6`, and `libglfw3` moved the
+  failure to the Gymnasium/MetaWorld render mode assertion.
+- The LeRobot docs recommend `gymnasium==1.1.0` for this exact assertion, but it
+  did not fix the issue on this Pod with `metaworld==3.0.0`.
+- `gymnasium==1.0.0` is not viable with `metaworld==3.0.0`; MetaWorld import
+  fails with missing `gymnasium.vector.AutoresetMode`.
+- Do not copy a full venv or LeRobot checkout into the network volume for
+  evidence. The volume hit quota; fetch only small logs and probes.
+
 ## 2026-06-05 SmolVLA LIBERO Full Eval
 
 ### Current State
@@ -1073,3 +1393,1539 @@ previous `lerobot/smolvla_libero` run.
     should be repeated before paper-scale claims, and reported against its
     same-run baseline because the policy-only routed parity baseline used a
     different split-suite protocol.
+
+### 2026-06-06 Post-LIBERO Evaluation Candidate Scan
+
+- Added `docs/evaluation_candidate_matrix_after_libero.md`.
+- Main conclusion:
+  - keep LIBERO as the immediate paper-comparable anchor because the
+    repeat-confirmed SmolVLA baseline is already within `-1.05` average points
+    of the ActionX Table 1 SmolVLA reference.
+  - next executable comparison should be a repeat of the full Long-suite
+    agentic retry run, then all-suite LIBERO agentic retry if the recovery
+    signal persists.
+  - best next external benchmark is RoboCasa365/RoboCasa because the current
+    leaderboard is a 50-task household manipulation benchmark with atomic,
+    composite-seen, and composite-unseen splits, which matches the
+    planner/verifier/retry research question better than generic short-horizon
+    manipulation suites.
+  - ManiSkill-HAB remains useful for smaller subtask success-once experiments,
+    but it is lower priority for SmolVLA paper comparability because the
+    published baselines are mostly RL/IL low-level mobile manipulation policies,
+    and serious GPU-scale execution needs Linux/NVIDIA/SAPIEN validation.
+  - vla-evaluation-harness is promising infrastructure for cross-benchmark
+    evaluation, but SmolVLA may require a custom model server before it can
+    replace the repo's working LIBERO path.
+
+### 2026-06-07 LIBERO Long Retry Control Series
+
+- Added and ran a Long-suite series runner:
+  - `scripts/runpod_smolvla_libero_agentic_retry_series.sh`
+  - `scripts/build_agentic_retry_series_report.py`
+- Remote output:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_series_long_3seed_20260606T220158Z`
+- Local archive without videos:
+  `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z_no_videos.tar.gz`
+- Local extracted report:
+  `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z/agentic_retry_series_report.md`
+- Protocol:
+  - suite: `libero_10`
+  - episodes: `10` per task, `100` per baseline seed
+  - baseline seeds: `1000`, `1001`, `1002`
+  - baseline action horizon: `n_action_steps=15`
+  - retry seeds: `1100`, `1101`, `1102`
+  - condition `blind_new_seed`: retry with `n_action_steps=15`
+  - condition `alternate_steps10`: retry with `n_action_steps=10`
+- Per-run results:
+  - `alternate_steps10`, seed `1000`: baseline `79.00`, success-once `90.00`,
+    delta `+11.00`, recovered `11/21`
+  - `alternate_steps10`, seed `1001`: baseline `66.00`, success-once `81.00`,
+    delta `+15.00`, recovered `15/34`
+  - `alternate_steps10`, seed `1002`: baseline `70.00`, success-once `79.00`,
+    delta `+9.00`, recovered `9/30`
+  - `blind_new_seed`, seed `1000`: baseline `79.00`, success-once `85.00`,
+    delta `+6.00`, recovered `6/21`
+  - `blind_new_seed`, seed `1001`: baseline `66.00`, success-once `75.00`,
+    delta `+9.00`, recovered `9/34`
+  - `blind_new_seed`, seed `1002`: baseline `70.00`, success-once `86.00`,
+    delta `+16.00`, recovered `16/30`
+- Summary:
+  - `alternate_steps10`: baseline `71.67 +/- 5.44`, success-once
+    `83.33 +/- 4.78`, delta `+11.67 +/- 2.49`, recovery `42.17 +/- 9.24`
+  - `blind_new_seed`: baseline `71.67 +/- 5.44`, success-once
+    `82.00 +/- 4.97`, delta `+10.33 +/- 4.19`, recovery `36.13 +/- 12.20`
+- Interpretation:
+  - retry budget itself is a strong baseline, not a weak strawman.
+  - `alternate_steps10` has a slightly higher mean than `blind_new_seed`, but
+    the margin is small and seed `1002` favored blind retry.
+  - next paper-useful experiment should be a real verifier-guided retry policy
+    that chooses retry strategy from failure/task predicates, and it must be
+    compared against the blind retry control.
+
+### 2026-06-07 Task-Guided Retry Selection Analysis
+
+- Added offline trace analysis:
+  - `scripts/build_agentic_retry_selection_report.py`
+  - local report:
+    `_workspace/runpod_results/agentic_retry_series_20260606/smolvla_agentic_retry_series_long_3seed_20260606T220158Z/agentic_retry_selection_report.md`
+- This analysis used the completed 3-seed Long blind and alternate retry traces;
+  it did not launch extra GPU rollouts.
+- Summary:
+  - `alternate_steps10`: success-once `83.33 +/- 4.78`, delta
+    `+11.67 +/- 2.49`, recovery `42.17 +/- 9.24`
+  - `blind_new_seed`: success-once `82.00 +/- 4.97`, delta
+    `+10.33 +/- 4.19`, recovery `36.13 +/- 12.20`
+  - `portfolio_budget2`: success-once `87.33 +/- 3.68`, delta
+    `+15.67 +/- 1.89`, recovery `56.19 +/- 4.87`
+  - `task_guided_loso`: success-once `80.00 +/- 3.74`, delta
+    `+8.33 +/- 1.70`, recovery `29.33 +/- 0.59`
+  - `task_oracle_same_seed`: success-once `85.67 +/- 3.68`, delta
+    `+14.00 +/- 2.16`, recovery `49.94 +/- 4.14`
+- Interpretation:
+  - task identity alone is not enough for a robust verifier-guided selector.
+  - a two-retry portfolio is more promising than task-id-only routing: run both
+    blind and alternate retry variants for baseline failures and count success
+    if either retry succeeds.
+  - next GPU experiment should formalize `retry_budget=2` portfolio retry on
+    Long first, then expand to all four LIBERO suites if still strong.
+
+### 2026-06-07 Remaining-Suite Portfolio Probe
+
+- Ran remaining LIBERO suites for seed `1000`:
+  - remote root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z`
+  - local archive without videos:
+    `_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z_no_videos.tar.gz`
+  - local extracted portfolio report:
+    `_workspace/runpod_results/agentic_retry_portfolio_20260607/smolvla_agentic_retry_portfolio_remaining_suites_seed1000_20260607T001547Z/agentic_retry_portfolio_report.md`
+- Spatial protocol:
+  - baseline `n_action_steps=10`
+  - blind retry `n_action_steps=10`, seed `1100`
+  - alternate retry `n_action_steps=15`, seed `1100`
+  - result: baseline `91.00`, blind `98.00`, alternate `94.00`,
+    portfolio `98.00`
+- Object protocol:
+  - baseline `n_action_steps=15`
+  - blind retry `n_action_steps=15`, seed `1100`
+  - alternate retry `n_action_steps=10`, seed `1100`
+  - result: baseline `94.00`, blind `96.00`, alternate `96.00`,
+    portfolio `97.00`
+- Goal protocol:
+  - baseline `n_action_steps=15`
+  - blind retry `n_action_steps=15`, seed `1100`
+  - alternate retry `n_action_steps=10`, seed `1100`
+  - result: baseline `89.00`, blind `97.00`, alternate `97.00`,
+    portfolio `99.00`
+- Four-suite seed-1000 portfolio table, using the existing Long seed-1000 row
+  from the 3-seed Long series:
+  - Spatial: baseline `91.00`, best single `98.00`, portfolio `98.00`,
+    delta `+7.00`
+  - Object: baseline `94.00`, best single `96.00`, portfolio `97.00`,
+    delta `+3.00`
+  - Goal: baseline `89.00`, best single `97.00`, portfolio `99.00`,
+    delta `+10.00`
+  - Long: baseline `79.00`, best single `90.00`, portfolio `92.00`,
+    delta `+13.00`
+  - Macro average: baseline `88.25`, best single `95.25`, portfolio `96.50`,
+    delta `+8.25`
+- Interpretation:
+  - This is the strongest current four-suite agentic retry result.
+  - It is a `retry_budget=2` portfolio result, not a fair policy-only
+    comparison against ActionX or base SmolVLA.
+  - The next paper-useful step is repeating the four-suite portfolio probe over
+    more seeds, or implementing a stronger verifier-guided selector that can
+    beat the blind/portfolio controls with less retry budget.
+
+## 2026-06-07 CP24B LIBERO Oracle Overlay Readiness
+
+### Current State
+
+- Status: completed, fetched locally, and probe Pod stopped.
+- Goal: verify real LIBERO/MuJoCo oracle affordance overlay generation on diverse actual simulation frames without interfering with baseline evaluation.
+- Probe Pod: `v5yckik4qv9y85`.
+- GPU: L4-class low-cost probe lane at `$0.39/hr` when running.
+- Network volume: `tchm4gxfvd`.
+- Separate clone path:
+  `/workspace/physical-ai/physical_ai_agent_affordance_probe`.
+- Final local artifact root:
+  `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/`.
+
+### Result
+
+- Broad pool: 19 real LIBERO/MuJoCo samples across `libero_spatial`, `libero_object`, and `libero_goal`.
+- Curated evidence set: 13 visually distinct samples after excluding near-duplicates and a weak edge-clipped case.
+- Targeting method: raw MuJoCo segmentation for semantic object geoms plus a cabinet drawer/handle resolver for open-drawer tasks.
+- Figure orientation: native `agentview` frames looked vertically inverted relative to LIBERO paper figures, so the paper-facing figure pack applies a visualization-only vertical flip and transforms overlay points as `y_fixed = H - 1 - y_native`.
+- Policy-input note: native simulator coordinates are preserved in the manifest; the fixed orientation is for report/figure artifacts.
+
+### Evidence
+
+- Corrected contact sheet:
+  `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/libero_mujoco_oracle_curated_diverse_contact_sheet.jpg`
+- Corrected manifest:
+  `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/libero_mujoco_oracle_curated_manifest.json`
+- Corrected report:
+  `_workspace/runpod_results/libero_mujoco_broad_diverse_oracle_20260607T013257Z_figure_fixed/verification_report_final.md`
+
+### Claim Boundary
+
+This is CP24B policy-input readiness evidence. It proves that real LIBERO/MuJoCo frames can be annotated with simulator-oracle affordance points in a visually inspected, paper-facing orientation. It does not prove SmolVLA success-rate improvement. The next checkpoint should be CP24C, an overlay ablation comparing `smolvla_rgb_only` against `smolvla_rgb_oracle_point`, optionally with `agentic_retry`.
+
+## 2026-06-07 LIBERO Retry Cost Normalization and Claim Boundary
+
+### Current State
+
+- Status: in progress.
+- Active RunPod evaluation root:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/smolvla_agentic_retry_portfolio_remaining_suites_seed1001_1002_20260607T012517Z`
+- Current run purpose: finish Spatial/Object/Goal seeds `1001` and `1002` so
+  the Long 3-seed retry series can be joined into a 4-suite, 3-seed table.
+- Direction change: success-only retry tables are not enough for the paper
+  claim. The current retry wrapper uses the same frozen `lerobot/smolvla_libero`
+  policy and should not be described as a better one-shot model.
+
+### Completed Partial Results
+
+- Spatial seeds `1001,1002`:
+  - baseline mean `88.00`
+  - `blind_new_seed` success-once mean `96.50`, delta `+8.50`
+  - `alternate_steps15` success-once mean `94.50`, delta `+6.50`
+- Object seeds `1001,1002`:
+  - baseline mean `92.50`
+  - `alternate_steps10` success-once mean `97.00`, delta `+4.50`
+  - `blind_new_seed` success-once mean `95.00`, delta `+2.50`
+- Goal seed `1001`:
+  - baseline `87.00`
+  - `alternate_steps10` success-once `97.00`, delta `+10.00`
+  - `blind_new_seed` success-once `94.00`, delta `+7.00`
+
+### Cost-Normalized Metric Update
+
+- Added cost fields to `physical_ai_agent.agent_core.libero_agentic_retry`:
+  - total attempts
+  - extra environment resets
+  - total eval seconds
+  - success-once per attempt
+  - recovered episodes per retry attempt
+  - success-once per eval minute
+- Added cost fields to the four-suite portfolio report builder:
+  `scripts/build_agentic_retry_four_suite_portfolio_report.py`.
+- Current LeRobot `eval_info.json` records `overall.eval_s` but does not record
+  per-episode action-step counts, so action-step-normalized metrics require an
+  instrumented rollout path before being used as paper evidence.
+
+### Claim Boundary
+
+- Current retry evidence supports:
+  "same frozen SmolVLA plus explicit reset/retry budget improves realized
+  benchmark success."
+- Current retry evidence does not support:
+  "SmolVLA model weights improved" or "one-shot policy success improved."
+- A stronger agentic physical AI claim needs either:
+  - better performance than blind retry under the same retry budget,
+  - better success per attempt/eval minute than blind retry,
+  - or in-episode verifier intervention before reset.
+
+### Next Required Experiment
+
+- Build or reuse an instrumented LIBERO rollout loop that logs per-step action
+  counts and exposes an online verifier hook.
+- Test an in-episode verifier that detects stagnation, failed grasp progress,
+  or timeout risk and intervenes before environment reset.
+- Compare against policy-only, blind retry, and horizon-switch retry with the
+  same success, attempt, reset, eval-time, and action-step metrics.
+
+### In-Episode Intervention Readiness Audit
+
+- Added executable readiness audit:
+  `scripts/build_libero_in_episode_intervention_readiness_report.py`.
+- Report:
+  `docs/research/libero_in_episode_intervention_readiness_report_2026_06_07.md`.
+- Summary:
+  - pass `7`
+  - warn `1`
+  - fail `2`
+  - missing `0`
+- Findings:
+  - LeRobot `rollout()` already returns stacked action, success, and done
+    tensors, so action-step-normalized metrics are feasible in a custom or
+    patched rollout path.
+  - The online verifier can be inserted immediately before or after
+    `env.step(action_numpy)`.
+  - `LiberoEnv.step()` exposes `info["is_success"]`, but auto-resets after
+    terminal states; intervention must trigger before `terminated=True`.
+  - Default `eval_info.json` does not include per-episode action-step counts.
+- Next gate:
+  implement a custom LIBERO rollout wrapper that logs `action_step_count`,
+  `verifier_triggered`, `trigger_step`, `intervention_type`, and final benchmark
+  success before launching more paper-facing GPU runs.
+
+### In-Episode Instrumentation Smoke
+
+- Added dependency-light core:
+  `src/physical_ai_agent/agent_core/libero_in_episode.py`.
+- Added executable smoke:
+  `scripts/run_libero_in_episode_instrumented_smoke.py`.
+- Local smoke command:
+  `PYTHONPATH=src:. python3 scripts/run_libero_in_episode_instrumented_smoke.py --output-dir _workspace/libero_in_episode_smoke_20260607`
+- Smoke evidence:
+  - report:
+    `_workspace/libero_in_episode_smoke_20260607/in_episode_report.md`
+  - metrics:
+    `_workspace/libero_in_episode_smoke_20260607/in_episode_metrics.json`
+  - trace:
+    `_workspace/libero_in_episode_smoke_20260607/in_episode_trace.jsonl`
+- Smoke result:
+  - success `true`
+  - action steps `6`
+  - verifier triggers `1`
+  - interventions `1`
+  - environment resets `1`
+  - success/action-step `0.166667`
+- RunPod Linux smoke:
+  - executed from a temporary `git archive FETCH_HEAD` checkout to avoid
+    touching the dirty remote working tree
+  - output root:
+    `/workspace/physical-ai/physical_ai_agent/_workspace/libero_in_episode_smoke_runpod_20260607`
+  - success `true`, action steps `6`, verifier triggers `1`, interventions
+    `1`, environment resets `1`, success/action-step `0.166667`
+- Interpretation:
+  this is not a LIBERO benchmark result yet. It proves the in-episode logging
+  contract: verifier trigger and intervention occur before terminal reset, and
+  the result reports action-step-normalized cost.
+
+### Real LIBERO/SmolVLA In-Episode Hook Smoke
+
+- Added real-path wrapper:
+  `scripts/run_libero_in_episode_smolvla_instrumented.py`.
+- Method:
+  monkeypatch LeRobot `rollout()` at runtime, keep the standard
+  `lerobot-eval` environment/policy setup, and append per-step trace rows.
+- RunPod command shape:
+  `python /tmp/run_libero_in_episode_smolvla_instrumented.py --trace-path ... --intervention-step 3 --intervention-scale 1.0 --output_dir=... --policy.path=lerobot/smolvla_libero --env.type=libero --env.task=libero_goal --env.task_ids=[0] --eval.n_episodes=1 ...`
+- Remote root:
+  `/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/libero_in_episode_smolvla_smoke_20260607T034632`
+- Local archive:
+  `_workspace/runpod_results/in_episode_20260607/libero_in_episode_smolvla_smoke_20260607T034632_no_videos.tar.gz`
+- Result:
+  - benchmark success `true`
+  - action steps `131`
+  - verifier triggers `1`
+  - interventions `1`
+  - environment resets `1`
+  - eval seconds `7.3373`
+  - success/action-step `0.007634`
+- Claim boundary:
+  intervention scale was `1.0`, so this is a real LIBERO hook/logging smoke,
+  not an intervention-improvement result. The next comparison should run
+  no-op hook vs non-trivial intervention under identical task/seed/action
+  budget.
+
+### Real LIBERO Same-Seed In-Episode Ablation
+
+- Added ablation report builder:
+  `scripts/build_libero_in_episode_ablation_report.py`.
+- Added report:
+  `docs/research/libero_in_episode_smolvla_ablation_2026_06_07.md`.
+- Conditions:
+  - no-op hook: scale `1.0`, `libero_goal`, task `[0]`, seed `1200`
+  - non-trivial intervention: scale `0.5`, same task and seed
+- Result:
+  - no-op hook: success `true`, action steps `131`, eval seconds `7.3373`,
+    success/action-step `0.007634`
+  - scale `0.5`: success `true`, action steps `132`, eval seconds `7.3378`,
+    success/action-step `0.007576`
+- Interpretation:
+  the scale `0.5` intervention preserved success but did not improve action
+  cost or eval-time cost in this one-episode smoke. This is useful negative
+  evidence: the project now has a same-task, same-seed, cost-normalized
+  comparison protocol, but not yet a positive in-episode intervention result.
+
+### Real LIBERO Same-Seed Spike Intervention Matrix
+
+- Extended real-path wrapper:
+  `scripts/run_libero_in_episode_smolvla_instrumented.py`.
+- Added verifier/intervention options:
+  - trigger modes: `fixed_step`, `action_norm_threshold`,
+    `fixed_or_action_norm`
+  - intervention modes: `none`, `scale`, `clamp`, `smooth`
+  - per-step trace records pre/post intervention action norms
+- RunPod task:
+  - policy: `lerobot/smolvla_libero`
+  - suite: `libero_goal`
+  - task ids: `[0]`
+  - seed: `1200`
+  - episodes: `1`
+  - `n_action_steps`: `15`
+- Local archive:
+  `_workspace/runpod_results/in_episode_20260607/libero_in_episode_matrix_20260607T035853_no_videos.tar.gz`
+- Report:
+  `docs/research/libero_in_episode_smolvla_spike_intervention_matrix_2026_06_07.md`
+- Result:
+  - `hook_none`: success `true`, action steps `131`, eval seconds `7.4206`
+  - `spike_clamp145_to120`: success `true`, action steps `135`, delta `+4`
+  - `spike_smooth145_a070`: success `true`, action steps `132`, delta `+1`
+  - `spike_scale145_085`: success `true`, action steps `134`, delta `+3`
+- Interpretation:
+  conditional action-norm spike interventions preserved success but did not
+  improve action-step efficiency on this same-seed one-task matrix. This is a
+  stronger negative result than the earlier fixed-step scale smoke: the
+  in-episode protocol is real and cost-normalized, but the current simple
+  action-space interventions are not yet a positive agentic improvement.
+
+### LIBERO Goal Task Scout and Task 3 Intervention Follow-Up
+
+- Ran a 5-task baseline scout with no in-episode intervention:
+  - suite: `libero_goal`
+  - task ids: `0, 1, 2, 3, 4`
+  - seed: `1200`
+  - episodes per task: `1`
+- Scout result:
+  - task `0`: success `true`, action steps `131`
+  - task `1`: success `true`, action steps `85`
+  - task `2`: success `true`, action steps `87`
+  - task `3`: success `true`, action steps `177`
+  - task `4`: success `true`, action steps `90`
+- Task `3` was selected for follow-up because it was the longest successful
+  rollout in the scout.
+- Task `3` baseline action-norm spikes were concentrated at steps `148-156`
+  with threshold `>=1.45`, suggesting a late execution/approach phase rather
+  than early instability.
+- Task `3` intervention follow-up:
+  - `task3_hook_none`: success `true`, action steps `177`, eval seconds
+    `8.5576`
+  - `task3_spike_scale145_110`: success `true`, action steps `178`, delta
+    `+1`
+  - `task3_spike_scale145_120`: success `true`, action steps `177`, delta
+    `+0`
+  - `task3_spike_clamp145_to135`: success `true`, action steps `177`, delta
+    `+0`
+  - `task3_spike_smooth145_a050`: success `true`, action steps `177`, delta
+    `+0`
+- Reports:
+  - `docs/research/libero_goal_task3_in_episode_intervention_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task3_in_episode_intervention_matrix_summary_2026_06_07.json`
+- Interpretation:
+  task `3` confirms the same pattern: simple action-space interventions
+  preserve success but do not yet reduce action-step cost. The next positive
+  candidate should move beyond scalar action post-processing toward a semantic
+  verifier/intervention, such as detecting no-progress windows and forcing a
+  policy reset/action-queue refresh inside the episode, or selecting known weak
+  seeds/tasks where baseline fails before comparing intervention variants.
+
+### LIBERO Goal Task 3 Policy Reset Matrix
+
+- Added `policy_reset` intervention mode to the real-path wrapper.
+- Mechanism:
+  when the verifier triggers, call `policy.reset()` inside the same episode
+  and reselect an action from the same observation before `env.step()`.
+- This is closer to the intended agentic physical AI loop than scalar action
+  post-processing because it refreshes the policy action queue/state without
+  resetting the environment.
+- Task:
+  - suite: `libero_goal`
+  - task id: `3`
+  - seed: `1200`
+  - baseline action steps: `177`
+- Result:
+  - `task3_reset_step80`: success `true`, action steps `178`, delta `+1`
+  - `task3_reset_step120`: success `true`, action steps `177`, delta `+0`
+  - `task3_reset_step145`: success `true`, action steps `177`, delta `+0`
+  - `task3_reset_norm145`: success `true`, action steps `177`, delta `+0`
+- Report:
+  - `docs/research/libero_goal_task3_policy_reset_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task3_policy_reset_matrix_summary_2026_06_07.json`
+- Interpretation:
+  in-episode policy reset/queue refresh preserved benchmark success but did not
+  reduce action-step cost on the selected long successful rollout. This is a
+  verified negative/neutral result, not a positive improvement. The next
+  experiment should first identify weak seeds/tasks where baseline fails or
+  times out, then compare policy reset or semantic retry against that fixed
+  subset.
+
+### LIBERO Goal Task 5-9 Scout and Task 6 Failure Intervention Matrix
+
+- Ran a second no-intervention scout over `libero_goal` task ids `5-9`.
+- Scout result:
+  - task `5`: success `true`, action steps `130`
+  - task `6`: success `false`, action steps `300`
+  - task `7`: success `true`, action steps `86`
+  - task `8`: success `true`, action steps `78`
+  - task `9`: success `true`, action steps `142`
+- Task `6` is the first identified same-seed baseline failure case in the
+  in-episode intervention search.
+- Task `6` baseline action-norm distribution:
+  - max norm: `1.4562`
+  - threshold `>=1.35`: `48` trigger candidates
+  - threshold `>=1.45`: `1` trigger candidate
+- Task `6` intervention matrix:
+  - `task6_hook_none`: success `false`, action steps `300`
+  - `task6_reset_step30`: success `false`, action steps `300`
+  - `task6_reset_step60`: success `false`, action steps `300`
+  - `task6_reset_step120`: success `false`, action steps `300`
+  - `task6_reset_norm135`: success `false`, action steps `300`
+  - `task6_smooth_norm135_a050`: success `false`, action steps `300`
+- Report:
+  - `docs/research/libero_goal_task6_failure_intervention_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task6_failure_intervention_matrix_summary_2026_06_07.json`
+- Interpretation:
+  this is a verified negative result on a true baseline failure case. The
+  current in-episode interventions can preserve success on successful tasks,
+  but they do not recover this failure. To get a positive paper-facing result,
+  the next intervention likely needs semantic state feedback from LIBERO/MuJoCo
+  info or rendered observations, not only action norm or policy queue reset.
+
+### LIBERO Goal Task 6 Semantic State Probe and Late Placement Intervention
+
+- Added semantic probe:
+  `scripts/probe_libero_env_semantic_state.py`.
+- Probe result:
+  LeRobot/LIBERO exposes raw object and robot state through the underlying
+  `LiberoEnv._env.env._get_observations()` path inside rollout.
+- Available task `6` semantic keys:
+  - `cream_cheese_1_pos`
+  - `akita_black_bowl_1_pos`
+  - `robot0_eef_pos`
+  - `robot0_gripper_qpos`
+- Extended real in-episode wrapper with:
+  - `semantic_no_progress` trigger
+  - semantic trace fields: target position, receptacle position, EEF position,
+    target-to-receptacle distance, EEF-to-target distance
+  - `semantic_reach_target` intervention
+  - `semantic_push_receptacle` intervention
+- Early semantic intervention result:
+  - `task6_semantic_probe_none`: success `false`, action steps `300`
+  - `task6_semantic_reach_g2`: success `false`, action steps `300`
+  - `task6_semantic_reach_g4`: success `false`, action steps `300`
+  - `task6_semantic_reach_g4_open`: success `false`, action steps `300`
+- Late-stage semantic intervention result:
+  - `task6_late_probe_none`: success `false`, action steps `300`
+  - `task6_late_push_g5_close`: success `false`, action steps `300`
+  - `task6_late_push_g10_close`: success `false`, action steps `300`
+  - `task6_late_push_g5_open`: success `false`, action steps `300`
+  - `task6_late_reach_g2_open`: success `false`, action steps `300`
+- Semantic diagnostic:
+  - baseline minimum target-to-bowl distance: `0.062636` at step `229`
+  - baseline final target-to-bowl distance: `0.062821`
+  - `late_reach_g2_open` final EEF-to-target improved from `0.080481` to
+    `0.047316`, but target-to-bowl stayed `0.062821`
+- Report:
+  - `docs/research/libero_goal_task6_semantic_intervention_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task6_semantic_intervention_matrix_summary_2026_06_07.json`
+- Interpretation:
+  small semantic interventions reveal improvement potential at the diagnostic
+  level: the wrapper can identify a late placement stall and move the gripper
+  closer to the object. However, it has not yet produced benchmark success or
+  action-step efficiency improvement. The next useful intervention should be
+  contact-aware placement/release rather than generic reach or push vectors.
+
+### LIBERO Goal Task 6 Reach-Then-Push Phase Intervention
+
+- Added `semantic_reach_then_push` intervention mode.
+- Mechanism:
+  - trigger on late semantic no-progress
+  - if EEF-to-target is above a contact threshold, move EEF toward the target
+  - once EEF-to-target is below the threshold, push the target toward the bowl
+- RunPod matrix:
+  - suite: `libero_goal`
+  - task id: `6`
+  - seed: `1200`
+  - baseline: `task6_late_probe_none`
+- Result:
+  - all phase-intervention conditions still failed benchmark success at `300`
+    action steps
+  - `task6_phase_push_c06_g2p5_close`: final EEF-to-target improved from
+    `0.080481` to `0.059052`, but object placement did not improve
+  - `task6_phase_push_c08_g2p5_close`: first tiny object-placement improvement,
+    minimum target-to-bowl distance improved from `0.062636` to `0.062615`
+  - open-gripper variants worsened final target-to-bowl distance
+- Report:
+  - `docs/research/libero_goal_task6_phase_intervention_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task6_phase_intervention_matrix_summary_2026_06_07.json`
+- Interpretation:
+  this is still not a positive task-level agentic result. It is the first
+  diagnostic evidence that a contact-seeking phase intervention can nudge the
+  object-placement metric in the desired direction. The next intervention
+  should use raw MuJoCo contact state or a short placement macro rather than a
+  single vector push.
+
+### LIBERO Goal Task 6 Near-Receptacle Placement Macro
+
+- Tried to probe raw MuJoCo contacts, but the exposed `sim` candidates in the
+  current LeRobot/LIBERO wrapper did not surface named geom/contact pairs
+  through the quick probe.
+- Added `semantic_near_receptacle` trigger:
+  trigger once target-to-receptacle distance is below a threshold after a
+  minimum step.
+- Added `semantic_place_receptacle` intervention:
+  - if EEF is far from target, reach target
+  - if EEF is within contact threshold, push target toward receptacle in XY
+    and apply a configurable downward Z command
+  - optionally close/open gripper via action dimension 6
+- RunPod task:
+  - suite: `libero_goal`
+  - task id: `6`
+  - seed: `1200`
+  - baseline: `task6_late_probe_none`
+- Benchmark result:
+  all tested placement-macro conditions still failed benchmark success at
+  `300` action steps.
+- Subgoal metric result:
+  - baseline min target-to-bowl distance: `0.062636`
+  - `task6_place_c06_p5_zm02_close`: `0.058806`
+  - `task6_place_c08_p8_zm02_close`: `0.060582`
+  - `task6_place_c08_p5_zm05_close`: `0.055952`
+- Report:
+  - `docs/research/libero_goal_task6_place_macro_matrix_2026_06_07.md`
+  - `docs/research/libero_goal_task6_place_macro_matrix_summary_2026_06_07.json`
+- Interpretation:
+  this is still not a positive benchmark success result, but it is the
+  strongest in-episode evidence so far: a semantic subgoal intervention
+  improves an intermediate physical metric by moving the target closer to the
+  bowl. The next search should tune this macro or test nearby weak seeds/tasks.
+
+### LIBERO Goal Task 6 Placement Macro Positive Tuning
+
+- Tuned the best near-receptacle placement macro around:
+  - trigger step: `220`
+  - contact threshold: `0.08`
+  - push gain: `5.0`
+  - downward Z command: `-0.7` and `-1.0`
+  - gripper command: `1.0`
+- Baseline:
+  - `task6_late_probe_none`
+  - benchmark success: `false`
+  - action steps: `300`
+  - eval seconds: `10.0566`
+  - environment resets: `1`
+- Positive in-episode intervention results:
+  - `task6_tune_s220_zm07`
+    - benchmark success: `true`
+    - action steps: `224`
+    - interventions: `4`
+    - eval seconds: `9.3361`
+    - min target-to-bowl: `0.058218`
+  - `task6_tune_s220_zm10`
+    - benchmark success: `true`
+    - action steps: `224`
+    - interventions: `4`
+    - eval seconds: `9.3117`
+    - min target-to-bowl: `0.053997`
+- Negative controls:
+  - delaying trigger to step `224` or `228` failed despite improving placement
+    metrics
+  - weaker push gain `3.0` failed despite transient placement improvement
+- Report:
+  - `docs/research/libero_goal_task6_place_tuning_success_2026_06_07.md`
+  - `docs/research/libero_goal_task6_place_tuning_success_summary_2026_06_07.json`
+- Interpretation:
+  this is the first positive benchmark result for the in-episode agentic layer.
+  It is not a reset retry: the wrapper detects a semantic near-receptacle
+  condition inside the rollout and switches to a placement subgoal. The result
+  is still a single task/seed smoke, but it gives a real seed for paper-scale
+  follow-up.
+
+### LIBERO Goal Task 6 Placement Macro Multi-Seed Check
+
+- Expanded the positive placement macro from one task/seed to seeds `1200`,
+  `1201`, and `1202` on the same `libero_goal` task id `6`.
+- Baseline condition:
+  - SmolVLA policy-only rollout
+  - no in-episode intervention
+  - environment resets: `1`
+- Wrapper condition:
+  - same `lerobot/smolvla_libero` weights
+  - `semantic_near_receptacle` trigger
+  - `semantic_place_receptacle` macro
+  - environment resets: `1`
+- Paired result:
+  - seed `1200`: baseline failed at `300` steps; wrapper succeeded at `224`
+    steps with `4` interventions
+  - seed `1201`: baseline failed; wrapper also failed because the object never
+    entered the near-receptacle trigger threshold
+  - seed `1202`: baseline failed; wrapper also failed because the object never
+    entered the near-receptacle trigger threshold
+- Aggregate paired success:
+  - baseline: `0/3`
+  - wrapper: `1/3`
+- Report:
+  - `docs/research/libero_goal_task6_place_multiseed_report_2026_06_07.md`
+  - `docs/research/libero_goal_task6_place_multiseed_summary_2026_06_07.json`
+- Interpretation:
+  the small in-episode intervention did produce a benchmark-success conversion
+  on one seed without adding an environment reset, so there is improvement
+  signal. The blocker is trigger coverage: the current wrapper only helps when
+  the base policy has already moved the target close enough to the receptacle.
+  The next improvement should broaden trigger/reach coverage inside the same
+  episode rather than using reset retry.
+
+### LIBERO Goal Task 6 No-Progress Trigger Coverage Check
+
+- Tested a no-code trigger-coverage variant on the same `libero_goal` task id
+  `6` and seeds `1200`, `1201`, `1202`.
+- Variant:
+  - trigger: `semantic_no_progress`
+  - intervention: `semantic_place_receptacle`
+  - min step: `220`
+  - progress window: `20`
+  - progress threshold: `0.002`
+  - environment resets: `1`
+- Aggregate benchmark result:
+  - baseline: `0/3`
+  - near-receptacle placement macro: `1/3`
+  - no-progress placement macro: `0/3`
+- Intervention load:
+  - near-receptacle placement macro: mean `1.33` interventions across seeds
+  - no-progress placement macro: mean `73.33` interventions across seeds
+- Subgoal metric:
+  - seed `1201` min target-to-bowl improved from `0.146379` to `0.112685`
+  - seed `1202` min target-to-bowl improved from `0.142073` to `0.061886`
+  - seed `1200` regressed from the near-receptacle success case to failure
+- Report:
+  - `docs/research/libero_goal_task6_trigger_coverage_report_2026_06_07.md`
+  - `docs/research/libero_goal_task6_trigger_coverage_summary_2026_06_07.json`
+- Interpretation:
+  no-progress detection fixes the trigger coverage problem only partially. It
+  creates in-episode interventions on previously untouched seeds and improves
+  an intermediate physical metric, but it over-intervenes and hurts benchmark
+  success. The next candidate should be a phased/gated trigger: use
+  no-progress to recover approach/reach, then switch to placement only under
+  contact or near-receptacle conditions.
+
+### ManiSkill3 Shared LeRobot Runner Smoke
+
+- Checked the previous LIBERO SmolVLA path and confirmed it uses the full
+  LeRobot processor contract:
+  `env_preprocessor -> preprocessor -> policy.select_action -> postprocessor -> env_postprocessor`.
+- Added a shared custom-benchmark policy path:
+  - `src/physical_ai_agent/policies/lerobot_policy_runner.py`
+  - `scripts/run_maniskill3_smolvla_eval.py`
+  - `tests/test_lerobot_policy_runner.py`
+- Purpose:
+  - prevent one-off custom scripts from skipping policy processors
+  - preserve `UnnormalizerProcessorStep` for SmolVLA actions
+  - make future ManiSkill3 and other custom benchmark evals use one runner
+- RunPod checkpoint inspected:
+  - `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count10_100step/checkpoints/last/pretrained_model`
+  - preprocessor steps:
+    `RenameObservationsProcessorStep`, `AddBatchDimensionProcessorStep`,
+    `NewLineTaskProcessorStep`, `TokenizerProcessorStep`,
+    `DeviceProcessorStep`, `NormalizerProcessorStep`
+  - postprocessor steps:
+    `UnnormalizerProcessorStep`, `DeviceProcessorStep`
+- Debug fixes made:
+  - aligned mismatched processor stats to declared feature shape for the small
+    probe checkpoint
+  - converted ManiSkill RGB observations to batched CHW LeRobot image format
+  - moved preprocessed tensors to the policy device before action selection
+- Smoke result:
+  - env: `PushCube-v1`
+  - episodes: `3`
+  - success: `0/3`
+  - output:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count10_100step_shared_runner_eval_3ep/metrics.json`
+  - metrics confirm:
+    `preprocessor_applied=true`, `postprocessor_applied=true`,
+    `postprocessor_steps=["UnnormalizerProcessorStep","DeviceProcessorStep"]`
+- Interpretation:
+  - the earlier raw custom `select_action()` eval snippets are invalid for
+    comparison because they skipped LeRobot processors
+  - this shared-runner smoke is a valid pipeline proof, but the `0/3` result is
+    not a paper-comparable STARE number because it uses only a count10,
+    100-step PushCube probe checkpoint rather than paper-like task-specific
+    SFT with `1000` trajectory samples
+
+### ManiSkill3 PushCube SFT Scale-Up
+
+- Goal:
+  calibrate the policy-only SmolVLA fine-tuning baseline against the STARE
+  ManiSkill3 Table 2 `PushCube-v1` reference before making any agentic-wrapper
+  claim.
+- Reference:
+  STARE Table 2 reports `SmolVLA (fine-tuning)` on `PushCube-v1` at `86.3%`
+  success and states SmolVLA uses `1000` trajectory samples for SFT per task.
+- Data:
+  official `PushCube-v1` RGB replay was generated without `--use-env-states`,
+  saving `1000/1000=100.00%` demos.
+- Converted dataset:
+  `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_no_env_states`
+  with `1000` episodes and `68978` frames.
+- Training:
+  `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_feature_override_9000step`
+  completed `9000` steps, about `1.04` epochs, with final logged loss `0.029`.
+- Evaluation:
+  `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_9000step_qpos_horizon100_shared_runner_eval_50ep`
+  scored `29/50`, `58.0%`.
+- Delta:
+  `58.0%` vs STARE `86.3%`, so current gap is `-28.3pp`.
+- Earlier scale probe:
+  count100/1000-step SFT scored `20/50`, `40.0%`; a shorter 20ep run scored
+  `11/20`, `55.0%`.
+- Correctness fixes:
+  - `scripts/run_maniskill3_smolvla_eval.py` now passes
+    `max_episode_steps=args.max_steps` into `gym.make(...)`; without this,
+    `PushCube-v1` truncated at the default 50-step horizon.
+  - The eval observation builder now prefers `obs["agent"]["qpos"]` as
+    `observation.state`, matching the LeRobot conversion path.
+  - The eval path uses `LeRobotPolicyRunner`, preserving the
+    `UnnormalizerProcessorStep` postprocessor.
+- Interpretation:
+  this is meaningful as policy-only baseline calibration, not as the project
+  contribution. The next wrapper comparison must use this or a better-matched
+  checkpoint as the fixed baseline. The remaining work is to narrow or explain
+  the `-28.3pp` gap before expanding to `StackCube-v1`, `PullCube-v1`, and
+  `LiftPegUpright-v1`.
+
+### ManiSkill3 PushCube Negative Parity Ablations
+
+- Action chunk ablation on the count1000/9000-step checkpoint:
+  - default checkpoint config: `n_action_steps=50`
+  - temporary config copy with `n_action_steps=1`:
+    `1/20`, `5.0%`
+  - temporary config copy with `n_action_steps=10`:
+    `8/20`, `40.0%`
+  - temporary config copy with `n_action_steps=15`:
+    `8/20`, `40.0%`
+  - interpretation:
+    unlike the LIBERO parity sweep, shorter action chunks do not help
+    `PushCube-v1`; keep the default `50` for this checkpoint.
+- Longer SFT ablation:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_feature_override_27000step`
+  - config source:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_feature_override_9000step/checkpoints/last/pretrained_model/train_config.json`
+  - changed fields:
+    `steps=27000`, `save_freq=27000`, `eval_freq=50000`, output dir and
+    repo id only
+  - training completed:
+    `27000` steps, about `3.13` epochs, final logged loss `0.017`
+  - 50-episode eval result:
+    `26/50`, `52.0%`
+  - artifact:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_27000step_qpos_horizon100_shared_runner_eval_50ep/metrics.json`
+  - interpretation:
+    longer training reduced train loss but worsened eval relative to the
+    9000-step result (`58.0%`), so simple under-training is not the main
+    explanation for the STARE `86.3%` gap.
+- Operational note:
+  - the RunPod clone used for these commands reported git revision `808aa6a`
+    during the ablation session, while the local branch later contained newer
+    documentation commits. Before the next paper-facing run, run `git pull` on
+    RunPod and record the exact git revision in the metrics/report.
+- Next likely parity checks:
+  - exact STARE eval seed/distribution and number of episodes
+  - whether STARE used the same official motion-planning demo source or a
+    different successful trajectory source
+  - observation preprocessing, especially camera resolution and any image
+    resize/padding semantics between replay conversion, training, and eval
+  - whether the STARE row uses a different ManiSkill task/control-mode variant
+
+### ManiSkill3 PushCube Horizon-30 / Idle-Filtered Parity Round
+
+- Status: completed on RunPod; Pod left running for follow-up parity debugging.
+- Reference protocol update:
+  - STARE Appendix B.5 reports ManiSkill3 evaluation with horizon `30`, `300`
+    episodes, and `5` random seeds.
+  - STARE Appendix C.2 reports filtering idle actions before training.
+- Raw checkpoint paper-horizon check:
+  - checkpoint:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_feature_override_9000step/checkpoints/last/pretrained_model`
+  - eval:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_feature_override_9000step_qpos_horizon30_shared_runner_eval_50ep`
+  - result:
+    `0/50`, `0.0%` at horizon `30`.
+  - interpretation:
+    the earlier horizon-100 `58.0%` number is not paper-comparable; most raw
+    SFT successes happen too late for STARE's horizon.
+- Qpos idle-filtered dataset:
+  - source:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_no_env_states`
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_qpos_filter005`
+  - filter:
+    keep frames with qpos delta at least `0.05`.
+  - size:
+    `1000` episodes, `21802` frames, mean length `21.8`, p50 `21`, p90 `24`,
+    max `31`.
+  - loader smoke:
+    `LeRobotDataset` loaded `1000` episodes and `21802` frames; sample state
+    shape `[9]`, action shape `[8]`.
+- Qpos idle-filtered SFT:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_qpos_filter005_9000step`
+  - source config:
+    raw count1000 9000-step train config.
+  - training completed:
+    `9000` steps, about `3.30` epochs, final logged loss `0.023`.
+- Evaluation:
+  - 50ep horizon-30 eval:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_50ep`
+    scored `34/50`, `68.0%`.
+  - 300ep horizon-30 eval, seed `1000`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1000`
+    scored `182/300`, `60.7%`.
+  - 300ep horizon-30 eval, seed `1001`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1001`
+    scored `183/300`, `61.0%`.
+  - 300ep horizon-30 eval, seed `1002`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1002`
+    scored `189/300`, `63.0%`.
+  - 300ep horizon-30 eval, seed `1003`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1003`
+    scored `193/300`, `64.3%`.
+  - 300ep horizon-30 eval, seed `1004`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter005_9000step_qpos_horizon30_shared_runner_eval_300ep_seed1004`
+    scored `186/300`, `62.0%`.
+- Delta:
+  the five-seed aggregate is `933/1500`, `62.2%` vs STARE PushCube `86.3%`, so
+  the current paper-horizon gap is `-24.1pp`.
+- Interpretation:
+  fine-tuning here is baseline calibration, not the agentic contribution.
+  Action/idle filtering is a real protocol lever: it recovers horizon-30
+  success from `0.0%` to a stable `61-64%` band across five 300-episode seeds,
+  matching STARE's reported seed count. The remaining gap is still too large
+  for a parity claim, so continue by matching STARE's exact filtering/source
+  trajectory protocol before expanding to the other three ManiSkill3 tasks.
+
+### ManiSkill3 PushCube Qpos Filter 0.04 Negative Ablation
+
+- Status: completed on RunPod.
+- Purpose:
+  test whether qpos threshold `0.05` was too aggressive by trying a looser
+  idle-frame filter.
+- Script:
+  `scripts/filter_lerobot_idle_frames.py` now provides a reusable repo-local
+  idle-frame filtering command for LeRobot datasets. It keeps a frame when the
+  state delta from the last kept frame exceeds the threshold, rewrites parquet
+  metadata, and reuses source videos through symlinks by default.
+- Dataset:
+  - source:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_no_env_states`
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_qpos_filter004`
+  - threshold:
+    qpos delta `0.04`
+  - size:
+    `1000` episodes, `25104` frames, mean length `25.1`, p50 `24`, p90 `30`,
+    max `37`.
+  - loader smoke:
+    `LeRobotDataset` loaded `1000` episodes and `25104` frames; sample state
+    shape `[9]`, action shape `[8]`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_qpos_filter004_9000step`
+  - steps:
+    `9000`
+  - final logged loss:
+    `0.022`
+  - approximate epochs:
+    `2.87`
+- Evaluation:
+  - artifact:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter004_9000step_qpos_horizon30_shared_runner_eval_50ep`
+  - result:
+    `20/50`, `40.0%`
+  - delta vs STARE PushCube `86.3%`:
+    `-46.3pp`
+- Interpretation:
+  looser filtering is worse than threshold `0.05` (`68.0%` over the same 50ep
+  horizon-30 check). The next likely filter ablation is a stronger threshold,
+  or a closer implementation of STARE's exact idle-action filtering rule.
+
+### ManiSkill3 PushCube Qpos Filter 0.06 Ablation
+
+- Status: completed on RunPod.
+- Purpose:
+  test whether a stronger qpos idle-frame filter improves horizon-30 success
+  relative to the current best threshold `0.05`.
+- Dataset:
+  - source:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_no_env_states`
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_rgb_count1000_rgbmode_128_qpos_filter006`
+  - threshold:
+    qpos delta `0.06`
+  - size:
+    `1000` episodes, `18850` frames, mean length `18.85`, p50 `19`, p90 `21`,
+    max `25`.
+  - loader smoke:
+    `LeRobotDataset` loaded `1000` episodes and `18850` frames; sample state
+    shape `[9]`, action shape `[8]`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pushcube_count1000_qpos_filter006_9000step`
+  - steps:
+    `9000`
+  - final logged loss:
+    `0.022`
+  - approximate epochs:
+    `3.82`
+- Evaluation:
+  - artifact:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/pushcube_count1000_qpos_filter006_9000step_qpos_horizon30_shared_runner_eval_50ep`
+  - result:
+    `31/50`, `62.0%`
+  - delta vs STARE PushCube `86.3%`:
+    `-24.3pp`
+- Interpretation:
+  stronger filtering is better than the looser `0.04` threshold but still below
+  the threshold `0.05` 50ep result (`68.0%`). The current qpos-filter best
+  remains threshold `0.05`, with the stronger five-seed 300ep estimate
+  `62.2%`. Further improvement likely requires matching STARE's exact
+  action-filter/source-demo protocol rather than sweeping qpos thresholds
+  alone.
+
+### ManiSkill3 StackCube Qpos Filter 0.05 Two-Camera SFT
+
+- Status: completed on RunPod; results fetched locally; Pod left running for
+  follow-up parity work.
+- Purpose:
+  add a second STARE-style non-LIBERO SmolVLA fine-tuning row after PushCube.
+- Reference:
+  STARE Table 2 reports `StackCube-v1` SmolVLA fine-tuning success `12.7%`.
+  Appendix B.5 reports horizon `30`, `300` episodes, and `5` random seeds.
+- Repo/runtime note:
+  the eval script was updated so StackCube observations populate both
+  `base_camera/camera1` and `hand_camera/camera2`. This avoids evaluating a
+  two-camera checkpoint with a zero-filled wrist/hand camera stream.
+- RGB replay:
+  - source:
+    `/root/physical-ai/tmp_maniskill_official_demos/StackCube-v1/motionplanning/trajectory.h5`
+  - output:
+    `/root/physical-ai/tmp_maniskill_official_demos/StackCube-v1/motionplanning/trajectory.rgb.pd_joint_pos.physx_cpu.h5`
+  - result:
+    `999/1000` demos saved successfully; one replay episode was skipped, so
+    this is close to but not exact `1000`-trajectory parity.
+- LeRobot conversion:
+  - output:
+    `/root/physical-ai/tmp_lerobot_stare_stackcube_rgb_count999_rgbmode_128_no_env_states`
+  - result:
+    `999` episodes, `107420` frames.
+  - features:
+    action shape `[8]`, state shape `[9]`, cameras `base_camera` and
+    `hand_camera`.
+- Qpos idle-filtered dataset:
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_stackcube_rgb_count999_rgbmode_128_qpos_filter005`
+  - threshold:
+    qpos delta `0.05`.
+  - size:
+    `999` episodes, `26728` frames, mean length `26.8`, p50 `26`, p90 `34`,
+    max `76`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_stackcube_count999_qpos_filter005_9000step_2cam`
+  - checkpoint:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_stackcube_count999_qpos_filter005_9000step_2cam/checkpoints/009000/pretrained_model`
+  - base:
+    `lerobot/smolvla_base`
+  - steps:
+    `9000`
+  - rename map:
+    `base_camera -> camera1`, `hand_camera -> camera2`
+  - training completion:
+    `9000/9000`, final logged loss `0.092`.
+- Evaluation:
+  - 1ep smoke:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/stackcube_count999_qpos_filter005_9000step_2cam_smoke_1ep_seed1000`
+    scored `0/1`, `0.0%`.
+  - 300ep horizon-30 eval, seed `1000`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/stackcube_count999_qpos_filter005_9000step_2cam_horizon30_eval_300ep_seed1000`
+    scored `1/300`, `0.33%`.
+  - 100ep horizon-100 debug eval, seed `1000`:
+    `_workspace/runpod_results/maniskill3_stare_sft_scale_probe_20260607/stackcube_count999_qpos_filter005_9000step_2cam_horizon100_eval_100ep_seed1000`
+    scored `0/100`, `0.0%`.
+- Local fetched bundle:
+  `_workspace/runpod_results/20260607_maniskill3_stackcube_qpos005_9000_2cam`.
+- Delta:
+  paper-horizon seed `1000` is `0.33%` vs STARE StackCube `12.7%`, a
+  `-12.37pp` gap.
+- Interpretation:
+  this is a real table-backed row but not a parity result. The horizon-100
+  debug run also failed, so the low StackCube score is not merely a
+  short-horizon timing issue. Continue by checking StackCube source trajectory,
+  action/control-mode details, exact idle-action filtering, and whether the
+  skipped replay episode or two-camera preprocessing differs from STARE.
+
+### ManiSkill3 PullCube Qpos Filter 0.05 SFT
+
+- Status: completed on RunPod; five-seed 300ep results fetched locally; Pod
+  left running for follow-up parity work.
+- Purpose:
+  add a third STARE-style non-LIBERO SmolVLA fine-tuning row after PushCube and
+  StackCube.
+- Reference:
+  STARE Table 2 reports `PullCube-v1` SmolVLA fine-tuning success `90.7%`.
+  Appendix B.5 reports horizon `30`, `300` episodes, and `5` random seeds.
+- Replay finding:
+  action replay without env states saved only `130/1000`, `13.0%`, so it was
+  rejected for SFT. Replaying the same official `pd_joint_delta_pos` RL source
+  with `--use-env-states` saved `989/1000`, `98.90%`.
+- LeRobot conversion:
+  - output:
+    `/root/physical-ai/tmp_lerobot_stare_pullcube_rgb_count989_rgbmode_128_use_env_states`
+  - result:
+    `989` episodes, `20941` frames.
+  - features:
+    action shape `[8]`, state shape `[9]`, camera `base_camera`.
+- Qpos idle-filtered dataset:
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_pullcube_rgb_count989_rgbmode_128_use_env_states_qpos_filter005`
+  - threshold:
+    qpos delta `0.05`.
+  - size:
+    `989` episodes, `19753` frames, mean length `20.0`, p50 `19`, p90 `24`,
+    max `37`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pullcube_count989_qpos_filter005_9000step`
+  - checkpoint:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_pullcube_count989_qpos_filter005_9000step/checkpoints/009000/pretrained_model`
+  - base:
+    `lerobot/smolvla_base`
+  - steps:
+    `9000`
+  - rename map:
+    `base_camera -> camera1`
+  - training completion:
+    `9000/9000`, final logged loss `0.083`.
+- Evaluation:
+  - 10ep smoke seed `1000`:
+    `1/10`, `10.0%`.
+  - 300ep seed `1000`:
+    `29/300`, `9.67%`.
+  - 300ep seed `1001`:
+    `29/300`, `9.67%`.
+  - 300ep seed `1002`:
+    `34/300`, `11.33%`.
+  - 300ep seed `1003`:
+    `28/300`, `9.33%`.
+  - 300ep seed `1004`:
+    `25/300`, `8.33%`.
+  - five-seed aggregate:
+    `145/1500`, `9.67%`.
+- Local fetched bundle:
+  `_workspace/runpod_results/20260607_maniskill3_pullcube_qpos005_9000_5seed`.
+- Delta:
+  five-seed aggregate is `9.67%` vs STARE PullCube `90.7%`, a `-81.03pp`
+  gap.
+- Interpretation:
+  this is now a paper-scale row by episode and seed count, but not a parity
+  result. Because `--use-env-states` was required to recover the replay
+  success rate, likely suspects are source-demo type, control-mode/action
+  replay semantics, exact STARE idle-action filtering, and training-protocol
+  mismatch rather than evaluation sample count.
+
+### ManiSkill3 LiftPegUpright Qpos Filter 0.05 SFT
+
+- Status: completed on RunPod; five-seed 300ep results fetched locally; Pod
+  left running for follow-up parity/debug work.
+- Purpose:
+  add the fourth STARE-style non-LIBERO SmolVLA fine-tuning row.
+- Reference:
+  STARE Table 2 reports `LiftPegUpright-v1` SmolVLA fine-tuning success
+  `16.3%`. Appendix B.5 reports horizon `30`, `300` episodes, and `5` random
+  seeds.
+- Source audit:
+  official `LiftPegUpright-v1` RL demos include `pd_ee_delta_pose` with `1015`
+  successes and `pd_joint_delta_pos` with `993` successes. The
+  `pd_joint_delta_pos` source was selected to match the current 8D action
+  SFT/eval lane.
+- Replay audit:
+  - `pd_ee_delta_pose` count100 no-env-state replay:
+    `3/100`, `3.0%`.
+  - `pd_joint_delta_pos` count100 no-env-state replay:
+    `0/100`, `0.0%`.
+  - `pd_ee_delta_pose` count100 `--use-env-states` replay:
+    `90/100`, `90.0%`.
+  - `pd_joint_delta_pos` count100 `--use-env-states` replay:
+    `93/100`, `93.0%`.
+  - full selected `pd_joint_delta_pos` `--use-env-states` replay:
+    `878/993`, `88.42%` demos saved.
+- LeRobot conversion:
+  - output:
+    `/root/physical-ai/tmp_lerobot_stare_liftpeg_rgb_count878_rgbmode_128_use_env_states`
+  - result:
+    `878` episodes, `35726` frames.
+  - features:
+    action shape `[8]`, state shape `[9]`, camera `base_camera`.
+- Qpos idle-filtered dataset:
+  - destination:
+    `/root/physical-ai/tmp_lerobot_stare_liftpeg_rgb_count878_rgbmode_128_use_env_states_qpos_filter005`
+  - threshold:
+    qpos delta `0.05`.
+  - size:
+    `878` episodes, `34663` frames, mean length `39.48`, p50 `41`, p90 `48`,
+    max `50`.
+- Training:
+  - output:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_liftpeg_count878_qpos_filter005_9000step`
+  - checkpoint:
+    `/root/physical-ai/tmp_train_smolvla_base_maniskill3_liftpeg_count878_qpos_filter005_9000step/checkpoints/009000/pretrained_model`
+  - base:
+    `lerobot/smolvla_base`
+  - steps:
+    `9000`
+  - rename map:
+    `base_camera -> camera1`
+  - training completion:
+    `9000/9000`.
+- Evaluation:
+  - 10ep smoke seed `1000`:
+    `0/10`, `0.0%`.
+  - 300ep seed `1000`:
+    `0/300`, `0.0%`.
+  - 300ep seed `1001`:
+    `0/300`, `0.0%`.
+  - 300ep seed `1002`:
+    `0/300`, `0.0%`.
+  - 300ep seed `1003`:
+    `0/300`, `0.0%`.
+  - 300ep seed `1004`:
+    `0/300`, `0.0%`.
+  - five-seed aggregate:
+    `0/1500`, `0.0%`.
+  - horizon-100 debug seed `1000`:
+    `0/100`, `0.0%`.
+- Local fetched bundle:
+  `_workspace/runpod_results/20260607_maniskill3_liftpeg_qpos005_9000_5seed`.
+- Delta:
+  five-seed aggregate is `0.0%` vs STARE LiftPegUpright `16.3%`, a `-16.3pp`
+  gap.
+- Interpretation:
+  this is now a paper-scale row by episode and seed count, but not a parity
+  result. The horizon-100 debug run also scored `0/100`, so the failure is not
+  only a short-horizon issue. Because the selected source required
+  `--use-env-states` and still dropped `115` of `993` episodes, likely suspects
+  are exact source-demo selection, control-mode/action replay semantics,
+  STARE's idle-action filter, and training-protocol details rather than
+  evaluation sample count.
+
+### RunPod Cleanup and Meta-World Very-Hard Seed Sweep
+
+- Cleanup:
+  deleted five already-documented old/negative PushCube SFT checkpoints from
+  `/root/physical-ai/tmp_train_*`.
+- Disk result:
+  overlay moved from `50G/60G`, `84%` used to `43G/60G`, `72%` used.
+- Kept:
+  current qpos-filter `0.05` checkpoints for PushCube, StackCube, PullCube,
+  and LiftPegUpright.
+- Meta-World purpose:
+  test whether the very-hard gap to SmolVLA Table 2 can be explained by a
+  simple eval-seed/reset choice.
+- Fixed condition:
+  `lerobot/smolvla_metaworld`, `very_hard`, `batch_size=10`,
+  `empty_cameras=0`, `corner2`, 10 trials per task, 50 total episodes per seed.
+- Results:
+  - seed `1`: `14.0%`.
+  - seed `10`: `12.0%`.
+  - seed `42`: `14.0%`.
+  - seed `100`: `22.0%`.
+  - seed `500`: `30.0%`.
+  - seed `2000`: `16.0%`.
+  - prior matching seed `1000`: `36.0%`.
+- Local fetched bundle:
+  `_workspace/runpod_results/metaworld_veryhard_seed_sweep_20260607T231900Z`.
+- Interpretation:
+  seed/reset variation exists, but none of the tested seeds approach the paper
+  `very_hard` reference `60.0%`. The prior seed `1000` run remains the best
+  observed standalone setting at `36.0%`. This weakens the simple
+  eval-seed-only explanation and keeps task/protocol-specific reset details as
+  the leading Meta-World parity suspect.
+
+### Meta-World Full MT50 `n_action_steps=15` Rerun Attempt
+
+- Request:
+  rerun the full public Meta-World MT50 evaluation with
+  `POLICY_N_ACTION_STEPS=15`.
+- Local runner changes:
+  - `scripts/runpod_smolvla_metaworld_official_repro.sh` now accepts optional
+    `POLICY_N_ACTION_STEPS` and passes it through as
+    `--policy.n_action_steps=<value>`.
+  - `scripts/runpod_create_pod.sh` now supports:
+    `RUNPOD_NETWORK_VOLUME_ID=none`, `RUNPOD_DOCKER_START_CMD_JSON`,
+    `RUNPOD_DOCKER_ENTRYPOINT_JSON`, and public-key env injection under both
+    `SSH_PUBLIC_KEY` and `PUBLIC_KEY`.
+  - `scripts/runpod_probe_gpus.sh` now forwards the Docker entrypoint/start
+    overrides to Pod creation.
+  - RunPod API/status output now redacts `dockerStartCmd` because startup
+    commands can contain auth material.
+- Desired remote command:
+
+```bash
+RUN_ID=metaworld_public_full_mt50_10ep_nas15_$(date -u +%Y%m%dT%H%M%SZ) \
+TASK=easy,medium,hard,very_hard \
+EPISODES=10 \
+BATCH_SIZE=1 \
+POLICY_N_ACTION_STEPS=15 \
+OUT=/tmp/metaworld_public_repro_results/$RUN_ID \
+sh /tmp/runpod_smolvla_metaworld_official_repro.sh
+```
+
+- Pod attempts:
+  - Existing successful Pod `r6jzvw1osez5pm` could not restart because the
+    host had no free GPU.
+  - SECURE A100 `ut95e2z5tkfj1r` was created at `$1.39/hr`, but SSH key auth
+    failed. It was terminated before any eval work.
+  - SECURE RTX 4000 Ada `z0vcar9dutdbi8` was created at `$0.26/hr`, but SSH
+    key auth failed. It was terminated before any eval work.
+  - SECURE RTX 4090 `fpx9ilb70ud7cx` with `SSH_PUBLIC_KEY` startup setup was
+    created at `$0.69/hr`, but SSH key auth failed. It was terminated before
+    any eval work.
+  - SECURE RTX 4090 `u8pu6cni1nt96c` with literal public key startup setup was
+    created at `$0.69/hr`, but SSH key auth still failed for `root`, `runpod`,
+    `ubuntu`, and `admin`. It was terminated before any eval work.
+- Security note:
+  password-based root SSH fallback was considered but not used because it would
+  weaken an internet-accessible Pod. Continue with key-based SSH only unless
+  the user explicitly authorizes a different access method.
+- Current state:
+  no `RUNNING` Pods remain. The `n_action_steps=15` full evaluation has not
+  started yet.
+- User action needed:
+  add this Mac's current `~/.ssh/id_ed25519.pub` key to RunPod account
+  settings, or provide the exact SSH command from the RunPod Pod Connect tab
+  for the newly created Pod.
+
+### Meta-World Full MT50 `n_action_steps=15` Completed
+
+- Pod:
+  `4pxof2vs44h9cb`, SECURE RTX 4090, `$0.69/hr`, network volume `tchm4gxfvd`.
+- SSH issue resolved:
+  RunPod accepted the key, but Codex could not sign with the encrypted private
+  key until the user ran `ssh-add ~/.ssh/id_ed25519`.
+- Network volume cleanup:
+  removed old already-fetched Meta-World repro output
+  `metaworld_official_smolvla_mt50_20260608T0528Z` and failed empty nas15 probe
+  directories to clear quota for the new result.
+- Run:
+  `metaworld_public_full_mt50_10ep_nas15_20260608T1635Z`
+  - command delta: `--policy.n_action_steps=15`
+  - task suites: `easy,medium,hard,very_hard`
+  - episodes: `10` per task, `500` total
+  - batch size: `1`
+  - exit code: `0`
+  - total eval time: `7248.79s`
+- Runtime caveat:
+  public LeRobot `main` resolved to `torch 2.11.0`; the RunPod driver was too
+  old for that CUDA wheel, so `environment_probe.txt` reported
+  `cuda_available False`. The run still completed but was slow.
+- Results:
+  - LeRobot weighted overall: `65.20%`.
+  - Easy: `78.21%` over `280` episodes.
+  - Medium: `58.18%` over `110` episodes.
+  - Hard: `40.00%` over `60` episodes.
+  - Very Hard: `38.00%` over `50` episodes.
+  - paper-style arithmetic split average: `53.60%`.
+- Comparison:
+
+| Metric | Default/checkpoint | `n_action_steps=15` | SmolVLA Table 2 | `15` delta vs paper |
+| --- | ---: | ---: | ---: | ---: |
+| Easy | 68.21 | 78.21 | 82.50 | -4.29 |
+| Medium | 52.73 | 58.18 | 41.80 | +16.38 |
+| Hard | 23.33 | 40.00 | 45.00 | -5.00 |
+| Very Hard | 24.00 | 38.00 | 60.00 | -22.00 |
+| Arithmetic split avg | 42.07 | 53.60 | 57.30 | -3.70 |
+| Weighted overall | 55.00 | 65.20 | n/a | n/a |
+
+- Local evidence:
+  `_workspace/runpod_results/metaworld_public_full_mt50_10ep_nas15_20260608T1635Z/metaworld_public_full_mt50_10ep_nas15_20260608T1635Z/`
+- Visual QA:
+  extracted and inspected representative frames from `easy`, `medium`, `hard`,
+  and `very_hard`; all showed valid Meta-World robot/table/object scenes.
+
+### Meta-World Full MT50 `n_action_steps=10` and `20` CUDA-Pinned Runs
+
+- Pod:
+  `4pxof2vs44h9cb`, SECURE RTX 4090, `$0.69/hr`, network volume `tchm4gxfvd`.
+- Runner update:
+  `scripts/runpod_smolvla_metaworld_official_repro.sh` now supports optional
+  torch/CUDA pin env vars:
+  - `TORCH_INDEX_URL`
+  - `TORCH_VERSION_SPEC`
+  - `TORCHVISION_VERSION_SPEC`
+  - `TORCHAUDIO_VERSION_SPEC`
+- CUDA pin used:
+  - `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124`
+  - `TORCH_VERSION_SPEC=torch==2.5.1+cu124`
+  - `TORCHVISION_VERSION_SPEC=torchvision==0.20.1+cu124`
+- Smoke:
+  `metaworld_smoke_nas10_cu124_20260608T1905Z`
+  - task: `assembly-v3`
+  - episodes: `1`
+  - exit code: `0`
+  - probe: `cuda_available True`, `cuda_device NVIDIA GeForce RTX 4090`
+- Full run:
+  `metaworld_public_full_mt50_10ep_nas10_cu124_20260608T1906Z`
+  - task suites: `easy,medium,hard,very_hard`
+  - episodes: `10` per task, `500` total
+  - batch size: `1`
+  - `--policy.n_action_steps=10`
+  - exit code: `0`
+  - probe: `torch 2.5.1+cu124`, `cuda_available True`
+  - total eval time: `2742.43s`
+  - LeRobot weighted overall: `66.20%`
+  - Easy: `82.86%` over `280` episodes
+  - Medium: `50.91%` over `110` episodes
+  - Hard: `43.33%` over `60` episodes
+  - Very Hard: `34.00%` over `50` episodes
+  - paper-style arithmetic split average: `52.77%`
+- Full run:
+  `metaworld_public_full_mt50_10ep_nas20_cu124_20260608T1955Z`
+  - task suites: `easy,medium,hard,very_hard`
+  - episodes: `10` per task, `500` total
+  - batch size: `1`
+  - `--policy.n_action_steps=20`
+  - exit code: `0`
+  - probe: `torch 2.5.1+cu124`, `cuda_available True`
+  - total eval time: `1425.98s`
+  - LeRobot weighted overall: `65.40%`
+  - Easy: `80.36%` over `280` episodes
+  - Medium: `52.73%` over `110` episodes
+  - Hard: `43.33%` over `60` episodes
+  - Very Hard: `36.00%` over `50` episodes
+  - paper-style arithmetic split average: `53.10%`
+- Comparison:
+  - Best weighted overall is now CUDA `n_action_steps=10` at `66.20%`.
+  - Best paper-style split average remains `n_action_steps=15` at `53.60%`,
+    `-3.70pp` vs SmolVLA Table 2's `57.30%`.
+  - CUDA `n_action_steps=10` is `-4.53pp` vs paper split average.
+  - CUDA `n_action_steps=20` is `-4.20pp` vs paper split average.
+- Caveat:
+  public LeRobot `0.5.2` declares `torch>=2.7`, but the CUDA pin uses
+  `torch 2.5.1+cu124` to match the RunPod driver. The runs completed and used
+  GPU, but this dependency mismatch should be reported.
+- Local evidence:
+  - `_workspace/runpod_results/metaworld_public_full_mt50_10ep_nas10_cu124_20260608T1906Z/metaworld_public_full_mt50_10ep_nas10_cu124_20260608T1906Z/`
+  - `_workspace/runpod_results/metaworld_public_full_mt50_10ep_nas20_cu124_20260608T1955Z/metaworld_public_full_mt50_10ep_nas20_cu124_20260608T1955Z/`
+- Visual QA:
+  generated and inspected representative midpoint frames from `easy`,
+  `medium`, `hard`, and `very_hard` for both CUDA-pinned runs. All frames show
+  valid Meta-World robot/table/object scenes.
+
+### Imagine-Then-Act Cheap L4 RunPod Attempt
+
+- User approval:
+  cheaper alternate GPU specs were allowed after RTX 4090/3090 capacity was
+  unavailable.
+- Pod:
+  `h1yxes6375ymbd`, `physical-ai-ita-cheap-secure-1781004397`, NVIDIA L4,
+  `$0.39/hr`, network volume `tchm4gxfvd`, image
+  `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`.
+- SSH/GPU check:
+  SSH succeeded at `213.173.105.29:30209`; `nvidia-smi` reported
+  `NVIDIA L4, 23034 MiB`, driver `580.126.20`, and torch reported CUDA
+  available in the base image.
+- Repo state:
+  the canonical remote checkout was on branch
+  `codex/real-so100-green-doll-dryrun` but still at old HEAD `1102568` with
+  unrelated dirty state in `src/physical_ai_agent/checkpoints/checkpoint_24.py`
+  and `.log`. To avoid overwriting that state, a clean evaluation clone was
+  created at `/workspace/physical-ai/eval_worktrees/physical_ai_agent_ita` and
+  updated to committed HEAD `d07bddb`.
+- Dry-run:
+  `scripts/run_imagine_then_act.py --mode runpod-libero --target runpod
+  --task-suite libero_goal --task-id 6 --num-candidates 3
+  --candidate-seeds 1200,1201,1202 --dry-run --json`
+  - exit code: `0`
+  - status: `passed`
+  - selected candidate: `candidate_02`
+  - final benchmark success: not available by design in dry-run
+- Non-dry-run attempt:
+  the first clean-clone non-dry-run stopped at the repo path guard. A second
+  attempt used the explicit debug override `PHYSICAL_AI_ALLOW_RUNPOD_BACKEND=1`
+  so the real backend command would be invoked from the clean clone.
+  - exit code: `2` from the entrypoint
+  - report status: `blocked`
+  - backend exit code: `1`
+  - `eval_info.json`: not produced
+  - `pc_success`: unavailable
+  - failure: `ModuleNotFoundError: No module named 'lerobot'`
+- Environment finding:
+  no LeRobot-ready Python environment was present at the expected paths:
+  `/root/physical-ai/envs/lerobot_py312/bin/python`,
+  `/workspace/physical-ai/envs/lerobot_py312/bin/python`,
+  `/workspace/physical-ai/.venv/bin/python`, or the repo-local venv paths.
+  The backend therefore fell back to `/usr/bin/python`, which did not have
+  `lerobot` installed.
+- Claim boundary:
+  this run verifies cheap-Pod lifecycle and RunPod dry-run parity only. It is
+  not a LIBERO benchmark result and provides no agentic gain claim.
+- Local evidence:
+  `_workspace/runpod_results/ita_l4_h1yxes6375ymbd/`
+- Stop confirmation:
+  Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
+  `h1yxes6375ymbd`, `7pkhrhmb657w4c`, and `4pxof2vs44h9cb` all `EXITED`; no
+  `RUNNING` Pods remained.
+
+### Imagine-Then-Act L4 Environment Recovery and Backend Run
+
+- User direction:
+  future RunPod experiments may fall back to cheaper or similar specs when the
+  preferred instance is unavailable, and environment issues should be debugged
+  from prior worklog evidence or install references instead of ending the run
+  prematurely.
+- Harness update:
+  `docs/harness/physical-ai/team-spec.md` now records the cheap/similar GPU
+  fallback policy and the LIBERO environment recovery policy.
+- Script update:
+  `scripts/eval_smolvla_libero_linux.sh` now defaults `PY312_VENV` to
+  `/root/physical-ai/envs/lerobot_py312` so package-heavy virtualenv writes use
+  faster container disk while pip/HF/assets remain under `/workspace`.
+- Commit evaluated on RunPod:
+  `d3250dc` on branch `codex/real-so100-green-doll-dryrun`, using clean clone
+  `/workspace/physical-ai/eval_worktrees/physical_ai_agent_ita`.
+- Pod:
+  resumed `h1yxes6375ymbd`, NVIDIA L4, `$0.39/hr`, network volume
+  `tchm4gxfvd`, SSH `213.173.105.29:30053`.
+- Environment recovery:
+  - installed Python 3.12 apt dependencies and EGL/ffmpeg packages;
+  - created `/root/physical-ai/envs/lerobot_py312`;
+  - installed editable public LeRobot `0.5.2` from `main` with
+    `[smolvla,libero]`;
+  - installed `hf-libero`, `robosuite`, `robomimic`, and `mujoco==3.3.2`;
+  - downloaded `lerobot/libero-assets` and wrote LIBERO config under
+    `/root/.libero`.
+- Bootstrap sanity command:
+  `scripts/eval_smolvla_libero_linux.sh` with `libero_goal`, task id `[6]`,
+  `LIBERO_N_EPISODES=1`, `POLICY_EMPTY_CAMERAS=0`, and `--seed=1200`.
+  - exit code: `0`
+  - `eval_info.json`: produced
+  - `pc_success`: `0.0`
+  - `eval_s`: `46.1683`
+  - video: produced at
+    `eval_logs/videos/libero_goal_6/eval_episode_0.mp4`
+- Imagine-Then-Act non-dry-run command:
+  `/root/physical-ai/envs/lerobot_py312/bin/python -B
+  scripts/run_imagine_then_act.py --mode runpod-libero --target runpod
+  --env-type libero --task-suite libero_goal --task-id 6 --num-candidates 3
+  --candidate-seeds 1200,1201,1202 --output-dir
+  .../imagine_then_act_libero_goal_task6_after_bootstrap --json`
+  with `PHYSICAL_AI_ALLOW_RUNPOD_BACKEND=1` because the clean clone is outside
+  the canonical RunPod repo path.
+  - entrypoint exit code: `0`
+  - status: `passed`
+  - selected candidate: `candidate_02`
+  - benchmark result source: `eval_info.json`
+  - backend exit code: `0`
+  - `pc_success`: `0.0`
+  - benchmark success: `false`
+  - action steps: `300`
+  - `eval_s`: `15.9252`
+  - selected candidate applied to benchmark actions: `false`
+- Claim boundary:
+  this proves the RunPod/LIBERO environment and backend-success-signal plumbing
+  are executable on the cheap L4 fallback. It is not an agentic improvement
+  result because the chosen candidate is still analysis-only and is not applied
+  to environment actions.
+- Local evidence:
+  `_workspace/runpod_results/ita_l4_h1yxes6375ymbd_rerun/`
+- Visual QA:
+  generated a QuickLook thumbnail from the fetched benchmark video and inspected
+  it. The frame shows a valid LIBERO/robosuite tabletop scene with the robot,
+  objects, and cabinet rendered correctly.
+- Stop confirmation:
+  Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
+  `h1yxes6375ymbd`, `7pkhrhmb657w4c`, and `4pxof2vs44h9cb` all `EXITED`; no
+  `RUNNING` Pods remained.

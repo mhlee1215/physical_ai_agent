@@ -164,7 +164,7 @@ def _write_render_blocker(path: Path, attempts: list[SO101RenderAttempt]) -> Non
             "Run from a normal macOS terminal session, not a headless agent session:",
             "",
             "```bash",
-            "sh scripts/view_so101_live.sh --browser-only --show-inputs --fps 2 --max-steps 1",
+            "sh scripts/checkpoint_14_15.sh --require-3d-render",
             "```",
             "",
             f"Observed `MUJOCO_GL={os.environ.get('MUJOCO_GL', '')}`.",

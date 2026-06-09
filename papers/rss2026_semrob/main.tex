@@ -1,0 +1,187 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{times}
+\usepackage[numbers]{natbib}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage[bookmarks=true]{hyperref}
+
+\pdfinfo{
+   /Author (Anonymous)
+   /Title  (Imagine-Then-Act Chunk Selection for Lightweight Vision-Language-Action Policies)
+   /CreationDate (D:20260606140000)
+   /Subject (Robotics)
+   /Keywords (robot learning; vision-language-action; visual foresight; semantic reasoning)
+}
+
+\begin{document}
+
+\title{Imagine-Then-Act Chunk Selection for Lightweight Vision-Language-Action Policies}
+
+% Replace [add your ID here] after OpenReview assigns the SemRob submission ID.
+\author{Author Names Omitted for Anonymous Review. Paper-ID [add your ID here]}
+
+\maketitle
+
+\begin{abstract}
+% Author-written abstract only. RSS-style policy prohibits submitting text
+% generated entirely by LLMs. Keep this concise: problem, method, evaluation,
+% strongest quantitative result, and why SemRob should care.
+TODO.
+\end{abstract}
+
+\IEEEpeerreviewmaketitle
+
+\section{Introduction}
+% Target: 4-page workshop version. Suggested shape:
+% 1 paragraph: lightweight VLA policies are now practical but brittle.
+% 1 paragraph: stochastic action chunks create multiple possible futures.
+% 1 paragraph: this work selects an action chunk before execution by judging
+% imagined outcome images against the current subgoal.
+% 1 short contribution list.
+
+TODO.
+
+\section{Related Work}
+% Keep this tight for SemRob. Research-room related-work results should be
+% sorted into these buckets:
+% 1. visual MPC / visual foresight / video prediction
+% 2. world models and imagination-based planning
+% 3. best-of-N / CEM / candidate trajectory selection
+% 4. VLM-as-critic / reward / verifier in robotics
+% 5. VLA and lightweight VLA background
+% 6. agentic LLM concepts only where directly relevant
+
+\subsection{Visual Foresight and Imagination-Based Planning}
+TODO cite visual MPC, visual foresight, action-conditioned video prediction,
+and world-model planning. Connect them to this paper's first proof setting:
+using simulator clone rollouts and renders as oracle imagined outcomes before
+training a deployable action-conditioned visual dynamics model.
+
+\subsection{Candidate Trajectory Selection}
+TODO cite best-of-N sampling, CEM, model-predictive control, and trajectory
+ranking methods. Frame this paper as chunk-level candidate selection for a
+fixed lightweight VLA, not as post-hoc recovery after a failed rollout.
+
+\subsection{VLM Critics and Robotic Verification}
+TODO cite VLM-as-reward, VLM-as-critic, and semantic verifier work in robotics.
+State the boundary clearly: the VLM judge scores predicted outcome images for
+pre-execution selection only; final task success remains the environment
+benchmark signal.
+
+\subsection{Efficient Vision-Language-Action Policies}
+TODO cite SmolVLA~\cite{shukor2025smolvla}, TinyVLA~\cite{wen2024tinyvla},
+OpenVLA~\cite{kim2024openvla}, and broader robot foundation policies such as
+RT-1~\cite{brohan2022rt1} and RT-2~\cite{zitkovich2023rt2}.
+
+\subsection{Agentic Planning and Feedback}
+TODO cite SayCan~\cite{ahn2022saycan}, Inner Monologue~\cite{huang2022inner},
+Code as Policies~\cite{liang2022code}, ReAct~\cite{yao2022react}, and
+Reflexion~\cite{shinn2023reflexion}. Tie this to SemRob topics: semantic
+goal interpretation and policy steering. Keep this subsection short: the paper
+is not mainly an LLM-agent paper.
+
+\section{Method}
+% Core claim: no base policy weight changes. The wrapper samples candidate
+% action chunks, imagines their outcomes, judges the predicted images against
+% the current subgoal, and executes only the selected chunk.
+
+\subsection{Base Policy and Evaluation Harness}
+TODO describe the fixed SmolVLA policy, observation/action interface, LIBERO
+or ManiSkill environment, seeds, action budgets, and logging artifacts.
+
+\subsection{Candidate Chunk Generation}
+TODO define stochastic chunk sampling from the fixed lightweight VLA. Specify
+candidate count, sampling parameters, action horizon, and whether candidates
+share the same current observation and subgoal.
+
+\subsection{Imagined Outcome Rendering}
+TODO define the first proof path: clone simulator state, roll out each
+candidate chunk without committing it to the real evaluation environment, and
+render the resulting outcome image. Explain that this is an oracle-imagination
+upper-bound diagnostic. Later work can replace this with a learned
+action-conditioned visual dynamics or video prediction model.
+
+\subsection{VLM-Guided Chunk Selection}
+TODO define the visual judge inputs: current observation, predicted outcome
+image, candidate metadata, and current subgoal. The judge ranks candidates
+before execution. Only the selected chunk is committed to the benchmark
+environment.
+
+\subsection{Success Semantics}
+TODO state explicitly: final task success is the environment benchmark success
+signal, e.g., \texttt{info["success"]} or \texttt{is\_success}. The VLM judge
+is a pre-execution candidate selector, not a final success detector.
+
+\section{Experiments}
+% Keep this evidence-first. Use matched seeds, same base policy, same action
+% budget where possible. Do not overclaim from small probes.
+
+\subsection{Setup}
+TODO list suites, task IDs, episodes per task, compute environment, simulator
+versions, policy checkpoint, and action-step protocol.
+
+\subsection{Policy-Only Baseline}
+TODO summarize the current routed SmolVLA baseline and cite the local artifact
+paths in the camera-ready or supplement, not in the blinded submission.
+
+\begin{table}[t]
+\centering
+\caption{Policy-only baseline reproduction on LIBERO. Fill with final
+paper-scale numbers only.}
+\label{tab:baseline}
+\begin{tabular}{lrrrrr}
+\toprule
+Condition & Goal & Object & Spatial & Long & Avg \\
+\midrule
+Policy-only & TODO & TODO & TODO & TODO & TODO \\
+Reference & TODO & TODO & TODO & TODO & TODO \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Imagine-Then-Act Selection Results}
+TODO compare \texttt{policy\_only}, random candidate selection, oracle imagined
+candidate selection, and VLM-guided imagined candidate selection. Report
+success, action steps, wall-clock latency, candidate count, and judge accuracy
+against environment outcomes where available.
+
+\begin{table}[t]
+\centering
+\caption{Imagined chunk selection ablation. Keep all conditions matched by
+seeds, base policy, and committed action budget unless explicitly stated.}
+\label{tab:selection}
+\begin{tabular}{lrrrr}
+\toprule
+Condition & Episodes & Success & $N$ & Latency \\
+\midrule
+Policy-only & TODO & TODO & 1 & TODO \\
+Random chunk & TODO & TODO & TODO & TODO \\
+Oracle imagined selector & TODO & TODO & TODO & TODO \\
+VLM imagined selector & TODO & TODO & TODO & TODO \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+TODO explain when imagined chunk selection helps, when it fails, and whether
+semantic visual judging is actually better than random or oracle-state
+heuristic selection.
+
+\section{Limitations}
+% RSS requires a limitations section for main papers; SemRob follows RSS paper
+% policy, so include it here too.
+TODO include limited task coverage, simulator-only evidence, privileged
+simulator-clone imagination, VLM judge brittleness, latency from evaluating
+multiple candidates, no weight updates, and no real robot claim unless real
+evidence is added.
+
+\section{Conclusion}
+TODO one paragraph: what was tested, strongest measured result, and why
+pre-execution imagined chunk selection is a useful control layer for
+lightweight VLA policies.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
