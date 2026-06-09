@@ -2,6 +2,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -13,6 +14,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     WARN,
     RiskProbeConfig,
     apply_candidate_to_env,
+    apply_torch_transformers_import_compatibility_patch,
     compute_clone_fidelity_metrics,
     compute_actual_oracle_or_proxy_metrics,
     compute_diversity_metrics,
@@ -192,6 +194,25 @@ class RiskProbeTest(TestCase):
             self.assertTrue(Path(report.artifacts["libero_adapter_evidence"]).exists())
             if report.status == "BLOCKED":
                 self.assertTrue(any("LIBERO actual adapter" in blocker for blocker in report.blockers))
+
+    def test_torch_transformers_import_compatibility_patch_adds_float8_alias(self) -> None:
+        previous_torch = sys.modules.get("torch")
+        fake_torch = types.ModuleType("torch")
+        fake_torch.__version__ = "2.5.1+cu124"
+        fake_torch.float8_e5m2 = object()
+        try:
+            sys.modules["torch"] = fake_torch
+
+            result = apply_torch_transformers_import_compatibility_patch()
+
+            self.assertTrue(result["patched"])
+            self.assertIs(fake_torch.float8_e8m0fnu, fake_torch.float8_e5m2)
+            self.assertEqual(result["torch_version"], "2.5.1+cu124")
+        finally:
+            if previous_torch is None:
+                sys.modules.pop("torch", None)
+            else:
+                sys.modules["torch"] = previous_torch
 
 
 class _FakeNumpy:

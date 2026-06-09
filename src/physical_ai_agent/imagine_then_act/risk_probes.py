@@ -379,6 +379,7 @@ def run_libero_actual_adapter(
     output_dir: Path,
 ) -> dict[str, Any]:
     evidence_path = output_dir / "libero_adapter_evidence.json"
+    import_compat = apply_torch_transformers_import_compatibility_patch()
     try:
         from lerobot.scripts import lerobot_eval
     except Exception as exc:  # noqa: BLE001 - import guard keeps local tests dependency-free.
@@ -390,6 +391,7 @@ def run_libero_actual_adapter(
                 f"({type(exc).__name__}: {str(exc)[:300]}). Run inside the prepared RunPod LeRobot/LIBERO environment."
             ],
             "import_error": {"type": type(exc).__name__, "message": str(exc)[:500]},
+            "import_compat": import_compat,
         }
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         evidence["artifact_path"] = str(evidence_path)
@@ -417,6 +419,7 @@ def run_libero_actual_adapter(
             ],
             "exception": {"type": type(exc).__name__, "message": str(exc)[:1000]},
             "argv": sys.argv[1:],
+            "import_compat": import_compat,
         }
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
@@ -434,6 +437,53 @@ def run_libero_actual_adapter(
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     evidence["artifact_path"] = str(evidence_path)
     return evidence
+
+
+def apply_torch_transformers_import_compatibility_patch() -> dict[str, Any]:
+    """Patch narrow torch/Transformers import drift seen on RunPod cu124.
+
+    LeRobot 0.5.2 currently imports Transformers 5.x utilities, while the
+    known-good RunPod driver path keeps torch at 2.5.1+cu124. Transformers 5.x
+    probes ``torch.float8_e8m0fnu`` during lazy AutoProcessor imports; torch
+    2.5 exposes other float8 dtypes but not that newer alias. The risk probe
+    only needs import/runtime plumbing here, so provide the alias before
+    importing LeRobot instead of upgrading torch into the CUDA 13 failure path.
+    """
+
+    try:
+        import torch  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001 - optional dependency on local tests.
+        return {
+            "torch_imported": False,
+            "patched": False,
+            "patch": "torch.float8_e8m0fnu",
+            "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
+    if hasattr(torch, "float8_e8m0fnu"):
+        return {
+            "torch_imported": True,
+            "patched": False,
+            "patch": "torch.float8_e8m0fnu",
+            "reason": "already_present",
+            "torch_version": getattr(torch, "__version__", "unknown"),
+        }
+    if hasattr(torch, "float8_e5m2"):
+        setattr(torch, "float8_e8m0fnu", getattr(torch, "float8_e5m2"))
+        return {
+            "torch_imported": True,
+            "patched": True,
+            "patch": "torch.float8_e8m0fnu",
+            "source_attr": "torch.float8_e5m2",
+            "torch_version": getattr(torch, "__version__", "unknown"),
+        }
+    return {
+        "torch_imported": True,
+        "patched": False,
+        "patch": "torch.float8_e8m0fnu",
+        "reason": "source_attr_missing",
+        "torch_version": getattr(torch, "__version__", "unknown"),
+    }
 
 
 def build_lerobot_eval_argv(config: RiskProbeConfig, output_dir: Path) -> list[str]:
