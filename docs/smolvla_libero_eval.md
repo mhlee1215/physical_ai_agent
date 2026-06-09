@@ -81,7 +81,7 @@ For a parallel throughput probe:
 
 ```bash
 LIBERO_TASKS=libero_spatial LIBERO_TASK_IDS='[0,1]' LIBERO_N_EPISODES=2 \
-  sh scripts/runpod_smolvla_libero_parallel_probe.sh
+  sh experiments/libero_runpod_variants/runpod_smolvla_libero_parallel_probe.sh
 ```
 
 Use the parallel probe before changing a full benchmark run to a higher

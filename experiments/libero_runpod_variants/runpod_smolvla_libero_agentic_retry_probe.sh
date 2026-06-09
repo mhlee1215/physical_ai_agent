@@ -2,6 +2,7 @@
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 
 PROJECT_DIR="${PROJECT_DIR:-/workspace/physical-ai/physical_ai_agent}"
 WORK_ROOT="${WORK_ROOT:-/workspace/physical-ai}"
@@ -64,7 +65,7 @@ run_eval() {
   LIBERO_CAMERA_NAME_MAPPING="$LIBERO_CAMERA_NAME_MAPPING" \
   LIBERO_EXTRA_ARGS="$extra_args" \
   OUTPUT_ROOT="$out" \
-    "$SCRIPT_DIR/eval_smolvla_libero_linux.sh" > "$out.driver.log" 2>&1
+    "$REPO_ROOT/scripts/eval_smolvla_libero_linux.sh" > "$out.driver.log" 2>&1
 }
 
 run_eval "$OUTPUT_ROOT/baseline" "$EVAL_TASK_IDS" "$BASELINE_EXTRA_ARGS"

@@ -154,6 +154,43 @@ git pull --ff-only origin main
 
 The current known-good cloud commit is `59f25a1`.
 
+## LeRobot / SmolVLA RunPod Environment
+
+Use the unified LeRobot runner for LIBERO and Meta-World:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+sh scripts/eval_smolvla_lerobot_linux.sh --benchmark libero --agentic-layer baseline
+sh scripts/eval_smolvla_lerobot_linux.sh --benchmark metaworld --agentic-layer baseline
+```
+
+Environment defaults are set to avoid previous RunPod failure modes:
+
+- `PY312_VENV=/root/physical-ai/envs/lerobot_py312` by default. This uses the
+  faster container disk for the Python environment; keep caches/results under
+  `/workspace`.
+- `PIP_CACHE_DIR=/workspace/physical-ai/pip_cache`.
+- `HF_HOME=/workspace/physical-ai/hf_home`.
+- `MUJOCO_GL=egl`.
+- `MUJOCO_VERSION=3.3.2` for LIBERO unless explicitly overridden.
+- `REQUIRE_CUDA=1` by default. If CUDA is not visible to PyTorch, the runner
+  fails before producing misleading CPU-baseline numbers.
+
+Every run writes:
+
+```text
+debug_artifacts/runpod_preflight.txt
+debug_artifacts/environment_probe.txt
+debug_artifacts/eval_manifest.json
+debug_artifacts/command_argv.json
+debug_artifacts/agentic_layer.json
+debug_artifacts/events.jsonl
+```
+
+Read those files first when debugging setup drift. The most important checks
+are Python `>=3.12`, `torch.cuda.is_available() == True`, the evaluated git
+commit, MuJoCo version, and the generated `lerobot-eval` argv.
+
 ## Verified Smoke
 
 The template was verified on the Pod with:

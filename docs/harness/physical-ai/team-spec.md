@@ -196,7 +196,13 @@ reported benchmark table.
 - `sh scripts/eval_smolvla_libero_mac.sh`
 - `LIBERO_TASKS=libero_spatial LIBERO_N_EPISODES=1 sh scripts/eval_smolvla_libero_linux.sh`
 - `LIBERO_TASKS=libero_spatial LIBERO_TASK_IDS='[0,1,2]' LIBERO_N_EPISODES=5 sh scripts/eval_smolvla_libero_linux.sh`
+- `METAWORLD_TASKS=easy METAWORLD_N_EPISODES=1 sh scripts/eval_smolvla_metaworld_linux.sh`
+- `sh scripts/eval_smolvla_lerobot_linux.sh --benchmark libero --agentic-layer baseline`
+- `sh scripts/eval_smolvla_lerobot_linux.sh --benchmark metaworld --agentic-layer baseline`
 - `sh scripts/runpod_smolvla_libero_eval.sh`
+- `PYTHONPATH=src python3 -m physical_ai_agent.evaluation.lerobot_eval --benchmark libero --output-dir /tmp/libero --print-command`
+- `PYTHONPATH=src python3 -m physical_ai_agent.evaluation.lerobot_eval --benchmark metaworld --output-dir /tmp/metaworld --n-action-steps 15 --print-command`
+- `PYTHONPATH=src python3 -B -m unittest tests.test_real_so100_contract`
 - `PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests`
 - `PYTHONPATH=src python3 -B -m pytest` when pytest is available
 - `python3 -B -c "import ast, pathlib; ..."` as a no-dependency fallback syntax check

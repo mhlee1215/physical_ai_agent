@@ -33,17 +33,17 @@ def run_checkpoint(
         output_dir=output_dir / "so101_multi_inputs",
         env_id=env_id,
         steps=steps,
-        camera_names=("wrist_cam", "top_down"),
+        camera_names=("wrist_cam", "egocentric_cam"),
     )
     first_frame = capture.frames[0] if capture.frames else None
     first_camera_frames = first_frame.camera_frames if first_frame is not None else {}
     checks = {
         "cp17_wrist_cam_saved": "wrist_cam" in first_camera_frames
         and Path(first_camera_frames["wrist_cam"]).exists(),
-        "cp17_top_down_saved": "top_down" in first_camera_frames
-        and Path(first_camera_frames["top_down"]).exists(),
+        "cp17_egocentric_cam_saved": "egocentric_cam" in first_camera_frames
+        and Path(first_camera_frames["egocentric_cam"]).exists(),
         "cp17_two_visual_inputs_per_step": bool(capture.frames)
-        and all({"wrist_cam", "top_down"}.issubset(frame.camera_frames) for frame in capture.frames),
+        and all({"wrist_cam", "egocentric_cam"}.issubset(frame.camera_frames) for frame in capture.frames),
         "cp17_multi_input_manifest_saved": Path(capture.manifest_path).exists()
         and Path(capture.manifest_path).stat().st_size > 0,
         "cp17_multi_input_preview_saved": Path(capture.preview_path).exists()
@@ -64,7 +64,7 @@ def run_checkpoint(
         "camera_specs": [asdict(spec) for spec in capture.camera_specs],
         "lerobot_feature_keys": [
             "observation.images.wrist_cam",
-            "observation.images.top_down",
+            "observation.images.egocentric_cam",
         ],
     }
     report = Checkpoint17Report(

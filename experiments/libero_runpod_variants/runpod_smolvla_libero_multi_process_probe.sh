@@ -2,6 +2,7 @@
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 
 PROJECT_DIR="${PROJECT_DIR:-/workspace/physical-ai/physical_ai_agent}"
 WORK_ROOT="${WORK_ROOT:-/workspace/physical-ai}"
@@ -14,37 +15,40 @@ if [ -z "${LIBERO_CAMERA_NAME_MAPPING+x}" ]; then
 fi
 LIBERO_N_EPISODES="${LIBERO_N_EPISODES:-2}"
 LIBERO_EXTRA_ARGS="${LIBERO_EXTRA_ARGS:---policy.num_steps=10 --policy.n_action_steps=10 --policy.device=cuda --seed=1000}"
+
 LANE_A_TASKS="${LANE_A_TASKS:-libero_spatial}"
 LANE_A_TASK_IDS="${LANE_A_TASK_IDS:-[0,1]}"
 LANE_B_TASKS="${LANE_B_TASKS:-libero_object}"
 LANE_B_TASK_IDS="${LANE_B_TASK_IDS:-[0,1]}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/_workspace/runpod_results/smolvla_dual_process_probe_$(date -u +%Y%m%dT%H%M%SZ)}"
+LANE_C_TASKS="${LANE_C_TASKS:-libero_goal}"
+LANE_C_TASK_IDS="${LANE_C_TASK_IDS:-[0,1]}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/_workspace/runpod_results/smolvla_multi_process_probe_$(date -u +%Y%m%dT%H%M%SZ)}"
 
 mkdir -p "$OUTPUT_ROOT"
 
-SUMMARY="$OUTPUT_ROOT/dual_process_probe_summary.tsv"
-REPORT="$OUTPUT_ROOT/dual_process_probe_report.md"
+SUMMARY="$OUTPUT_ROOT/multi_process_probe_summary.tsv"
+REPORT="$OUTPUT_ROOT/multi_process_probe_report.md"
 
 cat > "$SUMMARY" <<'EOF'
 phase	lane	tasks	task_ids	exit_code	elapsed_sec	overall_success	video_count	output_root
 EOF
 
 cat > "$REPORT" <<EOF
-# SmolVLA LIBERO Dual-Process Probe
+# SmolVLA LIBERO Multi-Process Probe
 
 - status: running
 - model_id: \`$SMOLVLA_MODEL_ID\`
 - episodes_per_task: \`$LIBERO_N_EPISODES\`
 - lane_a: \`$LANE_A_TASKS $LANE_A_TASK_IDS\`
 - lane_b: \`$LANE_B_TASKS $LANE_B_TASK_IDS\`
+- lane_c: \`$LANE_C_TASKS $LANE_C_TASK_IDS\`
 - policy_args: \`$LIBERO_EXTRA_ARGS\`
 - camera_name_mapping: \`$LIBERO_CAMERA_NAME_MAPPING\`
 - policy_empty_cameras: \`$POLICY_EMPTY_CAMERAS\`
 - output_root: \`$OUTPUT_ROOT\`
 
-This probe keeps each eval at batch_size=1, sync envs, and one task worker. It
-only tests whether two independent eval processes can run concurrently without
-changing success semantics.
+Each eval process keeps batch_size=1, sync envs, and one task worker. This only
+tests process-level concurrency, not intra-eval parallelism.
 
 EOF
 
@@ -74,7 +78,7 @@ run_lane() {
   LIBERO_CAMERA_NAME_MAPPING="$LIBERO_CAMERA_NAME_MAPPING" \
   LIBERO_EXTRA_ARGS="$LIBERO_EXTRA_ARGS" \
   OUTPUT_ROOT="$out" \
-    "$SCRIPT_DIR/eval_smolvla_libero_linux.sh" > "$out.driver.log" 2>&1
+    "$REPO_ROOT/scripts/eval_smolvla_libero_linux.sh" > "$out.driver.log" 2>&1
   exit_code="$?"
   set -e
   end_epoch="$(date +%s)"
@@ -114,18 +118,32 @@ append_phase() {
 seq_start="$(date +%s)"
 run_lane sequential lane_a "$LANE_A_TASKS" "$LANE_A_TASK_IDS"
 run_lane sequential lane_b "$LANE_B_TASKS" "$LANE_B_TASK_IDS"
+run_lane sequential lane_c "$LANE_C_TASKS" "$LANE_C_TASK_IDS"
 seq_end="$(date +%s)"
 append_phase sequential "$seq_start" "$seq_end"
 
-con_start="$(date +%s)"
-run_lane concurrent lane_a "$LANE_A_TASKS" "$LANE_A_TASK_IDS" &
+dual_start="$(date +%s)"
+run_lane dual lane_a "$LANE_A_TASKS" "$LANE_A_TASK_IDS" &
 pid_a="$!"
-run_lane concurrent lane_b "$LANE_B_TASKS" "$LANE_B_TASK_IDS" &
+run_lane dual lane_b "$LANE_B_TASKS" "$LANE_B_TASK_IDS" &
 pid_b="$!"
 wait "$pid_a"
 wait "$pid_b"
-con_end="$(date +%s)"
-append_phase concurrent "$con_start" "$con_end"
+dual_end="$(date +%s)"
+append_phase dual "$dual_start" "$dual_end"
+
+triple_start="$(date +%s)"
+run_lane triple lane_a "$LANE_A_TASKS" "$LANE_A_TASK_IDS" &
+pid_a="$!"
+run_lane triple lane_b "$LANE_B_TASKS" "$LANE_B_TASK_IDS" &
+pid_b="$!"
+run_lane triple lane_c "$LANE_C_TASKS" "$LANE_C_TASK_IDS" &
+pid_c="$!"
+wait "$pid_a"
+wait "$pid_b"
+wait "$pid_c"
+triple_end="$(date +%s)"
+append_phase triple "$triple_start" "$triple_end"
 
 {
   echo

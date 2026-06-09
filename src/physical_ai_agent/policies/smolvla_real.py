@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import Any
 
 from physical_ai_agent.policies.smolvla_adapter import DEFAULT_SMOLVLA_MODEL_ID
+from physical_ai_agent.real_so100.contract import SIM_POLICY_CAMERA_NAMES
 from physical_ai_agent.sim.so101_nexus_env import DEFAULT_SO101_ENV_ID, SO101NexusEnv, SO101Step
 
 
@@ -149,7 +150,7 @@ def _run_policy_rollout(
 
             camera_renderers = {
                 name: mujoco.Renderer(env.env.unwrapped.model, height=480, width=640)
-                for name in ("wrist_cam", "egocentric_cam", "top_down")
+                for name in (*SIM_POLICY_CAMERA_NAMES, "top_down")
             }
         for step in range(rollout_steps):
             camera_pixels = (
@@ -205,7 +206,7 @@ def _run_policy_rollout(
             json.dumps(
                 {
                     "env_id": env_id,
-                    "policy_input_names": ["wrist_cam", "egocentric_cam"],
+                    "policy_input_names": list(SIM_POLICY_CAMERA_NAMES),
                     "debug_input_names": ["top_down"],
                     "image_feature_mapping": image_feature_mapping,
                     "frames": [asdict(record) for record in input_records],
@@ -286,7 +287,7 @@ def _build_batch_for_policy(
 
 
 def _source_camera_name(index: int, camera_pixels: dict[str, Any]) -> str:
-    preferred = ["wrist_cam", "egocentric_cam", "egocentric_cam"]
+    preferred = [*SIM_POLICY_CAMERA_NAMES, SIM_POLICY_CAMERA_NAMES[-1]]
     if index < len(preferred):
         return preferred[index]
     return next(iter(camera_pixels), "zero")

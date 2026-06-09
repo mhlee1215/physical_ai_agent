@@ -15,9 +15,9 @@ class Checkpoint17Test(TestCase):
 
             self.assertEqual(report.status, "passed")
             self.assertTrue(all(report.checks.values()))
-            self.assertEqual(report.metrics["visual_input_names"], ["top_down", "wrist_cam"])
+            self.assertEqual(report.metrics["visual_input_names"], ["egocentric_cam", "wrist_cam"])
             self.assertIn("observation.images.wrist_cam", report.metrics["lerobot_feature_keys"])
-            self.assertIn("observation.images.top_down", report.metrics["lerobot_feature_keys"])
+            self.assertIn("observation.images.egocentric_cam", report.metrics["lerobot_feature_keys"])
             for artifact_path in report.artifacts.values():
                 path = Path(artifact_path)
                 self.assertTrue(path.exists(), artifact_path)
