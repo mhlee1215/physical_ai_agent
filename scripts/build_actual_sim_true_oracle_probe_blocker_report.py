@@ -59,7 +59,7 @@ def _html(manifest: dict[str, object], blocker: str) -> str:
         ("9", "No new RunPod created", "This report documents the blocker; it does not create or stop Pods."),
         ("10", "Next after pass", "If the cheap probe passes, run SmolVLA affordance oracle path to test policy-input integration."),
         ("11", "Claim boundary", "This is blocker evidence, not policy success or true-oracle projection evidence."),
-        ("12", "Actionable command", "The CP24 true-oracle probe command is retired; use maintained benchmark evaluation entrypoints for new runs."),
+        ("12", "Actionable command", "Reuse scripts/run_actual_sim_true_oracle_probe_cp24.sh in the renderer-capable environment."),
     ]
     card_html = "\n".join(
         f"""
