@@ -124,6 +124,44 @@ Relevant citations:
 - Wang et al., "Voyager: An Open-Ended Embodied Agent with Large Language Models", arXiv:2305.16291.
 - Physical Intelligence et al., "π0.7: a Steerable Generalist Robotic Foundation Model with Emergent Capabilities", arXiv:2604.15483.
 
+### 4.5. Visual Prompting and Affordance Interfaces for VLA Control
+
+The Oracle Point Overlay direction must be positioned carefully because closely
+related visual-prompting and affordance-interface work already exists. VP-VLA
+explicitly renders spatial anchors such as crosshairs and bounding boxes into
+the native RGB observation space so that a low-level controller can execute
+more precisely. TraceVLA overlays active point trajectories onto robot
+observations and feeds both original and trace-overlaid images into a VLA.
+AVP introduces spatially grounded visual primitive tokens between a VLM and an
+action expert. RoboPoint predicts 2D image keypoint affordances from images and
+instructions and projects them into 3D for downstream robot behavior.
+
+This means the paper should not claim that visual overlays, points, traces, or
+affordance cues are novel by themselves. The safer claim is that this project
+uses spatial cues as one controlled intervention inside a lightweight,
+test-time agentic wrapper. The contribution should be the experimental
+separation of policy-only control, visual-cue control, verifier/retry control,
+and combined agentic visual-cue control under identical tasks, seeds, budgets,
+and benchmark-defined success flags.
+
+Useful paper-language:
+
+"Rather than proposing visual prompting as a new representation, we treat
+spatial cueing as an auditable interface inside an external agentic control
+loop for compact VLA policies. This allows us to quantify when a lightweight
+policy benefits from additional spatial grounding, when recovery requires
+state-verification and retry, and when oracle cues expose an upper bound that a
+learned affordance module would need to approach."
+
+Relevant citations:
+
+- Wang et al., "VP-VLA: Visual Prompting as an Interface for Vision-Language-Action Models", arXiv:2603.22003.
+- Zheng et al., "TraceVLA: Visual Trace Prompting Enhances Spatial-Temporal Awareness for Generalist Robotic Policies", arXiv:2412.10345.
+- Guo et al., "Action with Visual Primitives", preprint, 2026.
+- Yuan et al., "RoboPoint: A Vision-Language Model for Spatial Affordance Prediction for Robotics", CoRL 2024.
+- Li et al., "CoA-VLA: Improving Vision-Language-Action Models via Visual-Text Chain-of-Affordance", ICCV 2025.
+- Huang et al., "VoxPoser: Composable 3D Value Maps for Robotic Manipulation with Language Models", CoRL 2023.
+
 ### 5. Benchmarks and Evaluation Risk
 
 LIBERO is relevant because it is widely used for language-conditioned robot
@@ -176,6 +214,10 @@ Potential contribution statements:
    retry exhaustion, and replan failure.
 4. An open, reproducible evaluation harness over LIBERO and/or ManiSkill/SO101
    that records traces, videos, verifier decisions, retries, and latency.
+5. A visual-cue ablation that treats affordance overlays as a diagnostic
+   interface, not as the primary novelty: no overlay vs heuristic overlay vs
+   oracle overlay, with actual-simulation evidence separated from synthetic
+   diagnostics.
 
 ## Method Progress
 
@@ -218,9 +260,19 @@ Primary metrics:
 
 ## Immediate Next Steps
 
-1. Use RunPod LIBERO baseline to obtain policy-only SmolVLA numbers.
-2. Freeze the baseline action budget and seed protocol.
-3. Add the agentic wrapper only after baseline reproducibility is documented.
-4. Evaluate policy-only vs agentic retry on the same LIBERO task IDs.
-5. Write the first related-work section around three groups: efficient VLAs,
-   agentic embodied planning, and long-horizon VLA evaluation.
+1. Run the two-stage actual-sim true-oracle gate in a renderer-capable
+   Linux/GPU environment, reusing an approved environment rather than creating
+   a new Pod by default:
+   `sh scripts/run_actual_sim_true_oracle_probe_then_policy_cp24.sh`.
+2. Import `two_stage_summary.json` with
+   `scripts/build_actual_sim_true_oracle_two_stage_result_report.py` and update
+   the milestone dashboard.
+3. If the probe stage passes but policy stage fails, debug SmolVLA model
+   loading or policy-input integration; do not revisit renderer/camera
+   metadata until the probe regresses.
+4. If both stages pass, freeze the baseline action budget and seed protocol.
+5. Run the controlled experiment matrix: policy-only, overlay-only,
+   agentic-only, agentic+overlay, and oracle upper bound.
+6. Keep the visual overlay line as a controlled ablation unless actual
+   simulation shows a strong effect beyond existing VP-VLA / TraceVLA-style
+   visual prompting baselines.
