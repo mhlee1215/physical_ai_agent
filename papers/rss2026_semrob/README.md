@@ -34,29 +34,46 @@ Official SemRob page currently lists:
 
 Working title:
 
-> Agentic Recovery for Lightweight Vision-Language-Action Policies
+> Imagine-Then-Act Chunk Selection for Lightweight Vision-Language-Action Policies
 
 Core claim:
 
-> A fixed lightweight VLA policy can be evaluated under an external recovery loop that detects failures, retries bounded attempts, and replans when needed, while final task success remains the benchmark environment success signal.
+> A fixed lightweight VLA policy can sample multiple candidate action chunks, imagine each candidate's visual outcome before execution, and execute the chunk whose predicted outcome best satisfies the current subgoal.
 
 Do **not** claim:
 
-- The wrapper universally fixes weak VLA policies.
+- The selector universally fixes weak VLA policies.
 - The verifier is the final success judge.
 - The current simulator evidence proves real-robot success.
 - The method trains a new VLA model.
+- The VLM judge determines benchmark success.
+- Oracle simulator-clone imagination is already deployable on a real robot.
 
 ## Evidence To Fill
 
 - Policy-only baseline:
   - Current internal report: `docs/smolvla_libero_baseline_report.md`
   - Current best average: `87.75%` over 400 LIBERO episodes.
-- Agentic retry probe:
+- Prior agentic retry evidence:
   - Current internal report: `docs/smolvla_libero_agentic_retry_report.md`
-  - Small 30-episode probe: baseline `50.00%`, success-once `70.00%`, recovery `6/15`.
+  - Use this as motivation/control context, not as the main novelty.
+- Imagine-then-act evidence:
+  - TODO: add simulator-clone candidate rollout, rendered outcome images, VLM/rule/oracle selector scores, and committed-environment success results.
 
-The 30-episode retry probe is promising but too small for a strong final claim. Treat it as a pilot unless it is scaled or carefully framed.
+The new main idea is pre-execution chunk selection, not post-failure retry. Keep retry-budget results as a baseline/control only if they help interpret cost and success.
+
+## Related Work Buckets
+
+When the delegated related-work search returns, sort papers into:
+
+1. visual MPC / visual foresight / video prediction
+2. world models and imagination-based planning
+3. best-of-N / CEM / candidate trajectory selection
+4. VLM-as-critic / reward / verifier in robotics
+5. VLA and lightweight VLA background
+6. agentic LLM concepts only where directly relevant
+
+The final related-work story should make the method look like visual MPC / model-based candidate selection for lightweight VLAs, with VLM judging as a semantic scorer. Do not frame the VLM as the task success oracle.
 
 ## Authoring Safety
 

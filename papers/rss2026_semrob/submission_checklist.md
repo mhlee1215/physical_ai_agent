@@ -3,7 +3,7 @@
 ## Venue Fit
 
 - [ ] The paper directly addresses SemRob themes: semantic goal understanding, policy steering, failure monitoring, online correction, or test-time adaptation.
-- [ ] The contribution is framed as a recovery/evaluation layer around a fixed lightweight VLA policy.
+- [ ] The contribution is framed as pre-execution imagined chunk selection around a fixed lightweight VLA policy.
 - [ ] Claims are bounded to simulator evidence unless real-robot evidence is added.
 
 ## Format
@@ -21,17 +21,18 @@
 - [ ] Freeze action budget.
 - [ ] Freeze seeds and task ordering.
 - [ ] Report policy-only baseline.
-- [ ] Report retry/recovery condition under matched settings or explicitly label unmatched settings.
+- [ ] Report random chunk, oracle imagined selector, and VLM imagined selector under matched settings or explicitly label unmatched settings.
 - [ ] Report final success using benchmark `info["success"]` / `is_success`.
-- [ ] Report wrapper verifier outputs only as control signals, not final success.
+- [ ] Report VLM judge outputs only as candidate-selection signals, not final success.
+- [ ] Report candidate count, committed action budget, total simulated/imagination budget, and wall-clock latency.
 - [ ] Include failure categories if there is room.
 
 ## Tables and Figures
 
 - [ ] Table 1: policy-only baseline vs external/reference baseline.
-- [ ] Table 2: policy-only vs agentic retry/replan ablation.
-- [ ] Optional figure: wrapper control loop.
-- [ ] Optional figure: failure/recovery trace.
+- [ ] Table 2: policy-only vs random chunk vs oracle imagined selector vs VLM imagined selector.
+- [ ] Optional figure: imagine-then-act control loop.
+- [ ] Optional figure: candidate predicted outcome image grid with selected chunk.
 
 ## Submission
 
