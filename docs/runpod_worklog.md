@@ -2803,3 +2803,58 @@ sh /tmp/runpod_smolvla_metaworld_official_repro.sh
   generated and inspected representative midpoint frames from `easy`,
   `medium`, `hard`, and `very_hard` for both CUDA-pinned runs. All frames show
   valid Meta-World robot/table/object scenes.
+
+### Imagine-Then-Act Cheap L4 RunPod Attempt
+
+- User approval:
+  cheaper alternate GPU specs were allowed after RTX 4090/3090 capacity was
+  unavailable.
+- Pod:
+  `h1yxes6375ymbd`, `physical-ai-ita-cheap-secure-1781004397`, NVIDIA L4,
+  `$0.39/hr`, network volume `tchm4gxfvd`, image
+  `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`.
+- SSH/GPU check:
+  SSH succeeded at `213.173.105.29:30209`; `nvidia-smi` reported
+  `NVIDIA L4, 23034 MiB`, driver `580.126.20`, and torch reported CUDA
+  available in the base image.
+- Repo state:
+  the canonical remote checkout was on branch
+  `codex/real-so100-green-doll-dryrun` but still at old HEAD `1102568` with
+  unrelated dirty state in `src/physical_ai_agent/checkpoints/checkpoint_24.py`
+  and `.log`. To avoid overwriting that state, a clean evaluation clone was
+  created at `/workspace/physical-ai/eval_worktrees/physical_ai_agent_ita` and
+  updated to committed HEAD `d07bddb`.
+- Dry-run:
+  `scripts/run_imagine_then_act.py --mode runpod-libero --target runpod
+  --task-suite libero_goal --task-id 6 --num-candidates 3
+  --candidate-seeds 1200,1201,1202 --dry-run --json`
+  - exit code: `0`
+  - status: `passed`
+  - selected candidate: `candidate_02`
+  - final benchmark success: not available by design in dry-run
+- Non-dry-run attempt:
+  the first clean-clone non-dry-run stopped at the repo path guard. A second
+  attempt used the explicit debug override `PHYSICAL_AI_ALLOW_RUNPOD_BACKEND=1`
+  so the real backend command would be invoked from the clean clone.
+  - exit code: `2` from the entrypoint
+  - report status: `blocked`
+  - backend exit code: `1`
+  - `eval_info.json`: not produced
+  - `pc_success`: unavailable
+  - failure: `ModuleNotFoundError: No module named 'lerobot'`
+- Environment finding:
+  no LeRobot-ready Python environment was present at the expected paths:
+  `/root/physical-ai/envs/lerobot_py312/bin/python`,
+  `/workspace/physical-ai/envs/lerobot_py312/bin/python`,
+  `/workspace/physical-ai/.venv/bin/python`, or the repo-local venv paths.
+  The backend therefore fell back to `/usr/bin/python`, which did not have
+  `lerobot` installed.
+- Claim boundary:
+  this run verifies cheap-Pod lifecycle and RunPod dry-run parity only. It is
+  not a LIBERO benchmark result and provides no agentic gain claim.
+- Local evidence:
+  `_workspace/runpod_results/ita_l4_h1yxes6375ymbd/`
+- Stop confirmation:
+  Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
+  `h1yxes6375ymbd`, `7pkhrhmb657w4c`, and `4pxof2vs44h9cb` all `EXITED`; no
+  `RUNNING` Pods remained.
