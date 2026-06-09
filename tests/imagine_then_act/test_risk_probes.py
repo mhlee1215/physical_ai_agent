@@ -6,6 +6,7 @@ import types
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest.mock import patch
 
 from physical_ai_agent.imagine_then_act.risk_probes import (
     ActionChunkCandidate,
@@ -194,6 +195,47 @@ class RiskProbeTest(TestCase):
             self.assertTrue(Path(report.artifacts["libero_adapter_evidence"]).exists())
             if report.status == "BLOCKED":
                 self.assertTrue(any("LIBERO actual adapter" in blocker for blocker in report.blockers))
+
+    def test_actual_adapter_partial_outcomes_still_generate_full_artifact_bundle(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=4,
+                chunk_steps=3,
+                action_dim=7,
+                output_dir=tmpdir,
+            )
+
+            def fake_adapter(config, candidates, output_dir):  # noqa: ANN001, ARG001
+                evidence_path = Path(output_dir) / "libero_adapter_evidence.json"
+                evidence_path.write_text("{}\n", encoding="utf-8")
+                return {
+                    "mode": "libero_actual_adapter",
+                    "available": True,
+                    "blockers": ["partial actual probe"],
+                    "artifact_path": str(evidence_path),
+                    "outcomes": {
+                        candidates[0].candidate_id: {
+                            "success_proxy": 0.0,
+                            "state": [0.0, 0.0, 0.0],
+                            "image": [[0]],
+                        }
+                    },
+                }
+
+            with patch(
+                "physical_ai_agent.imagine_then_act.risk_probes.run_libero_actual_adapter",
+                side_effect=fake_adapter,
+            ):
+                report = run_risk_probes(config)
+
+            self.assertEqual(report.status, "BLOCKED")
+            self.assertTrue(Path(report.artifacts["oracle_scores"]).exists())
+            self.assertTrue(Path(report.artifacts["html_report"]).exists())
 
     def test_torch_transformers_import_compatibility_patch_adds_float8_alias(self) -> None:
         previous_torch = sys.modules.get("torch")

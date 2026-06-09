@@ -116,7 +116,7 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
         actual_evidence = run_libero_actual_adapter(config, candidates, output_dir)
         blockers.extend(actual_evidence.get("blockers", []))
         if actual_evidence.get("outcomes"):
-            outcomes = actual_evidence["outcomes"]
+            outcomes = {**outcomes, **actual_evidence["outcomes"]}
         if actual_evidence.get("clone_fidelity"):
             clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
         if actual_evidence.get("oracle_upper_bound"):
