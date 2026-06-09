@@ -207,6 +207,27 @@ PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   --json
 ```
 
+Stage-2 Imagine-Then-Act risk probes must run before claiming true imagined
+selection readiness. Use the repo-local probe script to verify candidate
+diversity, simulator clone/imagination fidelity, and oracle-selector
+upper-bound evidence. VLM judges and learned world models stay out of this
+gate. Local dry-run must remain dependency-free and produce `events.jsonl`,
+`summary.json`, SVG image artifacts, and a single-file HTML report:
+
+```bash
+PYTHONPATH=src python3 -B scripts/run_imagine_then_act_risk_probes.py \
+  --preset local-dry-run \
+  --output-dir _workspace/imagine_then_act/risk_probes/local_dry_run \
+  --json
+```
+
+RunPod risk-probe order is smoke -> breadth -> full benchmark decision. Use
+`--preset runpod-libero-smoke` first, then `--preset runpod-libero-breadth`.
+Keep the existing RunPod rules: verify GPU util/import gates, fetch artifacts,
+and if a planned evaluation is halfway complete with 0% environment success,
+stop that condition and switch to bug/plumbing/setup triage before spending more
+episodes.
+
 ### RunPod LIBERO Environment and Parity Scripts
 
 Use these scripts for reproducible RunPod/LIBERO SmolVLA setup and evaluation
