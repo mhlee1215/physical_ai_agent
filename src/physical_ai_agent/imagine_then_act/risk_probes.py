@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import html
 import json
 import math
@@ -107,6 +108,7 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
     output_dir.mkdir(parents=True, exist_ok=True)
     candidates = generate_mock_candidates(config)
     outcomes = {candidate.candidate_id: simulate_mock_env(candidate.action_chunk) for candidate in candidates}
+    visual_candidates = candidates
     diversity = compute_diversity_metrics(config, candidates)
     clone_fidelity = compute_clone_fidelity_metrics(config, candidates[-1])
     oracle_upper_bound = compute_oracle_upper_bound_metrics(candidates, outcomes)
@@ -115,13 +117,16 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
     if config.backend != "mock":
         actual_evidence = run_libero_actual_adapter(config, candidates, output_dir)
         blockers.extend(actual_evidence.get("blockers", []))
+        diversity = mark_diversity_as_synthetic_contract(diversity)
         if actual_evidence.get("outcomes"):
-            outcomes = {**outcomes, **actual_evidence["outcomes"]}
+            outcomes = actual_evidence["outcomes"]
+            evaluated_ids = set(outcomes)
+            visual_candidates = [candidate for candidate in candidates if candidate.candidate_id in evaluated_ids]
         if actual_evidence.get("clone_fidelity"):
             clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
         if actual_evidence.get("oracle_upper_bound"):
             oracle_upper_bound = OracleUpperBoundMetrics(**actual_evidence["oracle_upper_bound"])
-    artifacts = write_visual_artifacts(output_dir, candidates, outcomes, diversity, clone_fidelity, oracle_upper_bound)
+    artifacts = write_visual_artifacts(output_dir, visual_candidates, outcomes, diversity, clone_fidelity, oracle_upper_bound)
     if actual_evidence.get("artifact_path"):
         artifacts["libero_adapter_evidence"] = actual_evidence["artifact_path"]
     risk_verdicts = {
@@ -152,6 +157,7 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
                 "source": candidate.source,
                 "privileged_success_proxy": candidate.privileged_success_proxy,
                 "is_policy_only": candidate.is_policy_only,
+                "evaluated_in_actual_adapter": candidate.candidate_id in outcomes if config.backend != "mock" else True,
             }
             for candidate in candidates
         ],
@@ -271,6 +277,23 @@ def compute_diversity_metrics(config: RiskProbeConfig, candidates: list[ActionCh
         gripper_command_variance=round(variance(gripper_values), 6),
         candidate_count=len(candidates),
         rationale=rationale,
+    )
+
+
+def mark_diversity_as_synthetic_contract(metrics: DiversityMetrics) -> DiversityMetrics:
+    return DiversityMetrics(
+        verdict=WARN,
+        min_pairwise_l2=metrics.min_pairwise_l2,
+        mean_pairwise_l2=metrics.mean_pairwise_l2,
+        max_pairwise_l2=metrics.max_pairwise_l2,
+        endpoint_spread_l2=metrics.endpoint_spread_l2,
+        mean_per_dim_variance=metrics.mean_per_dim_variance,
+        gripper_command_variance=metrics.gripper_command_variance,
+        candidate_count=metrics.candidate_count,
+        rationale=(
+            "synthetic candidate diversity smoke only: runpod-libero actual adapter applies configured candidates, "
+            "but does not yet prove SmolVLA policy-generated candidate chunk diversity."
+        ),
     )
 
 
@@ -534,17 +557,40 @@ def build_libero_risk_probe_rollout(
             policy.reset()
         rollout_seed = seeds if seeds is not None else [seed]
         introspection = inspect_actual_env(env)
+        clone_handle = find_sim_clone_handle(env)
         selected = select_actual_probe_candidates(candidates)
         candidate_results: dict[str, dict[str, Any]] = {}
         for candidate in selected:
-            committed = apply_candidate_to_env(env, candidate, rollout_seed, max_steps, np)
-            clone = apply_candidate_to_env(env, candidate, rollout_seed, max_steps, np)
+            start_observation, start_info = env.reset(seed=rollout_seed)
+            start_state = capture_sim_state(clone_handle)
+            committed = apply_candidate_to_env(
+                env,
+                candidate,
+                rollout_seed,
+                max_steps,
+                np,
+                reset_before=False,
+                initial_observation=start_observation,
+                initial_info=start_info,
+            )
+            restore_result = restore_sim_state(clone_handle, start_state)
+            clone = apply_candidate_to_env(
+                env,
+                candidate,
+                rollout_seed,
+                max_steps,
+                np,
+                reset_before=not restore_result["restored"],
+                initial_observation=start_observation if restore_result["restored"] else None,
+                initial_info=start_info if restore_result["restored"] else None,
+            )
             state_l2 = l2(committed["state_vector"], clone["state_vector"]) if committed["state_vector"] and clone["state_vector"] else 0.0
             image_mse, image_mae = image_errors_from_vectors(committed["image_vector"], clone["image_vector"])
             success_delta = abs(committed["success_proxy"] - clone["success_proxy"])
             candidate_results[candidate.candidate_id] = {
                 "committed": committed,
                 "clone_or_imagination": clone,
+                "snapshot_restore": restore_result,
                 "state_l2": round(state_l2, 12),
                 "image_mse": round(image_mse, 12),
                 "image_mae": round(image_mae, 12),
@@ -559,12 +605,29 @@ def build_libero_risk_probe_rollout(
         clone_candidate = selected[-1]
         clone_record = candidate_results[clone_candidate.candidate_id]
         exact_clone_available = bool(introspection.get("exact_state_clone_available"))
-        clone_verdict = PASS if exact_clone_available and clone_record["state_l2"] == 0.0 and clone_record["image_mse"] == 0.0 else BLOCKED
+        restored_exact_state = bool(clone_record["snapshot_restore"].get("restored"))
+        clone_verdict = (
+            PASS
+            if exact_clone_available
+            and restored_exact_state
+            and clone_record["state_l2"] == 0.0
+            and clone_record["image_mse"] == 0.0
+            else BLOCKED
+        )
         clone_rationale = (
             "Actual LIBERO exact state clone/replay matched for the selected candidate."
             if clone_verdict == PASS
-            else "Actual LIBERO exact simulator state clone API was not confirmed; deterministic seed replay evidence was recorded but is not a clone-fidelity pass."
+            else (
+                "Actual LIBERO exact simulator state clone API was not restored for the selected candidate; "
+                "deterministic seed replay evidence was recorded but is not a clone-fidelity pass."
+            )
         )
+        clone_restore_evidence = {
+            "selected_candidate_id": clone_candidate.candidate_id,
+            "snapshot_restored": restored_exact_state,
+            "snapshot_source": clone_record["snapshot_restore"].get("path", "unavailable"),
+            "restore_error": clone_record["snapshot_restore"].get("reason"),
+        }
         outcomes = {
             candidate_id: {
                 "success_proxy": record["committed"]["success_proxy"],
@@ -581,6 +644,7 @@ def build_libero_risk_probe_rollout(
             "introspection": introspection,
             "candidate_results": candidate_results,
             "outcomes": outcomes,
+            "clone_restore_evidence": clone_restore_evidence,
             "clone_fidelity": asdict(
                 CloneFidelityMetrics(
                     verdict=clone_verdict,
@@ -624,9 +688,23 @@ def select_actual_probe_candidates(candidates: list[ActionChunkCandidate]) -> li
     return result or candidates[:1]
 
 
-def apply_candidate_to_env(env: Any, candidate: ActionChunkCandidate, seed_value: Any, max_steps: int, np_module: Any) -> dict[str, Any]:
-    observation, reset_info = env.reset(seed=seed_value)
-    info: Any = reset_info
+def apply_candidate_to_env(
+    env: Any,
+    candidate: ActionChunkCandidate,
+    seed_value: Any,
+    max_steps: int,
+    np_module: Any,
+    *,
+    reset_before: bool = True,
+    initial_observation: Any = None,
+    initial_info: Any = None,
+) -> dict[str, Any]:
+    if reset_before:
+        observation, reset_info = env.reset(seed=seed_value)
+        info: Any = reset_info
+    else:
+        observation = initial_observation
+        info = initial_info if initial_info is not None else {}
     reward: Any = 0.0
     terminated: Any = False
     truncated: Any = False
@@ -638,14 +716,22 @@ def apply_candidate_to_env(env: Any, candidate: ActionChunkCandidate, seed_value
     state_vector, state_source = extract_state_vector(env, observation, info)
     image_vector, image_source = extract_image_vector(observation)
     success_proxy, success_source = extract_success_proxy(info, reward, state_vector)
+    privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
+    privileged_success = extract_privileged_success_proxy(env)
+    if privileged_success[1] != "unavailable" and success_source == "state_norm_proxy":
+        success_proxy, success_source = privileged_success
     return {
         "candidate_id": candidate.candidate_id,
         "state_vector": state_vector,
         "state_source": state_source,
+        "privileged_state_vector": privileged_state_vector[:64],
+        "privileged_state_source": privileged_state_source,
         "image_vector": image_vector,
         "image_source": image_source,
         "success_proxy": success_proxy,
         "success_proxy_source": success_source,
+        "privileged_success_proxy": privileged_success[0],
+        "privileged_success_proxy_source": privileged_success[1],
         "info_summary": summarize_value(info),
     }
 
@@ -667,10 +753,18 @@ def inspect_actual_env(env: Any) -> dict[str, Any]:
             call_probe[name] = {"error": type(exc).__name__, "message": str(exc)[:300]}
     attr_names = sorted(name for name in dir(env) if any(part in name.lower() for part in ("sim", "state", "env", "object")))[:150]
     internal = inspect_internal_sim(env)
+    privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
+    privileged_success = extract_privileged_success_proxy(env)
     exact_clone_available = bool(internal.get("sim_get_state_available") and internal.get("sim_set_state_available"))
-    privileged_state_available = exact_clone_available or any(
+    call_privileged_available = any(
         not isinstance(call_probe.get(name), dict) or "error" not in call_probe.get(name, {})
         for name in ("get_sim_state", "get_state", "get_object_state")
+    )
+    privileged_state_available = bool(
+        exact_clone_available
+        or call_privileged_available
+        or privileged_state_vector
+        or privileged_success[1] != "unavailable"
     )
     return {
         "env_type": f"{type(env).__module__}.{type(env).__name__}",
@@ -680,40 +774,161 @@ def inspect_actual_env(env: Any) -> dict[str, Any]:
         "internal_sim": internal,
         "exact_state_clone_available": exact_clone_available,
         "privileged_state_available": privileged_state_available,
+        "privileged_state_source": privileged_state_source,
+        "privileged_state_preview": privileged_state_vector[:24],
+        "privileged_success_proxy_source": privileged_success[1],
+        "privileged_success_proxy": privileged_success[0],
     }
 
 
 def inspect_internal_sim(env: Any) -> dict[str, Any]:
-    try:
-        inner = env.envs[0]
-    except Exception as exc:  # noqa: BLE001
-        return {"error": type(exc).__name__, "message": str(exc)[:300]}
-    candidates = []
-    for root in (inner, getattr(inner, "_env", None)):
-        if root is None:
-            continue
-        for path in ("sim", "env.sim", "env.env.sim", "env.env.env.sim"):
-            current = root
-            try:
-                for part in path.split("."):
-                    current = getattr(current, part)
-                candidates.append((path, current))
-            except Exception:  # noqa: BLE001
-                continue
-    if not candidates:
+    nodes = traverse_env_object_graph(env)
+    sim_candidates = [
+        node
+        for node in nodes
+        if has_callable(node["object"], "get_state") and has_callable(node["object"], "set_state")
+    ]
+    interesting = [
+        {
+            "path": node["path"],
+            "type": object_type_name(node["object"]),
+            "has_sim": hasattr(node["object"], "sim"),
+            "has_check_success": has_callable(node["object"], "check_success") or has_callable(node["object"], "_check_success"),
+            "has_reward": has_callable(node["object"], "reward"),
+        }
+        for node in nodes[:80]
+    ]
+    if not sim_candidates:
         return {
-            "inner_type": f"{type(inner).__module__}.{type(inner).__name__}",
+            "root_type": object_type_name(env),
+            "visited_count": len(nodes),
             "sim_get_state_available": False,
             "sim_set_state_available": False,
+            "candidate_paths": interesting,
         }
-    path, sim = candidates[0]
+    node = sim_candidates[0]
+    sim = node["object"]
     return {
-        "inner_type": f"{type(inner).__module__}.{type(inner).__name__}",
-        "sim_path": path,
-        "sim_type": f"{type(sim).__module__}.{type(sim).__name__}",
+        "root_type": object_type_name(env),
+        "visited_count": len(nodes),
+        "sim_path": node["path"],
+        "sim_type": object_type_name(sim),
         "sim_get_state_available": hasattr(sim, "get_state"),
         "sim_set_state_available": hasattr(sim, "set_state"),
+        "sim_forward_available": has_callable(sim, "forward"),
+        "candidate_paths": interesting,
     }
+
+
+def traverse_env_object_graph(root: Any, *, max_depth: int = 7, max_nodes: int = 240) -> list[dict[str, Any]]:
+    relation_names = (
+        "envs",
+        "_env",
+        "env",
+        "unwrapped",
+        "gym",
+        "venv",
+        "sim",
+        "model",
+        "data",
+        "task",
+        "robots",
+        "robot",
+        "arena",
+        "objects",
+        "object",
+        "obj",
+    )
+    queue: list[tuple[str, Any, int]] = [("root", root, 0)]
+    seen: set[int] = set()
+    nodes: list[dict[str, Any]] = []
+    while queue and len(nodes) < max_nodes:
+        path, value, depth = queue.pop(0)
+        if value is None:
+            continue
+        obj_id = id(value)
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+        nodes.append({"path": path, "object": value})
+        if depth >= max_depth or is_scalar_like(value):
+            continue
+        for child_path, child in iter_known_children(value, relation_names):
+            queue.append((f"{path}.{child_path}", child, depth + 1))
+    return nodes
+
+
+def iter_known_children(value: Any, relation_names: tuple[str, ...]) -> list[tuple[str, Any]]:
+    children: list[tuple[str, Any]] = []
+    for name in relation_names:
+        try:
+            child = getattr(value, name)
+        except Exception:  # noqa: BLE001
+            continue
+        children.append((name, child))
+    if isinstance(value, dict):
+        for key, child in list(value.items())[:30]:
+            if any(token in str(key).lower() for token in ("env", "sim", "state", "object", "robot", "task")):
+                children.append((f"[{key!r}]", child))
+    if isinstance(value, (list, tuple)):
+        for index, child in enumerate(value[:16]):
+            children.append((f"[{index}]", child))
+    return children
+
+
+def is_scalar_like(value: Any) -> bool:
+    return isinstance(value, (str, bytes, int, float, bool))
+
+
+def has_callable(value: Any, name: str) -> bool:
+    try:
+        attr = getattr(value, name)
+    except Exception:  # noqa: BLE001
+        return False
+    return callable(attr)
+
+
+def object_type_name(value: Any) -> str:
+    return f"{type(value).__module__}.{type(value).__name__}"
+
+
+def find_sim_clone_handle(env: Any) -> dict[str, Any] | None:
+    for node in traverse_env_object_graph(env):
+        candidate = node["object"]
+        if has_callable(candidate, "get_state") and has_callable(candidate, "set_state"):
+            return {"path": node["path"], "sim": candidate}
+    return None
+
+
+def capture_sim_state(handle: dict[str, Any] | None) -> dict[str, Any]:
+    if not handle:
+        return {"captured": False, "reason": "sim_handle_unavailable"}
+    sim = handle["sim"]
+    try:
+        state = sim.get_state()
+        return {
+            "captured": True,
+            "path": handle["path"],
+            "state": copy.deepcopy(state),
+            "state_summary": summarize_value(state),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"captured": False, "path": handle["path"], "reason": f"{type(exc).__name__}: {str(exc)[:300]}"}
+
+
+def restore_sim_state(handle: dict[str, Any] | None, snapshot: dict[str, Any]) -> dict[str, Any]:
+    if not handle:
+        return {"restored": False, "reason": "sim_handle_unavailable"}
+    if not snapshot.get("captured"):
+        return {"restored": False, "path": handle["path"], "reason": snapshot.get("reason", "snapshot_not_captured")}
+    sim = handle["sim"]
+    try:
+        sim.set_state(snapshot["state"])
+        if has_callable(sim, "forward"):
+            sim.forward()
+        return {"restored": True, "path": handle["path"], "forward_called": has_callable(sim, "forward")}
+    except Exception as exc:  # noqa: BLE001
+        return {"restored": False, "path": handle["path"], "reason": f"{type(exc).__name__}: {str(exc)[:300]}"}
 
 
 def extract_state_vector(env: Any, observation: Any, info: Any) -> tuple[list[float], str]:
@@ -725,6 +940,9 @@ def extract_state_vector(env: Any, observation: Any, info: Any) -> tuple[list[fl
                 return vector, f"env.call({name})"
         except Exception:  # noqa: BLE001
             continue
+    privileged_vector, privileged_source = extract_privileged_state_vector(env)
+    if privileged_vector:
+        return privileged_vector, privileged_source
     vector = numeric_vector(info, limit=256)
     if vector:
         return vector, "info_numeric"
@@ -750,11 +968,99 @@ def extract_success_proxy(info: Any, reward: Any, state_vector: list[float]) -> 
             numbers = numeric_vector(value, limit=10)
             if numbers:
                 return max(0.0, min(1.0, max(numbers))), f"info.{key}"
+    privileged_score, privileged_source = extract_privileged_success_proxy_from_value(info)
+    if privileged_source != "unavailable":
+        return privileged_score, f"info.{privileged_source}"
     reward_values = numeric_vector(reward, limit=10)
     if reward_values:
         return max(0.0, min(1.0, max(reward_values))), "reward_clamped"
     if state_vector:
         return max(0.0, min(1.0, 1.0 / (1.0 + math.sqrt(sum(value * value for value in state_vector[:8]))))), "state_norm_proxy"
+    return 0.0, "unavailable"
+
+
+def extract_privileged_state_vector(env: Any) -> tuple[list[float], str]:
+    for node in traverse_env_object_graph(env):
+        value = node["object"]
+        sim_vector = extract_sim_data_vector(value)
+        if sim_vector:
+            return sim_vector, f"{node['path']}.sim_data_pose"
+        attr_vector = extract_privileged_attrs_vector(value)
+        if attr_vector:
+            return attr_vector, f"{node['path']}.privileged_attrs"
+    return [], "unavailable"
+
+
+def extract_sim_data_vector(value: Any) -> list[float]:
+    try:
+        data = getattr(value, "data")
+    except Exception:  # noqa: BLE001
+        return []
+    vectors: list[float] = []
+    for name in ("body_xpos", "site_xpos", "geom_xpos", "qpos", "qvel"):
+        try:
+            vectors.extend(numeric_vector(getattr(data, name), limit=128))
+        except Exception:  # noqa: BLE001
+            continue
+        if len(vectors) >= 256:
+            break
+    return vectors[:256]
+
+
+def extract_privileged_attrs_vector(value: Any) -> list[float]:
+    vectors: list[float] = []
+    for name in dir(value):
+        lowered = name.lower()
+        if not any(token in lowered for token in ("target", "goal", "object", "obj", "site", "body")):
+            continue
+        if name.startswith("__"):
+            continue
+        try:
+            attr = getattr(value, name)
+        except Exception:  # noqa: BLE001
+            continue
+        if callable(attr):
+            continue
+        vectors.extend(numeric_vector(attr, limit=64))
+        if len(vectors) >= 256:
+            break
+    return vectors[:256]
+
+
+def extract_privileged_success_proxy(env: Any) -> tuple[float, str]:
+    for node in traverse_env_object_graph(env):
+        value = node["object"]
+        for name in ("check_success", "_check_success", "is_success", "_is_success"):
+            if not has_callable(value, name):
+                continue
+            try:
+                score, source = extract_privileged_success_proxy_from_value(getattr(value, name)())
+                if source != "unavailable":
+                    return score, f"{node['path']}.{name}"
+            except Exception:  # noqa: BLE001
+                continue
+        if has_callable(value, "reward"):
+            try:
+                reward = value.reward()
+                numbers = numeric_vector(reward, limit=10)
+                if numbers:
+                    return max(0.0, min(1.0, max(numbers))), f"{node['path']}.reward"
+            except Exception:  # noqa: BLE001
+                continue
+    return 0.0, "unavailable"
+
+
+def extract_privileged_success_proxy_from_value(value: Any) -> tuple[float, str]:
+    for key in ("is_success", "success", "task_success", "check_success"):
+        found = find_key(value, key)
+        if found is None:
+            continue
+        numbers = numeric_vector(found, limit=10)
+        if numbers:
+            return max(0.0, min(1.0, max(numbers))), key
+    numbers = numeric_vector(value, limit=10)
+    if numbers:
+        return max(0.0, min(1.0, max(numbers))), "numeric"
     return 0.0, "unavailable"
 
 

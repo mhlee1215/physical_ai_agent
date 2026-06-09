@@ -16,12 +16,15 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     RiskProbeConfig,
     apply_candidate_to_env,
     apply_torch_transformers_import_compatibility_patch,
+    capture_sim_state,
     compute_clone_fidelity_metrics,
     compute_actual_oracle_or_proxy_metrics,
     compute_diversity_metrics,
     compute_oracle_upper_bound_metrics,
+    find_sim_clone_handle,
     generate_mock_candidates,
     inspect_actual_env,
+    restore_sim_state,
     run_risk_probes,
     simulate_mock_env,
 )
@@ -176,6 +179,87 @@ class RiskProbeTest(TestCase):
             self.assertEqual(metrics.verdict, WARN)
             self.assertIn("proxy_only", metrics.rationale)
 
+    def test_deep_internal_sim_traversal_finds_clone_restore_handle(self) -> None:
+        env = _FakeVectorRobosuiteEnv()
+        introspection = inspect_actual_env(env)
+        handle = find_sim_clone_handle(env)
+
+        self.assertTrue(introspection["exact_state_clone_available"])
+        self.assertTrue(introspection["privileged_state_available"])
+        self.assertIsNotNone(handle)
+        self.assertIn("sim", handle["path"])
+
+        snapshot = capture_sim_state(handle)
+        env.step([[0.25, 0.5, 0.75]])
+        self.assertNotEqual(env.sim.state, [0.0, 0.0, 0.0])
+        forward_calls_before_restore = env.sim.forward_calls
+        restored = restore_sim_state(handle, snapshot)
+
+        self.assertTrue(snapshot["captured"])
+        self.assertTrue(restored["restored"])
+        self.assertEqual(env.sim.state, [0.0, 0.0, 0.0])
+        self.assertEqual(env.sim.forward_calls, forward_calls_before_restore + 1)
+
+    def test_clone_rollout_uses_restored_internal_sim_state(self) -> None:
+        env = _FakeVectorRobosuiteEnv()
+        candidate = ActionChunkCandidate(
+            candidate_id="candidate_clone",
+            source="fake_robosuite",
+            action_chunk=[[0.2, 0.3, 0.4], [0.1, 0.1, 0.1]],
+            privileged_success_proxy=0.8,
+        )
+        handle = find_sim_clone_handle(env)
+        start_observation, start_info = env.reset(seed=[1201])
+        snapshot = capture_sim_state(handle)
+
+        committed = apply_candidate_to_env(
+            env,
+            candidate,
+            [1201],
+            2,
+            _FakeNumpy,
+            reset_before=False,
+            initial_observation=start_observation,
+            initial_info=start_info,
+        )
+        restored = restore_sim_state(handle, snapshot)
+        clone = apply_candidate_to_env(
+            env,
+            candidate,
+            [1201],
+            2,
+            _FakeNumpy,
+            reset_before=False,
+            initial_observation=start_observation,
+            initial_info=start_info,
+        )
+
+        self.assertTrue(restored["restored"])
+        self.assertEqual(committed["state_vector"], clone["state_vector"])
+        self.assertEqual(committed["image_vector"], clone["image_vector"])
+        self.assertIn("sim_data_pose", committed["state_source"])
+        self.assertNotEqual(committed["privileged_success_proxy_source"], "unavailable")
+
+    def test_privileged_oracle_metrics_are_not_proxy_only_when_internal_state_exists(self) -> None:
+        candidates = [
+            ActionChunkCandidate("candidate_00_policy_only", "policy", [[0.0]], 0.0, is_policy_only=True),
+            ActionChunkCandidate("candidate_01_random", "random", [[0.0]], 0.0),
+            ActionChunkCandidate("candidate_02_oracle", "oracle_fixture", [[0.0]], 0.0),
+        ]
+        outcomes = {
+            "candidate_00_policy_only": {"success_proxy": 0.1},
+            "candidate_01_random": {"success_proxy": 0.2},
+            "candidate_02_oracle": {"success_proxy": 0.9},
+        }
+        introspection = inspect_actual_env(_FakeVectorRobosuiteEnv())
+
+        metrics = compute_actual_oracle_or_proxy_metrics(candidates, outcomes, introspection)
+
+        self.assertEqual(metrics.verdict, PASS)
+        self.assertIn("oracle_available", metrics.rationale)
+        self.assertTrue(metrics.oracle_beats_policy)
+        self.assertTrue(metrics.oracle_beats_random)
+
     def test_libero_contract_writes_actionable_import_guard_blocker_without_dependencies(self) -> None:
         with TemporaryDirectory() as tmpdir:
             config = RiskProbeConfig(
@@ -234,8 +318,15 @@ class RiskProbeTest(TestCase):
                 report = run_risk_probes(config)
 
             self.assertEqual(report.status, "BLOCKED")
+            self.assertEqual(report.diversity.verdict, WARN)
+            self.assertIn("synthetic candidate diversity", report.diversity.rationale)
+            self.assertTrue(report.candidates[0]["evaluated_in_actual_adapter"])
+            self.assertFalse(report.candidates[1]["evaluated_in_actual_adapter"])
             self.assertTrue(Path(report.artifacts["oracle_scores"]).exists())
             self.assertTrue(Path(report.artifacts["html_report"]).exists())
+            oracle_svg = Path(report.artifacts["oracle_scores"]).read_text(encoding="utf-8")
+            self.assertIn("candidate_00_policy_only", oracle_svg)
+            self.assertNotIn("candidate_01", oracle_svg)
 
     def test_torch_transformers_import_compatibility_patch_adds_float8_alias(self) -> None:
         previous_torch = sys.modules.get("torch")
@@ -293,3 +384,91 @@ class _FakeActualEnv:
             "state": [self.state[:]],
             "agentview_image": [[[base, base, base], [base, base, base]]],
         }
+
+
+class _FakeVectorRobosuiteEnv:
+    num_envs = 1
+
+    def __init__(self) -> None:
+        self.sim = _FakeMuJoCoSim()
+        self.robosuite = _FakeRobosuiteEnv(self.sim)
+        self.envs = [_FakeVectorLeaf(self.robosuite)]
+
+    def reset(self, seed=None):  # noqa: ARG002
+        self.sim.set_state([0.0, 0.0, 0.0])
+        self.sim.forward()
+        return self._observation(), {"reset": True}
+
+    def step(self, action):
+        row = action[0]
+        self.sim.state = [self.sim.state[index] + float(row[index]) for index in range(3)]
+        self.sim.forward()
+        info = {"success": [self.robosuite.check_success()]}
+        reward = [1.0 if info["success"][0] else 0.0]
+        return self._observation(), reward, [False], [False], info
+
+    def call(self, name):
+        if name == "task_description":
+            return ["fake deep libero task"]
+        raise AttributeError(name)
+
+    def _observation(self):
+        base = int(max(0, min(255, sum(self.sim.state) * 80)))
+        return {
+            "state": [self.sim.state[:]],
+            "agentview_image": [[[base, base, base], [base, base, base]]],
+        }
+
+
+class _FakeVectorLeaf:
+    def __init__(self, robosuite_env) -> None:  # noqa: ANN001
+        self._env = _FakeEnvWrapper(robosuite_env)
+
+
+class _FakeEnvWrapper:
+    def __init__(self, robosuite_env) -> None:  # noqa: ANN001
+        self.unwrapped = _FakeUnwrapped(robosuite_env)
+
+
+class _FakeUnwrapped:
+    def __init__(self, robosuite_env) -> None:  # noqa: ANN001
+        self.env = robosuite_env
+
+
+class _FakeRobosuiteEnv:
+    def __init__(self, sim) -> None:  # noqa: ANN001
+        self.sim = sim
+        self.target_pos = [0.3, 0.3, 0.3]
+        self.object_pos = [0.0, 0.0, 0.0]
+
+    def check_success(self) -> bool:
+        return sum(self.sim.state) > 0.8
+
+    def reward(self) -> float:
+        return 1.0 if self.check_success() else 0.0
+
+
+class _FakeMuJoCoSim:
+    def __init__(self) -> None:
+        self.state = [0.0, 0.0, 0.0]
+        self.forward_calls = 0
+        self.data = _FakeMuJoCoData(self.state)
+
+    def get_state(self):
+        return self.state[:]
+
+    def set_state(self, state) -> None:  # noqa: ANN001
+        self.state = [float(value) for value in state]
+        self.data = _FakeMuJoCoData(self.state)
+
+    def forward(self) -> None:
+        self.forward_calls += 1
+        self.data = _FakeMuJoCoData(self.state)
+
+
+class _FakeMuJoCoData:
+    def __init__(self, state: list[float]) -> None:
+        self.body_xpos = [state[:], [value + 0.1 for value in state]]
+        self.site_xpos = [[value + 0.2 for value in state]]
+        self.qpos = state[:]
+        self.qvel = [0.0 for _ in state]
