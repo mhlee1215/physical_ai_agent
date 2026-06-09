@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class RunConfig:
     mode: str
     target: str
+    eval_method: str
     policy_path: str
     env_type: str
     task_suite: str
@@ -144,6 +145,7 @@ class RunReport:
     status: str
     mode: str
     target: str
+    eval_method: str
     env_type: str
     task_suite: str
     task_id: int | None

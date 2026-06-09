@@ -29,6 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Single entrypoint for Imagine-Then-Act chunk-selection experiments.")
     parser.add_argument("--mode", choices=("smoke", "local-dry-run", "libero", "runpod-libero"), default="smoke")
     parser.add_argument("--target", choices=("local", "runpod"), default="local")
+    parser.add_argument(
+        "--eval-method",
+        choices=("policy_only", "ita_baseline_fallback"),
+        default="ita_baseline_fallback",
+        help="Backend evaluation method. policy_only omits ITA action injection; ita_baseline_fallback preserves baseline candidate selection.",
+    )
     parser.add_argument("--policy-path", default="lerobot/smolvla_libero")
     parser.add_argument("--env-type", default=None)
     parser.add_argument("--task-suite", default=None)
@@ -101,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "mode": config.mode,
                 "target": config.target,
+                "eval_method": config.eval_method,
                 "output_dir": config.output_dir,
                 "policy_num_steps": config.policy_num_steps,
                 "policy_n_action_steps": config.policy_n_action_steps,
@@ -202,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": report.status,
             "report_path": artifacts.report_path,
             "summary_path": artifacts.summary_path,
+            "eval_method": report.eval_method,
             "selected_candidate_id": report.selected_candidate_id,
             "baseline_candidate_available": report.baseline_candidate_available,
             "baseline_candidate_selected": report.baseline_candidate_selected,

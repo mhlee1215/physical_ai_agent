@@ -186,6 +186,28 @@ PYTHONPATH=src python3 -B scripts/run_imagine_then_act.py \
   --dry-run
 ```
 
+For broader `libero_goal` breadth evaluation, avoid shell one-liners and use
+the repo-local argv-based orchestrator. It must call
+`scripts/run_imagine_then_act.py` for each actual evaluation run, execute
+`policy_only` over all requested tasks before `ita_baseline_fallback`, and
+write machine-readable `results.jsonl` plus `summary.json`:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_libero_broader_eval.py \
+  --suite libero_goal \
+  --task-ids 0-9 \
+  --seed 1201 \
+  --methods policy_only,ita_baseline_fallback \
+  --target runpod \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --output-dir _workspace/runpod_results/libero_goal_broader_seed1201 \
+  --monitor-interval 30 \
+  --early-stop-zero-at-half \
+  --json
+```
+
 ## Required Checkpoint 01 Verification
 
 Run these commands before completing checkpoint 01:

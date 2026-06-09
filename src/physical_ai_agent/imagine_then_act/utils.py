@@ -37,10 +37,12 @@ CANONICAL_INTERVENTION_MODE = "none"
 CANONICAL_POLICY_EMPTY_CAMERAS = 0
 CANONICAL_POLICY_PATH = "lerobot/smolvla_libero"
 CANONICAL_TASK_SUITE = "libero_goal"
-CANONICAL_TASK_ID = 6
 BASELINE_CANDIDATE_ID = "candidate_00_policy_only"
 DEFAULT_SELECTOR_STRATEGY = "baseline_fallback"
 DEBUG_MIN_ACTION_NORM_SELECTOR = "debug_min_action_norm"
+EVAL_METHOD_POLICY_ONLY = "policy_only"
+EVAL_METHOD_ITA_BASELINE_FALLBACK = "ita_baseline_fallback"
+SUPPORTED_EVAL_METHODS = {EVAL_METHOD_POLICY_ONLY, EVAL_METHOD_ITA_BASELINE_FALLBACK}
 
 
 def parse_candidate_seeds(raw_value: str | None, num_candidates: int, episode_seed: int) -> tuple[int, ...]:
@@ -92,6 +94,7 @@ def build_run_config(args: Any) -> RunConfig:
     config = RunConfig(
         mode=args.mode,
         target=args.target,
+        eval_method=getattr(args, "eval_method", EVAL_METHOD_ITA_BASELINE_FALLBACK),
         policy_path=args.policy_path,
         env_type=env_type,
         task_suite=task_suite,
@@ -128,6 +131,8 @@ def validate_run_config(config: RunConfig) -> list[str]:
         errors.append("chunk-steps must be > 0")
     if config.action_dim <= 0:
         errors.append("action-dim must be > 0")
+    if config.eval_method not in SUPPORTED_EVAL_METHODS:
+        errors.append("eval-method must be policy_only or ita_baseline_fallback")
     if config.policy_num_steps is not None and config.policy_num_steps <= 0:
         errors.append("policy-num-steps must be > 0 when set")
     if config.policy_n_action_steps is not None and config.policy_n_action_steps <= 0:
@@ -181,6 +186,8 @@ def build_execution_contract(config: RunConfig) -> ExecutionContract:
         config.mode,
         "--target",
         config.target,
+        "--eval-method",
+        config.eval_method,
         "--policy-path",
         config.policy_path,
         "--env-type",
@@ -227,6 +234,7 @@ def build_execution_contract(config: RunConfig) -> ExecutionContract:
         "Use one entrypoint for local smoke, local dry-run, and future RunPod benchmark execution.",
         "Pre-execution imagined outcome selection and post-execution progress checks stay separate.",
         "Judge backends are selectors only; final benchmark success must come from the environment.",
+        f"Backend evaluation method is {config.eval_method}.",
     ]
     requires_linux = config.mode in LIBERO_MODES or config.target == "runpod"
 
@@ -243,6 +251,8 @@ def build_execution_contract(config: RunConfig) -> ExecutionContract:
             "runpod-libero" if config.mode in LIBERO_MODES else config.mode,
             "--target",
             "runpod",
+            "--eval-method",
+            config.eval_method,
             "--policy-path",
             config.policy_path,
             "--env-type",
@@ -396,16 +406,21 @@ def build_backend_command_tokens(
         f"--policy.empty_cameras={CANONICAL_POLICY_EMPTY_CAMERAS}",
         f"--seed={config.episode_seed}",
         *policy_horizon_backend_tokens(config),
-        "--ita-enable",
-        "--ita-candidate-seeds",
-        ",".join(str(seed) for seed in config.candidate_seeds),
-        "--ita-num-candidates",
-        str(config.num_candidates),
-        "--ita-commit-steps",
-        str(config.chunk_steps),
-        "--ita-selector-strategy",
-        config.selector_strategy,
     ]
+    if config.eval_method == EVAL_METHOD_ITA_BASELINE_FALLBACK:
+        tokens.extend(
+            [
+                "--ita-enable",
+                "--ita-candidate-seeds",
+                ",".join(str(seed) for seed in config.candidate_seeds),
+                "--ita-num-candidates",
+                str(config.num_candidates),
+                "--ita-commit-steps",
+                str(config.chunk_steps),
+                "--ita-selector-strategy",
+                config.selector_strategy,
+            ]
+        )
     if selected_candidate_id:
         tokens.extend(["--ita-selected-candidate-id", selected_candidate_id])
     return tokens
@@ -650,10 +665,10 @@ def ensure_canonical_libero_backend_config(config: RunConfig) -> None:
         mismatches.append("env-type must be libero")
     if config.task_suite != CANONICAL_TASK_SUITE:
         mismatches.append(f"task-suite must be {CANONICAL_TASK_SUITE}")
-    if config.task_id != CANONICAL_TASK_ID:
-        mismatches.append(f"task-id must be {CANONICAL_TASK_ID}")
+    if config.task_id is None:
+        mismatches.append("task-id must be set")
     if mismatches:
-        raise ValueError("Real LIBERO backend currently supports only the canonical focused baseline: " + "; ".join(mismatches))
+        raise ValueError("Real LIBERO backend currently supports only the canonical LIBERO goal baseline family: " + "; ".join(mismatches))
 
 
 def trace_event(stage: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -871,6 +886,10 @@ def evaluate_execution_readiness(config: RunConfig) -> tuple[str, list[str], lis
     if config.dry_run:
         notes.append("Dry-run mode validated the selection pipeline contract without benchmark execution.")
         notes.append("Baseline policy-only candidate is included and selected by default unless a debug selector is requested.")
+        if config.eval_method == EVAL_METHOD_POLICY_ONLY:
+            notes.append(
+                "Policy-only dry-run still records the outer selection contract, but the real backend command omits --ita-enable."
+            )
         return "dry_run", blockers, notes
     if config.mode in LIBERO_MODES:
         if config.target == "local":
@@ -895,6 +914,8 @@ def evaluate_execution_readiness(config: RunConfig) -> tuple[str, list[str], lis
         notes.append(
             "Baseline-preserving selector defaults to candidate_00_policy_only; debug_min_action_norm is not a method selector."
         )
+        if config.eval_method == EVAL_METHOD_POLICY_ONLY:
+            notes.append("Policy-only method runs the same backend without --ita-enable.")
         if config.policy_num_steps is not None or config.policy_n_action_steps is not None:
             notes.append(
                 "Policy horizon overrides are passed through for fair baseline parity comparison only; "
@@ -982,6 +1003,7 @@ def build_run_report(
         status=report_status,
         mode=config.mode,
         target=config.target,
+        eval_method=config.eval_method,
         env_type=config.env_type,
         task_suite=config.task_suite,
         task_id=config.task_id,
@@ -1072,6 +1094,7 @@ def render_markdown(report: RunReport) -> str:
         f"- status: `{report.status}`",
         f"- mode: `{report.mode}`",
         f"- target: `{report.target}`",
+        f"- eval_method: `{report.eval_method}`",
         f"- env_type: `{report.env_type}`",
         f"- task_suite: `{report.task_suite}`",
         f"- task_id: `{report.task_id}`",

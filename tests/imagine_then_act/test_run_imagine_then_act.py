@@ -286,6 +286,44 @@ class ImagineThenActTest(TestCase):
             self.assertEqual(tokens.count("--policy.num_steps=10"), 1)
             self.assertEqual(tokens.count("--policy.n_action_steps=15"), 1)
 
+    def test_policy_only_backend_method_omits_ita_flags_and_allows_broader_task_ids(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            args = Namespace(
+                mode="runpod-libero",
+                target="runpod",
+                eval_method="policy_only",
+                policy_path="lerobot/smolvla_libero",
+                env_type=None,
+                task_suite=None,
+                task_id=0,
+                num_candidates=2,
+                candidate_seeds="1201,1202",
+                imagination_backend="sim-rollout",
+                judge_backend="heuristic",
+                post_check_backend="heuristic",
+                retry_budget=1,
+                output_dir=tmpdir,
+                dry_run=False,
+                episode_seed=1201,
+                chunk_steps=15,
+                action_dim=7,
+                policy_num_steps=10,
+                policy_n_action_steps=15,
+                instruction="move the target object toward the receptacle",
+                selector_strategy="baseline_fallback",
+            )
+
+            config = build_run_config(args)
+            artifacts = prepare_run_artifacts(config)
+            command, _env = build_real_backend_command(config, artifacts)
+
+            self.assertEqual(config.eval_method, "policy_only")
+            self.assertIn("--env.task_ids=[0]", command)
+            self.assertIn("--policy.num_steps=10", command)
+            self.assertIn("--policy.n_action_steps=15", command)
+            self.assertNotIn("--ita-enable", command)
+            self.assertNotIn("--ita-candidate-seeds", command)
+
     def test_non_dry_run_libero_modes_are_gated_to_backend_readiness(self) -> None:
         with TemporaryDirectory() as tmpdir:
             args = Namespace(
