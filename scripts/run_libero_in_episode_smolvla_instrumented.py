@@ -66,6 +66,28 @@ def main() -> None:
     parser.add_argument("--semantic-contact-threshold", type=float, default=0.06)
     parser.add_argument("--semantic-place-z-command", type=float, default=-0.2)
     parser.add_argument("--semantic-gripper-command", type=float, default=1.0)
+    parser.add_argument(
+        "--ita-enable",
+        action="store_true",
+        help="Enable Imagine-Then-Act candidate generation and selected-action execution.",
+    )
+    parser.add_argument(
+        "--ita-candidate-seeds",
+        default="",
+        help="Comma-separated candidate seeds used to sample policy action chunks from the same observation.",
+    )
+    parser.add_argument("--ita-num-candidates", type=int, default=0)
+    parser.add_argument(
+        "--ita-commit-steps",
+        type=int,
+        default=1,
+        help="Number of selected candidate actions to commit open-loop before normal policy resumes.",
+    )
+    parser.add_argument(
+        "--ita-selected-candidate-id",
+        default="",
+        help="Optional candidate id to force; default selector chooses the lowest action-norm candidate.",
+    )
     args, lerobot_args = parser.parse_known_args()
 
     args.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,6 +115,11 @@ def main() -> None:
         semantic_contact_threshold=args.semantic_contact_threshold,
         semantic_place_z_command=args.semantic_place_z_command,
         semantic_gripper_command=args.semantic_gripper_command,
+        ita_enable=args.ita_enable,
+        ita_candidate_seeds=parse_ita_candidate_seeds(args.ita_candidate_seeds),
+        ita_num_candidates=args.ita_num_candidates,
+        ita_commit_steps=args.ita_commit_steps,
+        ita_selected_candidate_id=args.ita_selected_candidate_id or None,
     )
     sys.argv = ["lerobot-eval", *lerobot_args]
     lerobot_eval.main()
@@ -118,6 +145,11 @@ def build_instrumented_rollout(
     semantic_contact_threshold: float,
     semantic_place_z_command: float,
     semantic_gripper_command: float,
+    ita_enable: bool = False,
+    ita_candidate_seeds: list[int] | None = None,
+    ita_num_candidates: int = 0,
+    ita_commit_steps: int = 1,
+    ita_selected_candidate_id: str | None = None,
 ):
     def instrumented_rollout(
         env,
@@ -155,6 +187,13 @@ def build_instrumented_rollout(
         trace_records: list[dict[str, Any]] = []
         semantic_history: list[dict[str, Any]] = []
         previous_action = None
+        ita_action_queue: list[Any] = []
+        ita_active_candidate_id: str | None = None
+        ita_selected_candidate_applied = False
+        ita_committed_action_steps = 0
+        ita_candidate_generation_source = "disabled"
+        ita_selected_action_shape: list[int] | None = None
+        ita_candidate_generation_done = False
 
         step = 0
         done = np.array([False] * env.num_envs)
@@ -187,13 +226,77 @@ def build_instrumented_rollout(
 
             observation = env_preprocessor(observation)
             observation = preprocessor(observation)
-            with torch.inference_mode():
-                action = policy.select_action(observation)
-            action = postprocessor(action)
+            ita_step_record: dict[str, Any] = {
+                "enabled": bool(ita_enable),
+                "action_source": "normal_policy",
+                "selected_candidate_id": None,
+                "selected_candidate_applied": False,
+                "candidate_generation_source": "disabled" if not ita_enable else None,
+                "candidate_seeds": normalize_ita_candidate_seeds(
+                    ita_candidate_seeds,
+                    ita_num_candidates,
+                )
+                if ita_enable
+                else [],
+                "candidate_count": 0,
+                "committed_action_steps_count": ita_committed_action_steps,
+                "selected_action_shape": None,
+                "limitation": None,
+            }
+            if ita_enable and not ita_candidate_generation_done:
+                decision = build_ita_candidate_decision(
+                    policy=policy,
+                    observation=observation,
+                    postprocessor=postprocessor,
+                    env_postprocessor=env_postprocessor,
+                    action_key=ACTION,
+                    torch_module=torch,
+                    numpy_module=np,
+                    candidate_seeds=ita_candidate_seeds,
+                    num_candidates=ita_num_candidates,
+                    commit_steps=ita_commit_steps,
+                    forced_candidate_id=ita_selected_candidate_id,
+                )
+                ita_action_queue = list(decision["selected_actions"])
+                ita_active_candidate_id = decision["selected_candidate_id"]
+                ita_candidate_generation_source = str(decision["candidate_generation_source"])
+                ita_selected_action_shape = list(decision["selected_action_shape"])
+                ita_candidate_generation_done = True
+                ita_step_record.update(
+                    {
+                        "candidate_generation_source": decision["candidate_generation_source"],
+                        "candidate_count": decision["candidate_count"],
+                        "candidates": decision["candidates"],
+                        "selected_candidate_id": decision["selected_candidate_id"],
+                        "selected_action_shape": decision["selected_action_shape"],
+                        "limitation": decision["limitation"],
+                    }
+                )
 
-            action_transition = {ACTION: action}
-            action_transition = env_postprocessor(action_transition)
-            action = action_transition[ACTION]
+            if ita_enable and ita_action_queue:
+                action = ita_action_queue.pop(0)
+                ita_selected_candidate_applied = True
+                ita_committed_action_steps += 1
+                ita_step_record.update(
+                    {
+                        "action_source": "ita_selected_candidate",
+                        "selected_candidate_id": ita_active_candidate_id,
+                        "selected_candidate_applied": True,
+                        "committed_action_steps_count": ita_committed_action_steps,
+                        "remaining_selected_actions": len(ita_action_queue),
+                        "selected_action_shape": _shape_list(action),
+                    }
+                )
+                if not ita_action_queue:
+                    policy.reset()
+            else:
+                with torch.inference_mode():
+                    action = policy.select_action(observation)
+                action = postprocessor(action)
+
+                action_transition = {ACTION: action}
+                action_transition = env_postprocessor(action_transition)
+                action = action_transition[ACTION]
             policy_reset_reselected = False
 
             pre_intervention_action_norm = float(torch.linalg.vector_norm(action).item())
@@ -315,6 +418,7 @@ def build_instrumented_rollout(
                     "intervention_type": intervention_type,
                     "policy_reset_reselected": policy_reset_reselected,
                     "semantic_state": semantic_state,
+                    "ita": ita_step_record,
                 }
             )
 
@@ -370,6 +474,18 @@ def build_instrumented_rollout(
                         "verifier_trigger_count": sum(1 for record in trace_records if record["verifier_triggered"]),
                         "intervention_count": sum(1 for record in trace_records if record["intervention_type"]),
                         "success": bool(any(any(record["successes"]) for record in trace_records)),
+                        "ita_enabled": bool(ita_enable),
+                        "ita_candidate_generation_source": ita_candidate_generation_source,
+                        "ita_candidate_seeds": normalize_ita_candidate_seeds(
+                            ita_candidate_seeds,
+                            ita_num_candidates,
+                        )
+                        if ita_enable
+                        else [],
+                        "ita_selected_candidate_id": ita_active_candidate_id,
+                        "ita_selected_action_shape": ita_selected_action_shape,
+                        "ita_committed_action_steps": ita_committed_action_steps,
+                        "selected_candidate_applied": bool(ita_selected_candidate_applied),
                     },
                     sort_keys=True,
                 )
@@ -383,6 +499,190 @@ def build_instrumented_rollout(
         return ret
 
     return instrumented_rollout
+
+
+def parse_ita_candidate_seeds(raw_value: str) -> list[int]:
+    if not raw_value.strip():
+        return []
+    return [int(part.strip()) for part in raw_value.split(",") if part.strip()]
+
+
+def normalize_ita_candidate_seeds(candidate_seeds: list[int] | None, num_candidates: int) -> list[int]:
+    seeds = list(candidate_seeds or [])
+    if num_candidates <= 0:
+        return seeds
+    if not seeds:
+        seeds = list(range(num_candidates))
+    while len(seeds) < num_candidates:
+        seeds.append(seeds[-1] + 1)
+    return seeds[:num_candidates]
+
+
+def build_ita_candidate_decision(
+    *,
+    policy: Any,
+    observation: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    torch_module: Any,
+    numpy_module: Any,
+    candidate_seeds: list[int] | None,
+    num_candidates: int,
+    commit_steps: int,
+    forced_candidate_id: str | None = None,
+) -> dict[str, Any]:
+    seeds = normalize_ita_candidate_seeds(candidate_seeds, num_candidates)
+    if not seeds:
+        seeds = [0]
+    commit_steps = max(1, int(commit_steps))
+    candidates = []
+    for index, seed in enumerate(seeds):
+        candidate_id = f"candidate_{index + 1:02d}"
+        set_ita_policy_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+        policy.reset()
+        candidate = sample_policy_candidate_chunk(
+            policy=policy,
+            observation=observation,
+            postprocessor=postprocessor,
+            env_postprocessor=env_postprocessor,
+            action_key=action_key,
+            torch_module=torch_module,
+            commit_steps=commit_steps,
+        )
+        candidate.update({"candidate_id": candidate_id, "seed": seed})
+        candidates.append(candidate)
+    selected = choose_ita_candidate(candidates, forced_candidate_id)
+    selected_actions = list(selected["actions"])
+    return {
+        "candidate_generation_source": selected["source"],
+        "candidate_count": len(candidates),
+        "candidates": [
+            {
+                "candidate_id": candidate["candidate_id"],
+                "seed": candidate["seed"],
+                "source": candidate["source"],
+                "action_shape": candidate["action_shape"],
+                "score": candidate["score"],
+                "limitation": candidate["limitation"],
+            }
+            for candidate in candidates
+        ],
+        "selected_candidate_id": selected["candidate_id"],
+        "selected_action_shape": selected["action_shape"],
+        "selected_actions": selected_actions,
+        "limitation": selected["limitation"],
+    }
+
+
+def sample_policy_candidate_chunk(
+    *,
+    policy: Any,
+    observation: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    torch_module: Any,
+    commit_steps: int,
+) -> dict[str, Any]:
+    limitation = None
+    with torch_module.inference_mode():
+        if hasattr(policy, "predict_action_chunk"):
+            raw_chunk = policy.predict_action_chunk(clone_policy_observation(observation))
+            source = f"{getattr(policy, 'name', 'policy')}.predict_action_chunk"
+        else:
+            raw_action = policy.select_action(clone_policy_observation(observation))
+            raw_chunk = raw_action.unsqueeze(1) if hasattr(raw_action, "unsqueeze") else [raw_action]
+            source = f"{getattr(policy, 'name', 'policy')}.select_action"
+            limitation = "Policy does not expose predict_action_chunk; ITA MVP used a one-step selected action."
+    actions = extract_env_action_sequence(
+        raw_chunk=raw_chunk,
+        postprocessor=postprocessor,
+        env_postprocessor=env_postprocessor,
+        action_key=action_key,
+        commit_steps=commit_steps,
+    )
+    return {
+        "source": source,
+        "actions": actions,
+        "action_shape": _shape_list(actions[0]) if actions else [],
+        "score": score_ita_action_sequence(actions),
+        "limitation": limitation,
+    }
+
+
+def extract_env_action_sequence(
+    *,
+    raw_chunk: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    commit_steps: int,
+) -> list[Any]:
+    actions = []
+    chunk_steps = int(raw_chunk.shape[1]) if hasattr(raw_chunk, "shape") and len(raw_chunk.shape) >= 3 else 1
+    for index in range(min(commit_steps, chunk_steps)):
+        if chunk_steps == 1 and not (hasattr(raw_chunk, "shape") and len(raw_chunk.shape) >= 3):
+            raw_step = raw_chunk
+        else:
+            raw_step = raw_chunk[:, index, :]
+        action = postprocessor(raw_step)
+        action_transition = {action_key: action}
+        action_transition = env_postprocessor(action_transition)
+        actions.append(action_transition[action_key])
+    return actions
+
+
+def choose_ita_candidate(candidates: list[dict[str, Any]], forced_candidate_id: str | None = None) -> dict[str, Any]:
+    if not candidates:
+        raise ValueError("ITA candidate generation produced no candidates")
+    if forced_candidate_id:
+        for candidate in candidates:
+            if candidate["candidate_id"] == forced_candidate_id:
+                return candidate
+        raise ValueError(f"forced ITA candidate id not found: {forced_candidate_id}")
+    return min(candidates, key=lambda candidate: (candidate["score"], candidate["candidate_id"]))
+
+
+def score_ita_action_sequence(actions: list[Any]) -> float:
+    values = []
+    for action in actions:
+        if hasattr(action, "detach"):
+            action = action.detach()
+        if hasattr(action, "to"):
+            action = action.to("cpu")
+        if hasattr(action, "numpy"):
+            action = action.numpy()
+        if hasattr(action, "tolist"):
+            action = action.tolist()
+        values.extend(_flatten_numeric(action))
+    return sum(abs(value) for value in values) / max(len(values), 1)
+
+
+def set_ita_policy_seed(seed: int, *, numpy_module: Any, torch_module: Any) -> None:
+    import random
+
+    random.seed(seed)
+    if hasattr(numpy_module, "random") and hasattr(numpy_module.random, "seed"):
+        numpy_module.random.seed(seed)
+    if hasattr(torch_module, "manual_seed"):
+        torch_module.manual_seed(seed)
+    cuda = getattr(torch_module, "cuda", None)
+    if cuda is not None and hasattr(cuda, "manual_seed_all"):
+        try:
+            cuda.manual_seed_all(seed)
+        except Exception:  # noqa: BLE001 - CUDA may be unavailable in CPU-only jobs.
+            pass
+
+
+def clone_policy_observation(observation: Any) -> Any:
+    cloned: dict[str, Any] = {}
+    for key, value in observation.items():
+        if hasattr(value, "detach") and hasattr(value, "clone"):
+            cloned[key] = value.detach().clone()
+        else:
+            cloned[key] = deepcopy(value)
+    return cloned
 
 
 def should_trigger_verifier(
@@ -669,6 +969,28 @@ def _tolist(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return repr(value)
+
+
+def _shape_list(value: Any) -> list[int]:
+    shape = getattr(value, "shape", None)
+    if shape is not None:
+        return [int(item) for item in shape]
+    if isinstance(value, list):
+        if value and isinstance(value[0], list):
+            return [len(value), len(value[0])]
+        return [len(value)]
+    return []
+
+
+def _flatten_numeric(value: Any) -> list[float]:
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, (list, tuple)):
+        values: list[float] = []
+        for item in value:
+            values.extend(_flatten_numeric(item))
+        return values
+    return []
 
 
 if __name__ == "__main__":

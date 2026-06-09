@@ -328,9 +328,10 @@ def build_backend_command_tokens(
     eval_logs_dir: str,
     python_bin: str,
     script_path: str | None = None,
+    selected_candidate_id: str | None = None,
 ) -> list[str]:
     runner_path = script_path or str(REPO_ROOT / "scripts" / "run_libero_in_episode_smolvla_instrumented.py")
-    return [
+    tokens = [
         python_bin,
         "-B",
         runner_path,
@@ -358,10 +359,24 @@ def build_backend_command_tokens(
         "--env.max_parallel_tasks=1",
         f"--policy.empty_cameras={CANONICAL_POLICY_EMPTY_CAMERAS}",
         f"--seed={config.episode_seed}",
+        "--ita-enable",
+        "--ita-candidate-seeds",
+        ",".join(str(seed) for seed in config.candidate_seeds),
+        "--ita-num-candidates",
+        str(config.num_candidates),
+        "--ita-commit-steps",
+        str(config.chunk_steps),
     ]
+    if selected_candidate_id:
+        tokens.extend(["--ita-selected-candidate-id", selected_candidate_id])
+    return tokens
 
 
-def build_real_backend_command(config: RunConfig, artifacts: RunArtifacts) -> tuple[list[str], dict[str, str]]:
+def build_real_backend_command(
+    config: RunConfig,
+    artifacts: RunArtifacts,
+    selected_candidate_id: str | None = None,
+) -> tuple[list[str], dict[str, str]]:
     ensure_canonical_libero_backend_config(config)
     eval_logs_dir = Path(artifacts.benchmark_eval_info_path).parent
     command = build_backend_command_tokens(
@@ -369,6 +384,7 @@ def build_real_backend_command(config: RunConfig, artifacts: RunArtifacts) -> tu
         trace_path=artifacts.benchmark_trace_path,
         eval_logs_dir=str(eval_logs_dir),
         python_bin=sys.executable,
+        selected_candidate_id=selected_candidate_id,
     )
     env = {
         "PYTHONPATH": str(REPO_ROOT / "src"),
@@ -441,6 +457,7 @@ def load_benchmark_result(
     summary = read_rollout_summary(trace_path)
     action_steps = int(summary.get("action_step_count", 0)) if summary else None
     trace_success = bool(summary.get("success")) if summary and "success" in summary else None
+    ita_trace = read_ita_application_summary(trace_path)
 
     if eval_info_path.exists():
         payload = json.loads(eval_info_path.read_text(encoding="utf-8"))
@@ -450,7 +467,7 @@ def load_benchmark_result(
         success = trace_success if trace_success is not None else pc_success > 0.0
         rationale = (
             "Real LIBERO backend executed via the instrumented SmolVLA baseline path. "
-            "Final success came from benchmark artifacts, while imagined candidate selection remains analysis-only."
+            "Final success came from benchmark artifacts; selected_candidate_applied is read from rollout trace action-source records."
         )
         result = BenchmarkResult(
             available=True,
@@ -466,7 +483,11 @@ def load_benchmark_result(
             action_steps=action_steps,
             seed=config.episode_seed,
             exit_code=exit_code,
-            selected_candidate_applied=False,
+            selected_candidate_applied=ita_trace["selected_candidate_applied"],
+            selected_candidate_id=ita_trace["selected_candidate_id"],
+            selected_action_shape=ita_trace["selected_action_shape"],
+            committed_action_steps=ita_trace["committed_action_steps"],
+            candidate_generation_source=ita_trace["candidate_generation_source"],
         )
     else:
         result = BenchmarkResult(
@@ -486,7 +507,11 @@ def load_benchmark_result(
             action_steps=action_steps,
             seed=config.episode_seed,
             exit_code=exit_code,
-            selected_candidate_applied=False,
+            selected_candidate_applied=ita_trace["selected_candidate_applied"],
+            selected_candidate_id=ita_trace["selected_candidate_id"],
+            selected_action_shape=ita_trace["selected_action_shape"],
+            committed_action_steps=ita_trace["committed_action_steps"],
+            candidate_generation_source=ita_trace["candidate_generation_source"],
         )
 
     write_json(Path(artifacts.benchmark_result_path), asdict(result))
@@ -503,6 +528,42 @@ def read_rollout_summary(trace_path: Path) -> dict[str, Any]:
         if record.get("event") == "rollout_summary":
             return record
     return {}
+
+
+def read_ita_application_summary(trace_path: Path) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "selected_candidate_applied": False,
+        "selected_candidate_id": None,
+        "selected_action_shape": None,
+        "committed_action_steps": 0,
+        "candidate_generation_source": None,
+    }
+    if not trace_path.exists():
+        return result
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if record.get("event") == "rollout_summary":
+            result["selected_candidate_applied"] = bool(record.get("selected_candidate_applied", False))
+            result["selected_candidate_id"] = record.get("ita_selected_candidate_id")
+            result["selected_action_shape"] = record.get("ita_selected_action_shape")
+            result["committed_action_steps"] = int(record.get("ita_committed_action_steps", 0) or 0)
+            result["candidate_generation_source"] = record.get("ita_candidate_generation_source")
+            continue
+        ita = record.get("ita", {}) if isinstance(record, dict) else {}
+        if ita.get("selected_candidate_applied") is True or ita.get("action_source") == "ita_selected_candidate":
+            result["selected_candidate_applied"] = True
+            result["selected_candidate_id"] = ita.get("selected_candidate_id") or result["selected_candidate_id"]
+            result["selected_action_shape"] = ita.get("selected_action_shape") or result["selected_action_shape"]
+            result["candidate_generation_source"] = (
+                ita.get("candidate_generation_source") or result["candidate_generation_source"]
+            )
+            result["committed_action_steps"] = max(
+                result["committed_action_steps"],
+                int(ita.get("committed_action_steps_count", 0) or 0),
+            )
+    return result
 
 
 def ensure_canonical_libero_backend_config(config: RunConfig) -> None:
@@ -678,13 +739,13 @@ def evaluate_execution_readiness(config: RunConfig) -> tuple[str, list[str], lis
             )
             notes.append("--target runpod shapes the command contract; it does not remotely execute from this Mac.")
             return "blocked_runpod_runtime", blockers, notes
-        notes.append("Real backend adapter reuses the instrumented SmolVLA baseline runner and reads final success from benchmark artifacts.")
+        notes.append("Real backend adapter reuses the instrumented SmolVLA runner and reads final success from benchmark artifacts.")
         notes.append(
             "Canonical focused baseline settings stay fixed at policy lerobot/smolvla_libero, libero_goal task 6, "
             "camera1/camera2 mapping, one episode, batch size 1, async false, max parallel tasks 1, and policy.empty_cameras=0."
         )
         notes.append(
-            "The current adapter validates environment-success plumbing first; imagined candidate selection is recorded but not yet committed to env actions."
+            "ITA candidate chunks are sampled from the real policy action path and the selected action is committed through env.step."
         )
         return "benchmark_backend_ready", blockers, notes
     notes.append("Non-LIBERO local modes are interface-contract runs, not benchmark evaluations.")
@@ -730,6 +791,10 @@ def build_run_report(
             seed=None,
             exit_code=None,
             selected_candidate_applied=False,
+            selected_candidate_id=None,
+            selected_action_shape=None,
+            committed_action_steps=0,
+            candidate_generation_source=None,
         )
     execution_readiness = "blocked" if blockers else "passed"
     if config.dry_run:
@@ -747,6 +812,13 @@ def build_run_report(
     elif benchmark_result.exit_code not in (None, 0) and not benchmark_result.available:
         report_status = "blocked"
 
+    report_selected_candidate_id = benchmark_result.selected_candidate_id or selected_candidate.candidate_id
+    if benchmark_result.candidate_generation_source:
+        report_stage_candidate_generation = benchmark_result.candidate_generation_source
+    elif config.mode in LIBERO_MODES:
+        report_stage_candidate_generation = "backend_policy_generation_pending"
+    else:
+        report_stage_candidate_generation = "deterministic_seeded_chunk_generator"
     return RunReport(
         status=report_status,
         mode=config.mode,
@@ -757,7 +829,7 @@ def build_run_report(
         policy_path=config.policy_path,
         dry_run=config.dry_run,
         candidate_count=config.num_candidates,
-        selected_candidate_id=selected_candidate.candidate_id,
+        selected_candidate_id=report_selected_candidate_id,
         selected_score=selected_candidate.score,
         benchmark_success_available=benchmark_result.available,
         benchmark_success=benchmark_result.success,
@@ -765,7 +837,7 @@ def build_run_report(
         blockers=blockers,
         notes=notes,
         stage_backends={
-            "candidate_generation": "deterministic_seeded_chunk_generator",
+            "candidate_generation": report_stage_candidate_generation,
             "imagination": config.imagination_backend,
             "judge": config.judge_backend,
             "post_check": config.post_check_backend,
@@ -857,6 +929,10 @@ def render_markdown(report: RunReport) -> str:
         f"- Benchmark eval_seconds: `{report.benchmark_result.eval_seconds}`",
         f"- Benchmark action_steps: `{report.benchmark_result.action_steps}`",
         f"- Selected candidate applied to benchmark actions: `{str(report.benchmark_result.selected_candidate_applied).lower()}`",
+        f"- Benchmark selected_candidate_id: `{report.benchmark_result.selected_candidate_id}`",
+        f"- Benchmark selected_action_shape: `{report.benchmark_result.selected_action_shape}`",
+        f"- Benchmark committed_action_steps: `{report.benchmark_result.committed_action_steps}`",
+        f"- Benchmark candidate_generation_source: `{report.benchmark_result.candidate_generation_source}`",
         "",
         "## Commands",
         "",
