@@ -1,0 +1,889 @@
+from __future__ import annotations
+
+import json
+import math
+import os
+import random
+import shlex
+import subprocess
+import sys
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from physical_ai_agent.imagine_then_act.interfaces import (
+    ActionCandidate,
+    BenchmarkResult,
+    ExecutionContract,
+    ImaginedCandidate,
+    JudgedCandidate,
+    PostCheckResult,
+    RunArtifacts,
+    RunConfig,
+    RunReport,
+    SelectionDecision,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_LOCAL_OUTPUT_ROOT = REPO_ROOT / "_workspace" / "imagine_then_act"
+DEFAULT_RUNPOD_OUTPUT_ROOT = "/workspace/physical-ai/physical_ai_agent/_workspace/runpod_results"
+RUNPOD_WORKSPACE_ROOT = Path("/workspace/physical-ai/physical_ai_agent")
+RUNPOD_BACKEND_OVERRIDE_ENV = "PHYSICAL_AI_ALLOW_RUNPOD_BACKEND"
+LIBERO_MODES = {"libero", "runpod-libero"}
+CANONICAL_LIBERO_CAMERA_NAME_MAPPING = '{"agentview_image": "camera1", "robot0_eye_in_hand_image": "camera2"}'
+CANONICAL_TRIGGER_MODE = "semantic_no_progress"
+CANONICAL_INTERVENTION_MODE = "none"
+CANONICAL_POLICY_EMPTY_CAMERAS = 0
+CANONICAL_POLICY_PATH = "lerobot/smolvla_libero"
+CANONICAL_TASK_SUITE = "libero_goal"
+CANONICAL_TASK_ID = 6
+
+
+def parse_candidate_seeds(raw_value: str | None, num_candidates: int, episode_seed: int) -> tuple[int, ...]:
+    if raw_value is None:
+        return tuple(episode_seed + index for index in range(num_candidates))
+    cleaned = [part.strip() for part in raw_value.split(",") if part.strip()]
+    if not cleaned:
+        raise ValueError("candidate-seeds must include at least one integer")
+    seeds = tuple(int(part) for part in cleaned)
+    if len(seeds) != num_candidates:
+        raise ValueError(
+            f"candidate-seeds count ({len(seeds)}) must match num-candidates ({num_candidates})"
+        )
+    return seeds
+
+
+def default_env_type(mode: str) -> str:
+    if mode in LIBERO_MODES:
+        return "libero"
+    return "mock"
+
+
+def default_task_suite(mode: str) -> str:
+    if mode in LIBERO_MODES:
+        return "libero_goal"
+    return "mock_pick_and_place"
+
+
+def default_output_dir(mode: str, target: str, task_suite: str, task_id: int | None) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    task_suffix = f"{task_suite}_task{task_id}" if task_id is not None else task_suite
+    return DEFAULT_LOCAL_OUTPUT_ROOT / f"{target}_{mode}_{task_suffix}_{timestamp}"
+
+
+def build_run_config(args: Any) -> RunConfig:
+    env_type = args.env_type or default_env_type(args.mode)
+    task_suite = args.task_suite or default_task_suite(args.mode)
+    output_dir = Path(args.output_dir) if args.output_dir else default_output_dir(
+        mode=args.mode,
+        target=args.target,
+        task_suite=task_suite,
+        task_id=args.task_id,
+    )
+    candidate_seeds = parse_candidate_seeds(
+        raw_value=args.candidate_seeds,
+        num_candidates=args.num_candidates,
+        episode_seed=args.episode_seed,
+    )
+    config = RunConfig(
+        mode=args.mode,
+        target=args.target,
+        policy_path=args.policy_path,
+        env_type=env_type,
+        task_suite=task_suite,
+        task_id=args.task_id,
+        num_candidates=args.num_candidates,
+        candidate_seeds=candidate_seeds,
+        imagination_backend=args.imagination_backend,
+        judge_backend=args.judge_backend,
+        post_check_backend=args.post_check_backend,
+        retry_budget=args.retry_budget,
+        output_dir=str(output_dir),
+        dry_run=bool(args.dry_run or args.mode in {"smoke", "local-dry-run"}),
+        episode_seed=args.episode_seed,
+        chunk_steps=args.chunk_steps,
+        action_dim=args.action_dim,
+        instruction=args.instruction,
+    )
+    errors = validate_run_config(config)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return config
+
+
+def validate_run_config(config: RunConfig) -> list[str]:
+    errors: list[str] = []
+    if config.num_candidates <= 0:
+        errors.append("num-candidates must be > 0")
+    if config.retry_budget < 0:
+        errors.append("retry-budget must be >= 0")
+    if config.chunk_steps <= 0:
+        errors.append("chunk-steps must be > 0")
+    if config.action_dim <= 0:
+        errors.append("action-dim must be > 0")
+    if config.mode == "runpod-libero" and config.target != "runpod":
+        errors.append("mode runpod-libero requires --target runpod")
+    if config.target == "runpod" and config.mode == "smoke":
+        errors.append("mode smoke is reserved for local deterministic validation")
+    if config.mode == "local-dry-run" and config.target != "local":
+        errors.append("mode local-dry-run requires --target local")
+    if config.mode in LIBERO_MODES and config.env_type != "libero":
+        errors.append("libero modes require --env-type libero")
+    if config.mode in LIBERO_MODES and config.task_id is None:
+        errors.append("libero modes require --task-id")
+    if len(config.candidate_seeds) != config.num_candidates:
+        errors.append("candidate seed count must match num-candidates")
+    return errors
+
+
+def prepare_run_artifacts(config: RunConfig) -> RunArtifacts:
+    output_dir = Path(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return RunArtifacts(
+        output_dir=str(output_dir),
+        config_path=str(output_dir / "config.json"),
+        execution_contract_path=str(output_dir / "execution_contract.json"),
+        trace_path=str(output_dir / "trace.jsonl"),
+        report_path=str(output_dir / "report.json"),
+        summary_path=str(output_dir / "summary.md"),
+        command_path=str(output_dir / "replay_command.sh"),
+        blocker_path=str(output_dir / "blocker.md"),
+        benchmark_command_path=str(output_dir / "benchmark_command.sh"),
+        benchmark_log_path=str(output_dir / "benchmark.log"),
+        benchmark_trace_path=str(output_dir / "benchmark_trace.jsonl"),
+        benchmark_eval_info_path=str(output_dir / "eval_logs" / "eval_info.json"),
+        benchmark_result_path=str(output_dir / "benchmark_result.json"),
+    )
+
+
+def build_execution_contract(config: RunConfig) -> ExecutionContract:
+    output_dir = Path(config.output_dir)
+    entrypoint = "scripts/run_imagine_then_act.py"
+    python_bin = "python3"
+    current_tokens = [
+        python_bin,
+        "-B",
+        entrypoint,
+        "--mode",
+        config.mode,
+        "--target",
+        config.target,
+        "--policy-path",
+        config.policy_path,
+        "--env-type",
+        config.env_type,
+        "--task-suite",
+        config.task_suite,
+        "--num-candidates",
+        str(config.num_candidates),
+        "--candidate-seeds",
+        ",".join(str(seed) for seed in config.candidate_seeds),
+        "--imagination-backend",
+        config.imagination_backend,
+        "--judge-backend",
+        config.judge_backend,
+        "--post-check-backend",
+        config.post_check_backend,
+        "--retry-budget",
+        str(config.retry_budget),
+        "--output-dir",
+        str(output_dir),
+        "--episode-seed",
+        str(config.episode_seed),
+        "--chunk-steps",
+        str(config.chunk_steps),
+        "--action-dim",
+        str(config.action_dim),
+        "--instruction",
+        config.instruction,
+    ]
+    if config.task_id is not None:
+        current_tokens.extend(["--task-id", str(config.task_id)])
+    if config.dry_run:
+        current_tokens.append("--dry-run")
+
+    benchmark_tokens = current_tokens.copy()
+    benchmark_command: str | None = None
+    backend_command: str | None = None
+    environment_exports: dict[str, str] = {}
+    remote_output_dir: str | None = None
+    notes = [
+        "Use one entrypoint for local smoke, local dry-run, and future RunPod benchmark execution.",
+        "Pre-execution imagined outcome selection and post-execution progress checks stay separate.",
+        "Judge backends are selectors only; final benchmark success must come from the environment.",
+    ]
+    requires_linux = config.mode in LIBERO_MODES or config.target == "runpod"
+
+    if config.target == "runpod":
+        remote_output_dir = (
+            f"{DEFAULT_RUNPOD_OUTPUT_ROOT}/imagine_then_act_{config.task_suite}_task"
+            f"{config.task_id if config.task_id is not None else 'none'}"
+        )
+        benchmark_tokens = [
+            "/root/physical-ai/envs/lerobot_py312/bin/python",
+            "-B",
+            entrypoint,
+            "--mode",
+            "runpod-libero" if config.mode in LIBERO_MODES else config.mode,
+            "--target",
+            "runpod",
+            "--policy-path",
+            config.policy_path,
+            "--env-type",
+            "libero" if config.mode in LIBERO_MODES else config.env_type,
+            "--task-suite",
+            config.task_suite,
+            "--num-candidates",
+            str(config.num_candidates),
+            "--candidate-seeds",
+            ",".join(str(seed) for seed in config.candidate_seeds),
+            "--imagination-backend",
+            config.imagination_backend,
+            "--judge-backend",
+            config.judge_backend,
+            "--post-check-backend",
+            config.post_check_backend,
+            "--retry-budget",
+            str(config.retry_budget),
+            "--output-dir",
+            remote_output_dir,
+            "--episode-seed",
+            str(config.episode_seed),
+            "--chunk-steps",
+            str(config.chunk_steps),
+            "--action-dim",
+            str(config.action_dim),
+            "--instruction",
+            config.instruction,
+        ]
+        if config.task_id is not None:
+            benchmark_tokens.extend(["--task-id", str(config.task_id)])
+        environment_exports = {
+            "LIBERO_CONFIG_PATH": "$HOME/.libero",
+            "MUJOCO_GL": "egl",
+            "HF_HOME": "/workspace/physical-ai/hf_home",
+            "TRANSFORMERS_CACHE": "/workspace/physical-ai/hf_home/transformers",
+            "HF_HUB_CACHE": "/workspace/physical-ai/hf_home/hub",
+        }
+        notes.append("RunPod execution should be performed on a committed revision and stopped after fetching results.")
+        benchmark_command = shell_command(benchmark_tokens, environment_exports, working_dir="/workspace/physical-ai/physical_ai_agent")
+        if config.mode in LIBERO_MODES:
+            backend_tokens = build_backend_command_tokens(
+                config=config,
+                trace_path=f"{remote_output_dir}/benchmark_trace.jsonl",
+                eval_logs_dir=f"{remote_output_dir}/eval_logs",
+                python_bin="/root/physical-ai/envs/lerobot_py312/bin/python",
+                script_path="scripts/run_libero_in_episode_smolvla_instrumented.py",
+            )
+            backend_command = shell_command(
+                backend_tokens,
+                environment_exports,
+                working_dir="/workspace/physical-ai/physical_ai_agent",
+            )
+    elif config.mode in LIBERO_MODES:
+        notes.append("Local LIBERO parity is tracked as a Linux or RunPod follow-up, not a Mac benchmark claim.")
+
+    return ExecutionContract(
+        entrypoint=entrypoint,
+        working_dir=str(REPO_ROOT),
+        python_bin=python_bin,
+        current_command=shell_command(current_tokens, {"PYTHONPATH": "src"}, working_dir=str(REPO_ROOT)),
+        benchmark_command=benchmark_command,
+        backend_command=backend_command,
+        environment_exports=environment_exports,
+        local_output_dir=str(output_dir),
+        remote_output_dir=remote_output_dir,
+        requires_linux=requires_linux,
+        notes=notes,
+    )
+
+
+def shell_command(tokens: list[str], env: dict[str, str], working_dir: str) -> str:
+    env_prefix = " ".join(f"{key}={value}" for key, value in env.items())
+    command = shlex.join(tokens)
+    if env_prefix:
+        return f"cd {shlex.quote(working_dir)} && {env_prefix} {command}"
+    return f"cd {shlex.quote(working_dir)} && {command}"
+
+
+def write_config_snapshot(config: RunConfig, artifacts: RunArtifacts) -> None:
+    write_json(Path(artifacts.config_path), asdict(config))
+
+
+def write_execution_contract(contract: ExecutionContract, artifacts: RunArtifacts) -> None:
+    write_json(Path(artifacts.execution_contract_path), asdict(contract))
+    command_lines = ["#!/bin/sh", "set -eu", "", contract.current_command]
+    if contract.benchmark_command:
+        command_lines.extend(["", "# Future entrypoint benchmark command", contract.benchmark_command])
+    if contract.backend_command:
+        command_lines.extend(["", "# Canonical backend command invoked by the entrypoint", contract.backend_command])
+    Path(artifacts.command_path).write_text("\n".join(command_lines) + "\n", encoding="utf-8")
+
+
+def build_backend_command_tokens(
+    *,
+    config: RunConfig,
+    trace_path: str,
+    eval_logs_dir: str,
+    python_bin: str,
+    script_path: str | None = None,
+) -> list[str]:
+    runner_path = script_path or str(REPO_ROOT / "scripts" / "run_libero_in_episode_smolvla_instrumented.py")
+    return [
+        python_bin,
+        "-B",
+        runner_path,
+        "--trace-path",
+        trace_path,
+        "--trigger-mode",
+        CANONICAL_TRIGGER_MODE,
+        "--intervention-mode",
+        CANONICAL_INTERVENTION_MODE,
+        "--semantic-min-step",
+        "220",
+        "--semantic-window",
+        "20",
+        "--semantic-progress-threshold",
+        "0.002",
+        f"--output_dir={eval_logs_dir}",
+        f"--policy.path={config.policy_path}",
+        "--env.type=libero",
+        f"--env.task={config.task_suite}",
+        f"--env.task_ids=[{config.task_id}]",
+        f"--env.camera_name_mapping={CANONICAL_LIBERO_CAMERA_NAME_MAPPING}",
+        "--eval.n_episodes=1",
+        "--eval.batch_size=1",
+        "--eval.use_async_envs=false",
+        "--env.max_parallel_tasks=1",
+        f"--policy.empty_cameras={CANONICAL_POLICY_EMPTY_CAMERAS}",
+        f"--seed={config.episode_seed}",
+    ]
+
+
+def build_real_backend_command(config: RunConfig, artifacts: RunArtifacts) -> tuple[list[str], dict[str, str]]:
+    ensure_canonical_libero_backend_config(config)
+    eval_logs_dir = Path(artifacts.benchmark_eval_info_path).parent
+    command = build_backend_command_tokens(
+        config=config,
+        trace_path=artifacts.benchmark_trace_path,
+        eval_logs_dir=str(eval_logs_dir),
+        python_bin=sys.executable,
+    )
+    env = {
+        "PYTHONPATH": str(REPO_ROOT / "src"),
+        "MUJOCO_GL": os.environ.get("MUJOCO_GL", "egl"),
+    }
+    if config.target == "runpod":
+        env["LIBERO_CONFIG_PATH"] = os.environ.get("LIBERO_CONFIG_PATH", os.path.expanduser("~/.libero"))
+        env["HF_HOME"] = os.environ.get("HF_HOME", "/workspace/physical-ai/hf_home")
+        env["TRANSFORMERS_CACHE"] = os.environ.get(
+            "TRANSFORMERS_CACHE",
+            f"{env['HF_HOME']}/transformers",
+        )
+        env["HF_HUB_CACHE"] = os.environ.get("HF_HUB_CACHE", f"{env['HF_HOME']}/hub")
+    elif "LIBERO_CONFIG_PATH" in os.environ:
+        env["LIBERO_CONFIG_PATH"] = os.environ["LIBERO_CONFIG_PATH"]
+    return command, env
+
+
+def execute_real_backend(
+    config: RunConfig,
+    artifacts: RunArtifacts,
+) -> BenchmarkResult:
+    command, env_updates = build_real_backend_command(config, artifacts)
+    environment = os.environ.copy()
+    existing_pythonpath = environment.get("PYTHONPATH")
+    if existing_pythonpath:
+        env_updates["PYTHONPATH"] = f"{env_updates['PYTHONPATH']}{os.pathsep}{existing_pythonpath}"
+    environment.update(env_updates)
+
+    command_text = shell_command(command, env_updates, working_dir=str(REPO_ROOT))
+    Path(artifacts.benchmark_command_path).write_text(
+        "\n".join(["#!/bin/sh", "set -eu", "", command_text]) + "\n",
+        encoding="utf-8",
+    )
+
+    log_path = Path(artifacts.benchmark_log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as handle:
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            env=environment,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+
+    return load_benchmark_result(
+        config=config,
+        artifacts=artifacts,
+        command_text=command_text,
+        exit_code=completed.returncode,
+    )
+
+
+def should_execute_real_backend(config: RunConfig, blockers: list[str]) -> bool:
+    return config.mode in LIBERO_MODES and not config.dry_run and not blockers
+
+
+def load_benchmark_result(
+    *,
+    config: RunConfig,
+    artifacts: RunArtifacts,
+    command_text: str,
+    exit_code: int,
+) -> BenchmarkResult:
+    eval_info_path = Path(artifacts.benchmark_eval_info_path)
+    trace_path = Path(artifacts.benchmark_trace_path)
+    summary = read_rollout_summary(trace_path)
+    action_steps = int(summary.get("action_step_count", 0)) if summary else None
+    trace_success = bool(summary.get("success")) if summary and "success" in summary else None
+
+    if eval_info_path.exists():
+        payload = json.loads(eval_info_path.read_text(encoding="utf-8"))
+        overall = payload.get("overall", {})
+        pc_success = float(overall.get("pc_success", 0.0))
+        eval_seconds = float(overall.get("eval_s", 0.0))
+        success = trace_success if trace_success is not None else pc_success > 0.0
+        rationale = (
+            "Real LIBERO backend executed via the instrumented SmolVLA baseline path. "
+            "Final success came from benchmark artifacts, while imagined candidate selection remains analysis-only."
+        )
+        result = BenchmarkResult(
+            available=True,
+            success=bool(success),
+            source="eval_info.json",
+            rationale=rationale,
+            command=command_text,
+            log_path=str(Path(artifacts.benchmark_log_path)),
+            trace_path=str(trace_path),
+            eval_info_path=str(eval_info_path),
+            pc_success=pc_success,
+            eval_seconds=eval_seconds,
+            action_steps=action_steps,
+            seed=config.episode_seed,
+            exit_code=exit_code,
+            selected_candidate_applied=False,
+        )
+    else:
+        result = BenchmarkResult(
+            available=False,
+            success=None,
+            source="command_failed",
+            rationale=(
+                "Real LIBERO backend was invoked but did not produce eval_info.json. "
+                "Inspect the benchmark log for the environment failure."
+            ),
+            command=command_text,
+            log_path=str(Path(artifacts.benchmark_log_path)),
+            trace_path=str(trace_path),
+            eval_info_path=str(eval_info_path),
+            pc_success=None,
+            eval_seconds=None,
+            action_steps=action_steps,
+            seed=config.episode_seed,
+            exit_code=exit_code,
+            selected_candidate_applied=False,
+        )
+
+    write_json(Path(artifacts.benchmark_result_path), asdict(result))
+    return result
+
+
+def read_rollout_summary(trace_path: Path) -> dict[str, Any]:
+    if not trace_path.exists():
+        return {}
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if record.get("event") == "rollout_summary":
+            return record
+    return {}
+
+
+def ensure_canonical_libero_backend_config(config: RunConfig) -> None:
+    mismatches: list[str] = []
+    if config.policy_path != CANONICAL_POLICY_PATH:
+        mismatches.append(f"policy-path must be {CANONICAL_POLICY_PATH}")
+    if config.env_type != "libero":
+        mismatches.append("env-type must be libero")
+    if config.task_suite != CANONICAL_TASK_SUITE:
+        mismatches.append(f"task-suite must be {CANONICAL_TASK_SUITE}")
+    if config.task_id != CANONICAL_TASK_ID:
+        mismatches.append(f"task-id must be {CANONICAL_TASK_ID}")
+    if mismatches:
+        raise ValueError("Real LIBERO backend currently supports only the canonical focused baseline: " + "; ".join(mismatches))
+
+
+def trace_event(stage: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "stage": stage,
+        "payload": payload,
+    }
+
+
+def generate_candidate_chunks(config: RunConfig) -> list[ActionCandidate]:
+    candidates: list[ActionCandidate] = []
+    for index, seed in enumerate(config.candidate_seeds):
+        rng = random.Random(seed)
+        chunk = []
+        for _step in range(config.chunk_steps):
+            chunk.append([round(rng.uniform(-1.0, 1.0), 4) for _dim in range(config.action_dim)])
+        flattened = [abs(value) for row in chunk for value in row]
+        summary = {
+            "mean_abs_action": round(sum(flattened) / max(1, len(flattened)), 6),
+            "first_axis_mean": round(sum(row[0] for row in chunk) / max(1, len(chunk)), 6),
+            "last_axis_mean": round(sum(row[-1] for row in chunk) / max(1, len(chunk)), 6),
+            "chunk_l2_proxy": round(math.sqrt(sum(value * value for row in chunk for value in row)), 6),
+        }
+        candidates.append(
+            ActionCandidate(
+                candidate_id=f"candidate_{index + 1:02d}",
+                seed=seed,
+                action_chunk=chunk,
+                summary=summary,
+            )
+        )
+    return candidates
+
+
+def imagine_candidates(config: RunConfig, candidates: list[ActionCandidate]) -> list[ImaginedCandidate]:
+    imagined: list[ImaginedCandidate] = []
+    for candidate in candidates:
+        mean_abs_action = candidate.summary["mean_abs_action"]
+        directional_bias = candidate.summary["first_axis_mean"] - abs(candidate.summary["last_axis_mean"]) * 0.25
+        progress = 0.0
+        alignment = 0.0
+        success_proxy = 0.0
+        if config.imagination_backend == "none":
+            rationale = "No imagined rollout; preserve candidate metadata only."
+        elif config.imagination_backend == "sim-rollout":
+            progress = clamp01(0.45 + directional_bias * 0.35)
+            alignment = clamp01(0.50 + (0.75 - mean_abs_action) * 0.30)
+            success_proxy = clamp01(progress * 0.65 + alignment * 0.35)
+            rationale = "Oracle-style placeholder rollout estimated progress from deterministic chunk statistics."
+        else:
+            progress = clamp01(0.35 + directional_bias * 0.20)
+            alignment = clamp01(0.55 + (0.60 - mean_abs_action) * 0.15)
+            success_proxy = clamp01(progress * 0.40 + alignment * 0.60)
+            rationale = "Learned-placeholder imagination used a deterministic surrogate, not a trained predictor."
+        imagined.append(
+            ImaginedCandidate(
+                candidate_id=candidate.candidate_id,
+                backend=config.imagination_backend,
+                predicted_progress=round(progress, 6),
+                predicted_alignment=round(alignment, 6),
+                predicted_success_proxy=round(success_proxy, 6),
+                rationale=rationale,
+            )
+        )
+    return imagined
+
+
+def judge_candidates(
+    config: RunConfig,
+    candidates: list[ActionCandidate],
+    imagined_candidates: list[ImaginedCandidate],
+) -> list[JudgedCandidate]:
+    candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
+    scored: list[tuple[str, float, str]] = []
+    for imagined in imagined_candidates:
+        candidate = candidate_by_id[imagined.candidate_id]
+        stability_bonus = clamp01(1.0 - candidate.summary["mean_abs_action"])
+        if config.judge_backend == "heuristic":
+            score = imagined.predicted_progress * 0.55 + imagined.predicted_alignment * 0.35 + stability_bonus * 0.10
+            rationale = "Heuristic judge weighted imagined progress, alignment, and chunk stability."
+        elif config.judge_backend == "vlm-placeholder":
+            score = imagined.predicted_alignment * 0.55 + imagined.predicted_progress * 0.30 + stability_bonus * 0.15
+            rationale = "VLM-placeholder judge emphasized subgoal-image alignment but did not produce final success."
+        else:
+            score = imagined.predicted_success_proxy
+            rationale = "Oracle-state placeholder ranked candidates by privileged imagined success proxy."
+        scored.append((imagined.candidate_id, round(score, 6), rationale))
+    ranked_ids = [candidate_id for candidate_id, _score, _rationale in sorted(scored, key=lambda item: (-item[1], item[0]))]
+    judged: list[JudgedCandidate] = []
+    for candidate_id, score, rationale in scored:
+        judged.append(
+            JudgedCandidate(
+                candidate_id=candidate_id,
+                backend=config.judge_backend,
+                score=score,
+                rank=ranked_ids.index(candidate_id) + 1,
+                rationale=rationale,
+            )
+        )
+    return sorted(judged, key=lambda item: (item.rank, item.candidate_id))
+
+
+def select_candidate(judged_candidates: list[JudgedCandidate]) -> SelectionDecision:
+    best = min(judged_candidates, key=lambda item: (item.rank, item.candidate_id))
+    return SelectionDecision(
+        candidate_id=best.candidate_id,
+        score=best.score,
+        rank=best.rank,
+        rationale=f"Selected rank {best.rank} candidate by judge score {best.score:.6f}.",
+    )
+
+
+def run_post_check(
+    config: RunConfig,
+    selected_candidate: SelectionDecision,
+    judged_candidates: list[JudgedCandidate],
+) -> PostCheckResult:
+    if config.post_check_backend == "none":
+        return PostCheckResult(
+            backend=config.post_check_backend,
+            passed=True,
+            score=selected_candidate.score,
+            rationale="Post-check skipped by configuration.",
+        )
+    margin = selected_candidate.score - min(item.score for item in judged_candidates)
+    if config.post_check_backend == "heuristic":
+        passed = selected_candidate.score >= 0.45 and margin >= 0.02
+        rationale = "Heuristic post-check verified minimum imagined quality and ranking margin."
+    elif config.post_check_backend == "vlm-placeholder":
+        passed = selected_candidate.score >= 0.40
+        rationale = "VLM-placeholder post-check accepted the selection without claiming benchmark success."
+    else:
+        passed = selected_candidate.score >= 0.50
+        rationale = "Oracle-state placeholder post-check accepted the candidate under a privileged proxy."
+    return PostCheckResult(
+        backend=config.post_check_backend,
+        passed=passed,
+        score=round(margin, 6),
+        rationale=rationale,
+    )
+
+
+def evaluate_execution_readiness(config: RunConfig) -> tuple[str, list[str], list[str]]:
+    blockers: list[str] = []
+    notes: list[str] = []
+    if config.dry_run:
+        notes.append("Dry-run mode validated the selection pipeline contract without benchmark execution.")
+        return "dry_run", blockers, notes
+    if config.mode in LIBERO_MODES:
+        if config.target == "local":
+            blockers.append("Comparable LIBERO execution remains a Linux or RunPod path, not a Mac-local benchmark claim.")
+            notes.append("Non-dry-run LIBERO backend is available only for Linux or RunPod execution.")
+            return "blocked_local_libero", blockers, notes
+        if not is_runpod_execution_context():
+            blockers.append(
+                "Non-dry-run RunPod execution must run inside the RunPod workspace "
+                f"({RUNPOD_WORKSPACE_ROOT}) or set {RUNPOD_BACKEND_OVERRIDE_ENV}=1 for an explicit debug override."
+            )
+            notes.append("--target runpod shapes the command contract; it does not remotely execute from this Mac.")
+            return "blocked_runpod_runtime", blockers, notes
+        notes.append("Real backend adapter reuses the instrumented SmolVLA baseline runner and reads final success from benchmark artifacts.")
+        notes.append(
+            "Canonical focused baseline settings stay fixed at policy lerobot/smolvla_libero, libero_goal task 6, "
+            "camera1/camera2 mapping, one episode, batch size 1, async false, max parallel tasks 1, and policy.empty_cameras=0."
+        )
+        notes.append(
+            "The current adapter validates environment-success plumbing first; imagined candidate selection is recorded but not yet committed to env actions."
+        )
+        return "benchmark_backend_ready", blockers, notes
+    notes.append("Non-LIBERO local modes are interface-contract runs, not benchmark evaluations.")
+    return "contract_only", blockers, notes
+
+
+def is_runpod_execution_context() -> bool:
+    if os.environ.get(RUNPOD_BACKEND_OVERRIDE_ENV) == "1":
+        return True
+    try:
+        return REPO_ROOT.resolve().is_relative_to(RUNPOD_WORKSPACE_ROOT)
+    except AttributeError:
+        return str(REPO_ROOT.resolve()).startswith(str(RUNPOD_WORKSPACE_ROOT))
+
+
+def build_run_report(
+    config: RunConfig,
+    artifacts: RunArtifacts,
+    contract: ExecutionContract,
+    selected_candidate: SelectionDecision,
+    post_check: PostCheckResult,
+    trace_events: list[dict[str, Any]],
+    blockers: list[str],
+    notes: list[str],
+    benchmark_result: BenchmarkResult | None = None,
+) -> RunReport:
+    if benchmark_result is None:
+        benchmark_result = BenchmarkResult(
+            available=False,
+            success=None,
+            source="not_run",
+            rationale=(
+                "Benchmark execution was not run in this invocation; final success must "
+                "come from the environment once the real backend is executed."
+            ),
+            command=None,
+            log_path=None,
+            trace_path=None,
+            eval_info_path=None,
+            pc_success=None,
+            eval_seconds=None,
+            action_steps=None,
+            seed=None,
+            exit_code=None,
+            selected_candidate_applied=False,
+        )
+    execution_readiness = "blocked" if blockers else "passed"
+    if config.dry_run:
+        execution_readiness = "dry_run"
+    elif benchmark_result.available:
+        execution_readiness = "benchmark_executed"
+    elif config.mode in LIBERO_MODES and config.target == "runpod":
+        execution_readiness = "backend_ready"
+    elif not blockers:
+        execution_readiness = "contract_only"
+
+    report_status = "blocked" if blockers else "passed"
+    if config.dry_run:
+        report_status = "passed"
+    elif benchmark_result.exit_code not in (None, 0) and not benchmark_result.available:
+        report_status = "blocked"
+
+    return RunReport(
+        status=report_status,
+        mode=config.mode,
+        target=config.target,
+        env_type=config.env_type,
+        task_suite=config.task_suite,
+        task_id=config.task_id,
+        policy_path=config.policy_path,
+        dry_run=config.dry_run,
+        candidate_count=config.num_candidates,
+        selected_candidate_id=selected_candidate.candidate_id,
+        selected_score=selected_candidate.score,
+        benchmark_success_available=benchmark_result.available,
+        benchmark_success=benchmark_result.success,
+        execution_readiness=execution_readiness,
+        blockers=blockers,
+        notes=notes,
+        stage_backends={
+            "candidate_generation": "deterministic_seeded_chunk_generator",
+            "imagination": config.imagination_backend,
+            "judge": config.judge_backend,
+            "post_check": config.post_check_backend,
+        },
+        artifacts={
+            "output_dir": artifacts.output_dir,
+            "config": artifacts.config_path,
+            "execution_contract": artifacts.execution_contract_path,
+            "trace": artifacts.trace_path,
+            "report": artifacts.report_path,
+            "summary": artifacts.summary_path,
+            "command": artifacts.command_path,
+            "blocker": artifacts.blocker_path,
+            "benchmark_command": artifacts.benchmark_command_path,
+            "benchmark_log": artifacts.benchmark_log_path,
+            "benchmark_trace": artifacts.benchmark_trace_path,
+            "benchmark_eval_info": artifacts.benchmark_eval_info_path,
+            "benchmark_result": artifacts.benchmark_result_path,
+        },
+        current_command=contract.current_command,
+        benchmark_command=contract.benchmark_command,
+        backend_command=contract.backend_command,
+        trace_event_count=len(trace_events),
+        post_check_passed=post_check.passed,
+        post_check_score=post_check.score,
+        post_check_rationale=post_check.rationale,
+        benchmark_result=benchmark_result,
+    )
+
+
+def write_run_outputs(
+    artifacts: RunArtifacts,
+    trace_events: list[dict[str, Any]],
+    report: RunReport,
+) -> None:
+    write_jsonl(Path(artifacts.trace_path), trace_events)
+    write_json(Path(artifacts.report_path), asdict(report))
+    Path(artifacts.summary_path).write_text(render_markdown(report), encoding="utf-8")
+    if report.blockers:
+        Path(artifacts.blocker_path).write_text(
+            "\n".join(
+                [
+                    "# Imagine-Then-Act Blockers",
+                    "",
+                    *[f"- {blocker}" for blocker in report.blockers],
+                    "",
+                    "Run the deterministic local dry-run first, then hand off RunPod execution to the researcher lane.",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+
+def render_markdown(report: RunReport) -> str:
+    lines = [
+        "# Imagine-Then-Act Chunk Selection",
+        "",
+        f"- status: `{report.status}`",
+        f"- mode: `{report.mode}`",
+        f"- target: `{report.target}`",
+        f"- env_type: `{report.env_type}`",
+        f"- task_suite: `{report.task_suite}`",
+        f"- task_id: `{report.task_id}`",
+        f"- dry_run: `{str(report.dry_run).lower()}`",
+        f"- policy_path: `{report.policy_path}`",
+        f"- selected_candidate: `{report.selected_candidate_id}`",
+        f"- selected_score: `{report.selected_score}`",
+        f"- post_check_passed: `{report.post_check_passed}`",
+        f"- post_check_score: `{report.post_check_score}`",
+        "",
+        "## Stage Contract",
+        "",
+        f"- candidate_generation: `{report.stage_backends['candidate_generation']}`",
+        f"- imagination_backend: `{report.stage_backends['imagination']}`",
+        f"- judge_backend: `{report.stage_backends['judge']}`",
+        f"- post_check_backend: `{report.stage_backends['post_check']}`",
+        "",
+        "## Claim Boundary",
+        "",
+        "- Imagined outcome selection happens before execution and is not the final task success signal.",
+        f"- Post-check rationale: {report.post_check_rationale}",
+        "- Final benchmark success must come from the environment, not from the judge backend.",
+        f"- Benchmark result source: `{report.benchmark_result.source}`",
+        f"- Benchmark result rationale: {report.benchmark_result.rationale}",
+        f"- Benchmark success available: `{str(report.benchmark_success_available).lower()}`",
+        f"- Benchmark success: `{report.benchmark_success}`",
+        f"- Benchmark pc_success: `{report.benchmark_result.pc_success}`",
+        f"- Benchmark eval_seconds: `{report.benchmark_result.eval_seconds}`",
+        f"- Benchmark action_steps: `{report.benchmark_result.action_steps}`",
+        f"- Selected candidate applied to benchmark actions: `{str(report.benchmark_result.selected_candidate_applied).lower()}`",
+        "",
+        "## Commands",
+        "",
+        f"- current_command: `{report.current_command}`",
+        f"- benchmark_command: `{report.benchmark_command or 'not-generated'}`",
+        f"- backend_command: `{report.backend_command or 'not-generated'}`",
+        f"- backend_command_artifact: `{report.artifacts['benchmark_command']}`",
+        "",
+        "## Notes",
+        "",
+    ]
+    lines.extend(f"- {note}" for note in report.notes)
+    if report.blockers:
+        lines.extend(["", "## Blockers", ""])
+        lines.extend(f"- {blocker}" for blocker in report.blockers)
+    return "\n".join(lines) + "\n"
+
+
+def write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(record, sort_keys=True) + "\n" for record in records), encoding="utf-8")
+
+
+def clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
