@@ -60,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-candidates", type=int, default=5)
     parser.add_argument("--chunk-steps", type=int, default=15)
     parser.add_argument("--action-dim", type=int, default=7)
+    parser.add_argument("--policy-path", default="lerobot/smolvla_libero")
+    parser.add_argument("--camera-mapping", default='{"agentview_image":"camera1","robot0_eye_in_hand_image":"camera2"}')
+    parser.add_argument("--policy-num-steps", type=int, default=10)
+    parser.add_argument("--policy-n-action-steps", type=int, default=15)
+    parser.add_argument("--actual-max-steps", type=int, default=15)
+    parser.add_argument("--image-frequency", type=int, default=1)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--json", action="store_true")
     return parser
@@ -81,6 +87,12 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         raise ValueError("chunk-steps must be > 0")
     if args.action_dim <= 0:
         raise ValueError("action-dim must be > 0")
+    if args.policy_num_steps <= 0 or args.policy_n_action_steps <= 0:
+        raise ValueError("policy horizon flags must be > 0")
+    if args.actual_max_steps <= 0:
+        raise ValueError("actual-max-steps must be > 0")
+    if args.image_frequency <= 0:
+        raise ValueError("image-frequency must be > 0")
     return RiskProbeConfig(
         preset=args.preset,
         backend=backend_for_preset(args.preset, args.backend),
@@ -91,6 +103,12 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         chunk_steps=args.chunk_steps,
         action_dim=args.action_dim,
         output_dir=args.output_dir or default_output_dir(args.preset),
+        policy_path=args.policy_path,
+        camera_mapping=args.camera_mapping,
+        policy_num_steps=args.policy_num_steps,
+        policy_n_action_steps=args.policy_n_action_steps,
+        actual_max_steps=args.actual_max_steps,
+        image_frequency=args.image_frequency,
     )
 
 

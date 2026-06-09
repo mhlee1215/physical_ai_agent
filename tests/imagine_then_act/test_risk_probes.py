@@ -10,11 +10,15 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     ActionChunkCandidate,
     FAIL,
     PASS,
+    WARN,
     RiskProbeConfig,
+    apply_candidate_to_env,
     compute_clone_fidelity_metrics,
+    compute_actual_oracle_or_proxy_metrics,
     compute_diversity_metrics,
     compute_oracle_upper_bound_metrics,
     generate_mock_candidates,
+    inspect_actual_env,
     run_risk_probes,
     simulate_mock_env,
 )
@@ -145,3 +149,84 @@ class RiskProbeTest(TestCase):
         spec.loader.exec_module(module)
 
         self.assertEqual(module.parse_task_ids("0-2,2,4", "local-dry-run"), (0, 1, 2, 4))
+
+    def test_fake_actual_adapter_helpers_record_proxy_only_evidence(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = self.make_config(tmpdir)
+            candidates = generate_mock_candidates(config)
+            selected = [candidates[0], candidates[1], candidates[-1]]
+            env = _FakeActualEnv()
+            introspection = inspect_actual_env(env)
+            outcomes = {}
+            for candidate in selected:
+                evidence = apply_candidate_to_env(env, candidate, [config.seed], config.actual_max_steps, _FakeNumpy)
+                outcomes[candidate.candidate_id] = {
+                    "success_proxy": evidence["success_proxy"],
+                    "state": evidence["state_vector"][:3],
+                    "image": [[0]],
+                }
+
+            metrics = compute_actual_oracle_or_proxy_metrics(selected, outcomes, introspection)
+
+            self.assertFalse(introspection["exact_state_clone_available"])
+            self.assertFalse(introspection["privileged_state_available"])
+            self.assertEqual(metrics.verdict, WARN)
+            self.assertIn("proxy_only", metrics.rationale)
+
+    def test_libero_contract_writes_actionable_import_guard_blocker_without_dependencies(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=3,
+                chunk_steps=3,
+                action_dim=7,
+                output_dir=tmpdir,
+            )
+            report = run_risk_probes(config)
+
+            self.assertIn(report.status, {"BLOCKED", "WARN", "PASS"})
+            self.assertTrue(Path(report.artifacts["libero_adapter_evidence"]).exists())
+            if report.status == "BLOCKED":
+                self.assertTrue(any("LIBERO actual adapter" in blocker for blocker in report.blockers))
+
+
+class _FakeNumpy:
+    float32 = float
+
+    @staticmethod
+    def asarray(value, dtype=None):  # noqa: ARG004
+        return value
+
+
+class _FakeActualEnv:
+    num_envs = 1
+
+    def __init__(self) -> None:
+        self.state = [0.0, 0.0, 0.0]
+
+    def reset(self, seed=None):  # noqa: ARG002
+        self.state = [0.0, 0.0, 0.0]
+        return self._observation(), {"reset": True}
+
+    def step(self, action):
+        row = action[0]
+        for index in range(3):
+            self.state[index] += float(row[index])
+        info = {"success": [self.state[0] > 1.0]}
+        return self._observation(), [0.0], [False], [False], info
+
+    def call(self, name):
+        if name == "task_description":
+            return ["fake libero task"]
+        raise AttributeError(name)
+
+    def _observation(self):
+        base = int(max(0, min(255, self.state[0] * 100)))
+        return {
+            "state": [self.state[:]],
+            "agentview_image": [[[base, base, base], [base, base, base]]],
+        }

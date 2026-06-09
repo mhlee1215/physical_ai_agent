@@ -228,6 +228,26 @@ and if a planned evaluation is halfway complete with 0% environment success,
 stop that condition and switch to bug/plumbing/setup triage before spending more
 episodes.
 
+Actual LIBERO risk-probe smoke uses an import-guarded adapter. On a local Mac
+without LeRobot/LIBERO it may return `BLOCKED` with an actionable import/API
+message and still exit 0 as an expected contract outcome. On RunPod it should
+attempt the actual env rollout, write `libero_adapter_evidence.json`, and
+separate exact clone fidelity from weaker deterministic seed replay or
+obs/info-only proxy evidence:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-smoke \
+  --backend libero-contract \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --actual-max-steps 15 \
+  --output-dir _workspace/runpod_results/ita_risk_probes/libero_smoke_seed1201 \
+  --json
+```
+
 ### RunPod LIBERO Environment and Parity Scripts
 
 Use these scripts for reproducible RunPod/LIBERO SmolVLA setup and evaluation
