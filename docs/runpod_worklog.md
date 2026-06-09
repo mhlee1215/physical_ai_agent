@@ -20,6 +20,64 @@ API responses that may contain secrets.
 - Before stopping or terminating a Pod, fetch result bundles to the local repo
   with `scripts/runpod_fetch_results.sh`.
 
+## 2026-06-09 Imagine-Then-Act Backend Plumbing
+
+### Current State
+
+- Status: local implementation, review, commit, and push completed; RunPod
+  execution is blocked by Pod lifecycle/capacity, not by the code path.
+- Branch: `codex/real-so100-green-doll-dryrun`.
+- Commit: `6ac05df0 Add Imagine-Then-Act experiment entrypoint`.
+- Local test gate:
+
+```bash
+PYTHONPATH=src /Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -B -m unittest discover -s tests/imagine_then_act
+```
+
+Result: `10` tests passed.
+
+### Execution Boundary
+
+- The first RunPod run is backend-success-signal plumbing only.
+- `scripts/run_imagine_then_act.py` records imagined candidate selection and
+  invokes the canonical LIBERO/SmolVLA baseline runner behind the same
+  entrypoint.
+- `selected_candidate_applied=false`, so do not claim agentic performance gains
+  from this run.
+- Final success, if execution reaches LIBERO, must come from benchmark artifacts
+  such as `eval_info.json` / `pc_success`.
+
+### RunPod Lifecycle Blocker
+
+- The `.env` Pod ID was `ldwpvij20awxqi`; status lookup returned `404 pod not
+  found`.
+- The currently accessible existing Pod identified by the RunPod researcher is
+  `4pxof2vs44h9cb`; status is `desiredStatus: EXITED`.
+- Restarting `4pxof2vs44h9cb` failed because the host did not have a free GPU
+  available. The reported API error was: `start pod: There are not enough free
+  GPUs on the host machine to start this pod.`
+- A transient SECURE Pod `7pkhrhmb657w4c` was created before the manager
+  stop-before-cost instruction was processed. It was not used for evaluation,
+  was immediately stopped, and ended in `desiredStatus: EXITED` with
+  `lastStatusChange: Exited by user: Tue Jun 09 2026 08:16:08 GMT+0000`.
+- The RunPod researcher reported no currently billable/running Pods after this
+  cleanup.
+- This is a `blocked_capacity` / lifecycle issue; no LIBERO benchmark result has
+  been produced yet for Imagine-Then-Act.
+- Before creating a new Pod or selecting a more expensive GPU, report the option
+  and expected risk first. Do not start new billable capacity without explicit
+  confirmation in the manager thread.
+- If any Pod is found running, fetch relevant artifacts if they exist and stop
+  the Pod before ending the RunPod lane.
+
+### Next Action
+
+1. Confirm whether any Pod is currently `RUNNING` and therefore billable.
+2. If none are running, report `blocked_capacity` with the failed Pod ID and
+   capacity reason.
+3. When capacity is available or creation is approved, run the committed
+   entrypoint first in dry-run mode, then in non-dry-run backend plumbing mode.
+
 ## 2026-06-08 Meta-World Official LeRobot Reproduction
 
 ### Current State
