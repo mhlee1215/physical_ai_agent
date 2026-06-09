@@ -78,6 +78,19 @@ Result: `10` tests passed.
 3. When capacity is available or creation is approved, run the committed
    entrypoint first in dry-run mode, then in non-dry-run backend plumbing mode.
 
+### Safe Recheck
+
+On 2026-06-09, a read-only RunPod list recheck found only two accessible Pods:
+
+- `7pkhrhmb657w4c`: `desiredStatus: EXITED`, no public IP, network volume
+  `tchm4gxfvd`.
+- `4pxof2vs44h9cb`: `desiredStatus: EXITED`, no public IP, network volume
+  `tchm4gxfvd`.
+
+No Pod was `RUNNING`, so there was no active billable Pod to stop. No new Pod
+was created, started, terminated, or used for evaluation during this recheck.
+The Imagine-Then-Act RunPod evaluation remains `blocked_capacity_reconfirmed`.
+
 ## 2026-06-08 Meta-World Official LeRobot Reproduction
 
 ### Current State
