@@ -70,3 +70,45 @@ The focused baseline is frozen unless the user explicitly asks to change the
 baseline protocol. Wrapper experiments should compare against this policy-only
 reference and report benchmark success separately from any internal verifier
 or intervention metrics.
+
+## RunPod Reproduction Scripts
+
+Use the repo-local bootstrap script instead of repeating ad hoc environment
+repair steps:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+sh scripts/bootstrap_runpod_libero_smolvla_env.sh
+```
+
+The known-good RunPod path pins `torch==2.5.1+cu124` on CUDA 12.4, then installs
+LeRobot editable with `--no-deps` and adds LIBERO runtime packages under
+constraints. This avoids the failed torch 2.11/CUDA 13 drift path that made
+CUDA unavailable on the tested RunPod driver.
+
+For baseline-preserving Imagine-Then-Act parity checks, use:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/runpod_libero_goal_baseline_parity_eval.py \
+  --preset breadth \
+  --methods policy_only,ita_baseline_fallback \
+  --monitor-gpu \
+  --early-stop-zero-at-half \
+  --output-dir _workspace/runpod_results/libero_goal_breadth_seed1201 \
+  --json
+```
+
+`ita_baseline_fallback` is a baseline-preserving control: it chooses
+`candidate_00_policy_only`, records the ITA plumbing metadata, and keeps
+`method_claim_ready=false`. It is not a true imagined selector and should not be
+reported as an agentic improvement claim.
+
+Current 2026-06-09 RunPod full-result evidence on commit
+`7e3a18eb643b2f23220271e280091a7877e7dc81`:
+
+- Direct policy-only: `37/50 = 74.0%`
+- ITA `baseline_fallback`: `39/50 = 78.0%`
+
+This is baseline-near/better implementation evidence only. The +4 percentage
+point delta may be variance and should not be overclaimed as method performance.

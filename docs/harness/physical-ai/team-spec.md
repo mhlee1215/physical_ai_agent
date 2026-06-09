@@ -186,27 +186,99 @@ PYTHONPATH=src python3 -B scripts/run_imagine_then_act.py \
   --dry-run
 ```
 
-For broader `libero_goal` breadth evaluation, avoid shell one-liners and use
-the repo-local argv-based orchestrator. It must call
-`scripts/run_imagine_then_act.py` for each actual evaluation run, execute
-`policy_only` over all requested tasks before `ita_baseline_fallback`, and
-write machine-readable `results.jsonl` plus `summary.json`:
+For broader `libero_goal` breadth/full evaluation, avoid shell one-liners and
+use the repo-local argv-based RunPod evaluator. It executes `policy_only` over
+all requested tasks before `ita_baseline_fallback`, keeps the horizon/camera
+settings matched, and writes machine-readable `results.jsonl` plus
+`summary.json`:
 
 ```bash
 PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
-  scripts/run_imagine_then_act_libero_broader_eval.py \
-  --suite libero_goal \
-  --task-ids 0-9 \
+  scripts/runpod_libero_goal_baseline_parity_eval.py \
+  --preset breadth \
   --seed 1201 \
   --methods policy_only,ita_baseline_fallback \
-  --target runpod \
   --policy-num-steps 10 \
   --policy-n-action-steps 15 \
   --output-dir _workspace/runpod_results/libero_goal_broader_seed1201 \
+  --monitor-gpu \
   --monitor-interval 30 \
   --early-stop-zero-at-half \
   --json
 ```
+
+### RunPod LIBERO Environment and Parity Scripts
+
+Use these scripts for reproducible RunPod/LIBERO SmolVLA setup and evaluation
+handoff. They encode the successful 2026-06-09 RunPod recovery path and should
+be preferred over ad hoc shell snippets.
+
+Environment bootstrap:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+sh scripts/bootstrap_runpod_libero_smolvla_env.sh
+```
+
+The bootstrap script is intended for
+`runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` or a similar
+CUDA-12.4-capable Linux image. It creates or reuses
+`/root/physical-ai/envs/lerobot_py312`, pins `torch==2.5.1+cu124`,
+`torchvision==0.20.1+cu124`, and `torchaudio==2.5.1+cu124`, installs LeRobot
+editable with `--no-deps`, installs LIBERO/robosuite/MuJoCo runtime packages
+under constraints, writes `$HOME/.libero/config.yaml`, downloads LIBERO assets,
+and prints CUDA/import checks. The key failure mode it prevents is LeRobot
+dependency resolution pulling torch 2.11/CUDA 13 wheels, which produced
+`torch.cuda.is_available() == False` on the tested RunPod driver.
+
+Baseline parity evaluator:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/runpod_libero_goal_baseline_parity_eval.py \
+  --preset breadth \
+  --methods policy_only,ita_baseline_fallback \
+  --monitor-gpu \
+  --early-stop-zero-at-half \
+  --output-dir _workspace/runpod_results/libero_goal_breadth_seed1201 \
+  --json
+```
+
+Presets:
+
+- `--preset smoke`: task 6, one episode; use first to prove the path runs.
+- `--preset breadth`: task ids 0-9, one episode per task; use as the 10-episode
+  implementation check before full evaluation.
+- `--preset full`: task ids 0-9, five episodes per task by default; use after
+  breadth is baseline-near.
+
+Both direct policy-only and ITA `baseline_fallback` must use the same
+`lerobot/smolvla_libero` policy, canonical LIBERO camera mapping, seed,
+`--policy.num_steps=10`, `--policy.n_action_steps=15`,
+`--policy.empty_cameras=0`, batch size 1, async envs off, and max parallel tasks
+1. `ita_baseline_fallback` is a baseline-preserving control, not a true imagined
+selector or performance-claiming method. Treat small deltas, including the
+2026-06-09 `39/50` ITA versus `37/50` direct full result, as implementation
+readiness evidence that may include variance, not a paper claim of method gain.
+
+RunPod lifecycle policy:
+
+- During a long approved evaluation, keep a working Pod alive and do not stop it
+  just because a trace is still progressing; check GPU utilization only at a low
+  cadence or when progress appears stale.
+- If GPU utilization remains 0% and trace/result files stop growing for several
+  checks, classify the run as stuck and debug before launching more work.
+- If about half of a planned condition completes with zero environment success,
+  stop that condition and inspect logs, traces, action norms, camera artifacts,
+  and eval parsing before continuing.
+- Fetch artifacts before stopping any Pod used for evaluation.
+- After the approved run is complete and artifacts are fetched, stop the Pod and
+  confirm no Pods remain `RUNNING`.
+- If the current instance is unavailable, cheaper or similar SSH-capable GPU
+  fallbacks are acceptable: L4, A10/A10G, RTX 4000 Ada, RTX A4000/A4500/A5000,
+  RTX 3090/3080-class. Prefer an existing network volume when it works; if using
+  ephemeral storage, fetch results before stop.
 
 ## Required Checkpoint 01 Verification
 
