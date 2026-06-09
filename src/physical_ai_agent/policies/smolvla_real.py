@@ -338,7 +338,7 @@ def _clip_action(action: list[float], action_dim: int) -> list[float]:
 
 def _write_smolvla_blocker(path: Path, model_id: str, local_files_only: bool, blocker: str) -> None:
     lines = [
-        "# CP15 Real SmolVLA Inference Blocker",
+        "# Real SmolVLA Inference Blocker",
         "",
         f"- Model id: `{model_id}`",
         f"- Local files only: `{local_files_only}`",
@@ -350,7 +350,7 @@ def _write_smolvla_blocker(path: Path, model_id: str, local_files_only: bool, bl
         "To allow Hugging Face download from a normal networked terminal, run:",
         "",
         "```bash",
-        "sh scripts/checkpoint_14_15.sh --allow-download --require-real-smolvla",
+        "sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download --smolvla-action-steps 15 --show-inputs --fps 2 --max-steps 1",
         "```",
         "",
     ]
