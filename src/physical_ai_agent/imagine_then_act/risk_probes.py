@@ -1647,12 +1647,21 @@ def build_risk1b_subgoal_portfolio(
         records = payload.get("subgoals", payload) if isinstance(payload, dict) else payload
         metadata = payload if isinstance(payload, dict) else {}
         normalized, errors = validate_risk1b_subgoal_records(records, limit=num_subgoals)
+        generator_backend = str(metadata.get("generator_backend", "external_vlm_json"))
+        generator_provenance = str(metadata.get("provenance", "external_vlm_json"))
+        if generator_backend in {"mock", "fixture", "contract"} and generator_provenance == "external_vlm_json":
+            generator_provenance = f"{generator_backend}_contract"
         return normalized, {
             "valid": not errors and len(normalized) >= 2,
             "errors": errors,
-            "provenance": "external_vlm_json",
+            "provenance": generator_provenance,
             "schema": list(RISK1B_REQUIRED_FIELDS),
             "model": metadata.get("model", model_name),
+            "generator_backend": generator_backend,
+            "source_context": metadata.get("source_context") or metadata.get("input_context"),
+            "prompt_template": metadata.get("prompt_template"),
+            "raw_output_path": metadata.get("raw_output_path"),
+            "schema_validation": metadata.get("schema_validation"),
             "latency_ms": metadata.get("latency_ms"),
             "memory_mb": metadata.get("memory_mb"),
             "cost_usd": metadata.get("cost_usd"),
