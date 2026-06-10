@@ -72,6 +72,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--direct-camera-name", default="agentview")
     parser.add_argument("--direct-image-width", type=int, default=128)
     parser.add_argument("--direct-image-height", type=int, default=128)
+    parser.add_argument(
+        "--debug-candidate-noise-scale",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional plumbing-only noise for non-baseline policy candidates. "
+            "Reports remain WARN for debug-noise diversity; do not use for method claims."
+        ),
+    )
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--json", action="store_true")
     return parser
@@ -103,6 +112,8 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         raise ValueError("image-frequency must be > 0")
     if args.direct_image_width <= 0 or args.direct_image_height <= 0:
         raise ValueError("direct image dimensions must be > 0")
+    if args.debug_candidate_noise_scale < 0:
+        raise ValueError("debug-candidate-noise-scale must be >= 0")
     direct_libero_double_sim = args.direct_libero_double_sim or args.preset == "runpod-libero-double-sim-smoke"
     return RiskProbeConfig(
         preset=args.preset,
@@ -125,6 +136,7 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         direct_camera_name=args.direct_camera_name,
         direct_image_width=args.direct_image_width,
         direct_image_height=args.direct_image_height,
+        debug_candidate_noise_scale=args.debug_candidate_noise_scale,
     )
 
 

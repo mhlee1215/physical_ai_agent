@@ -221,6 +221,15 @@ PYTHONPATH=src python3 -B scripts/run_imagine_then_act_risk_probes.py \
   --json
 ```
 
+Risk 1 candidate diversity can pass only when the artifact bundle includes
+actual policy-generated action chunks, their candidate seeds/sampling metadata,
+pairwise L2/cosine/normalized distances, per-step variance, endpoint diversity,
+and selected-vs-policy-only distance. Synthetic/mock candidates or
+`--debug-candidate-noise-scale` are plumbing evidence only and must stay
+`WARN`, even when the numeric spread is large. Risk 5 can pass only with
+privileged oracle state/success access; obs/info proxy ranking must remain
+`WARN`/`proxy_only` and must not be reported as benchmark success.
+
 RunPod risk-probe order is smoke -> breadth -> full benchmark decision. Use
 `--preset runpod-libero-smoke` first, then `--preset runpod-libero-breadth`.
 Keep the existing RunPod rules: verify GPU util/import gates, fetch artifacts,

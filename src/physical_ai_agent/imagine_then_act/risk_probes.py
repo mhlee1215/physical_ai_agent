@@ -9,7 +9,7 @@ import random
 import signal
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +44,7 @@ class RiskProbeConfig:
     direct_camera_name: str = "agentview"
     direct_image_width: int = 128
     direct_image_height: int = 128
+    debug_candidate_noise_scale: float = 0.0
     diversity_warn_threshold: float = 0.05
     diversity_fail_threshold: float = 0.001
     clone_state_l2_threshold: float = 1e-9
@@ -57,6 +58,9 @@ class ActionChunkCandidate:
     action_chunk: list[list[float]]
     privileged_success_proxy: float
     is_policy_only: bool = False
+    seed: int | None = None
+    selection_role: str | None = None
+    sampling_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,15 @@ class DiversityMetrics:
     gripper_command_variance: float
     candidate_count: int
     rationale: str
+    min_pairwise_cosine_distance: float = 0.0
+    mean_pairwise_cosine_distance: float = 0.0
+    min_normalized_pairwise_l2: float = 0.0
+    mean_normalized_pairwise_l2: float = 0.0
+    mean_per_step_variance: float = 0.0
+    max_per_step_variance: float = 0.0
+    selected_vs_policy_l2: float = 0.0
+    selected_vs_policy_cosine_distance: float = 0.0
+    provenance: str = "mock"
 
 
 @dataclass(frozen=True)
@@ -121,6 +134,7 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
     write_probe_progress(output_dir, "candidates_generated", {"candidate_count": len(candidates)})
     outcomes = {candidate.candidate_id: simulate_mock_env(candidate.action_chunk) for candidate in candidates}
     visual_candidates = candidates
+    report_candidates = candidates
     diversity = compute_diversity_metrics(config, candidates)
     clone_fidelity = compute_clone_fidelity_metrics(config, candidates[-1])
     oracle_upper_bound = compute_oracle_upper_bound_metrics(candidates, outcomes)
@@ -136,23 +150,33 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
             outcomes = actual_evidence["outcomes"]
             evaluated_ids = set(outcomes)
             visual_candidates = [candidate for candidate in candidates if candidate.candidate_id in evaluated_ids]
+        if actual_evidence.get("introspection"):
+            oracle_introspection = actual_evidence["introspection"]
+        else:
+            oracle_introspection = {"privileged_state_available": False}
         if actual_evidence.get("clone_fidelity"):
             clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
-        oracle_upper_bound = compute_actual_oracle_or_proxy_metrics(visual_candidates or candidates, outcomes, {"privileged_state_available": True})
+        oracle_upper_bound = compute_actual_oracle_or_proxy_metrics(visual_candidates or candidates, outcomes, oracle_introspection)
     elif config.backend != "mock":
         write_probe_progress(output_dir, "libero_actual_adapter_start", {"timeout_sec": config.actual_timeout_sec})
         actual_evidence = run_libero_actual_adapter(config, candidates, output_dir)
         write_probe_progress(output_dir, "libero_actual_adapter_end", {"available": actual_evidence.get("available")})
         blockers.extend(actual_evidence.get("blockers", []))
         diversity = mark_diversity_as_synthetic_contract(diversity)
+        actual_candidates = candidates_from_evidence(actual_evidence.get("action_candidates"))
+        if actual_candidates:
+            report_candidates = actual_candidates
+            diversity = compute_diversity_metrics(config, actual_candidates)
         if actual_evidence.get("outcomes"):
             outcomes = actual_evidence["outcomes"]
             evaluated_ids = set(outcomes)
-            visual_candidates = [candidate for candidate in candidates if candidate.candidate_id in evaluated_ids]
+            visual_candidates = [candidate for candidate in report_candidates if candidate.candidate_id in evaluated_ids]
         if actual_evidence.get("clone_fidelity"):
             clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
         if actual_evidence.get("oracle_upper_bound"):
             oracle_upper_bound = OracleUpperBoundMetrics(**actual_evidence["oracle_upper_bound"])
+    if outcomes and (config.backend == "mock" or actual_evidence.get("outcomes")):
+        actual_evidence.setdefault("outcome_diversity", compute_outcome_diversity_metrics(outcomes))
     artifacts = write_visual_artifacts(output_dir, visual_candidates, outcomes, diversity, clone_fidelity, oracle_upper_bound)
     write_probe_progress(output_dir, "visual_artifacts_written", {"artifact_count": len(artifacts)})
     artifacts["progress"] = str(output_dir / "risk_probe_progress.jsonl")
@@ -190,9 +214,16 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
                 "source": candidate.source,
                 "privileged_success_proxy": candidate.privileged_success_proxy,
                 "is_policy_only": candidate.is_policy_only,
+                "seed": candidate.seed,
+                "selection_role": candidate.selection_role,
+                "sampling_metadata": candidate.sampling_metadata,
+                "action_shape": [len(candidate.action_chunk), len(candidate.action_chunk[0]) if candidate.action_chunk else 0],
+                "action_l2_norm": round(vector_norm(flatten_chunk(candidate.action_chunk)), 8),
+                "action_chunk": candidate.action_chunk,
+                "outcome": outcomes.get(candidate.candidate_id),
                 "evaluated_in_actual_adapter": candidate.candidate_id in outcomes if config.backend != "mock" else True,
             }
-            for candidate in candidates
+            for candidate in report_candidates
         ],
         artifacts=artifacts,
         blockers=blockers,
@@ -260,6 +291,8 @@ def generate_mock_candidates(config: RiskProbeConfig) -> list[ActionChunkCandida
             action_chunk=policy_chunk,
             privileged_success_proxy=simulate_mock_env(policy_chunk)["success_proxy"],
             is_policy_only=True,
+            selection_role="policy_only_baseline",
+            sampling_metadata={"candidate_generation": "mock", "seed": None},
         )
     )
     for index in range(1, config.num_candidates):
@@ -285,6 +318,8 @@ def generate_mock_candidates(config: RiskProbeConfig) -> list[ActionChunkCandida
                 source=source,
                 action_chunk=chunk,
                 privileged_success_proxy=simulate_mock_env(chunk)["success_proxy"],
+                seed=config.seed + index,
+                sampling_metadata={"candidate_generation": "mock", "seed": config.seed + index},
             )
         )
     return candidates
@@ -296,6 +331,23 @@ def flatten_chunk(chunk: list[list[float]]) -> list[float]:
 
 def l2(values_a: list[float], values_b: list[float]) -> float:
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(values_a, values_b)))
+
+
+def vector_norm(values: list[float]) -> float:
+    return math.sqrt(sum(value * value for value in values))
+
+
+def cosine_distance(values_a: list[float], values_b: list[float]) -> float:
+    denom = vector_norm(values_a) * vector_norm(values_b)
+    if denom <= 1e-12:
+        return 0.0 if vector_norm(values_a) <= 1e-12 and vector_norm(values_b) <= 1e-12 else 1.0
+    cosine = sum(a * b for a, b in zip(values_a, values_b)) / denom
+    return max(0.0, min(2.0, 1.0 - cosine))
+
+
+def normalized_l2(values_a: list[float], values_b: list[float]) -> float:
+    denom = max(vector_norm(values_a), vector_norm(values_b), 1e-12)
+    return l2(values_a, values_b) / denom
 
 
 def mean(values: list[float]) -> float:
@@ -312,9 +364,13 @@ def variance(values: list[float]) -> float:
 def compute_diversity_metrics(config: RiskProbeConfig, candidates: list[ActionChunkCandidate]) -> DiversityMetrics:
     flat_chunks = [flatten_chunk(candidate.action_chunk) for candidate in candidates]
     pairwise = []
+    pairwise_cosine = []
+    pairwise_normalized = []
     for left in range(len(flat_chunks)):
         for right in range(left + 1, len(flat_chunks)):
             pairwise.append(l2(flat_chunks[left], flat_chunks[right]))
+            pairwise_cosine.append(cosine_distance(flat_chunks[left], flat_chunks[right]))
+            pairwise_normalized.append(normalized_l2(flat_chunks[left], flat_chunks[right]))
     endpoints = [candidate.action_chunk[-1] for candidate in candidates]
     endpoint_distances = []
     for left in range(len(endpoints)):
@@ -324,9 +380,38 @@ def compute_diversity_metrics(config: RiskProbeConfig, candidates: list[ActionCh
     for dim in range(config.action_dim):
         dim_values = [row[dim] for candidate in candidates for row in candidate.action_chunk]
         per_dim_variances.append(variance(dim_values))
+    per_step_variances = []
+    max_steps = max((len(candidate.action_chunk) for candidate in candidates), default=0)
+    for step in range(max_steps):
+        step_values = [
+            value
+            for candidate in candidates
+            if step < len(candidate.action_chunk)
+            for value in candidate.action_chunk[step]
+        ]
+        per_step_variances.append(variance(step_values))
     gripper_values = [row[-1] for candidate in candidates for row in candidate.action_chunk]
     min_pairwise = min(pairwise) if pairwise else 0.0
     mean_variance = mean(per_dim_variances)
+    policy_candidate = next((candidate for candidate in candidates if candidate.is_policy_only), None)
+    selected_candidate = max(candidates, key=lambda item: item.privileged_success_proxy) if candidates else None
+    selected_vs_policy_l2 = 0.0
+    selected_vs_policy_cosine = 0.0
+    if policy_candidate is not None and selected_candidate is not None:
+        policy_flat = flatten_chunk(policy_candidate.action_chunk)
+        selected_flat = flatten_chunk(selected_candidate.action_chunk)
+        selected_vs_policy_l2 = l2(policy_flat, selected_flat)
+        selected_vs_policy_cosine = cosine_distance(policy_flat, selected_flat)
+    sources = [candidate.source for candidate in candidates]
+    has_debug_noise = any("debug_noise" in source for source in sources)
+    has_policy_generated = any(
+        ("policy" in source or "smolvla" in source.lower())
+        and "mock" not in source
+        and "synthetic" not in source
+        for source in sources
+    )
+    has_synthetic = any("mock" in source or "synthetic" in source for source in sources)
+    provenance = "policy_generated" if has_policy_generated and not has_synthetic else "synthetic_or_mixed"
     if min_pairwise <= config.diversity_fail_threshold:
         verdict = FAIL
         rationale = "Candidate chunks are identical or nearly identical."
@@ -335,7 +420,19 @@ def compute_diversity_metrics(config: RiskProbeConfig, candidates: list[ActionCh
         rationale = "Candidate chunks have limited spread; increase sampling diversity before method claims."
     else:
         verdict = PASS
-        rationale = "Candidate chunks show non-trivial action spread in the mock probe."
+        rationale = "Candidate chunks show non-trivial action spread under the configured probe thresholds."
+    if has_debug_noise and verdict == PASS:
+        verdict = WARN
+        rationale = "debug_noise candidate diversity is useful for plumbing only; do not claim actual SmolVLA diversity from it."
+    if has_synthetic and has_policy_generated and verdict == PASS:
+        verdict = WARN
+        rationale = "mixed policy/synthetic candidate diversity is not an actual SmolVLA diversity pass."
+    if has_policy_generated and not has_synthetic and verdict == FAIL:
+        verdict = WARN
+        rationale = (
+            "Actual policy-generated candidate chunks were identical or nearly identical; "
+            "treat this as deterministic SmolVLA sampling or seed-handling limitation, not a method pass."
+        )
     return DiversityMetrics(
         verdict=verdict,
         min_pairwise_l2=round(min_pairwise, 6),
@@ -346,6 +443,15 @@ def compute_diversity_metrics(config: RiskProbeConfig, candidates: list[ActionCh
         gripper_command_variance=round(variance(gripper_values), 6),
         candidate_count=len(candidates),
         rationale=rationale,
+        min_pairwise_cosine_distance=round(min(pairwise_cosine) if pairwise_cosine else 0.0, 6),
+        mean_pairwise_cosine_distance=round(mean(pairwise_cosine), 6),
+        min_normalized_pairwise_l2=round(min(pairwise_normalized) if pairwise_normalized else 0.0, 6),
+        mean_normalized_pairwise_l2=round(mean(pairwise_normalized), 6),
+        mean_per_step_variance=round(mean(per_step_variances), 6),
+        max_per_step_variance=round(max(per_step_variances) if per_step_variances else 0.0, 6),
+        selected_vs_policy_l2=round(selected_vs_policy_l2, 6),
+        selected_vs_policy_cosine_distance=round(selected_vs_policy_cosine, 6),
+        provenance=provenance,
     )
 
 
@@ -363,7 +469,97 @@ def mark_diversity_as_synthetic_contract(metrics: DiversityMetrics) -> Diversity
             "synthetic candidate diversity smoke only: runpod-libero actual adapter applies configured candidates, "
             "but does not yet prove SmolVLA policy-generated candidate chunk diversity."
         ),
+        min_pairwise_cosine_distance=metrics.min_pairwise_cosine_distance,
+        mean_pairwise_cosine_distance=metrics.mean_pairwise_cosine_distance,
+        min_normalized_pairwise_l2=metrics.min_normalized_pairwise_l2,
+        mean_normalized_pairwise_l2=metrics.mean_normalized_pairwise_l2,
+        mean_per_step_variance=metrics.mean_per_step_variance,
+        max_per_step_variance=metrics.max_per_step_variance,
+        selected_vs_policy_l2=metrics.selected_vs_policy_l2,
+        selected_vs_policy_cosine_distance=metrics.selected_vs_policy_cosine_distance,
+        provenance="synthetic_contract",
     )
+
+
+def summarize_candidate(candidate: ActionChunkCandidate) -> dict[str, Any]:
+    flat = flatten_chunk(candidate.action_chunk)
+    return {
+        "candidate_id": candidate.candidate_id,
+        "source": candidate.source,
+        "is_policy_only": candidate.is_policy_only,
+        "seed": candidate.seed,
+        "selection_role": candidate.selection_role,
+        "sampling_metadata": candidate.sampling_metadata,
+        "action_shape": [len(candidate.action_chunk), len(candidate.action_chunk[0]) if candidate.action_chunk else 0],
+        "action_l2_norm": round(vector_norm(flat), 8),
+        "endpoint_action": candidate.action_chunk[-1] if candidate.action_chunk else [],
+        "privileged_success_proxy": candidate.privileged_success_proxy,
+        "action_chunk": candidate.action_chunk,
+    }
+
+
+def candidates_from_evidence(payload: Any) -> list[ActionChunkCandidate]:
+    if not isinstance(payload, list):
+        return []
+    candidates: list[ActionChunkCandidate] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        action_chunk = item.get("action_chunk")
+        if not isinstance(action_chunk, list) or not action_chunk:
+            continue
+        candidates.append(
+            ActionChunkCandidate(
+                candidate_id=str(item.get("candidate_id", f"candidate_{len(candidates):02d}")),
+                source=str(item.get("source", "unknown")),
+                action_chunk=[
+                    [float(value) for value in row]
+                    for row in action_chunk
+                    if isinstance(row, list)
+                ],
+                privileged_success_proxy=float(item.get("privileged_success_proxy", 0.0)),
+                is_policy_only=bool(item.get("is_policy_only", False)),
+                seed=item.get("seed"),
+                selection_role=item.get("selection_role"),
+                sampling_metadata=item.get("sampling_metadata") if isinstance(item.get("sampling_metadata"), dict) else {},
+            )
+        )
+    return candidates
+
+
+def compute_outcome_diversity_metrics(outcomes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    state_vectors = {
+        candidate_id: numeric_vector(outcome.get("state"), limit=128)
+        for candidate_id, outcome in outcomes.items()
+    }
+    image_vectors = {
+        candidate_id: numeric_vector(outcome.get("image"), limit=4096)
+        for candidate_id, outcome in outcomes.items()
+    }
+    success_values = [
+        float(outcome.get("success_proxy", 0.0))
+        for outcome in outcomes.values()
+    ]
+    state_distances: list[float] = []
+    image_mses: list[float] = []
+    candidate_ids = list(outcomes)
+    for left in range(len(candidate_ids)):
+        for right in range(left + 1, len(candidate_ids)):
+            left_id = candidate_ids[left]
+            right_id = candidate_ids[right]
+            if state_vectors[left_id] and state_vectors[right_id]:
+                state_distances.append(l2(state_vectors[left_id], state_vectors[right_id]))
+            if image_vectors[left_id] and image_vectors[right_id]:
+                image_mse, _image_mae = image_errors_from_vectors(image_vectors[left_id], image_vectors[right_id])
+                image_mses.append(image_mse)
+    return {
+        "candidate_count": len(outcomes),
+        "max_state_l2": round(max(state_distances) if state_distances else 0.0, 8),
+        "mean_state_l2": round(mean(state_distances), 8),
+        "max_image_mse": round(max(image_mses) if image_mses else 0.0, 8),
+        "mean_image_mse": round(mean(image_mses), 8),
+        "success_proxy_range": round((max(success_values) - min(success_values)) if success_values else 0.0, 8),
+    }
 
 
 def simulate_mock_env(action_chunk: list[list[float]]) -> dict[str, Any]:
@@ -626,6 +822,237 @@ def build_lerobot_eval_argv(config: RiskProbeConfig, output_dir: Path) -> list[s
     ]
 
 
+def sample_policy_action_candidates(
+    *,
+    policy: Any,
+    observation: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    config: RiskProbeConfig,
+    torch_module: Any = None,
+    numpy_module: Any = None,
+) -> tuple[list[ActionChunkCandidate], dict[str, Any]]:
+    seeds = [config.seed + index for index in range(max(config.num_candidates - 1, 0))]
+    candidates: list[ActionChunkCandidate] = []
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index in range(config.num_candidates):
+        candidate_id = "candidate_00_policy_only" if index == 0 else f"candidate_{index:02d}"
+        seed = None if index == 0 else seeds[index - 1]
+        if seed is not None:
+            set_policy_sampling_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+            if hasattr(policy, "reset"):
+                try:
+                    policy.reset()
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{candidate_id} policy.reset failed: {type(exc).__name__}: {str(exc)[:200]}")
+        try:
+            raw_chunk, source, limitation = capture_policy_raw_action_chunk(
+                policy=policy,
+                observation=observation,
+                torch_module=torch_module,
+            )
+            action_chunk = raw_policy_chunk_to_action_chunk(
+                raw_chunk=raw_chunk,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=action_key,
+                config=config,
+            )
+            source_label = source
+            if seed is not None and config.debug_candidate_noise_scale > 0.0:
+                action_chunk = add_debug_candidate_noise(action_chunk, seed, config.debug_candidate_noise_scale)
+                source_label = f"{source_label}+debug_noise"
+                limitation = (
+                    (limitation + " " if limitation else "")
+                    + "debug_candidate_noise_scale was applied; this is plumbing evidence, not SmolVLA diversity."
+                )
+            if not action_chunk:
+                raise ValueError("policy action chunk was empty after postprocessing")
+            candidate = ActionChunkCandidate(
+                candidate_id=candidate_id,
+                source=source_label,
+                action_chunk=action_chunk,
+                privileged_success_proxy=simulate_mock_env(action_chunk)["success_proxy"],
+                is_policy_only=index == 0,
+                seed=seed,
+                selection_role="policy_only_baseline" if index == 0 else "policy_seeded_sample",
+                sampling_metadata={
+                    "candidate_generation": "policy",
+                    "seed": seed,
+                    "raw_chunk_shape": shape_list(raw_chunk),
+                    "action_shape": [len(action_chunk), len(action_chunk[0]) if action_chunk else 0],
+                    "limitation": limitation,
+                },
+            )
+            candidates.append(candidate)
+            records.append(summarize_candidate(candidate))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{candidate_id} policy candidate sampling failed: {type(exc).__name__}: {str(exc)[:300]}")
+    metadata = {
+        "source": "policy",
+        "requested_candidates": config.num_candidates,
+        "candidate_count": len(candidates),
+        "candidate_seeds": seeds,
+        "debug_candidate_noise_scale": config.debug_candidate_noise_scale,
+        "errors": errors,
+        "candidates": records,
+        "limitation": (
+            "Policy path exposed only one-step actions for some candidates; chunk_steps may be smaller than requested."
+            if any(
+                candidate.sampling_metadata.get("limitation")
+                for candidate in candidates
+            )
+            else None
+        ),
+    }
+    return candidates, metadata
+
+
+def capture_policy_raw_action_chunk(*, policy: Any, observation: Any, torch_module: Any = None) -> tuple[Any, str, str | None]:
+    context = torch_module.inference_mode() if torch_module is not None and hasattr(torch_module, "inference_mode") else contextlib.nullcontext()
+    with context:
+        if hasattr(policy, "predict_action_chunk"):
+            raw_chunk = policy.predict_action_chunk(clone_observation(observation))
+            return raw_chunk, f"{getattr(policy, 'name', 'policy')}.predict_action_chunk", None
+        raw_action = policy.select_action(clone_observation(observation))
+        return (
+            raw_action,
+            f"{getattr(policy, 'name', 'policy')}.select_action",
+            "Policy does not expose predict_action_chunk; sampled one-step action candidates.",
+        )
+
+
+def raw_policy_chunk_to_action_chunk(
+    *,
+    raw_chunk: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    config: RiskProbeConfig,
+) -> list[list[float]]:
+    steps = min(config.chunk_steps, raw_policy_chunk_steps(raw_chunk))
+    action_chunk: list[list[float]] = []
+    for step in range(max(steps, 1)):
+        raw_step = select_raw_policy_step(raw_chunk, step)
+        processed = postprocessor(raw_step) if callable(postprocessor) else raw_step
+        transition = {action_key: processed}
+        if callable(env_postprocessor):
+            transition = env_postprocessor(transition)
+        action_values = numeric_vector(transition.get(action_key), limit=config.action_dim)
+        if not action_values:
+            action_values = numeric_vector(processed, limit=config.action_dim)
+        if len(action_values) < config.action_dim:
+            action_values = [*action_values, *([0.0] * (config.action_dim - len(action_values)))]
+        action_chunk.append([round(float(value), 8) for value in action_values[: config.action_dim]])
+    return action_chunk
+
+
+def raw_policy_chunk_steps(raw_chunk: Any) -> int:
+    shape = getattr(raw_chunk, "shape", None)
+    if shape is not None:
+        shape_values = list(shape)
+        if len(shape_values) >= 3:
+            return int(shape_values[1])
+        return 1
+    value = to_plain_value(raw_chunk)
+    if (
+        isinstance(value, list)
+        and value
+        and isinstance(value[0], list)
+        and value[0]
+        and isinstance(value[0][0], list)
+    ):
+        return len(value[0])
+    if isinstance(value, list) and value and isinstance(value[0], list) and all(isinstance(item, (int, float, bool)) for item in value[0]):
+        return len(value)
+    return 1
+
+
+def select_raw_policy_step(raw_chunk: Any, step: int) -> Any:
+    shape = getattr(raw_chunk, "shape", None)
+    if shape is not None and len(list(shape)) >= 3:
+        return raw_chunk[:, step, :]
+    value = to_plain_value(raw_chunk)
+    if (
+        isinstance(value, list)
+        and value
+        and isinstance(value[0], list)
+        and value[0]
+        and isinstance(value[0][0], list)
+    ):
+        return [value[0][step]]
+    if isinstance(value, list) and value and isinstance(value[0], list) and step < len(value):
+        return [value[step]]
+    return raw_chunk
+
+
+def add_debug_candidate_noise(action_chunk: list[list[float]], seed: int, scale: float) -> list[list[float]]:
+    rng = random.Random(seed)
+    return [
+        [round(value + rng.uniform(-scale, scale), 8) for value in row]
+        for row in action_chunk
+    ]
+
+
+def set_policy_sampling_seed(seed: int, *, numpy_module: Any = None, torch_module: Any = None) -> None:
+    random.seed(seed)
+    if numpy_module is not None and hasattr(numpy_module, "random") and hasattr(numpy_module.random, "seed"):
+        numpy_module.random.seed(seed)
+    if torch_module is not None and hasattr(torch_module, "manual_seed"):
+        torch_module.manual_seed(seed)
+    cuda = getattr(torch_module, "cuda", None)
+    if cuda is not None and hasattr(cuda, "manual_seed_all"):
+        try:
+            cuda.manual_seed_all(seed)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def clone_observation(observation: Any) -> Any:
+    try:
+        return copy.deepcopy(observation)
+    except Exception:  # noqa: BLE001
+        return observation
+
+
+def to_plain_value(value: Any) -> Any:
+    if hasattr(value, "detach"):
+        try:
+            value = value.detach()
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(value, "cpu"):
+        try:
+            value = value.cpu()
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(value, "numpy"):
+        try:
+            value = value.numpy()
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:  # noqa: BLE001
+            pass
+    return value
+
+
+def shape_list(value: Any) -> list[int]:
+    shape = getattr(value, "shape", None)
+    if shape is not None:
+        return [int(item) for item in list(shape)]
+    plain = to_plain_value(value)
+    result: list[int] = []
+    while isinstance(plain, list):
+        result.append(len(plain))
+        plain = plain[0] if plain else []
+    return result
+
+
 def run_direct_libero_double_sim_probe(
     config: RiskProbeConfig,
     candidates: list[ActionChunkCandidate],
@@ -818,6 +1245,7 @@ def run_direct_env_snapshot_replay(
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     selected = select_actual_probe_candidates(candidates)
+    introspection = inspect_actual_env(env)
     candidate_results: dict[str, dict[str, Any]] = {}
     image_artifacts: dict[str, str] = {}
     for candidate in selected:
@@ -916,6 +1344,9 @@ def run_direct_env_snapshot_replay(
         "candidate_results": candidate_results,
         "outcomes": outcomes,
         "image_artifacts": image_artifacts,
+        "introspection": introspection,
+        "oracle_mode": "privileged" if introspection.get("privileged_state_available") else "proxy_only",
+        "outcome_diversity": compute_outcome_diversity_metrics(outcomes),
         "clone_restore_evidence": {
             "selected_candidate_id": chosen.candidate_id,
             "snapshot_restored": snapshot_restored,
@@ -1012,7 +1443,7 @@ def build_libero_risk_probe_rollout(
         return_observations=False,
         render_callback=None,
     ) -> dict:
-        del env_preprocessor, env_postprocessor, preprocessor, postprocessor, return_observations
+        del env_preprocessor, preprocessor, return_observations
         import numpy as np
         import torch
 
@@ -1023,7 +1454,34 @@ def build_libero_risk_probe_rollout(
         rollout_seed = seeds if seeds is not None else [seed]
         introspection = inspect_actual_env(env)
         clone_handle = find_sim_clone_handle(env)
-        selected = select_actual_probe_candidates(candidates)
+        sampling_observation, _sampling_info = env.reset(seed=rollout_seed)
+        policy_candidates, candidate_generation = sample_policy_action_candidates(
+            policy=policy,
+            observation=sampling_observation,
+            postprocessor=postprocessor,
+            env_postprocessor=env_postprocessor,
+            action_key=ACTION,
+            config=config,
+            torch_module=torch,
+            numpy_module=np,
+        )
+        if policy_candidates:
+            active_candidates = policy_candidates
+        else:
+            active_candidates = candidates
+            candidate_generation = {
+                **candidate_generation,
+                "source": "synthetic_fallback",
+                "fallback_reason": "policy candidate sampling produced no usable candidates",
+            }
+        if hasattr(policy, "reset"):
+            try:
+                policy.reset()
+            except Exception as exc:  # noqa: BLE001
+                candidate_generation.setdefault("errors", []).append(
+                    f"post-sampling policy.reset failed: {type(exc).__name__}: {str(exc)[:200]}"
+                )
+        selected = select_actual_probe_candidates(active_candidates)
         candidate_results: dict[str, dict[str, Any]] = {}
         for candidate in selected:
             start_observation, start_info = env.reset(seed=rollout_seed)
@@ -1125,8 +1583,11 @@ def build_libero_risk_probe_rollout(
             "available": True,
             "blockers": [] if clone_verdict == PASS else [clone_rationale],
             "introspection": introspection,
+            "candidate_generation": candidate_generation,
+            "action_candidates": [summarize_candidate(candidate) for candidate in active_candidates],
             "candidate_results": candidate_results,
             "outcomes": outcomes,
+            "outcome_diversity": compute_outcome_diversity_metrics(outcomes),
             "clone_restore_evidence": clone_restore_evidence,
             "direct_libero_double_sim": direct_double_sim,
             "clone_fidelity": asdict(
@@ -1149,7 +1610,7 @@ def build_libero_risk_probe_rollout(
         reward = np.zeros((getattr(env, "num_envs", 1),), dtype=np.float32)
         success = np.zeros((getattr(env, "num_envs", 1),), dtype=bool)
         done = np.ones((getattr(env, "num_envs", 1),), dtype=bool)
-        action_dim = len(candidates[0].action_chunk[0]) if candidates and candidates[0].action_chunk else 1
+        action_dim = len(active_candidates[0].action_chunk[0]) if active_candidates and active_candidates[0].action_chunk else 1
         action = np.zeros((getattr(env, "num_envs", 1), 1, action_dim), dtype=np.float32)
         return {
             ACTION: torch.from_numpy(action),
@@ -1898,6 +2359,7 @@ def write_visual_artifacts(
 ) -> dict[str, str]:
     artifacts = {
         "candidate_action_heatmap": str(output_dir / "candidate_action_heatmap.svg"),
+        "candidate_action_chunks": str(output_dir / "candidate_action_chunks.json"),
         "oracle_scores": str(output_dir / "oracle_scores.svg"),
         "clone_image_diff": str(output_dir / "clone_image_diff.svg"),
         "html_report": str(output_dir / "risk_probe_report.html"),
@@ -1914,10 +2376,27 @@ def write_report_bundle(output_dir: Path, config: RiskProbeConfig, report: RiskP
     summary_path = output_dir / "summary.json"
     events_path = output_dir / "events.jsonl"
     html_path = output_dir / "risk_probe_report.html"
+    candidate_chunks_path = output_dir / "candidate_action_chunks.json"
+    candidate_chunks_path.write_text(
+        json.dumps(
+            {
+                "risk": "risk_1_candidate_diversity",
+                "verdict": report.diversity.verdict,
+                "rationale": report.diversity.rationale,
+                "metrics": asdict(report.diversity),
+                "candidates": report.candidates,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     summary_path.write_text(json.dumps(asdict(report), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     events = [
         {"event": "config", "payload": asdict(config)},
         {"event": "risk_1_candidate_diversity", "payload": asdict(report.diversity)},
+        {"event": "risk_1_candidate_action_chunks", "payload": {"artifact": str(candidate_chunks_path)}},
         {"event": "risk_2_clone_fidelity", "payload": asdict(report.clone_fidelity)},
         {"event": "risk_5_oracle_selector_upper_bound", "payload": asdict(report.oracle_upper_bound)},
         {"event": "actual_evidence", "payload": report.actual_evidence},
@@ -2043,6 +2522,7 @@ def render_html_report(report: RiskProbeReport) -> str:
   <table>{risk_rows}</table>
   <h2>Risk 1 Candidate Diversity</h2>
   <p>{html.escape(report.diversity.rationale)}</p>
+  <p><a href="{html.escape(artifact['candidate_action_chunks'])}">candidate_action_chunks.json</a></p>
   <img src="{html.escape(artifact['candidate_action_heatmap'])}" alt="candidate action heatmap">
   <h2>Risk 2 Clone Fidelity</h2>
   <p>{html.escape(report.clone_fidelity.rationale)}</p>

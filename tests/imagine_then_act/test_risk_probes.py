@@ -28,6 +28,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     restore_sim_state,
     run_direct_env_snapshot_replay,
     run_risk_probes,
+    sample_policy_action_candidates,
     simulate_mock_env,
 )
 from physical_ai_agent.imagine_then_act.direct_libero_imagination import (
@@ -115,7 +116,8 @@ class RiskProbeTest(TestCase):
 
     def test_html_report_contains_risk_evidence_and_image_links(self) -> None:
         with TemporaryDirectory() as tmpdir:
-            report = run_risk_probes(self.make_config(tmpdir))
+            config = self.make_config(tmpdir)
+            report = run_risk_probes(config)
             html_path = Path(report.artifacts["html_report"])
             html = html_path.read_text(encoding="utf-8")
 
@@ -124,10 +126,14 @@ class RiskProbeTest(TestCase):
             self.assertIn("Risk 2 Clone Fidelity", html)
             self.assertIn("Risk 5 Oracle Selector Upper-Bound", html)
             self.assertIn("candidate_action_heatmap.svg", html)
+            self.assertIn("candidate_action_chunks.json", html)
             self.assertIn("clone_image_diff.svg", html)
             self.assertIn("oracle_scores.svg", html)
             for artifact_path in report.artifacts.values():
                 self.assertTrue(Path(artifact_path).exists())
+            chunk_payload = json.loads(Path(report.artifacts["candidate_action_chunks"]).read_text(encoding="utf-8"))
+            self.assertEqual(chunk_payload["risk"], "risk_1_candidate_diversity")
+            self.assertEqual(len(chunk_payload["candidates"]), config.num_candidates)
 
     def test_cli_dry_run_generates_artifact_bundle(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -540,6 +546,101 @@ class RiskProbeTest(TestCase):
             self.assertIn("candidate_00_policy_only", oracle_svg)
             self.assertNotIn("candidate_01", oracle_svg)
 
+    def test_policy_candidate_sampling_records_seeded_action_chunks(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=4,
+                chunk_steps=2,
+                action_dim=3,
+                output_dir=tmpdir,
+            )
+
+            candidates, metadata = sample_policy_action_candidates(
+                policy=_FakeChunkPolicy(),
+                observation={"state": [0.0]},
+                postprocessor=lambda action: action,
+                env_postprocessor=lambda transition: transition,
+                action_key="action",
+                config=config,
+                torch_module=_FakeTorch,
+                numpy_module=None,
+            )
+            metrics = compute_diversity_metrics(config, candidates)
+
+            self.assertEqual(len(candidates), 4)
+            self.assertEqual(candidates[0].candidate_id, "candidate_00_policy_only")
+            self.assertTrue(candidates[0].is_policy_only)
+            self.assertEqual(candidates[1].seed, 1201)
+            self.assertEqual(metadata["source"], "policy")
+            self.assertEqual(metadata["candidate_count"], 4)
+            self.assertEqual(metrics.provenance, "policy_generated")
+            self.assertGreater(metrics.min_pairwise_l2, 0.0)
+            self.assertGreaterEqual(metrics.selected_vs_policy_l2, 0.0)
+
+    def test_debug_noise_candidate_diversity_cannot_be_method_pass(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=3,
+                chunk_steps=2,
+                action_dim=3,
+                output_dir=tmpdir,
+                debug_candidate_noise_scale=0.5,
+            )
+
+            candidates, _metadata = sample_policy_action_candidates(
+                policy=_FakeConstantPolicy(),
+                observation={"state": [0.0]},
+                postprocessor=lambda action: action,
+                env_postprocessor=lambda transition: transition,
+                action_key="action",
+                config=config,
+                torch_module=_FakeTorch,
+                numpy_module=None,
+            )
+            metrics = compute_diversity_metrics(config, candidates)
+
+            self.assertEqual(metrics.verdict, WARN)
+            self.assertIn("debug_noise", metrics.rationale)
+
+    def test_identical_policy_candidates_warn_as_deterministic_sampling_limit(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=3,
+                chunk_steps=2,
+                action_dim=3,
+                output_dir=tmpdir,
+            )
+
+            candidates, _metadata = sample_policy_action_candidates(
+                policy=_FakeConstantPolicy(),
+                observation={"state": [0.0]},
+                postprocessor=lambda action: action,
+                env_postprocessor=lambda transition: transition,
+                action_key="action",
+                config=config,
+                torch_module=_FakeTorch,
+                numpy_module=None,
+            )
+            metrics = compute_diversity_metrics(config, candidates)
+
+            self.assertEqual(metrics.verdict, WARN)
+            self.assertIn("deterministic", metrics.rationale)
+
     def test_torch_transformers_import_compatibility_patch_adds_float8_alias(self) -> None:
         previous_torch = sys.modules.get("torch")
         fake_torch = types.ModuleType("torch")
@@ -566,6 +667,56 @@ class _FakeNumpy:
     @staticmethod
     def asarray(value, dtype=None):  # noqa: ARG004
         return value
+
+
+class _FakeTorch:
+    @staticmethod
+    def inference_mode():
+        class _Context:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+                return False
+
+        return _Context()
+
+    @staticmethod
+    def manual_seed(seed):  # noqa: ANN001
+        import random
+
+        random.seed(seed)
+
+
+class _FakeChunkPolicy:
+    name = "fake_smolvla"
+
+    def __init__(self) -> None:
+        self.reset_count = 0
+
+    def reset(self) -> None:
+        self.reset_count += 1
+
+    def predict_action_chunk(self, observation):  # noqa: ANN001, ARG002
+        import random
+
+        offset = self.reset_count * 0.01
+        return [
+            [
+                [round(random.uniform(-0.2, 0.2) + offset, 4), 0.1 + offset, -0.1],
+                [round(random.uniform(-0.2, 0.2) + offset, 4), 0.2 + offset, -0.2],
+            ]
+        ]
+
+
+class _FakeConstantPolicy:
+    name = "fake_smolvla"
+
+    def reset(self) -> None:
+        return None
+
+    def predict_action_chunk(self, observation):  # noqa: ANN001, ARG002
+        return [[[0.05, 0.05, 0.05], [0.05, 0.05, 0.05]]]
 
 
 class _FakeActualEnv:
