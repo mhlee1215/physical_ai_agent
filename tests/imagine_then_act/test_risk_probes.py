@@ -209,6 +209,33 @@ class RiskProbeTest(TestCase):
         self.assertEqual(env.sim.state, [0.0, 0.0, 0.0])
         self.assertEqual(env.sim.forward_calls, forward_calls_before_restore + 1)
 
+    def test_sim_handle_prefers_nested_data_sim_over_broken_root_sim(self) -> None:
+        env = _FakeBrokenRootGoodNestedEnv()
+        handle = find_sim_clone_handle(env)
+        snapshot = capture_sim_state(handle)
+        env.env.sim.state = [0.4, 0.5, 0.6]
+        restored = restore_sim_state(handle, snapshot)
+
+        self.assertIsNotNone(handle)
+        self.assertEqual(handle["path"], "root.env.sim")
+        self.assertTrue(snapshot["captured"])
+        self.assertTrue(restored["restored"])
+        self.assertEqual(env.env.sim.state, [0.0, 0.0, 0.0])
+
+    def test_qpos_qvel_only_sim_handle_can_restore_state(self) -> None:
+        env = _FakeQposOnlyEnv()
+        handle = find_sim_clone_handle(env)
+        snapshot = capture_sim_state(handle)
+        env.sim.data.qpos[:] = [0.3, 0.4]
+        env.sim.data.qvel[:] = [0.5, 0.6]
+        restored = restore_sim_state(handle, snapshot)
+
+        self.assertEqual(handle["strategy"], "qpos_qvel")
+        self.assertTrue(snapshot["captured"])
+        self.assertTrue(restored["restored"])
+        self.assertEqual(env.sim.data.qpos, [0.0, 0.0])
+        self.assertEqual(env.sim.data.qvel, [0.0, 0.0])
+
     def test_clone_rollout_uses_restored_internal_sim_state(self) -> None:
         env = _FakeVectorRobosuiteEnv()
         candidate = ActionChunkCandidate(
@@ -375,6 +402,22 @@ class RiskProbeTest(TestCase):
             self.assertEqual(payload["status"], PASS)
             self.assertTrue(Path(payload["summary_path"]).exists())
             self.assertTrue(Path(payload["html_report"]).exists())
+
+    def test_diagnose_libero_sim_state_cli_import_guard(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            command = [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts" / "diagnose_libero_sim_state.py"),
+                "--output-dir",
+                tmpdir,
+                "--json",
+            ]
+            completed = subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
+            payload = json.loads(completed.stdout)
+
+            self.assertEqual(payload["status"], BLOCKED)
+            self.assertTrue(Path(payload["artifact_path"]).exists())
 
     def test_actual_adapter_partial_outcomes_still_generate_full_artifact_bundle(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -573,3 +616,46 @@ class _FakeMuJoCoData:
         self.site_xpos = [[value + 0.2 for value in state]]
         self.qpos = state[:]
         self.qvel = [0.0 for _ in state]
+
+
+class _FakeBrokenRootGoodNestedEnv:
+    def __init__(self) -> None:
+        self.sim = _FakeBrokenRootSim()
+        self.env = _FakeNestedGoodEnv()
+
+
+class _FakeBrokenRootSim:
+    def get_state(self):
+        return [9.0]
+
+    def set_state(self, state) -> None:  # noqa: ANN001
+        raise AttributeError("'MjSim' object has no attribute 'data'")
+
+    def forward(self) -> None:
+        raise AttributeError("'MjSim' object has no attribute 'data'")
+
+
+class _FakeNestedGoodEnv:
+    def __init__(self) -> None:
+        self.sim = _FakeMuJoCoSim()
+
+
+class _FakeQposOnlyEnv:
+    def __init__(self) -> None:
+        self.sim = _FakeQposOnlySim()
+
+
+class _FakeQposOnlySim:
+    def __init__(self) -> None:
+        self.data = _FakeQposOnlyData()
+        self.model = object()
+        self.forward_calls = 0
+
+    def forward(self) -> None:
+        self.forward_calls += 1
+
+
+class _FakeQposOnlyData:
+    def __init__(self) -> None:
+        self.qpos = [0.0, 0.0]
+        self.qvel = [0.0, 0.0]

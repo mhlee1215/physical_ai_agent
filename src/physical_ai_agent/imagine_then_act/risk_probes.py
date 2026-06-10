@@ -557,8 +557,6 @@ def run_direct_libero_double_sim_probe(
     evidence_path = output_dir / "direct_libero_double_sim_evidence.json"
     try:
         import numpy as np
-        from libero.libero import benchmark, get_libero_path
-        from libero.libero.envs import OffScreenRenderEnv
     except Exception as exc:  # noqa: BLE001 - local tests must not require LIBERO.
         evidence = {
             "enabled": True,
@@ -573,28 +571,11 @@ def run_direct_libero_double_sim_probe(
         return evidence
 
     try:
-        benchmark_dict = benchmark.get_benchmark_dict()
-        bench = benchmark_dict[config.suite]()
-        task_id = config.task_ids[0] if config.task_ids else 0
-        task = bench.get_task(task_id)
-        bddl_file = Path(str(task.bddl_file))
-        if not bddl_file.is_absolute():
-            bddl_root = Path(get_libero_path("bddl_files"))
-            direct = bddl_root / bddl_file
-            if direct.exists():
-                bddl_file = direct
-            else:
-                matches = sorted(bddl_root.rglob(bddl_file.name))
-                if not matches:
-                    raise FileNotFoundError(f"Could not resolve LIBERO BDDL file: {bddl_file}")
-                bddl_file = matches[0]
-        env = OffScreenRenderEnv(
-            bddl_file_name=str(bddl_file),
-            camera_heights=config.direct_image_height,
-            camera_widths=config.direct_image_width,
-        )
+        direct_setup = make_direct_libero_env(config)
+        env = direct_setup["env"]
+        task_id = direct_setup["task_id"]
         env.seed(config.seed + task_id * 1000)
-        init_states = bench.get_task_init_states(task_id)
+        init_states = direct_setup["bench"].get_task_init_states(task_id)
         init_state = init_states[0] if len(init_states) > 0 else None
         evidence = run_direct_env_snapshot_replay(
             env=env,
@@ -611,8 +592,8 @@ def run_direct_libero_double_sim_probe(
                 "available": True,
                 "suite": config.suite,
                 "task_id": task_id,
-                "task_name": getattr(task, "name", f"task_{task_id}"),
-                "bddl_file": str(bddl_file),
+                "task_name": getattr(direct_setup["task"], "name", f"task_{task_id}"),
+                "bddl_file": str(direct_setup["bddl_file"]),
                 "sync_scope": "episode_start_init_state_only",
                 "mid_episode_sync": "future_work",
             }
@@ -630,6 +611,121 @@ def run_direct_libero_double_sim_probe(
     evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     evidence["artifact_path"] = str(evidence_path)
     return evidence
+
+
+def make_direct_libero_env(config: RiskProbeConfig) -> dict[str, Any]:
+    from libero.libero import benchmark, get_libero_path
+    from libero.libero.envs import OffScreenRenderEnv
+
+    benchmark_dict = benchmark.get_benchmark_dict()
+    bench = benchmark_dict[config.suite]()
+    task_id = config.task_ids[0] if config.task_ids else 0
+    task = bench.get_task(task_id)
+    bddl_file = Path(str(task.bddl_file))
+    if not bddl_file.is_absolute():
+        bddl_root = Path(get_libero_path("bddl_files"))
+        direct = bddl_root / bddl_file
+        if direct.exists():
+            bddl_file = direct
+        else:
+            matches = sorted(bddl_root.rglob(bddl_file.name))
+            if not matches:
+                raise FileNotFoundError(f"Could not resolve LIBERO BDDL file: {bddl_file}")
+            bddl_file = matches[0]
+    env = OffScreenRenderEnv(
+        bddl_file_name=str(bddl_file),
+        camera_heights=config.direct_image_height,
+        camera_widths=config.direct_image_width,
+    )
+    return {"env": env, "bench": bench, "task": task, "task_id": task_id, "bddl_file": bddl_file}
+
+
+def diagnose_direct_libero_sim_tree(config: RiskProbeConfig, output_dir: Path) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    evidence_path = output_dir / "direct_libero_sim_tree_diagnosis.json"
+    try:
+        direct_setup = make_direct_libero_env(config)
+        env = direct_setup["env"]
+        env.seed(config.seed + direct_setup["task_id"] * 1000)
+        init_states = direct_setup["bench"].get_task_init_states(direct_setup["task_id"])
+        init_state = init_states[0] if len(init_states) > 0 else None
+        reset_direct_env_to_init_state(env, init_state)
+        handle = find_sim_clone_handle(env)
+        snapshot = capture_sim_state(handle)
+        restore = restore_sim_state(handle, snapshot)
+        nodes = traverse_env_object_graph(env, max_depth=8, max_nodes=360)
+        handles = [
+            handle_candidate
+            for node in nodes
+            for handle_candidate in [build_sim_handle(node)]
+            if handle_candidate is not None
+        ]
+        handle_summaries = [
+            summarize_sim_handle(handle_candidate)
+            for handle_candidate in sorted(handles, key=score_sim_handle, reverse=True)
+        ]
+        evidence = {
+            "status": "PASS" if restore.get("restored") else "BLOCKED",
+            "suite": config.suite,
+            "task_id": direct_setup["task_id"],
+            "task_name": getattr(direct_setup["task"], "name", f"task_{direct_setup['task_id']}"),
+            "bddl_file": str(direct_setup["bddl_file"]),
+            "selected_handle": summarize_sim_handle(handle) if handle else None,
+            "snapshot": {key: value for key, value in snapshot.items() if key != "state"},
+            "restore": restore,
+            "handle_candidates": handle_summaries,
+            "object_tree": summarize_object_tree(nodes),
+        }
+    except Exception as exc:  # noqa: BLE001 - diagnosis must return actionable JSON.
+        evidence = {
+            "status": "BLOCKED",
+            "blockers": [f"direct LIBERO sim-tree diagnosis failed: {type(exc).__name__}: {str(exc)[:500]}"],
+            "exception": {"type": type(exc).__name__, "message": str(exc)[:1000]},
+        }
+    evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["artifact_path"] = str(evidence_path)
+    return evidence
+
+
+def summarize_sim_handle(handle: dict[str, Any] | None) -> dict[str, Any] | None:
+    if handle is None:
+        return None
+    sim = handle["sim"]
+    data = getattr(sim, "data", None)
+    model = getattr(sim, "model", None)
+    return {
+        "path": handle["path"],
+        "type": object_type_name(sim),
+        "strategy": handle.get("strategy"),
+        "score": list(score_sim_handle(handle)),
+        "has_data": hasattr(sim, "data"),
+        "has_model": hasattr(sim, "model"),
+        "has_get_state": has_callable(sim, "get_state"),
+        "has_set_state": has_callable(sim, "set_state"),
+        "has_forward": has_callable(sim, "forward"),
+        "has_qpos": hasattr(data, "qpos") if data is not None else False,
+        "has_qvel": hasattr(data, "qvel") if data is not None else False,
+        "model_type": object_type_name(model) if model is not None else None,
+        "data_type": object_type_name(data) if data is not None else None,
+    }
+
+
+def summarize_object_tree(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": node["path"],
+            "type": object_type_name(node["object"]),
+            "has_sim": hasattr(node["object"], "sim"),
+            "has_env": hasattr(node["object"], "env"),
+            "has__env": hasattr(node["object"], "_env"),
+            "has_data": hasattr(node["object"], "data"),
+            "has_model": hasattr(node["object"], "model"),
+            "has_get_state": has_callable(node["object"], "get_state"),
+            "has_set_state": has_callable(node["object"], "set_state"),
+            "has_forward": has_callable(node["object"], "forward"),
+        }
+        for node in nodes[:160]
+    ]
 
 
 def run_direct_env_snapshot_replay(
@@ -1035,7 +1131,10 @@ def inspect_actual_env(env: Any) -> dict[str, Any]:
     internal = inspect_internal_sim(env)
     privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
     privileged_success = extract_privileged_success_proxy(env)
-    exact_clone_available = bool(internal.get("sim_get_state_available") and internal.get("sim_set_state_available"))
+    exact_clone_available = bool(
+        (internal.get("sim_get_state_available") and internal.get("sim_set_state_available"))
+        or internal.get("sim_strategy") == "qpos_qvel"
+    )
     call_privileged_available = any(
         not isinstance(call_probe.get(name), dict) or "error" not in call_probe.get(name, {})
         for name in ("get_sim_state", "get_state", "get_object_state")
@@ -1064,15 +1163,20 @@ def inspect_actual_env(env: Any) -> dict[str, Any]:
 def inspect_internal_sim(env: Any) -> dict[str, Any]:
     nodes = traverse_env_object_graph(env)
     sim_candidates = [
-        node
+        build_sim_handle(node)
         for node in nodes
-        if has_callable(node["object"], "get_state") and has_callable(node["object"], "set_state")
+        if build_sim_handle(node) is not None
     ]
+    sim_candidates = [candidate for candidate in sim_candidates if candidate is not None]
     interesting = [
         {
             "path": node["path"],
             "type": object_type_name(node["object"]),
             "has_sim": hasattr(node["object"], "sim"),
+            "has_data": hasattr(node["object"], "data"),
+            "has_model": hasattr(node["object"], "model"),
+            "has_get_state": has_callable(node["object"], "get_state"),
+            "has_set_state": has_callable(node["object"], "set_state"),
             "has_check_success": has_callable(node["object"], "check_success") or has_callable(node["object"], "_check_success"),
             "has_reward": has_callable(node["object"], "reward"),
         }
@@ -1086,16 +1190,19 @@ def inspect_internal_sim(env: Any) -> dict[str, Any]:
             "sim_set_state_available": False,
             "candidate_paths": interesting,
         }
-    node = sim_candidates[0]
-    sim = node["object"]
+    handle = sorted(sim_candidates, key=score_sim_handle, reverse=True)[0]
+    sim = handle["sim"]
     return {
         "root_type": object_type_name(env),
         "visited_count": len(nodes),
-        "sim_path": node["path"],
+        "sim_path": handle["path"],
         "sim_type": object_type_name(sim),
-        "sim_get_state_available": hasattr(sim, "get_state"),
-        "sim_set_state_available": hasattr(sim, "set_state"),
+        "sim_strategy": handle["strategy"],
+        "sim_get_state_available": has_callable(sim, "get_state"),
+        "sim_set_state_available": has_callable(sim, "set_state"),
         "sim_forward_available": has_callable(sim, "forward"),
+        "sim_data_available": hasattr(sim, "data"),
+        "sim_model_available": hasattr(sim, "model"),
         "candidate_paths": interesting,
     }
 
@@ -1173,11 +1280,56 @@ def object_type_name(value: Any) -> str:
 
 
 def find_sim_clone_handle(env: Any) -> dict[str, Any] | None:
-    for node in traverse_env_object_graph(env):
-        candidate = node["object"]
-        if has_callable(candidate, "get_state") and has_callable(candidate, "set_state"):
-            return {"path": node["path"], "sim": candidate}
-    return None
+    handles = [
+        handle
+        for node in traverse_env_object_graph(env)
+        for handle in [build_sim_handle(node)]
+        if handle is not None
+    ]
+    if not handles:
+        return None
+    return sorted(handles, key=score_sim_handle, reverse=True)[0]
+
+
+def build_sim_handle(node: dict[str, Any]) -> dict[str, Any] | None:
+    sim = node["object"]
+    get_set_available = has_callable(sim, "get_state") and has_callable(sim, "set_state")
+    qpos_available = has_qpos_qvel_state(sim)
+    if not get_set_available and not qpos_available:
+        return None
+    strategy = "get_set_state" if get_set_available else "qpos_qvel"
+    return {
+        "path": node["path"],
+        "sim": sim,
+        "strategy": strategy,
+        "has_data": hasattr(sim, "data"),
+        "has_model": hasattr(sim, "model"),
+        "has_forward": has_callable(sim, "forward"),
+        "has_get_state": get_set_available,
+        "has_qpos_qvel": qpos_available,
+    }
+
+
+def score_sim_handle(handle: dict[str, Any]) -> tuple[int, int, int, int, int, int, str]:
+    path = str(handle["path"])
+    # Raw robosuite / MuJoCo handles with model+data are preferred over shallow
+    # wrapper-level root.sim handles. RunPod evidence showed root.sim can expose
+    # get_state/set_state while failing restore because it lacks .data.
+    has_data = int(bool(handle.get("has_data")))
+    has_model = int(bool(handle.get("has_model")))
+    nested_env = int(".env" in path or "._env" in path or ".unwrapped" in path)
+    not_root_sim = int(path != "root.sim")
+    qpos = int(bool(handle.get("has_qpos_qvel")))
+    get_set = int(bool(handle.get("has_get_state")))
+    return (has_data + has_model, nested_env, not_root_sim, qpos, get_set, -len(path), path)
+
+
+def has_qpos_qvel_state(sim: Any) -> bool:
+    try:
+        data = getattr(sim, "data")
+    except Exception:  # noqa: BLE001
+        return False
+    return hasattr(data, "qpos") and hasattr(data, "qvel")
 
 
 def capture_sim_state(handle: dict[str, Any] | None) -> dict[str, Any]:
@@ -1185,10 +1337,18 @@ def capture_sim_state(handle: dict[str, Any] | None) -> dict[str, Any]:
         return {"captured": False, "reason": "sim_handle_unavailable"}
     sim = handle["sim"]
     try:
-        state = sim.get_state()
+        if handle.get("strategy") == "qpos_qvel":
+            data = sim.data
+            state = {
+                "qpos": copy.deepcopy(convert_array_like(data.qpos)),
+                "qvel": copy.deepcopy(convert_array_like(data.qvel)),
+            }
+        else:
+            state = sim.get_state()
         return {
             "captured": True,
             "path": handle["path"],
+            "strategy": handle.get("strategy", "get_set_state"),
             "state": copy.deepcopy(state),
             "state_summary": summarize_value(state),
         }
@@ -1203,12 +1363,62 @@ def restore_sim_state(handle: dict[str, Any] | None, snapshot: dict[str, Any]) -
         return {"restored": False, "path": handle["path"], "reason": snapshot.get("reason", "snapshot_not_captured")}
     sim = handle["sim"]
     try:
-        sim.set_state(snapshot["state"])
-        if has_callable(sim, "forward"):
-            sim.forward()
-        return {"restored": True, "path": handle["path"], "forward_called": has_callable(sim, "forward")}
+        strategy = snapshot.get("strategy") or handle.get("strategy") or "get_set_state"
+        if strategy == "qpos_qvel":
+            assign_array_like(sim.data.qpos, snapshot["state"]["qpos"])
+            assign_array_like(sim.data.qvel, snapshot["state"]["qvel"])
+        else:
+            sim.set_state(snapshot["state"])
+        forward_called = safe_sim_forward(sim)
+        return {
+            "restored": True,
+            "path": handle["path"],
+            "strategy": strategy,
+            "forward_called": forward_called,
+        }
     except Exception as exc:  # noqa: BLE001
         return {"restored": False, "path": handle["path"], "reason": f"{type(exc).__name__}: {str(exc)[:300]}"}
+
+
+def convert_array_like(value: Any) -> Any:
+    if hasattr(value, "copy"):
+        try:
+            value = value.copy()
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(value, (list, tuple)):
+        return [convert_array_like(item) for item in value]
+    return value
+
+
+def assign_array_like(target: Any, source: Any) -> None:
+    if hasattr(target, "__setitem__"):
+        try:
+            target[...] = source
+            return
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            target[:] = source
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(target, list):
+        target[:] = list(source)
+        return
+    raise TypeError(f"cannot assign simulator state into {type(target).__name__}")
+
+
+def safe_sim_forward(sim: Any) -> bool:
+    if not has_callable(sim, "forward"):
+        return False
+    sim.forward()
+    return True
 
 
 def extract_state_vector(env: Any, observation: Any, info: Any) -> tuple[list[float], str]:

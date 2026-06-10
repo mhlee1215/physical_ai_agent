@@ -255,6 +255,14 @@ state sync remains future work:
 
 ```bash
 PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/diagnose_libero_sim_state.py \
+  --suite libero_goal \
+  --task-id 6 \
+  --seed 1201 \
+  --output-dir _workspace/runpod_results/ita_risk_probes/direct_libero_sim_diagnosis_seed1201 \
+  --json
+
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   scripts/run_imagine_then_act_direct_libero_probe.py \
   --backend direct-libero \
   --suite libero_goal \
