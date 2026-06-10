@@ -82,7 +82,9 @@ class LiberoConfigTests(unittest.TestCase):
             self.assertIn('"config_path"', completed.stdout)
 
     def test_runpod_gate_checks_libero_config_before_probe(self) -> None:
-        gate = (ROOT / "scripts" / "runpod_check_libero_env.sh").read_text()
+        shim = (ROOT / "scripts" / "runpod_check_libero_env.sh").read_text()
+        self.assertIn("install/runpod_check_libero_env.sh", shim)
+        gate = (ROOT / "scripts" / "install" / "runpod_check_libero_env.sh").read_text()
         self.assertIn("runpod_prepare_libero_config.sh", gate)
         self.assertIn("LIBERO_CONFIG_PATH", gate)
         self.assertIn("get_libero_path", gate)

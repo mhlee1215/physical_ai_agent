@@ -78,7 +78,7 @@ repair steps:
 
 ```bash
 cd /workspace/physical-ai/physical_ai_agent
-sh scripts/bootstrap_runpod_libero_smolvla_env.sh
+sh scripts/install/bootstrap_runpod_libero_smolvla_env.sh
 ```
 
 The known-good RunPod path pins `torch==2.5.1+cu124` on CUDA 12.4, then installs

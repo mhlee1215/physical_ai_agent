@@ -96,8 +96,16 @@ cd /workspace/physical-ai/physical_ai_agent
 PROJECT_DIR="$PWD" \
 WORK_ROOT=/workspace/physical-ai \
 VLM_VENV=/workspace/physical-ai/envs/risk1b_vlm_py312 \
-sh scripts/bootstrap_runpod_risk1b_vlm_env.sh
+RISK1B_VLM_HF_HOME=/tmp/risk1b_vlm_hf_home \
+sh scripts/install/bootstrap_runpod_risk1b_vlm_env.sh
 ```
+
+The network volume preserves reusable envs, LIBERO config/assets, and fetched
+artifacts. Large Qwen/Gemma model weights are cache-on-demand and are not
+persistent assets by default. For VLM generation, use pod-local cache such as
+`RISK1B_VLM_HF_HOME=/tmp/risk1b_vlm_hf_home`, or delete the model cache after
+the generated JSON and artifacts are fetched. Persist Qwen/Gemma weights on the
+network volume only with explicit PM approval.
 
 Default VLM env pins:
 
@@ -119,6 +127,9 @@ loader class (`AutoModelForImageTextToText`, `AutoModelForVision2Seq`, or
 `AutoModelForCausalLM`). It does not download model weights:
 
 ```bash
+HF_HOME=/tmp/risk1b_vlm_hf_home \
+HF_HUB_CACHE=/tmp/risk1b_vlm_hf_home/hub \
+TRANSFORMERS_CACHE=/tmp/risk1b_vlm_hf_home/transformers \
 PYTHONPATH=src /workspace/physical-ai/envs/risk1b_vlm_py312/bin/python -B \
   scripts/generate_risk1b_vlm_subgoals.py \
   --backend transformers \
