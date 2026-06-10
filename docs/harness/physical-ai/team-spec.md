@@ -390,6 +390,19 @@ RUNPOD_SSH="$RUNPOD_SSH" sh scripts/runpod_check.sh
 
 RunPod capacity policy:
 
+- RunPod creation/start/reuse is pre-approved for planned verification work in
+  this project. Agents may create or start a cheaper/similar suitable Pod
+  without asking again when the work is already part of an approved evaluation
+  plan.
+- Minimize initialization waste: prefer an already-running or recently-used Pod,
+  an attached network volume, and cached repo/model/LIBERO assets. If a Pod
+  restarts without the expected environment, bootstrap from repo scripts and
+  keep the repaired environment/cache under the persistent work root whenever
+  the volume policy allows it.
+- Keep the Pod running while a planned verification batch is still active, so
+  related smoke/rerun/debug checks do not repeatedly pay the same setup cost.
+  Once the planned verification batch is done, artifacts are fetched, and no
+  active run remains, stop the Pod and confirm no Pods remain `RUNNING`.
 - If the preferred existing Pod or exact GPU spec is unavailable, do not stop at
   `blocked_capacity` when the user has approved RunPod experimentation.
 - Create or start the cheapest available same-class or lower-cost GPU that can
