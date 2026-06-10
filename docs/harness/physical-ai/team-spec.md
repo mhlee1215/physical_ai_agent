@@ -301,19 +301,50 @@ Environment bootstrap:
 
 ```bash
 cd /workspace/physical-ai/physical_ai_agent
-sh scripts/bootstrap_runpod_libero_smolvla_env.sh
+sh scripts/runpod_prepare_libero_smolvla_env.sh
 ```
 
-The bootstrap script is intended for
+Use `scripts/runpod_prepare_libero_smolvla_env.sh` as the operational entrypoint,
+not ad hoc pip commands. It selects a storage profile, runs the package
+bootstrap into a temporary venv, runs the hard CUDA/import gate, and only then
+publishes the venv as usable. A venv directory existing is not sufficient
+evidence; the hard gate must pass.
+
+Profiles:
+
+- `RUNPOD_ENV_PROFILE=volume`: preferred for Pods with a network volume. Keeps
+  the repo, venv, Hugging Face cache, LIBERO assets, pip cache, and results under
+  `/workspace/physical-ai`; creates `/root/physical-ai -> /workspace/physical-ai`
+  so historical commands using `/root/physical-ai/envs/lerobot_py312/bin/python`
+  continue to work.
+- `RUNPOD_ENV_PROFILE=ephemeral`: use only for no-volume throwaway Pods. Keeps
+  the venv under `/root/physical-ai`; artifacts must be fetched before stop.
+- `RUNPOD_ENV_PROFILE=auto`: chooses `volume` when `/workspace` exists.
+
+The lower-level package recipe,
+`scripts/bootstrap_runpod_libero_smolvla_env.sh`, is intended for
 `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` or a similar
 CUDA-12.4-capable Linux image. It creates or reuses
-`/root/physical-ai/envs/lerobot_py312`, pins `torch==2.5.1+cu124`,
+the venv path supplied by `PY312_VENV`, pins `torch==2.5.1+cu124`,
 `torchvision==0.20.1+cu124`, and `torchaudio==2.5.1+cu124`, installs LeRobot
 editable with `--no-deps`, installs LIBERO/robosuite/MuJoCo runtime packages
 under constraints, writes `$HOME/.libero/config.yaml`, downloads LIBERO assets,
-and prints CUDA/import checks. The key failure mode it prevents is LeRobot
+and runs `scripts/runpod_check_libero_env.sh`. The key failure mode it prevents is LeRobot
 dependency resolution pulling torch 2.11/CUDA 13 wheels, which produced
 `torch.cuda.is_available() == False` on the tested RunPod driver.
+
+Example persistent-volume setup:
+
+```bash
+cd /workspace/physical-ai/eval_worktrees/physical_ai_agent_<run>
+RUNPOD_ENV_PROFILE=volume \
+PROJECT_DIR="$PWD" \
+sh scripts/runpod_prepare_libero_smolvla_env.sh
+```
+
+If this script exits non-zero, report `env_bootstrap_blocked`, fetch the
+`env_prepare_*` log directory, stop the Pod when no active run remains, and do
+not launch LIBERO diagnostics/probes/benchmarks.
 
 Baseline parity evaluator:
 
@@ -440,19 +471,21 @@ RunPod environment policy:
   `docs/runpod_worklog.md`, the repo scripts, and relevant official install
   instructions or package metadata for a known working path.
 - For LIBERO/SmolVLA, first reuse or bootstrap the LeRobot Python environment at
-  `/root/physical-ai/envs/lerobot_py312`; keep pip/model/data caches under
-  `/workspace/physical-ai` but avoid creating package-heavy virtualenvs on the
-  network volume unless persistence is more important than install speed.
-- Treat `/root/physical-ai/envs/lerobot_py312` as the canonical runtime venv
-  even when the source checkout is a clean worktree under
-  `/workspace/physical-ai/eval_worktrees/...`. The network volume should hold
-  repo checkouts, Hugging Face cache, LIBERO assets, pip cache, and result
-  artifacts; do not infer the venv location from the clean checkout path.
+  `/root/physical-ai/envs/lerobot_py312` by running
+  `scripts/runpod_prepare_libero_smolvla_env.sh`. On network-volume Pods this
+  path should resolve through `/root/physical-ai -> /workspace/physical-ai` so
+  the actual venv is persistent at `/workspace/physical-ai/envs/lerobot_py312`.
+  On ephemeral Pods it may live under `/root/physical-ai`, but the Pod must be
+  treated as disposable.
+- Treat `/root/physical-ai/envs/lerobot_py312/bin/python` as the canonical
+  command path only after `scripts/runpod_check_libero_env.sh` passes. The
+  network volume should hold repo checkouts, Hugging Face cache, LIBERO assets,
+  pip cache, the published `lerobot_py312` environment, and result artifacts.
+  Do not infer readiness from a clean checkout or venv directory alone.
 - Preferred LIBERO bootstrap/eval entrypoints:
-  `scripts/bootstrap_runpod_libero_smolvla_env.sh` for environment creation and
-  `scripts/eval_smolvla_libero_linux.sh` for evaluation, with
-  `WORK_ROOT=/workspace/physical-ai` and
-  `PY312_VENV=/root/physical-ai/envs/lerobot_py312`.
+  `scripts/runpod_prepare_libero_smolvla_env.sh` for environment creation,
+  `scripts/runpod_check_libero_env.sh` for the hard gate, and
+  `scripts/eval_smolvla_libero_linux.sh` for evaluation.
 - Next LIBERO/SmolVLA RunPod attempts should be volume-first. If network volume
   `tchm4gxfvd` is available, attach it and keep the repo, Hugging Face cache,
   LIBERO assets, pip cache, and any repaired `lerobot_py312` environment under

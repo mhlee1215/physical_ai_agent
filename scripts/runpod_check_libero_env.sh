@@ -18,6 +18,7 @@ log() {
 
 if [ ! -x "$PYTHON_BIN" ]; then
   echo "venv python is missing or not executable: $PYTHON_BIN" >&2
+  echo "BLOCKER_CATEGORY=volume_path_mismatch" >&2
   exit 1
 fi
 
@@ -46,6 +47,25 @@ def require_prefix(label, actual, expected):
         raise RuntimeError(f"{label} drifted: expected prefix {expected!r}, got {actual!r}")
 
 
+def blocker_for_import(module, exc):
+    text = f"{type(exc).__name__}: {exc}"
+    if module in {"torch", "torchvision", "torchaudio"}:
+        return "torch_install_failed"
+    if module == "lerobot":
+        return "lerobot_install_failed"
+    if module == "libero":
+        return "libero_install_failed"
+    if "numpy.dtype size changed" in text or "binary incompatibility" in text:
+        return "resolver_drift"
+    return "runtime_dependency_missing"
+
+
+def fail(category, message):
+    print(f"BLOCKER_CATEGORY={category}", file=sys.stderr)
+    print(f"GATE_FAIL {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
 print("python", sys.version.split()[0])
 print("executable", sys.executable)
 
@@ -66,12 +86,15 @@ for package, module in [
         loaded[module] = importlib.import_module(module)
         print(f"{module} OK {version_for(package)}")
     except Exception as exc:
-        errors.append(f"{module}: {type(exc).__name__}: {exc}")
+        errors.append((module, exc))
 
 if errors:
-    for error in errors:
-        print(f"IMPORT_FAIL {error}", file=sys.stderr)
-    raise SystemExit(1)
+    categories = []
+    for module, exc in errors:
+        category = blocker_for_import(module, exc)
+        categories.append(category)
+        print(f"IMPORT_FAIL {module}: {type(exc).__name__}: {exc}", file=sys.stderr)
+    fail(categories[0], "required imports failed")
 
 torch = loaded["torch"]
 torchvision = loaded["torchvision"]
@@ -82,16 +105,19 @@ print("torch.version.cuda", torch.version.cuda)
 print("torch.cuda.is_available", torch.cuda.is_available())
 print("torch.cuda.device", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NO_CUDA")
 
-require_prefix("torch", torch.__version__, os.environ.get("EXPECTED_TORCH_PREFIX", ""))
-require_prefix("torchvision", torchvision.__version__, os.environ.get("EXPECTED_TORCHVISION_PREFIX", ""))
-require_prefix("torchaudio", torchaudio.__version__, os.environ.get("EXPECTED_TORCHAUDIO_PREFIX", ""))
+try:
+    require_prefix("torch", torch.__version__, os.environ.get("EXPECTED_TORCH_PREFIX", ""))
+    require_prefix("torchvision", torchvision.__version__, os.environ.get("EXPECTED_TORCHVISION_PREFIX", ""))
+    require_prefix("torchaudio", torchaudio.__version__, os.environ.get("EXPECTED_TORCHAUDIO_PREFIX", ""))
+except RuntimeError as exc:
+    fail("resolver_drift", str(exc))
 
 if os.environ.get("REQUIRE_CUDA", "1") == "1":
     if not torch.cuda.is_available():
-        raise RuntimeError("torch CUDA is unavailable; stop before LIBERO benchmark/probes")
+        fail("cuda_mismatch", "torch CUDA is unavailable; stop before LIBERO benchmark/probes")
     cuda_version = torch.version.cuda or ""
     if not cuda_version.startswith("12."):
-        raise RuntimeError(f"unexpected torch CUDA version {cuda_version!r}; expected CUDA 12.x/cu124-compatible")
+        fail("cuda_mismatch", f"unexpected torch CUDA version {cuda_version!r}; expected CUDA 12.x/cu124-compatible")
 
 print("env gate OK")
 PY
