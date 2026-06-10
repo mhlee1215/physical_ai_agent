@@ -312,11 +312,14 @@ evidence; the hard gate must pass.
 
 Profiles:
 
-- `RUNPOD_ENV_PROFILE=volume`: preferred for Pods with a network volume. Keeps
-  the repo, venv, Hugging Face cache, LIBERO assets, pip cache, and results under
-  `/workspace/physical-ai`; creates `/root/physical-ai -> /workspace/physical-ai`
-  so historical commands using `/root/physical-ai/envs/lerobot_py312/bin/python`
-  continue to work.
+- `RUNPOD_ENV_PROFILE=volume`: default for reusable LIBERO/SmolVLA Pods. Keeps
+  the repo, published venv, Hugging Face cache, LIBERO assets, reusable vendor
+  checkouts, and final results under `/workspace/physical-ai`; creates
+  `/root/physical-ai -> /workspace/physical-ai` so historical commands using
+  `/root/physical-ai/envs/lerobot_py312/bin/python` continue to work. The first
+  bootstrap may use `/tmp` for transient pip/build cache, but the reusable
+  source, env, model/data caches, assets, and final artifacts must end on the
+  network volume.
 - `RUNPOD_ENV_PROFILE=ephemeral`: use only for no-volume throwaway Pods. Keeps
   the venv under `/root/physical-ai`; artifacts must be fetched before stop.
 - `RUNPOD_ENV_PROFILE=auto`: chooses `volume` when `/workspace` exists.
@@ -328,19 +331,53 @@ CUDA-12.4-capable Linux image. It creates or reuses
 the venv path supplied by `PY312_VENV`, pins `torch==2.5.1+cu124`,
 `torchvision==0.20.1+cu124`, and `torchaudio==2.5.1+cu124`, installs LeRobot
 editable with `--no-deps`, installs LIBERO/robosuite/MuJoCo runtime packages
-under constraints, writes `$HOME/.libero/config.yaml`, downloads LIBERO assets,
-and runs `scripts/runpod_check_libero_env.sh`. The key failure mode it prevents is LeRobot
+under constraints, writes a non-interactive LIBERO config through
+`scripts/runpod_prepare_libero_config.sh`, downloads LIBERO assets, and runs
+`scripts/runpod_check_libero_env.sh`. The key failure mode it prevents is LeRobot
 dependency resolution pulling torch 2.11/CUDA 13 wheels, which produced
 `torch.cuda.is_available() == False` on the tested RunPod driver.
 
 Example persistent-volume setup:
 
 ```bash
-cd /workspace/physical-ai/eval_worktrees/physical_ai_agent_<run>
+cd /workspace/physical-ai/physical_ai_agent
 RUNPOD_ENV_PROFILE=volume \
 PROJECT_DIR="$PWD" \
+LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config \
 sh scripts/runpod_prepare_libero_smolvla_env.sh
 ```
+
+Preferred reusable volume:
+
+- RunPod volume name/id: `physical_ai_network_volume` / `w59nxx3o43`
+- Mount/root: `/workspace` with project root `/workspace/physical-ai`
+- Source checkout: `/workspace/physical-ai/physical_ai_agent`
+- Published venv: `/workspace/physical-ai/envs/lerobot_py312`
+- Canonical Python: `/root/physical-ai/envs/lerobot_py312/bin/python` after the
+  symlink is created; direct volume path
+  `/workspace/physical-ai/envs/lerobot_py312/bin/python` is also valid.
+- Reusable caches/assets: `/workspace/physical-ai/hf_home`,
+  `/workspace/physical-ai/libero_assets`, and
+  `/workspace/physical-ai/vendor/lerobot`
+- Non-interactive LIBERO config: `/workspace/physical-ai/libero_config/config.yaml`.
+  The config must exist before any script calls `libero.libero.get_libero_path()`;
+  otherwise LIBERO may prompt for dataset folders and crash headless runs with
+  `EOFError`.
+
+On a fresh Pod attached to this volume, do not reinstall first. Verify and use
+the existing env:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+PY312_VENV=/workspace/physical-ai/envs/lerobot_py312 \
+LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config \
+sh scripts/runpod_check_libero_env.sh
+LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config \
+PYTHONPATH=src /workspace/physical-ai/envs/lerobot_py312/bin/python <experiment>
+```
+
+Only rerun `scripts/runpod_prepare_libero_smolvla_env.sh` when the hard gate
+fails or the requested source/env contract intentionally changes.
 
 If this script exits non-zero, report `env_bootstrap_blocked`, fetch the
 `env_prepare_*` log directory, stop the Pod when no active run remains, and do
@@ -484,11 +521,13 @@ RunPod environment policy:
   `scripts/runpod_prepare_libero_smolvla_env.sh` for environment creation,
   `scripts/runpod_check_libero_env.sh` for the hard gate, and
   `scripts/eval_smolvla_libero_linux.sh` for evaluation.
-- Next LIBERO/SmolVLA RunPod attempts should be volume-first. If network volume
-  `tchm4gxfvd` is available and quota is healthy, attach it and keep reusable
-  Hugging Face cache, LIBERO assets, pip cache, any repaired published
-  `lerobot_py312` environment, and final artifacts under `/workspace/physical-ai`
-  so the next run does not repeat the same bootstrap.
+- Next LIBERO/SmolVLA RunPod attempts must attach `physical_ai_network_volume`
+  (`w59nxx3o43`) whenever possible. Keep reusable Hugging Face cache, LIBERO
+  assets, reusable vendor checkouts, the published `lerobot_py312` environment,
+  source snapshots intended for reuse, and final artifacts under
+  `/workspace/physical-ai` so the next Pod can start with the hard gate instead
+  of reinstalling. The older volume `tchm4gxfvd` had quota pressure and is not
+  the preferred target for new eval handoffs.
 - Do not leave temporary clones, build directories, half-built virtualenvs, or
   dirty worktrees on the network volume. Because `/workspace` previously hit a
   git write-heavy `Disk quota exceeded` blocker, prefer ephemeral `/tmp` or
@@ -509,12 +548,15 @@ RunPod environment policy:
   and run the Imagine-Then-Act CLI dry-run successfully.
 - Run the hard environment gate before any diagnostic, direct probe, LeRobot
   smoke, or benchmark:
-  `PY312_VENV=/root/physical-ai/envs/lerobot_py312 sh scripts/runpod_check_libero_env.sh`.
+  `LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config PY312_VENV=/root/physical-ai/envs/lerobot_py312 sh scripts/runpod_check_libero_env.sh`.
   The gate must exit non-zero if the venv python is missing, `torch` is absent,
   CUDA is false, torch-family versions drift away from the cu124 pins, or any
   required import fails: `lerobot`, `libero`, `robosuite`, `mujoco`, `av`, or
-  `num2words`. If this gate fails, report `env_bootstrap_blocked` and do not
-  run Risk 2/5 probes.
+  `num2words`. It also writes/verifies `LIBERO_CONFIG_PATH/config.yaml` and
+  calls `get_libero_path()` for `bddl_files`, `init_states`, and `datasets` so
+  non-interactive config prompts fail before Risk 2/5 probes. If this gate
+  fails, report `env_bootstrap_blocked` or `libero_config_prompt` and do not run
+  Risk 2/5 probes.
 - If `lerobot` is missing, bootstrap it instead of reporting a benchmark
   blocker. Only stop after either the benchmark artifact is produced or the
   bootstrap has a concrete, logged dependency failure that cannot be fixed

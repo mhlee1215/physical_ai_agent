@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from physical_ai_agent.imagine_then_act.libero_config import ensure_noninteractive_libero_config
+
 
 PASS = "PASS"
 WARN = "WARN"
@@ -423,13 +425,15 @@ def run_libero_actual_adapter(
     evidence_path = output_dir / "libero_adapter_evidence.json"
     import_compat = apply_torch_transformers_import_compatibility_patch()
     try:
+        ensure_noninteractive_libero_config()
         from lerobot.scripts import lerobot_eval
     except Exception as exc:  # noqa: BLE001 - import guard keeps local tests dependency-free.
         evidence = {
             "mode": "libero_actual_adapter",
             "available": False,
             "blockers": [
-                "LIBERO actual adapter blocked before env rollout: could not import lerobot.scripts.lerobot_eval "
+                "LIBERO actual adapter blocked before env rollout: could not prepare non-interactive LIBERO config "
+                "or import lerobot.scripts.lerobot_eval "
                 f"({type(exc).__name__}: {str(exc)[:300]}). Run inside the prepared RunPod LeRobot/LIBERO environment."
             ],
             "import_error": {"type": type(exc).__name__, "message": str(exc)[:500]},
@@ -614,6 +618,7 @@ def run_direct_libero_double_sim_probe(
 
 
 def make_direct_libero_env(config: RiskProbeConfig) -> dict[str, Any]:
+    ensure_noninteractive_libero_config()
     from libero.libero import benchmark, get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
 

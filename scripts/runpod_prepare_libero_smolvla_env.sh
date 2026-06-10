@@ -112,6 +112,8 @@ prepare_paths() {
 
   FINAL_VENV="$WORK_ROOT/envs/$VENV_NAME"
   BUILD_VENV="$WORK_ROOT/envs/.$VENV_NAME.build.$$"
+  LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$WORK_ROOT/libero_config}"
+  LIBERO_ASSETS_DIR="${LIBERO_ASSETS_DIR:-$WORK_ROOT/libero_assets}"
   LOG_DIR="${RUNPOD_ENV_LOG_DIR:-$PROJECT_DIR/_workspace/runpod_results/env_prepare_$(date -u +%Y%m%dT%H%M%SZ)}"
   mkdir -p "$LOG_DIR"
   BOOTSTRAP_LOG="$LOG_DIR/bootstrap.log"
@@ -130,6 +132,8 @@ write_manifest() {
   "work_root": "$WORK_ROOT",
   "project_dir": "$PROJECT_DIR",
   "final_venv": "$FINAL_VENV",
+  "libero_config_path": "$LIBERO_CONFIG_PATH",
+  "libero_assets_dir": "$LIBERO_ASSETS_DIR",
   "build_venv": "$BUILD_VENV",
   "bootstrap_script": "$PROJECT_DIR/scripts/bootstrap_runpod_libero_smolvla_env.sh",
   "gate_script": "$PROJECT_DIR/scripts/runpod_check_libero_env.sh",
@@ -182,6 +186,10 @@ classify_log() {
 
 run_gate() {
   venv="$1"
+  WORK_ROOT="$WORK_ROOT" \
+    PROJECT_DIR="$PROJECT_DIR" \
+    LIBERO_CONFIG_PATH="$LIBERO_CONFIG_PATH" \
+    LIBERO_ASSETS_DIR="$LIBERO_ASSETS_DIR" \
   PY312_VENV="$venv" \
     REQUIRE_CUDA="${REQUIRE_CUDA:-1}" \
     sh "$PROJECT_DIR/scripts/runpod_check_libero_env.sh"
@@ -231,6 +239,8 @@ main() {
     WORK_ROOT="$WORK_ROOT" \
     PROJECT_DIR="$PROJECT_DIR" \
     PY312_VENV="$BUILD_VENV" \
+    LIBERO_CONFIG_PATH="$LIBERO_CONFIG_PATH" \
+    LIBERO_ASSETS_DIR="$LIBERO_ASSETS_DIR" \
     sh "$PROJECT_DIR/scripts/bootstrap_runpod_libero_smolvla_env.sh" > "$BOOTSTRAP_LOG" 2>&1; then
     category="$(classify_log "$BOOTSTRAP_LOG")"
     log "bootstrap failed ($category); see $BOOTSTRAP_LOG"

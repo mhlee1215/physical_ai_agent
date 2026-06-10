@@ -7,6 +7,10 @@ set -eu
 
 PY312_VENV="${PY312_VENV:-/root/physical-ai/envs/lerobot_py312}"
 PYTHON_BIN="${PYTHON_BIN:-$PY312_VENV/bin/python}"
+WORK_ROOT="${WORK_ROOT:-/workspace/physical-ai}"
+PROJECT_DIR="${PROJECT_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
+LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${LIBERO_CONFIG_DIR:-$HOME/.libero}}"
+LIBERO_ASSETS_DIR="${LIBERO_ASSETS_DIR:-$WORK_ROOT/libero_assets}"
 REQUIRE_CUDA="${REQUIRE_CUDA:-1}"
 EXPECTED_TORCH_PREFIX="${EXPECTED_TORCH_PREFIX:-2.5.1+cu124}"
 EXPECTED_TORCHVISION_PREFIX="${EXPECTED_TORCHVISION_PREFIX:-0.20.1+cu124}"
@@ -24,15 +28,33 @@ fi
 
 log "python=$PYTHON_BIN"
 
+if [ ! -f "$PROJECT_DIR/scripts/runpod_prepare_libero_config.sh" ]; then
+  echo "missing repo LIBERO config script: $PROJECT_DIR/scripts/runpod_prepare_libero_config.sh" >&2
+  echo "BLOCKER_CATEGORY=libero_config_missing" >&2
+  exit 1
+fi
+
+log "ensuring LIBERO_CONFIG_PATH=$LIBERO_CONFIG_PATH"
+WORK_ROOT="$WORK_ROOT" \
+PROJECT_DIR="$PROJECT_DIR" \
+PY312_VENV="$PY312_VENV" \
+PYTHON_BIN="$PYTHON_BIN" \
+LIBERO_CONFIG_PATH="$LIBERO_CONFIG_PATH" \
+LIBERO_CONFIG_DIR="$LIBERO_CONFIG_PATH" \
+LIBERO_ASSETS_DIR="$LIBERO_ASSETS_DIR" \
+sh "$PROJECT_DIR/scripts/runpod_prepare_libero_config.sh"
+
 REQUIRE_CUDA="$REQUIRE_CUDA" \
 EXPECTED_TORCH_PREFIX="$EXPECTED_TORCH_PREFIX" \
 EXPECTED_TORCHVISION_PREFIX="$EXPECTED_TORCHVISION_PREFIX" \
 EXPECTED_TORCHAUDIO_PREFIX="$EXPECTED_TORCHAUDIO_PREFIX" \
+LIBERO_CONFIG_PATH="$LIBERO_CONFIG_PATH" \
 "$PYTHON_BIN" - <<'PY'
 import importlib
 import importlib.metadata as md
 import os
 import sys
+from pathlib import Path
 
 
 def version_for(package):
@@ -68,6 +90,17 @@ def fail(category, message):
 
 print("python", sys.version.split()[0])
 print("executable", sys.executable)
+config_dir = Path(os.environ.get("LIBERO_CONFIG_PATH", str(Path.home() / ".libero"))).expanduser()
+config_path = config_dir / "config.yaml"
+if not config_path.is_file():
+    fail("libero_config_missing", f"LIBERO config.yaml missing at {config_path}")
+config_text = config_path.read_text()
+required_config_keys = ("benchmark_root:", "assets:", "bddl_files:", "datasets:", "init_states:")
+missing_keys = [key for key in required_config_keys if key not in config_text]
+if missing_keys:
+    fail("libero_config_missing", f"LIBERO config missing keys: {', '.join(missing_keys)}")
+print("LIBERO_CONFIG_PATH", str(config_dir))
+print("LIBERO_CONFIG_FILE", str(config_path))
 
 errors = []
 loaded = {}
@@ -118,6 +151,16 @@ if os.environ.get("REQUIRE_CUDA", "1") == "1":
     cuda_version = torch.version.cuda or ""
     if not cuda_version.startswith("12."):
         fail("cuda_mismatch", f"unexpected torch CUDA version {cuda_version!r}; expected CUDA 12.x/cu124-compatible")
+
+try:
+    from libero.libero import get_libero_path
+
+    for key in ("bddl_files", "init_states", "datasets"):
+        print(f"get_libero_path.{key}", get_libero_path(key))
+except EOFError as exc:
+    fail("libero_config_prompt", f"LIBERO attempted an interactive config prompt: {exc}")
+except Exception as exc:
+    fail("libero_config_missing", f"LIBERO config path resolution failed: {type(exc).__name__}: {exc}")
 
 print("env gate OK")
 PY

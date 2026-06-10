@@ -15,6 +15,8 @@ PY312_VENV="${PY312_VENV:-/root/physical-ai/envs/lerobot_py312}"
 LEROBOT_DIR="${LEROBOT_DIR:-$WORK_ROOT/vendor/lerobot}"
 LEROBOT_REF="${LEROBOT_REF:-v0.5.2}"
 LIBERO_CONFIG_DIR="${LIBERO_CONFIG_DIR:-$HOME/.libero}"
+LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$LIBERO_CONFIG_DIR}"
+LIBERO_CONFIG_DIR="$LIBERO_CONFIG_PATH"
 LIBERO_ASSETS_DIR="${LIBERO_ASSETS_DIR:-$WORK_ROOT/libero_assets}"
 HF_HOME="${HF_HOME:-$WORK_ROOT/hf_home}"
 PIP_CACHE_DIR="${PIP_CACHE_DIR:-$WORK_ROOT/pip_cache}"
@@ -35,6 +37,9 @@ LIBERO_SPEC="${LIBERO_SPEC:-libero}"
 export PIP_CACHE_DIR
 export PIP_DISABLE_PIP_VERSION_CHECK="${PIP_DISABLE_PIP_VERSION_CHECK:-1}"
 export HF_HOME
+export LIBERO_CONFIG_PATH
+export LIBERO_CONFIG_DIR
+export LIBERO_ASSETS_DIR
 export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
@@ -182,13 +187,18 @@ PY
   libero_pkg="$site_packages/libero/libero"
   if [ -d "$libero_pkg" ]; then
     timed_run libero_assets_download download_libero_assets
-    cat > "$LIBERO_CONFIG_DIR/config.yaml" <<EOF
-benchmark_root: $libero_pkg
-assets: $LIBERO_ASSETS_DIR
-bddl_files: $libero_pkg/bddl_files
-datasets: $site_packages/libero/datasets
-init_states: $libero_pkg/init_files
-EOF
+    if [ ! -f "$PROJECT_DIR/scripts/runpod_prepare_libero_config.sh" ]; then
+      echo "missing repo LIBERO config script: $PROJECT_DIR/scripts/runpod_prepare_libero_config.sh" >&2
+      exit 1
+    fi
+    timed_run libero_config_prepare env \
+      WORK_ROOT="$WORK_ROOT" \
+      PROJECT_DIR="$PROJECT_DIR" \
+      PY312_VENV="$PY312_VENV" \
+      LIBERO_CONFIG_PATH="$LIBERO_CONFIG_DIR" \
+      LIBERO_ASSETS_DIR="$LIBERO_ASSETS_DIR" \
+      LIBERO_PACKAGE_DIR="$libero_pkg" \
+      sh "$PROJECT_DIR/scripts/runpod_prepare_libero_config.sh"
     log "LIBERO config written to $LIBERO_CONFIG_DIR/config.yaml"
     if command -v du >/dev/null 2>&1; then
       log "LIBERO assets size=$(du -sh "$LIBERO_ASSETS_DIR" 2>/dev/null | awk '{print $1}') path=$LIBERO_ASSETS_DIR"
