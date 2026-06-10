@@ -281,6 +281,86 @@ PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   --output-dir _workspace/runpod_results/ita_risk_probes/risk1a_prompt_portfolio_seed1201 \
   --json
 ```
+Risk1 reclassification boundaries:
+- Risk1-0 native SmolVLA `noise=` candidate generation is `WARN` when actual
+  chunks remain weak or near-identical.
+- Risk1-A template prompt portfolio may be treated as candidate-generation
+  `PASS` when actual `policy_generated` chunks beat native noise. This does
+  not require selector or environment success.
+
+Risk1-B tests external VLM-generated grounded subgoals against the accepted
+Risk1-A template reference. It is opt-in and should usually run as a separate
+commit/run from Risk1-C unless the goal is a combined artifact smoke. The VLM
+output must validate this JSON schema before it can drive frozen SmolVLA:
+`subgoal_text`, `strategy_axis`, `target_object`, `target_region_or_point`,
+`stop_condition`, `confidence`, and optional `rationale`. Candidate models to
+try are `Qwen/Qwen2.5-VL-7B-Instruct`, `Qwen/Qwen2.5-VL-3B-Instruct`, and
+`google/gemma-3-4b-it`. Contract/mock subgoals and invalid JSON are not PASS
+evidence. Risk1-B PASS requires validated external-VLM subgoals plus actual
+policy-generated chunks with diversity comparable to or better than the Risk1-A
+template reference:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-smoke \
+  --backend libero-contract \
+  --suite libero_goal \
+  --task-ids 6 \
+  --seed 1201 \
+  --num-candidates 5 \
+  --chunk-steps 15 \
+  --action-dim 7 \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --renderer-backend egl \
+  --risk1b-vlm-subgoals \
+  --risk1b-generator-backend json \
+  --risk1b-model Qwen/Qwen2.5-VL-7B-Instruct \
+  --risk1b-subgoals-json _workspace/runpod_results/ita_risk_probes/vlm_subgoals_qwen25vl7b_task6_seed1201.json \
+  --output-dir _workspace/runpod_results/ita_risk_probes/risk1b_vlm_subgoals_seed1201 \
+  --json
+```
+
+Risk1-C is selector/quality-gate instrumentation over an existing candidate
+set, not candidate generation. Keep its evidence classes separated:
+- `C0` privileged/oracle simulator selector upper-bound from cloned LIBERO
+  short rollouts and privileged state/success proxies.
+- `C1` non-oracle simulator proxy selector when obs/info/state proxies are
+  available.
+- `C2` action-only sanity selector, debug only.
+
+Risk1-C must write `risk1c_sim_selector.json` with selected candidate id,
+selected-vs-policy distance, non-baseline selection rate, score spread,
+rollout/proxy metrics, and plausibility failures. `C0` can show the candidate
+set contains a better chunk but is not a deployable method. `C1` is closer to
+the method claim and needs separate validation. Example combined B+C artifact
+smoke:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-smoke \
+  --backend libero-contract \
+  --suite libero_goal \
+  --task-ids 6 \
+  --seed 1201 \
+  --num-candidates 5 \
+  --chunk-steps 15 \
+  --action-dim 7 \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --renderer-backend egl \
+  --risk1b-vlm-subgoals \
+  --risk1b-generator-backend json \
+  --risk1b-subgoals-json _workspace/runpod_results/ita_risk_probes/vlm_subgoals_qwen25vl7b_task6_seed1201.json \
+  --risk1c-sim-selector \
+  --risk1c-selector-modes c0,c1,c2 \
+  --output-dir _workspace/runpod_results/ita_risk_probes/risk1b_risk1c_seed1201 \
+  --json
+```
 If direct LIBERO exposes privileged state or `check_success` but only one
 candidate is evaluated, or all evaluated policy/alternative candidates have no
 privileged score spread, report `privileged_oracle_available` with

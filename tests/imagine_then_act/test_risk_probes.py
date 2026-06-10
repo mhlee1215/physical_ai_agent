@@ -18,7 +18,9 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     apply_candidate_to_env,
     apply_torch_transformers_import_compatibility_patch,
     build_risk1a_prompt_portfolio,
+    build_risk1b_subgoal_portfolio,
     capture_sim_state,
+    compute_risk1c_selector_evidence,
     compute_clone_fidelity_metrics,
     compute_actual_oracle_or_proxy_metrics,
     compute_diversity_metrics,
@@ -32,8 +34,10 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     prepare_lerobot_policy_observation,
     sample_policy_action_candidates,
     sample_policy_prompt_portfolio_candidates,
+    sample_policy_vlm_subgoal_candidates,
     select_actual_probe_candidates,
     simulate_mock_env,
+    validate_risk1b_subgoal_records,
 )
 from physical_ai_agent.imagine_then_act.direct_libero_imagination import (
     DirectLiberoProbeConfig,
@@ -242,6 +246,26 @@ class RiskProbeTest(TestCase):
         risk1a_config = module.build_config(parsed_risk1a)
         self.assertTrue(risk1a_config.risk1a_prompt_portfolio)
         self.assertTrue(risk1a_config.risk1a_ambiguity)
+        parsed_risk1b = module.build_parser().parse_args(
+            [
+                "--preset",
+                "runpod-libero-smoke",
+                "--risk1b-vlm-subgoals",
+                "--risk1b-generator-backend",
+                "json",
+                "--risk1b-subgoals-json",
+                "subgoals.json",
+                "--risk1c-sim-selector",
+                "--risk1c-selector-modes",
+                "c0,c2",
+            ]
+        )
+        risk1b_config = module.build_config(parsed_risk1b)
+        self.assertTrue(risk1b_config.risk1b_vlm_subgoals)
+        self.assertEqual(risk1b_config.risk1b_generator_backend, "json")
+        self.assertEqual(risk1b_config.risk1b_subgoals_json, "subgoals.json")
+        self.assertTrue(risk1b_config.risk1c_sim_selector)
+        self.assertEqual(risk1b_config.risk1c_selector_modes, ("c0", "c2"))
 
     def test_fake_actual_adapter_helpers_record_proxy_only_evidence(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -1009,6 +1033,192 @@ class RiskProbeTest(TestCase):
             self.assertEqual(candidates[1].sampling_metadata["candidate_generation"], "risk1a_prompt_portfolio")
             self.assertIn("prompt_text", candidates[1].sampling_metadata)
             self.assertGreater(metrics.mean_normalized_pairwise_l2, 0.0)
+
+    def test_risk1b_subgoal_schema_validation_rejects_missing_fields(self) -> None:
+        valid, errors = validate_risk1b_subgoal_records(
+            [{"subgoal_text": "align first", "confidence": 0.8}],
+            limit=5,
+        )
+
+        self.assertEqual(valid, [])
+        self.assertTrue(any("missing required fields" in error for error in errors))
+
+    def test_risk1b_json_portfolio_validates_required_schema(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            payload_path = Path(tmpdir) / "vlm_subgoals.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+                        "latency_ms": 3210,
+                        "memory_mb": 11264,
+                        "cost_usd": 0.0,
+                        "subgoals": [
+                            {
+                                "subgoal_text": "Move the object to the target.",
+                                "strategy_axis": "baseline",
+                                "target_object": "object",
+                                "target_region_or_point": "target region",
+                                "stop_condition": "object reaches target",
+                                "confidence": 1.0,
+                            },
+                            {
+                                "subgoal_text": "Align the gripper before contact.",
+                                "strategy_axis": "alignment",
+                                "target_object": "object",
+                                "target_region_or_point": "pre-contact region",
+                                "stop_condition": "gripper is aligned",
+                                "confidence": 0.7,
+                                "rationale": "grounded alternative",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            subgoals, validation = build_risk1b_subgoal_portfolio(
+                base_prompt="Move the object to the target.",
+                num_subgoals=5,
+                model_name="Qwen/Qwen2.5-VL-7B-Instruct",
+                generator_backend="json",
+                subgoals_json=str(payload_path),
+            )
+
+            self.assertTrue(validation["valid"])
+            self.assertEqual(validation["provenance"], "external_vlm_json")
+            self.assertEqual(validation["latency_ms"], 3210)
+            self.assertEqual(len(subgoals), 2)
+            self.assertEqual(subgoals[1]["strategy_axis"], "alignment")
+
+    def test_risk1b_vlm_subgoal_sampling_records_schema_and_policy_metadata(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            payload_path = Path(tmpdir) / "vlm_subgoals.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "subgoals": [
+                            {
+                                "subgoal_text": "Move the object to the target.",
+                                "strategy_axis": "baseline",
+                                "target_object": "object",
+                                "target_region_or_point": "target",
+                                "stop_condition": "done",
+                                "confidence": 1.0,
+                            },
+                            {
+                                "subgoal_text": "Approach from the open side before contact.",
+                                "strategy_axis": "object_centric_direction",
+                                "target_object": "object",
+                                "target_region_or_point": "open side",
+                                "stop_condition": "near contact",
+                                "confidence": 0.8,
+                            },
+                            {
+                                "subgoal_text": "Align gripper before closing.",
+                                "strategy_axis": "gripper_alignment",
+                                "target_object": "gripper and object",
+                                "target_region_or_point": "pre-grasp",
+                                "stop_condition": "aligned",
+                                "confidence": 0.75,
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = RiskProbeConfig(
+                preset="runpod-libero-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=5,
+                chunk_steps=2,
+                action_dim=3,
+                output_dir=tmpdir,
+                risk1b_vlm_subgoals=True,
+                risk1b_generator_backend="json",
+                risk1b_subgoals_json=str(payload_path),
+            )
+
+            candidates, metadata = sample_policy_vlm_subgoal_candidates(
+                policy=_FakePromptAwarePolicy(config.chunk_steps, config.action_dim),
+                raw_observation={"state": [0.0]},
+                env=_FakeTaskEnv(),
+                env_preprocessor=lambda observation: observation,
+                preprocessor=lambda observation: observation,
+                preprocess_observation_fn=lambda observation: dict(observation),
+                postprocessor=lambda action: action,
+                env_postprocessor=lambda transition: transition,
+                action_key="action",
+                config=config,
+                torch_module=_FakeTorch,
+                numpy_module=None,
+            )
+
+            self.assertEqual(metadata["source"], "risk1b_vlm_subgoals")
+            self.assertEqual(metadata["risk1b_vlm_subgoals"]["provenance"], "external_vlm_json_policy_generated")
+            self.assertEqual(len(candidates), 3)
+            self.assertEqual(candidates[1].sampling_metadata["candidate_generation"], "risk1b_vlm_subgoals")
+            self.assertEqual(candidates[1].sampling_metadata["strategy_axis"], "object_centric_direction")
+
+    def test_cli_risk1b_and_risk1c_mock_write_contract_artifacts(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            command = [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts" / "run_imagine_then_act_risk_probes.py"),
+                "--preset",
+                "local-dry-run",
+                "--risk1b-vlm-subgoals",
+                "--risk1c-sim-selector",
+                "--output-dir",
+                tmpdir,
+                "--json",
+            ]
+            completed = subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
+            payload = json.loads(completed.stdout)
+            risk1b = json.loads(Path(payload["risk1b_vlm_subgoals"]).read_text(encoding="utf-8"))
+            risk1c = json.loads(Path(payload["risk1c_sim_selector"]).read_text(encoding="utf-8"))
+
+            self.assertEqual(risk1b["risk"], "risk_1b_external_vlm_subgoal_generator")
+            self.assertEqual(risk1b["provenance"], "mock_contract")
+            self.assertEqual(risk1b["verdict"], BLOCKED)
+            self.assertIn("c0_privileged_oracle", risk1c["modes"])
+            self.assertIn("c1_non_oracle_proxy", risk1c["modes"])
+            self.assertIn("c2_action_only_debug", risk1c["modes"])
+            self.assertEqual(risk1c["modes"]["c2_action_only_debug"]["verdict"], WARN)
+
+    def test_risk1c_selector_evidence_separates_oracle_proxy_and_debug(self) -> None:
+        config = RiskProbeConfig(
+            preset="local-dry-run",
+            backend="mock",
+            suite="libero_goal",
+            task_ids=(6,),
+            seed=1201,
+            num_candidates=4,
+            chunk_steps=2,
+            action_dim=3,
+            output_dir="/tmp/risk1c-test",
+            risk1c_sim_selector=True,
+        )
+        candidates = generate_mock_candidates(config)
+        outcomes = {candidate.candidate_id: simulate_mock_env(candidate.action_chunk) for candidate in candidates}
+        oracle = compute_oracle_upper_bound_metrics(candidates, outcomes)
+
+        evidence = compute_risk1c_selector_evidence(
+            config=config,
+            candidates=candidates,
+            outcomes=outcomes,
+            oracle=oracle,
+            actual_evidence={},
+        )
+
+        self.assertEqual(evidence["modes"]["c0_privileged_oracle"]["selector_class"], "C0")
+        self.assertEqual(evidence["modes"]["c1_non_oracle_proxy"]["selector_class"], "C1")
+        self.assertEqual(evidence["modes"]["c2_action_only_debug"]["selector_class"], "C2")
+        self.assertIn("debug baseline only", evidence["modes"]["c2_action_only_debug"]["claim_boundary"])
 
     def test_debug_noise_candidate_diversity_cannot_be_method_pass(self) -> None:
         with TemporaryDirectory() as tmpdir:

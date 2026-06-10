@@ -97,6 +97,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Request ambiguity-triggered Risk1-A strategy prompts. Without this flag Risk1-A preserves one prompt.",
     )
+    parser.add_argument(
+        "--risk1b-vlm-subgoals",
+        action="store_true",
+        help="Enable Risk1-B external VLM subgoal/prompt candidate-generation instrumentation.",
+    )
+    parser.add_argument(
+        "--risk1b-generator-backend",
+        choices=("contract", "json"),
+        default="contract",
+        help="Risk1-B subgoal source. contract is local schema plumbing only; json expects external VLM output.",
+    )
+    parser.add_argument("--risk1b-model", default="Qwen/Qwen2.5-VL-7B-Instruct")
+    parser.add_argument(
+        "--risk1b-subgoals-json",
+        default=None,
+        help="Path to validated external VLM subgoal JSON for Risk1-B when --risk1b-generator-backend=json.",
+    )
+    parser.add_argument(
+        "--risk1c-sim-selector",
+        action="store_true",
+        help="Write Risk1-C simulator selector evidence for C0/C1/C2 without changing rollout behavior.",
+    )
+    parser.add_argument(
+        "--risk1c-selector-modes",
+        default="c0,c1,c2",
+        help="Comma-separated selector evidence modes: c0,c1,c2.",
+    )
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--json", action="store_true")
     return parser
@@ -130,6 +157,12 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         raise ValueError("direct image dimensions must be > 0")
     if args.debug_candidate_noise_scale < 0:
         raise ValueError("debug-candidate-noise-scale must be >= 0")
+    if args.risk1a_prompt_portfolio and args.risk1b_vlm_subgoals:
+        raise ValueError("Risk1-A and Risk1-B candidate generators are mutually exclusive in one run")
+    risk1c_modes = tuple(item.strip().lower() for item in args.risk1c_selector_modes.split(",") if item.strip())
+    invalid_modes = sorted(set(risk1c_modes) - {"c0", "c1", "c2"})
+    if invalid_modes:
+        raise ValueError(f"invalid Risk1-C selector modes: {', '.join(invalid_modes)}")
     direct_libero_double_sim = args.direct_libero_double_sim or args.preset == "runpod-libero-double-sim-smoke"
     return RiskProbeConfig(
         preset=args.preset,
@@ -156,6 +189,12 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         debug_candidate_noise_scale=args.debug_candidate_noise_scale,
         risk1a_prompt_portfolio=args.risk1a_prompt_portfolio,
         risk1a_ambiguity=args.risk1a_ambiguity,
+        risk1b_vlm_subgoals=args.risk1b_vlm_subgoals,
+        risk1b_generator_backend=args.risk1b_generator_backend,
+        risk1b_model=args.risk1b_model,
+        risk1b_subgoals_json=args.risk1b_subgoals_json,
+        risk1c_sim_selector=args.risk1c_sim_selector,
+        risk1c_selector_modes=risk1c_modes or ("c0", "c1", "c2"),
     )
 
 
@@ -178,6 +217,10 @@ def main(argv: list[str] | None = None) -> int:
     }
     if "risk1a_prompt_portfolio" in report.artifacts:
         payload["risk1a_prompt_portfolio"] = report.artifacts["risk1a_prompt_portfolio"]
+    if "risk1b_vlm_subgoals" in report.artifacts:
+        payload["risk1b_vlm_subgoals"] = report.artifacts["risk1b_vlm_subgoals"]
+    if "risk1c_sim_selector" in report.artifacts:
+        payload["risk1c_sim_selector"] = report.artifacts["risk1c_sim_selector"]
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:

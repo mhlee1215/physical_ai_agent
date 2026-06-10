@@ -27,6 +27,24 @@ RISK1A_NATIVE_NOISE_REFERENCE = {
     "mean_pairwise_cosine_distance": 0.001218,
 }
 RISK1A_MIN_RELATIVE_GAIN = 1.25
+RISK1A_TEMPLATE_REFERENCE = {
+    "mean_normalized_pairwise_l2": 0.226331,
+    "mean_pairwise_cosine_distance": 0.030063,
+    "min_pairwise_l2": 0.568536,
+}
+RISK1B_REQUIRED_FIELDS = (
+    "subgoal_text",
+    "strategy_axis",
+    "target_object",
+    "target_region_or_point",
+    "stop_condition",
+    "confidence",
+)
+RISK1B_CANDIDATE_MODELS = (
+    "Qwen/Qwen2.5-VL-7B-Instruct",
+    "Qwen/Qwen2.5-VL-3B-Instruct",
+    "google/gemma-3-4b-it",
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +73,12 @@ class RiskProbeConfig:
     debug_candidate_noise_scale: float = 0.0
     risk1a_prompt_portfolio: bool = False
     risk1a_ambiguity: bool = False
+    risk1b_vlm_subgoals: bool = False
+    risk1b_generator_backend: str = "contract"
+    risk1b_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    risk1b_subgoals_json: str | None = None
+    risk1c_sim_selector: bool = False
+    risk1c_selector_modes: tuple[str, ...] = ("c0", "c1", "c2")
     diversity_warn_threshold: float = 0.05
     diversity_fail_threshold: float = 0.001
     clone_state_l2_threshold: float = 1e-9
@@ -184,6 +208,7 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
             report_candidates = actual_candidates
             diversity = compute_diversity_metrics(config, actual_candidates)
             diversity = gate_risk1a_diversity_if_needed(diversity, actual_evidence)
+            diversity = gate_risk1b_diversity_if_needed(diversity, actual_evidence)
         if actual_evidence.get("candidate_generation", {}).get("source") == "synthetic_fallback":
             diversity = mark_diversity_as_policy_sampling_unavailable(diversity, actual_evidence)
         if actual_evidence.get("outcomes"):
@@ -218,6 +243,27 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
             evidence=actual_evidence,
             diversity=diversity,
             candidates=report_candidates,
+        )
+    if config.risk1b_vlm_subgoals:
+        artifacts["risk1b_vlm_subgoals"] = write_risk1b_vlm_subgoals_artifact(
+            output_dir=output_dir,
+            config=config,
+            evidence=actual_evidence,
+            diversity=diversity,
+            candidates=report_candidates,
+        )
+    if config.risk1c_sim_selector:
+        selector_evidence = compute_risk1c_selector_evidence(
+            config=config,
+            candidates=report_candidates,
+            outcomes=outcomes,
+            oracle=oracle_upper_bound,
+            actual_evidence=actual_evidence,
+        )
+        actual_evidence["risk1c_sim_selector"] = selector_evidence
+        artifacts["risk1c_sim_selector"] = write_risk1c_sim_selector_artifact(
+            output_dir=output_dir,
+            selector_evidence=selector_evidence,
         )
     risk_verdicts = {
         "risk_1_candidate_diversity": diversity.verdict,
@@ -622,6 +668,53 @@ def gate_risk1a_diversity_if_needed(metrics: DiversityMetrics, evidence: dict[st
                 f"the conservative native-noise gate: mean_normalized_pairwise_l2>{min_mean_norm:.6f}, "
                 f"mean_pairwise_cosine_distance>{min_cosine:.6f}, and selected_vs_policy_l2>0 required. "
                 "Risk1-A remains WARN."
+            ),
+            "provenance": "policy_generated",
+        }
+    )
+
+
+def gate_risk1b_diversity_if_needed(metrics: DiversityMetrics, evidence: dict[str, Any]) -> DiversityMetrics:
+    portfolio = evidence.get("risk1b_vlm_subgoals")
+    if not isinstance(portfolio, dict) or not portfolio.get("enabled"):
+        return metrics
+    provenance = str(portfolio.get("provenance", "unavailable"))
+    if provenance not in {"external_vlm_json_policy_generated", "external_vlm_model_policy_generated"}:
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "verdict": BLOCKED,
+                "rationale": (
+                    "Risk1-B did not use validated external VLM subgoal output plus actual policy-generated "
+                    "chunks; contract/json-invalid/fallback evidence cannot pass."
+                ),
+                "provenance": provenance,
+            }
+        )
+    beats_risk1a = (
+        metrics.mean_normalized_pairwise_l2 >= RISK1A_TEMPLATE_REFERENCE["mean_normalized_pairwise_l2"]
+        and metrics.mean_pairwise_cosine_distance >= RISK1A_TEMPLATE_REFERENCE["mean_pairwise_cosine_distance"]
+        and metrics.min_pairwise_l2 >= RISK1A_TEMPLATE_REFERENCE["min_pairwise_l2"]
+    )
+    if metrics.verdict == PASS and beats_risk1a:
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "rationale": (
+                    "Risk1-B external VLM subgoals produced actual policy-generated chunks with diversity "
+                    "comparable to or better than the accepted Risk1-A template portfolio. This is candidate-generation "
+                    "evidence only, not selector or benchmark success."
+                ),
+                "provenance": "policy_generated",
+            }
+        )
+    return DiversityMetrics(
+        **{
+            **asdict(metrics),
+            "verdict": WARN,
+            "rationale": (
+                "Risk1-B external VLM subgoals produced actual policy-generated chunks, but diversity did not "
+                "match the accepted Risk1-A template portfolio reference. Keep Risk1-B at WARN."
             ),
             "provenance": "policy_generated",
         }
@@ -1322,6 +1415,157 @@ def sample_policy_prompt_portfolio_candidates(
     return candidates, metadata
 
 
+def sample_policy_vlm_subgoal_candidates(
+    *,
+    policy: Any,
+    raw_observation: Any,
+    env: Any,
+    env_preprocessor: Any,
+    preprocessor: Any,
+    preprocess_observation_fn: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    config: RiskProbeConfig,
+    torch_module: Any = None,
+    numpy_module: Any = None,
+) -> tuple[list[ActionChunkCandidate], dict[str, Any]]:
+    _base_observation, base_metadata = prepare_lerobot_policy_observation(
+        observation=raw_observation,
+        env=env,
+        env_preprocessor=env_preprocessor,
+        preprocessor=preprocessor,
+        preprocess_observation_fn=preprocess_observation_fn,
+    )
+    base_prompt = str(base_metadata.get("task_text") or "")
+    subgoals, validation = build_risk1b_subgoal_portfolio(
+        base_prompt=base_prompt,
+        num_subgoals=config.num_candidates,
+        model_name=config.risk1b_model,
+        generator_backend=config.risk1b_generator_backend,
+        subgoals_json=config.risk1b_subgoals_json,
+    )
+    if not validation["valid"]:
+        metadata = {
+            "source": "risk1b_vlm_subgoals",
+            "requested_candidates": config.num_candidates,
+            "candidate_count": 0,
+            "errors": validation["errors"],
+            "candidates": [],
+            "risk1b_vlm_subgoals": {
+                "enabled": True,
+                "active": False,
+                "model": config.risk1b_model,
+                "generator_backend": config.risk1b_generator_backend,
+                "base_prompt": base_prompt,
+                "subgoals": subgoals,
+                "validation": validation,
+                "provenance": "invalid_vlm_output",
+                "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+                "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
+            },
+            "limitation": "Risk1-B subgoal JSON failed schema validation; no policy chunks sampled.",
+        }
+        return [], metadata
+
+    candidates: list[ActionChunkCandidate] = []
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, subgoal in enumerate(subgoals):
+        candidate_id = "candidate_00_policy_only" if index == 0 else f"candidate_{index:02d}"
+        seed = None if index == 0 else config.seed + index - 1
+        if seed is not None:
+            set_policy_sampling_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+        if hasattr(policy, "reset"):
+            try:
+                policy.reset()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{candidate_id} policy.reset failed: {type(exc).__name__}: {str(exc)[:200]}")
+        try:
+            prompt_observation, prompt_metadata = prepare_lerobot_policy_observation(
+                observation=raw_observation,
+                env=env,
+                env_preprocessor=env_preprocessor,
+                preprocessor=preprocessor,
+                preprocess_observation_fn=preprocess_observation_fn,
+                task_override=risk1b_subgoal_to_prompt(base_prompt, subgoal),
+            )
+            raw_chunk, source, limitation = capture_policy_raw_action_chunk(
+                policy=policy,
+                observation=prompt_observation,
+                torch_module=torch_module,
+                explicit_noise=None,
+            )
+            action_chunk = raw_policy_chunk_to_action_chunk(
+                raw_chunk=raw_chunk,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=action_key,
+                config=config,
+            )
+            candidate = ActionChunkCandidate(
+                candidate_id=candidate_id,
+                source=f"{source}+risk1b_vlm_subgoals",
+                action_chunk=action_chunk,
+                privileged_success_proxy=simulate_mock_env(action_chunk)["success_proxy"],
+                is_policy_only=index == 0,
+                seed=seed,
+                selection_role="baseline_original_prompt" if index == 0 else "risk1b_vlm_subgoal_prompt",
+                sampling_metadata={
+                    "candidate_generation": "risk1b_vlm_subgoals",
+                    "seed": seed,
+                    "model": config.risk1b_model,
+                    "generator_backend": config.risk1b_generator_backend,
+                    "subgoal": subgoal,
+                    "strategy_axis": subgoal["strategy_axis"],
+                    "prompt_text": prompt_observation.get("task", [""])[0] if isinstance(prompt_observation, dict) else "",
+                    "prompt_index": index,
+                    "task_source": prompt_metadata.get("task_source"),
+                    "raw_chunk_shape": shape_list(raw_chunk),
+                    "raw_chunk_preview": truncate_nested(to_plain_value(raw_chunk), max_items=256),
+                    "action_shape": [len(action_chunk), len(action_chunk[0]) if action_chunk else 0],
+                    "limitation": limitation,
+                },
+            )
+            candidates.append(candidate)
+            records.append(summarize_candidate(candidate))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{candidate_id} risk1b subgoal candidate failed: {type(exc).__name__}: {str(exc)[:300]}")
+    generator_provenance = validation["provenance"]
+    policy_provenance = (
+        "external_vlm_json_policy_generated"
+        if generator_provenance == "external_vlm_json"
+        else f"{generator_provenance}_policy_generated"
+    )
+    metadata = {
+        "source": "risk1b_vlm_subgoals",
+        "requested_candidates": config.num_candidates,
+        "candidate_count": len(candidates),
+        "candidate_seeds": [config.seed + index for index in range(max(len(subgoals) - 1, 0))],
+        "candidate_sampling_api": "vlm_subgoal_prompt_portfolio_noise_free",
+        "errors": errors,
+        "candidates": records,
+        "risk1b_vlm_subgoals": {
+            "enabled": True,
+            "active": True,
+            "model": config.risk1b_model,
+            "candidate_models": list(RISK1B_CANDIDATE_MODELS),
+            "generator_backend": config.risk1b_generator_backend,
+            "base_prompt": base_prompt,
+            "subgoals": subgoals,
+            "validation": validation,
+            "provenance": policy_provenance if candidates else "unavailable",
+            "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+            "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
+            "latency_ms": validation.get("latency_ms"),
+            "memory_mb": validation.get("memory_mb"),
+            "cost_usd": validation.get("cost_usd"),
+        },
+        "limitation": None,
+    }
+    return candidates, metadata
+
+
 def build_risk1a_prompt_portfolio(
     *,
     base_prompt: str,
@@ -1375,6 +1619,128 @@ def build_risk1a_prompt_portfolio(
             }
         )
     return prompts
+
+
+def build_risk1b_subgoal_portfolio(
+    *,
+    base_prompt: str,
+    num_subgoals: int,
+    model_name: str,
+    generator_backend: str,
+    subgoals_json: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if generator_backend == "json":
+        if not subgoals_json:
+            return [], {
+                "valid": False,
+                "errors": ["--risk1b-subgoals-json is required when --risk1b-generator-backend=json"],
+                "provenance": "missing_external_vlm_json",
+            }
+        try:
+            payload = json.loads(Path(subgoals_json).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            return [], {
+                "valid": False,
+                "errors": [f"could not read VLM subgoal JSON: {type(exc).__name__}: {str(exc)[:200]}"],
+                "provenance": "invalid_external_vlm_json",
+            }
+        records = payload.get("subgoals", payload) if isinstance(payload, dict) else payload
+        metadata = payload if isinstance(payload, dict) else {}
+        normalized, errors = validate_risk1b_subgoal_records(records, limit=num_subgoals)
+        return normalized, {
+            "valid": not errors and len(normalized) >= 2,
+            "errors": errors,
+            "provenance": "external_vlm_json",
+            "schema": list(RISK1B_REQUIRED_FIELDS),
+            "model": metadata.get("model", model_name),
+            "latency_ms": metadata.get("latency_ms"),
+            "memory_mb": metadata.get("memory_mb"),
+            "cost_usd": metadata.get("cost_usd"),
+        }
+    if generator_backend != "contract":
+        return [], {
+            "valid": False,
+            "errors": [f"unsupported Risk1-B generator backend: {generator_backend}"],
+            "provenance": "unsupported_generator_backend",
+        }
+    clean_base = " ".join(str(base_prompt or "").split()) or "Complete the LIBERO task."
+    axes = [
+        ("baseline", "the task target", "the visible goal region", "complete the original instruction"),
+        ("object_centric_grounding", "the main manipulated object", "object-relative reachable side", "object is aligned for manipulation"),
+        ("contact_ordering", "the first contact surface", "near-contact waypoint", "first stable contact is achieved"),
+        ("gripper_pose_alignment", "the gripper and object", "pre-grasp alignment region", "gripper pose is aligned before closing"),
+        ("short_horizon_recovery", "the nearest recoverable subgoal", "local correction region", "next short-horizon progress is visible"),
+    ]
+    records = []
+    for index, (axis, target_object, region, stop_condition) in enumerate(axes[: max(1, num_subgoals)]):
+        subgoal_text = clean_base if index == 0 else f"{clean_base} Focus on {axis.replace('_', ' ')} while preserving the same task."
+        records.append(
+            {
+                "subgoal_text": subgoal_text,
+                "strategy_axis": axis,
+                "target_object": target_object,
+                "target_region_or_point": region,
+                "stop_condition": stop_condition,
+                "confidence": 0.5 if index else 1.0,
+                "rationale": "contract-only placeholder; replace with external VLM JSON before candidate-generation claims",
+            }
+        )
+    return records, {
+        "valid": True,
+        "errors": [],
+        "provenance": "contract_subgoal_template",
+        "schema": list(RISK1B_REQUIRED_FIELDS),
+        "model": model_name,
+        "latency_ms": None,
+        "memory_mb": None,
+        "cost_usd": None,
+    }
+
+
+def validate_risk1b_subgoal_records(records: Any, *, limit: int) -> tuple[list[dict[str, Any]], list[str]]:
+    errors: list[str] = []
+    if not isinstance(records, list):
+        return [], ["Risk1-B VLM output must be a list or a JSON object with a subgoals list"]
+    normalized: list[dict[str, Any]] = []
+    for index, record in enumerate(records[:limit]):
+        if not isinstance(record, dict):
+            errors.append(f"subgoal[{index}] must be an object")
+            continue
+        missing = [field_name for field_name in RISK1B_REQUIRED_FIELDS if field_name not in record]
+        if missing:
+            errors.append(f"subgoal[{index}] missing required fields: {', '.join(missing)}")
+            continue
+        try:
+            confidence = float(record["confidence"])
+        except (TypeError, ValueError):
+            errors.append(f"subgoal[{index}] confidence must be numeric")
+            continue
+        confidence = max(0.0, min(1.0, confidence))
+        normalized.append(
+            {
+                "subgoal_text": str(record["subgoal_text"]),
+                "strategy_axis": str(record["strategy_axis"]),
+                "target_object": str(record["target_object"]),
+                "target_region_or_point": str(record["target_region_or_point"]),
+                "stop_condition": str(record["stop_condition"]),
+                "confidence": round(confidence, 6),
+                "rationale": str(record.get("rationale", "")),
+            }
+        )
+    if len(normalized) < 2:
+        errors.append("Risk1-B requires at least two valid subgoals including baseline")
+    return normalized, errors
+
+
+def risk1b_subgoal_to_prompt(base_prompt: str, subgoal: dict[str, Any]) -> str:
+    clean_base = " ".join(str(base_prompt or "").split()) or "Complete the LIBERO task."
+    return (
+        f"{clean_base} Subgoal: {subgoal['subgoal_text']} "
+        f"Strategy axis: {subgoal['strategy_axis']}. "
+        f"Target object: {subgoal['target_object']}. "
+        f"Target region or point: {subgoal['target_region_or_point']}. "
+        f"Stop condition: {subgoal['stop_condition']}."
+    )
 
 
 def prepare_lerobot_policy_observation(
@@ -2105,7 +2471,22 @@ def build_libero_risk_probe_rollout(
             preprocessor=preprocessor,
             preprocess_observation_fn=preprocess_observation,
         )
-        if config.risk1a_prompt_portfolio:
+        if config.risk1b_vlm_subgoals:
+            policy_candidates, candidate_generation = sample_policy_vlm_subgoal_candidates(
+                policy=policy,
+                raw_observation=sampling_observation,
+                env=env,
+                env_preprocessor=env_preprocessor,
+                preprocessor=preprocessor,
+                preprocess_observation_fn=preprocess_observation,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=ACTION,
+                config=config,
+                torch_module=torch,
+                numpy_module=np,
+            )
+        elif config.risk1a_prompt_portfolio:
             policy_candidates, candidate_generation = sample_policy_prompt_portfolio_candidates(
                 policy=policy,
                 raw_observation=sampling_observation,
@@ -2278,6 +2659,7 @@ def build_libero_risk_probe_rollout(
             "oracle_upper_bound": asdict(oracle_metrics),
             "oracle_mode": "privileged" if introspection.get("privileged_state_available") else "proxy_only",
             "risk1a_prompt_portfolio": candidate_generation.get("risk1a_prompt_portfolio", {"enabled": False}),
+            "risk1b_vlm_subgoals": candidate_generation.get("risk1b_vlm_subgoals", {"enabled": False}),
         }
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         reward = np.zeros((getattr(env, "num_envs", 1),), dtype=np.float32)
@@ -3183,6 +3565,161 @@ def write_risk1a_prompt_portfolio_artifact(
         "boundary": "not Risk1 final PASS; final success remains benchmark/environment success only",
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def write_risk1b_vlm_subgoals_artifact(
+    *,
+    output_dir: Path,
+    config: RiskProbeConfig,
+    evidence: dict[str, Any],
+    diversity: DiversityMetrics,
+    candidates: list[ActionChunkCandidate],
+) -> str:
+    path = output_dir / "risk1b_vlm_subgoals.json"
+    portfolio = evidence.get("risk1b_vlm_subgoals")
+    if not isinstance(portfolio, dict):
+        subgoals, validation = build_risk1b_subgoal_portfolio(
+            base_prompt="mock/local contract prompt",
+            num_subgoals=config.num_candidates,
+            model_name=config.risk1b_model,
+            generator_backend=config.risk1b_generator_backend,
+            subgoals_json=config.risk1b_subgoals_json,
+        )
+        portfolio = {
+            "enabled": config.risk1b_vlm_subgoals,
+            "active": False,
+            "model": config.risk1b_model,
+            "candidate_models": list(RISK1B_CANDIDATE_MODELS),
+            "generator_backend": config.risk1b_generator_backend,
+            "base_prompt": "mock/local contract prompt",
+            "subgoals": subgoals,
+            "validation": validation,
+            "provenance": "mock_contract" if config.backend == "mock" else validation.get("provenance", "unavailable"),
+            "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+            "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
+            "latency_ms": validation.get("latency_ms"),
+            "memory_mb": validation.get("memory_mb"),
+            "cost_usd": validation.get("cost_usd"),
+        }
+    payload = {
+        "risk": "risk_1b_external_vlm_subgoal_generator",
+        "enabled": config.risk1b_vlm_subgoals,
+        "active": bool(portfolio.get("active")),
+        "model": portfolio.get("model", config.risk1b_model),
+        "candidate_models": portfolio.get("candidate_models", list(RISK1B_CANDIDATE_MODELS)),
+        "generator_backend": portfolio.get("generator_backend", config.risk1b_generator_backend),
+        "provenance": portfolio.get("provenance", "unavailable"),
+        "validation": portfolio.get("validation", {}),
+        "subgoals": portfolio.get("subgoals", []),
+        "latency_ms": portfolio.get("latency_ms"),
+        "memory_mb": portfolio.get("memory_mb"),
+        "cost_usd": portfolio.get("cost_usd"),
+        "verdict": diversity.verdict if portfolio.get("active") else BLOCKED,
+        "rationale": (
+            diversity.rationale
+            if portfolio.get("active")
+            else "Risk1-B was not active in this run; local/mock/contract evidence cannot pass."
+        ),
+        "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+        "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
+        "candidate_count": len(candidates),
+        "metrics": asdict(diversity),
+        "candidate_summaries": [summarize_candidate(candidate) for candidate in candidates],
+        "boundary": (
+            "Risk1-B is candidate-generation evidence only. PASS requires validated external VLM subgoals plus "
+            "actual policy-generated chunks; selector and LIBERO success are evaluated separately."
+        ),
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def compute_risk1c_selector_evidence(
+    *,
+    config: RiskProbeConfig,
+    candidates: list[ActionChunkCandidate],
+    outcomes: dict[str, dict[str, Any]],
+    oracle: OracleUpperBoundMetrics,
+    actual_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    del actual_evidence
+    policy = next((candidate for candidate in candidates if candidate.is_policy_only), candidates[0] if candidates else None)
+    policy_id = policy.candidate_id if policy else None
+    outcome_scores = {
+        candidate.candidate_id: float(outcomes.get(candidate.candidate_id, {}).get("success_proxy", candidate.privileged_success_proxy))
+        for candidate in candidates
+    }
+    score_values = list(outcome_scores.values())
+    score_spread = round((max(score_values) - min(score_values)) if score_values else 0.0, 8)
+    modes: dict[str, Any] = {}
+    if "c0" in config.risk1c_selector_modes:
+        modes["c0_privileged_oracle"] = {
+            "selector_class": "C0",
+            "available": bool(oracle.privileged_oracle_available and oracle.upper_bound_testable),
+            "verdict": PASS if oracle.verdict == PASS and oracle.privileged_oracle_available and oracle.upper_bound_testable else WARN,
+            "selected_candidate_id": oracle.selected_candidate_id,
+            "score_spread": score_spread,
+            "selected_vs_policy_l2": selected_vs_policy_distance(candidates, oracle.selected_candidate_id),
+            "non_baseline_selection": bool(policy_id and oracle.selected_candidate_id != policy_id),
+            "oracle_beats_policy": oracle.oracle_beats_policy,
+            "oracle_beats_random": oracle.oracle_beats_random,
+            "claim_boundary": "privileged upper-bound only; not deployable selector or benchmark success",
+            "rationale": oracle.rationale,
+        }
+    if "c1" in config.risk1c_selector_modes:
+        selected_id = max(outcome_scores, key=outcome_scores.get) if outcome_scores else None
+        non_baseline = bool(policy_id and selected_id and selected_id != policy_id)
+        modes["c1_non_oracle_proxy"] = {
+            "selector_class": "C1",
+            "available": bool(outcome_scores),
+            "verdict": WARN if outcome_scores else BLOCKED,
+            "selected_candidate_id": selected_id,
+            "score_spread": score_spread,
+            "selected_vs_policy_l2": selected_vs_policy_distance(candidates, selected_id),
+            "non_baseline_selection": non_baseline,
+            "plausibility_failures": [] if score_spread > 0 else ["proxy scores have no spread"],
+            "claim_boundary": "non-oracle proxy selector; requires separate validation before method claims",
+        }
+    if "c2" in config.risk1c_selector_modes:
+        selected = min(candidates, key=lambda candidate: vector_norm(flatten_chunk(candidate.action_chunk))) if candidates else None
+        selected_id = selected.candidate_id if selected else None
+        modes["c2_action_only_debug"] = {
+            "selector_class": "C2",
+            "available": bool(candidates),
+            "verdict": WARN,
+            "selected_candidate_id": selected_id,
+            "score_spread": score_spread,
+            "selected_vs_policy_l2": selected_vs_policy_distance(candidates, selected_id),
+            "non_baseline_selection": bool(policy_id and selected_id and selected_id != policy_id),
+            "claim_boundary": "action-only sanity selector, debug baseline only",
+        }
+    return {
+        "risk": "risk_1c_simulator_based_candidate_selection",
+        "enabled": config.risk1c_sim_selector,
+        "candidate_count": len(candidates),
+        "policy_candidate_id": policy_id,
+        "outcome_score_source": "success_proxy_or_privileged_proxy",
+        "score_spread": score_spread,
+        "modes": modes,
+        "boundary": (
+            "Risk1-C tests whether a selector can identify a better chunk from an existing candidate set. "
+            "C0 is privileged/oracle upper-bound, C1 is non-oracle proxy if available, and C2 is action-only debug."
+        ),
+    }
+
+
+def selected_vs_policy_distance(candidates: list[ActionChunkCandidate], selected_candidate_id: str | None) -> float:
+    policy = next((candidate for candidate in candidates if candidate.is_policy_only), None)
+    selected = next((candidate for candidate in candidates if candidate.candidate_id == selected_candidate_id), None)
+    if policy is None or selected is None:
+        return 0.0
+    return round(l2(flatten_chunk(policy.action_chunk), flatten_chunk(selected.action_chunk)), 6)
+
+
+def write_risk1c_sim_selector_artifact(*, output_dir: Path, selector_evidence: dict[str, Any]) -> str:
+    path = output_dir / "risk1c_sim_selector.json"
+    path.write_text(json.dumps(selector_evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return str(path)
 
 
