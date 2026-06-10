@@ -28,6 +28,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     restore_sim_state,
     run_direct_env_snapshot_replay,
     run_risk_probes,
+    prepare_lerobot_policy_observation,
     sample_policy_action_candidates,
     simulate_mock_env,
 )
@@ -596,6 +597,85 @@ class RiskProbeTest(TestCase):
             summary = json.loads(Path(report.artifacts["summary"]).read_text(encoding="utf-8"))
             self.assertIn("libero_egl_l4_blocked", summary["diversity"]["rationale"])
 
+    def test_actual_adapter_synthetic_fallback_cannot_pass_risk1(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-double-sim-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=4,
+                chunk_steps=3,
+                action_dim=7,
+                output_dir=tmpdir,
+            )
+
+            def fake_adapter(config, candidates, output_dir):  # noqa: ANN001, ARG001
+                evidence_path = Path(output_dir) / "libero_adapter_evidence.json"
+                evidence = {
+                    "mode": "libero_actual_adapter",
+                    "available": True,
+                    "blockers": [],
+                    "candidate_generation": {
+                        "source": "synthetic_fallback",
+                        "candidate_count": 0,
+                        "errors": ["candidate_00_policy_only policy candidate sampling failed: missing image features"],
+                        "fallback_reason": "policy candidate sampling produced no usable candidates",
+                    },
+                    "action_candidates": [],
+                    "fallback_candidates": [candidate.__dict__ for candidate in candidates],
+                    "outcomes": {
+                        candidates[0].candidate_id: {"success_proxy": 0.0, "state": [0.0], "image": [[0]]}
+                    },
+                    "artifact_path": str(evidence_path),
+                }
+                evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+                return evidence
+
+            with patch(
+                "physical_ai_agent.imagine_then_act.risk_probes.run_libero_actual_adapter",
+                side_effect=fake_adapter,
+            ):
+                report = run_risk_probes(config)
+
+            self.assertEqual(report.diversity.verdict, WARN)
+            self.assertEqual(report.diversity.provenance, "policy_sampling_unavailable")
+            self.assertIn("missing image features", report.diversity.rationale)
+            self.assertNotEqual(report.risk_verdicts["risk_1_candidate_diversity"], PASS)
+
+    def test_lerobot_policy_observation_preparation_adds_task_and_preprocessor_features(self) -> None:
+        raw_observation = {"pixels": [1], "robot_state": [0.1, 0.2]}
+        env = _FakeTaskEnv()
+
+        def fake_preprocess(observation):  # noqa: ANN001
+            return {"image": observation["pixels"], "state": observation["robot_state"]}
+
+        def fake_env_preprocessor(observation):  # noqa: ANN001
+            observation = dict(observation)
+            observation["observation.images.camera1"] = observation.pop("image")
+            return observation
+
+        def fake_policy_preprocessor(observation):  # noqa: ANN001
+            observation = dict(observation)
+            observation["pixels"] = observation.pop("observation.images.camera1")
+            observation["robot_state"] = observation.pop("state")
+            return observation
+
+        processed, metadata = prepare_lerobot_policy_observation(
+            observation=raw_observation,
+            env=env,
+            env_preprocessor=fake_env_preprocessor,
+            preprocessor=fake_policy_preprocessor,
+            preprocess_observation_fn=fake_preprocess,
+        )
+
+        self.assertEqual(processed["task"], ["fake task"])
+        self.assertIn("pixels", processed)
+        self.assertIn("robot_state", processed)
+        self.assertEqual(metadata["task_source"], "task_description")
+        self.assertEqual(metadata["steps"], ["preprocess_observation", "env_preprocessor", "policy_preprocessor"])
+
     def test_policy_candidate_sampling_records_seeded_action_chunks(self) -> None:
         with TemporaryDirectory() as tmpdir:
             config = RiskProbeConfig(
@@ -767,6 +847,15 @@ class _FakeConstantPolicy:
 
     def predict_action_chunk(self, observation):  # noqa: ANN001, ARG002
         return [[[0.05, 0.05, 0.05], [0.05, 0.05, 0.05]]]
+
+
+class _FakeTaskEnv:
+    num_envs = 1
+
+    def call(self, name):  # noqa: ANN001
+        if name == "task_description":
+            return ["fake task"]
+        raise AttributeError(name)
 
 
 class _FakeActualEnv:

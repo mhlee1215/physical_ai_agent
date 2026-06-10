@@ -172,6 +172,8 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
         if actual_candidates:
             report_candidates = actual_candidates
             diversity = compute_diversity_metrics(config, actual_candidates)
+        if actual_evidence.get("candidate_generation", {}).get("source") == "synthetic_fallback":
+            diversity = mark_diversity_as_policy_sampling_unavailable(diversity, actual_evidence)
         if actual_evidence.get("outcomes"):
             outcomes = actual_evidence["outcomes"]
             evaluated_ids = set(outcomes)
@@ -514,6 +516,35 @@ def mark_diversity_as_actual_unavailable(metrics: DiversityMetrics, evidence: di
         selected_vs_policy_l2=metrics.selected_vs_policy_l2,
         selected_vs_policy_cosine_distance=metrics.selected_vs_policy_cosine_distance,
         provenance="actual_unavailable",
+    )
+
+
+def mark_diversity_as_policy_sampling_unavailable(metrics: DiversityMetrics, evidence: dict[str, Any]) -> DiversityMetrics:
+    generation = evidence.get("candidate_generation", {}) if isinstance(evidence.get("candidate_generation"), dict) else {}
+    errors = generation.get("errors") if isinstance(generation.get("errors"), list) else []
+    reason = errors[0] if errors else generation.get("fallback_reason", "policy candidate sampling produced no usable candidates")
+    return DiversityMetrics(
+        verdict=WARN,
+        min_pairwise_l2=metrics.min_pairwise_l2,
+        mean_pairwise_l2=metrics.mean_pairwise_l2,
+        max_pairwise_l2=metrics.max_pairwise_l2,
+        endpoint_spread_l2=metrics.endpoint_spread_l2,
+        mean_per_dim_variance=metrics.mean_per_dim_variance,
+        gripper_command_variance=metrics.gripper_command_variance,
+        candidate_count=metrics.candidate_count,
+        rationale=(
+            f"actual LIBERO rollout ran, but SmolVLA/LeRobot policy candidate sampling fell back to synthetic chunks: {reason}. "
+            "Risk1 cannot pass until candidate_action_chunks.json contains actual policy-generated chunks."
+        ),
+        min_pairwise_cosine_distance=metrics.min_pairwise_cosine_distance,
+        mean_pairwise_cosine_distance=metrics.mean_pairwise_cosine_distance,
+        min_normalized_pairwise_l2=metrics.min_normalized_pairwise_l2,
+        mean_normalized_pairwise_l2=metrics.mean_normalized_pairwise_l2,
+        mean_per_step_variance=metrics.mean_per_step_variance,
+        max_per_step_variance=metrics.max_per_step_variance,
+        selected_vs_policy_l2=metrics.selected_vs_policy_l2,
+        selected_vs_policy_cosine_distance=metrics.selected_vs_policy_cosine_distance,
+        provenance="policy_sampling_unavailable",
     )
 
 
@@ -1053,6 +1084,35 @@ def sample_policy_action_candidates(
         ),
     }
     return candidates, metadata
+
+
+def prepare_lerobot_policy_observation(
+    *,
+    observation: Any,
+    env: Any,
+    env_preprocessor: Any,
+    preprocessor: Any,
+    preprocess_observation_fn: Any,
+) -> tuple[Any, dict[str, Any]]:
+    metadata: dict[str, Any] = {"steps": []}
+    processed = preprocess_observation_fn(observation) if callable(preprocess_observation_fn) else observation
+    metadata["steps"].append("preprocess_observation")
+    try:
+        processed["task"] = list(env.call("task_description"))
+        metadata["task_source"] = "task_description"
+    except Exception:  # noqa: BLE001
+        try:
+            processed["task"] = list(env.call("task"))
+            metadata["task_source"] = "task"
+        except Exception as exc:  # noqa: BLE001
+            processed["task"] = [""] * int(getattr(env, "num_envs", 1))
+            metadata["task_source"] = f"fallback_empty_task:{type(exc).__name__}"
+    processed = env_preprocessor(processed) if callable(env_preprocessor) else processed
+    metadata["steps"].append("env_preprocessor")
+    processed = preprocessor(processed) if callable(preprocessor) else processed
+    metadata["steps"].append("policy_preprocessor")
+    metadata["keys"] = sorted(str(key) for key in processed.keys()) if isinstance(processed, dict) else [type(processed).__name__]
+    return processed, metadata
 
 
 def capture_policy_raw_action_chunk(*, policy: Any, observation: Any, torch_module: Any = None) -> tuple[Any, str, str | None]:
@@ -1597,10 +1657,11 @@ def build_libero_risk_probe_rollout(
         return_observations=False,
         render_callback=None,
     ) -> dict:
-        del env_preprocessor, preprocessor, return_observations
+        del return_observations
         import numpy as np
         import torch
 
+        from lerobot.envs import preprocess_observation
         from lerobot.utils.constants import ACTION
 
         if hasattr(policy, "reset"):
@@ -1609,9 +1670,16 @@ def build_libero_risk_probe_rollout(
         introspection = inspect_actual_env(env)
         clone_handle = find_sim_clone_handle(env)
         sampling_observation, _sampling_info = env.reset(seed=rollout_seed)
+        policy_sampling_observation, observation_preprocess_metadata = prepare_lerobot_policy_observation(
+            observation=sampling_observation,
+            env=env,
+            env_preprocessor=env_preprocessor,
+            preprocessor=preprocessor,
+            preprocess_observation_fn=preprocess_observation,
+        )
         policy_candidates, candidate_generation = sample_policy_action_candidates(
             policy=policy,
-            observation=sampling_observation,
+            observation=policy_sampling_observation,
             postprocessor=postprocessor,
             env_postprocessor=env_postprocessor,
             action_key=ACTION,
@@ -1619,10 +1687,15 @@ def build_libero_risk_probe_rollout(
             torch_module=torch,
             numpy_module=np,
         )
+        candidate_generation["observation_preprocess"] = observation_preprocess_metadata
         if policy_candidates:
             active_candidates = policy_candidates
+            action_candidate_payload = [summarize_candidate(candidate) for candidate in active_candidates]
+            fallback_candidate_payload: list[dict[str, Any]] = []
         else:
             active_candidates = candidates
+            action_candidate_payload = []
+            fallback_candidate_payload = [summarize_candidate(candidate) for candidate in candidates]
             candidate_generation = {
                 **candidate_generation,
                 "source": "synthetic_fallback",
@@ -1738,7 +1811,8 @@ def build_libero_risk_probe_rollout(
             "blockers": [] if clone_verdict == PASS else [clone_rationale],
             "introspection": introspection,
             "candidate_generation": candidate_generation,
-            "action_candidates": [summarize_candidate(candidate) for candidate in active_candidates],
+            "action_candidates": action_candidate_payload,
+            "fallback_candidates": fallback_candidate_payload,
             "candidate_results": candidate_results,
             "outcomes": outcomes,
             "outcome_diversity": compute_outcome_diversity_metrics(outcomes),
