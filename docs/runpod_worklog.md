@@ -2903,6 +2903,61 @@ sh /tmp/runpod_smolvla_metaworld_official_repro.sh
   Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
   all accessible Pods `EXITED`; no `RUNNING` Pods remained.
 
+### RunPod LIBERO/SmolVLA Bootstrap Profiling
+
+- Goal:
+  quantify the wall-clock bottlenecks in the RunPod environment bootstrap path
+  with grep-able `[bootstrap-timer]` markers.
+- Repo fix:
+  commit `174f21b` adds timer markers to
+  `scripts/bootstrap_runpod_libero_smolvla_env.sh` and
+  `scripts/runpod_prepare_libero_smolvla_env.sh`. The markers log
+  `start/end/duration_sec` for apt, venv, pip setup, torch/cu124, LeRobot,
+  sim deps, auxiliary deps, LIBERO, LIBERO assets, and final import gates.
+- Pod:
+  restarted `h1yxes6375ymbd`, NVIDIA L4, `$0.39/hr`, image
+  `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`, network volume
+  `tchm4gxfvd`, SSH endpoint `213.173.105.29:30107`.
+- Cache finding:
+  after stop/start, `/root` was a fresh overlay, so the profiling run was a
+  cold ephemeral install. The preflight line saying warm cache was an incorrect
+  assumption; cache directories were absent before bootstrap.
+- Repo path:
+  because `/workspace` git writes had failed with `Disk quota exceeded`, the
+  committed snapshot was uploaded to `/root/...` by `git archive`. Snapshot
+  upload/check-out fallback took `11s`.
+- Top bottlenecks:
+  `torch_cu124_install=77s`, `pod_start_to_ssh_ready=39s`, and
+  `auxiliary_deps_install=22s` / `libero_install=22s` /
+  `libero_assets_download=22s`.
+- Stage durations:
+  `pod_start_to_ssh_ready=39s`, `repo_snapshot_upload_checkout=11s`,
+  `apt_update=3s`, `apt_install=12s`, `python_venv_create=2s`,
+  `pip_upgrade_setup=2s`, `torch_cu124_install=77s`,
+  `lerobot_editable_install=2s`, `base_runtime_deps_install=2s`,
+  `sim_runtime_deps_install=15s`, `auxiliary_deps_install=22s`,
+  `libero_install=22s`, `torch_cu124_repin=1s`,
+  `libero_assets_download=22s`, `final_import_gate=3s`,
+  `published_env_gate=3s`, `artifact_fetch=10s`,
+  `total_bootstrap=193s`, `prepare_total=199s`.
+- Asset/cache sizes:
+  LIBERO assets downloaded `586` files and occupied `407M` at
+  `/root/physical-ai/libero_assets`; HF cache was `2.4M`.
+- Hard gate result:
+  PASS. `/root/physical-ai/envs/lerobot_py312/bin/python`, Python `3.12.13`,
+  `torch 2.5.1+cu124`, CUDA `12.4`, CUDA available `True`, GPU `NVIDIA L4`;
+  imports passed for `lerobot 0.5.2`, `libero 0.1.1`, `robosuite 1.4.0`,
+  `mujoco 3.3.2`, `av 17.1.0`, and `num2words 0.5.14`.
+- Reduction ideas:
+  keep torch/cu124 wheels and LIBERO assets on a persistent volume with working
+  quota, or prebuild a Python 3.12/cu124 image. Keep the import gate split out
+  because it takes only about `3s`.
+- Local evidence:
+  `_workspace/runpod_results/env_bootstrap_profile_174f21bbe_h1yxes6375ymbd/`
+- Stop confirmation:
+  Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
+  all accessible Pods `EXITED`; no `RUNNING` Pods remained.
+
 ### Imagine-Then-Act L4 Environment Recovery and Backend Run
 
 - User direction:
