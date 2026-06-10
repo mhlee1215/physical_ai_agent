@@ -745,12 +745,19 @@ def run_direct_env_snapshot_replay(
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     selected = select_actual_probe_candidates(candidates)
-    handle = find_sim_clone_handle(env)
     candidate_results: dict[str, dict[str, Any]] = {}
     image_artifacts: dict[str, str] = {}
     for candidate in selected:
         start_observation = reset_direct_env_to_init_state(env, init_state)
-        start_state = capture_sim_state(handle)
+        handles = find_sim_clone_handles(env)
+        snapshot_records = [
+            {
+                "handle": handle,
+                "handle_summary": summarize_sim_handle(handle),
+                "snapshot": capture_sim_state(handle),
+            }
+            for handle in handles
+        ]
         committed = apply_candidate_to_direct_env(
             env,
             candidate,
@@ -758,7 +765,20 @@ def run_direct_env_snapshot_replay(
             np_module,
             initial_observation=start_observation,
         )
-        restore_result = restore_sim_state(handle, start_state)
+        restore_result = {"restored": False, "reason": "sim_handle_unavailable"}
+        selected_handle_summary = None
+        restore_attempts = []
+        for record in snapshot_records:
+            restore_result = restore_sim_state(record["handle"], record["snapshot"])
+            attempt = {
+                "handle": record["handle_summary"],
+                "snapshot": {key: value for key, value in record["snapshot"].items() if key != "state"},
+                "restore": restore_result,
+            }
+            restore_attempts.append(attempt)
+            if restore_result.get("restored"):
+                selected_handle_summary = record["handle_summary"]
+                break
         replay_start_observation = start_observation if restore_result["restored"] else reset_direct_env_to_init_state(env, init_state)
         replay = apply_candidate_to_direct_env(
             env,
@@ -775,6 +795,9 @@ def run_direct_env_snapshot_replay(
             "committed": committed,
             "replay": replay,
             "snapshot_restore": restore_result,
+            "selected_handle": selected_handle_summary,
+            "handle_candidates": [record["handle_summary"] for record in snapshot_records],
+            "restore_attempts": restore_attempts,
             "state_l2": round(state_l2, 12),
             "image_mse": round(image_mse, 12),
             "image_mae": round(image_mae, 12),
@@ -824,7 +847,14 @@ def run_direct_env_snapshot_replay(
             "selected_candidate_id": chosen.candidate_id,
             "snapshot_restored": snapshot_restored,
             "snapshot_source": chosen_record["snapshot_restore"].get("path", "unavailable"),
+            "snapshot_strategy": chosen_record["snapshot_restore"].get("strategy"),
+            "selected_handle": chosen_record.get("selected_handle"),
+            "handle_candidates": chosen_record.get("handle_candidates", []),
+            "restore_attempts": chosen_record.get("restore_attempts", []),
             "restore_error": chosen_record["snapshot_restore"].get("reason"),
+            "forward_called": chosen_record["snapshot_restore"].get("forward_called"),
+            "forward_succeeded": chosen_record["snapshot_restore"].get("forward_succeeded"),
+            "forward_error": chosen_record["snapshot_restore"].get("forward_error"),
             "future_image_artifact": chosen_record["future_image_artifact"],
             "state_available": state_available,
             "image_available": image_available,
@@ -1285,15 +1315,18 @@ def object_type_name(value: Any) -> str:
 
 
 def find_sim_clone_handle(env: Any) -> dict[str, Any] | None:
+    handles = find_sim_clone_handles(env)
+    return handles[0] if handles else None
+
+
+def find_sim_clone_handles(env: Any) -> list[dict[str, Any]]:
     handles = [
         handle
         for node in traverse_env_object_graph(env)
         for handle in [build_sim_handle(node)]
         if handle is not None
     ]
-    if not handles:
-        return None
-    return sorted(handles, key=score_sim_handle, reverse=True)[0]
+    return sorted(handles, key=score_sim_handle, reverse=True)
 
 
 def build_sim_handle(node: dict[str, Any]) -> dict[str, Any] | None:
@@ -1374,12 +1407,14 @@ def restore_sim_state(handle: dict[str, Any] | None, snapshot: dict[str, Any]) -
             assign_array_like(sim.data.qvel, snapshot["state"]["qvel"])
         else:
             sim.set_state(snapshot["state"])
-        forward_called = safe_sim_forward(sim)
+        forward_result = safe_sim_forward(sim)
         return {
             "restored": True,
             "path": handle["path"],
             "strategy": strategy,
-            "forward_called": forward_called,
+            "forward_called": forward_result["called"],
+            "forward_succeeded": forward_result["succeeded"],
+            "forward_error": forward_result.get("error"),
         }
     except Exception as exc:  # noqa: BLE001
         return {"restored": False, "path": handle["path"], "reason": f"{type(exc).__name__}: {str(exc)[:300]}"}
@@ -1419,11 +1454,14 @@ def assign_array_like(target: Any, source: Any) -> None:
     raise TypeError(f"cannot assign simulator state into {type(target).__name__}")
 
 
-def safe_sim_forward(sim: Any) -> bool:
+def safe_sim_forward(sim: Any) -> dict[str, Any]:
     if not has_callable(sim, "forward"):
-        return False
-    sim.forward()
-    return True
+        return {"called": False, "succeeded": False, "error": None}
+    try:
+        sim.forward()
+    except Exception as exc:  # noqa: BLE001
+        return {"called": True, "succeeded": False, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+    return {"called": True, "succeeded": True, "error": None}
 
 
 def extract_state_vector(env: Any, observation: Any, info: Any) -> tuple[list[float], str]:

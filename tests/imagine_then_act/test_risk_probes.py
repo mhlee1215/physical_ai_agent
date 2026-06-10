@@ -331,6 +331,69 @@ class RiskProbeTest(TestCase):
                 self.assertEqual(Path(artifact_path).suffix, ".ppm")
                 self.assertTrue(Path(artifact_path).read_text(encoding="ascii").startswith("P3\n"))
 
+    def test_direct_replay_finds_sim_handle_after_reset_replaces_root_sim(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-double-sim-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=3,
+                chunk_steps=2,
+                action_dim=3,
+                output_dir=tmpdir,
+                direct_libero_double_sim=True,
+            )
+            candidates = generate_mock_candidates(config)
+
+            evidence = run_direct_env_snapshot_replay(
+                env=_FakeResetReplacesSimEnv(),
+                init_state=[0.0, 0.0, 0.0],
+                candidates=candidates,
+                output_dir=Path(tmpdir),
+                camera_name="agentview",
+                max_steps=2,
+                np_module=_FakeNumpy,
+            )
+
+            self.assertEqual(evidence["clone_fidelity"]["verdict"], PASS)
+            self.assertTrue(evidence["clone_restore_evidence"]["snapshot_restored"])
+            self.assertEqual(evidence["clone_restore_evidence"]["snapshot_source"], "root.sim")
+            self.assertEqual(evidence["clone_restore_evidence"]["selected_handle"]["type"].split(".")[-1], "_FakeMuJoCoSim")
+
+    def test_direct_replay_records_forward_failure_without_failing_restore(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-double-sim-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=3,
+                chunk_steps=2,
+                action_dim=3,
+                output_dir=tmpdir,
+                direct_libero_double_sim=True,
+            )
+            candidates = generate_mock_candidates(config)
+
+            evidence = run_direct_env_snapshot_replay(
+                env=_FakeForwardRaisesEnv(),
+                init_state=[0.0, 0.0, 0.0],
+                candidates=candidates,
+                output_dir=Path(tmpdir),
+                camera_name="agentview",
+                max_steps=2,
+                np_module=_FakeNumpy,
+            )
+
+            self.assertEqual(evidence["clone_fidelity"]["verdict"], PASS)
+            self.assertTrue(evidence["clone_restore_evidence"]["snapshot_restored"])
+            self.assertTrue(evidence["clone_restore_evidence"]["forward_called"])
+            self.assertFalse(evidence["clone_restore_evidence"]["forward_succeeded"])
+            self.assertIn("AttributeError", evidence["clone_restore_evidence"]["forward_error"])
+
     def test_libero_contract_writes_actionable_import_guard_blocker_without_dependencies(self) -> None:
         with TemporaryDirectory() as tmpdir:
             config = RiskProbeConfig(
@@ -564,6 +627,48 @@ class _FakeVectorRobosuiteEnv:
         }
 
 
+class _FakeResetReplacesSimEnv(_FakeVectorRobosuiteEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sim = _FakeBrokenRootSim()
+
+    def reset(self, seed=None):  # noqa: ARG002
+        self.sim = _FakeMuJoCoSim()
+        self.robosuite = _FakeRobosuiteEnv(self.sim)
+        self.envs = [_FakeVectorLeaf(self.robosuite)]
+        return self._observation(), {"reset": True}
+
+    def set_init_state(self, init_state):  # noqa: ANN001
+        self.sim.set_state(init_state)
+        self.robosuite = _FakeRobosuiteEnv(self.sim)
+        self.envs = [_FakeVectorLeaf(self.robosuite)]
+        return self._observation()
+
+
+class _FakeForwardRaisesEnv(_FakeVectorRobosuiteEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sim = _FakeForwardRaisesSim()
+        self.robosuite = _FakeRobosuiteEnv(self.sim)
+        self.envs = [_FakeVectorLeaf(self.robosuite)]
+
+    def reset(self, seed=None):  # noqa: ARG002
+        self.sim.set_state([0.0, 0.0, 0.0])
+        return self._observation(), {"reset": True}
+
+    def set_init_state(self, init_state):  # noqa: ANN001
+        self.sim.set_state(init_state)
+        return self._observation()
+
+    def step(self, action):
+        row = action[0] if action and isinstance(action[0], list) else action
+        self.sim.state = [self.sim.state[index] + float(row[index]) for index in range(3)]
+        self.sim.data = _FakeMuJoCoData(self.sim.state)
+        info = {"success": [self.robosuite.check_success()]}
+        reward = [1.0 if info["success"][0] else 0.0]
+        return self._observation(), reward, [False], [False], info
+
+
 class _FakeVectorLeaf:
     def __init__(self, robosuite_env) -> None:  # noqa: ANN001
         self._env = _FakeEnvWrapper(robosuite_env)
@@ -608,6 +713,12 @@ class _FakeMuJoCoSim:
     def forward(self) -> None:
         self.forward_calls += 1
         self.data = _FakeMuJoCoData(self.state)
+
+
+class _FakeForwardRaisesSim(_FakeMuJoCoSim):
+    def forward(self) -> None:
+        self.forward_calls += 1
+        raise AttributeError("'MjSim' object has no attribute 'data'")
 
 
 class _FakeMuJoCoData:
