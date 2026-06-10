@@ -232,6 +232,10 @@ def resolve_transformers_components(model_id: str | None = None) -> dict[str, An
             "RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED: missing python import(s): "
             + "; ".join(missing)
         )
+    compatibility = diagnose_torch_transformers_compatibility(torch, transformers)
+    diagnostics.update(compatibility)
+    if compatibility.get("compatibility_blocker"):
+        raise RuntimeError(str(compatibility["compatibility_blocker"]))
     processor_cls, processor_name, processor_attempts = select_transformers_processor_class(transformers, model_id or "")
     model_cls, class_name = select_transformers_model_class(transformers)
     diagnostics["processor_loader_class"] = processor_name
@@ -244,6 +248,39 @@ def resolve_transformers_components(model_id: str | None = None) -> dict[str, An
         "model_cls": model_cls,
         "diagnostics": diagnostics,
     }
+
+
+def diagnose_torch_transformers_compatibility(torch_module: Any, transformers_module: Any) -> dict[str, Any]:
+    torch_version = str(getattr(torch_module, "__version__", "unknown"))
+    transformers_version = str(getattr(transformers_module, "__version__", "unknown"))
+    has_float8_e8m0fnu = hasattr(torch_module, "float8_e8m0fnu")
+    has_float8_e5m2 = hasattr(torch_module, "float8_e5m2")
+    diagnostics: dict[str, Any] = {
+        "torch_float8_e8m0fnu_available": bool(has_float8_e8m0fnu),
+        "torch_float8_e5m2_available": bool(has_float8_e5m2),
+        "torch_transformers_compatibility": "unknown",
+    }
+    version_tuple = parse_version_prefix(transformers_version)
+    if version_tuple >= (5, 10) and not has_float8_e8m0fnu:
+        diagnostics["torch_transformers_compatibility"] = "blocked"
+        diagnostics["compatibility_blocker"] = (
+            "RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED_COMPATIBILITY: "
+            f"transformers {transformers_version} is installed with torch {torch_version}, "
+            "but torch.float8_e8m0fnu is absent. This Transformers lazy processor path is "
+            "incompatible with the canonical torch==2.5.1+cu124 LeRobot/LIBERO env. "
+            "Use the separate Risk1-B VLM env pinned to transformers==4.49.0, or change "
+            "torch only in that separate VLM env after validation."
+        )
+    else:
+        diagnostics["torch_transformers_compatibility"] = "pass"
+    return diagnostics
+
+
+def parse_version_prefix(version: str) -> tuple[int, int]:
+    match = re.match(r"^(\d+)\.(\d+)", version)
+    if not match:
+        return (0, 0)
+    return (int(match.group(1)), int(match.group(2)))
 
 
 def select_transformers_processor_class(transformers_module: Any, model_id: str) -> tuple[Any, str, list[dict[str, Any]]]:

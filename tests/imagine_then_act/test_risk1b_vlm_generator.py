@@ -200,6 +200,38 @@ class Risk1BVlmGeneratorTest(TestCase):
         with self.assertRaisesRegex(RuntimeError, "PROCESSOR_LOADER"):
             module.select_transformers_processor_class(_BrokenTransformers(), "Qwen/Qwen2.5-VL-7B-Instruct")
 
+    def test_torch_transformers_compatibility_blocks_missing_float8_for_new_transformers(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        fake_torch = SimpleNamespace(__version__="2.5.1+cu124", float8_e5m2=object())
+        fake_transformers = SimpleNamespace(__version__="5.10.2")
+
+        diagnostics = module.diagnose_torch_transformers_compatibility(fake_torch, fake_transformers)
+
+        self.assertEqual(diagnostics["torch_transformers_compatibility"], "blocked")
+        self.assertFalse(diagnostics["torch_float8_e8m0fnu_available"])
+        self.assertIn("RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED_COMPATIBILITY", diagnostics["compatibility_blocker"])
+        self.assertIn("transformers 5.10.2", diagnostics["compatibility_blocker"])
+
+    def test_torch_transformers_compatibility_allows_pinned_transformers_without_new_float8(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        fake_torch = SimpleNamespace(__version__="2.5.1+cu124", float8_e5m2=object())
+        fake_transformers = SimpleNamespace(__version__="4.49.0")
+
+        diagnostics = module.diagnose_torch_transformers_compatibility(fake_torch, fake_transformers)
+
+        self.assertEqual(diagnostics["torch_transformers_compatibility"], "pass")
+        self.assertNotIn("compatibility_blocker", diagnostics)
+
     def test_dependency_check_reports_specific_missing_imports_or_loader(self) -> None:
         completed = subprocess.run(
             [

@@ -84,20 +84,46 @@ transformers generator will reject it.
 
 ## RunPod Generation
 
-Run this after the RunPod VLM environment has `torch`, `transformers`, and
-`pillow` available and a start-observation/contact-sheet image or task context
-is ready.
+Run this after the actual context artifacts exist. Keep the canonical
+LeRobot/LIBERO/SmolVLA env pinned to `torch==2.5.1+cu124`; do not upgrade its
+torch stack to satisfy external VLM dependencies. Risk1-B JSON generation is a
+separate process and should use a separate VLM env.
 
-Before loading model weights, run the dependency/class preflight. This checks
-`torch`, `PIL.Image`, `transformers`, `AutoProcessor`, and the available model
-loader class (`AutoModelForImageTextToText`, `AutoModelForVision2Seq`, or
-`AutoModelForCausalLM`):
+Recommended one-time VLM env setup on the RunPod volume:
 
 ```bash
-PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+cd /workspace/physical-ai/physical_ai_agent
+PROJECT_DIR="$PWD" \
+WORK_ROOT=/workspace/physical-ai \
+VLM_VENV=/workspace/physical-ai/envs/risk1b_vlm_py312 \
+sh scripts/bootstrap_runpod_risk1b_vlm_env.sh
+```
+
+Default VLM env pins:
+
+- `torch==2.5.1+cu124` and `torchvision==0.20.1+cu124`
+- `transformers==4.49.0`
+- `Pillow>=10,<13`, `accelerate>=1.0,<2`, `huggingface_hub>=0.26,<1.0`
+- `qwen-vl-utils[decord]>=0.0.8,<0.1`
+
+Do not use the previously observed `transformers==5.10.2` with
+`torch==2.5.1+cu124` for Qwen/Gemma generation: its lazy processor path can
+require `torch.float8_e8m0fnu`, which is absent from torch 2.5.1. The generator
+preflight reports this as
+`RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED_COMPATIBILITY`.
+
+Before loading model weights, run the dependency/class preflight. This checks
+`torch`, `PIL.Image`, `transformers`, torch/Transformers float8 compatibility,
+`AutoProcessor` or model-specific processor fallbacks, and the available model
+loader class (`AutoModelForImageTextToText`, `AutoModelForVision2Seq`, or
+`AutoModelForCausalLM`). It does not download model weights:
+
+```bash
+PYTHONPATH=src /workspace/physical-ai/envs/risk1b_vlm_py312/bin/python -B \
   scripts/generate_risk1b_vlm_subgoals.py \
   --backend transformers \
   --dependency-check-only \
+  --model-id Qwen/Qwen2.5-VL-7B-Instruct \
   --json
 ```
 
@@ -111,7 +137,7 @@ lazy loader, the script tries model-specific fallbacks such as
 `RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED_PROCESSOR_LOADER`.
 
 ```bash
-PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+PYTHONPATH=src /workspace/physical-ai/envs/risk1b_vlm_py312/bin/python -B \
   scripts/generate_risk1b_vlm_subgoals.py \
   --backend transformers \
   --model-id Qwen/Qwen2.5-VL-7B-Instruct \
