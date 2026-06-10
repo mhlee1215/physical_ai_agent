@@ -36,6 +36,52 @@ PYTHONPATH=src python3 -B scripts/generate_risk1b_vlm_subgoals.py \
 This checks schema plumbing only. The output provenance is `mock_contract` and
 cannot drive a Risk1-B PASS claim.
 
+## Required Order
+
+Risk1-B actual validation must run in this order:
+
+1. Capture actual LIBERO/LeRobot context artifacts.
+2. Generate external VLM subgoal JSON from those artifacts.
+3. Run the frozen SmolVLA Risk1-B probe with `--risk1b-subgoals-json`.
+
+If context artifacts are missing or have `provenance.actual_context=false`,
+the transformers generator must stay blocked. Do not fabricate context for a
+Risk1-B PASS claim.
+
+## RunPod Context Capture
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/capture_risk1b_context.py \
+  --backend libero \
+  --suite libero_goal \
+  --task-id 6 \
+  --seed 1201 \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --renderer-backend egl \
+  --output-dir _workspace/runpod_results/ita_risk_probes/risk1b_context \
+  --json
+```
+
+Expected outputs:
+
+- `_workspace/runpod_results/ita_risk_probes/risk1b_context/contact_sheet_task6_seed1201.png`
+- `_workspace/runpod_results/ita_risk_probes/risk1b_context/context_task6_seed1201.json`
+
+Local mock context capture is available for schema plumbing only:
+
+```bash
+PYTHONPATH=src python3 -B scripts/capture_risk1b_context.py \
+  --backend mock \
+  --output-dir /tmp/risk1b_context_mock \
+  --json
+```
+
+The mock context has `provenance.actual_context=false` and the real
+transformers generator will reject it.
+
 ## RunPod Generation
 
 Run this after the RunPod VLM environment has `torch`, `transformers`, and

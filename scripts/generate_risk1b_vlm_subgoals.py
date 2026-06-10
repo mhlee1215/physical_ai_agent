@@ -97,6 +97,13 @@ def read_context_summary(path: str | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {"context": payload}
 
 
+def is_actual_context(context_summary: dict[str, Any]) -> bool:
+    provenance = context_summary.get("provenance")
+    if isinstance(provenance, dict) and provenance.get("actual_context") is True:
+        return True
+    return context_summary.get("actual_context") is True
+
+
 def build_generation_prompt(args: argparse.Namespace, context_summary: dict[str, Any]) -> str:
     compact_context = json.dumps(context_summary, sort_keys=True)[:2000] if context_summary else "none"
     return PROMPT_TEMPLATE.format(
@@ -278,6 +285,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     context_summary = read_context_summary(args.context_json)
     prompt = build_generation_prompt(args, context_summary)
+    if args.backend == "transformers" and not is_actual_context(context_summary):
+        print(
+            "context_error: transformers generation requires actual Risk1-B context JSON "
+            "with provenance.actual_context=true; do not generate from mock/fabricated context",
+            file=sys.stderr,
+        )
+        return 2
     output_path = Path(args.output_path) if args.output_path else default_output_path(
         args.output_dir, args.model_id, args.suite, args.task_id, args.seed
     )
