@@ -45,6 +45,36 @@ log() {
   printf '[runpod-libero-bootstrap] %s\n' "$*"
 }
 
+now_sec() {
+  date -u +%s
+}
+
+timer_start() {
+  stage="$1"
+  eval "TIMER_${stage}=$(now_sec)"
+  printf '[bootstrap-timer] %s start epoch_sec=%s\n' "$stage" "$(now_sec)"
+}
+
+timer_end() {
+  stage="$1"
+  end="$(now_sec)"
+  eval "start=\${TIMER_${stage}:-$end}"
+  duration=$((end - start))
+  printf '[bootstrap-timer] %s end epoch_sec=%s duration_sec=%s\n' "$stage" "$end" "$duration"
+}
+
+timed_run() {
+  stage="$1"
+  shift
+  timer_start "$stage"
+  set +e
+  "$@"
+  status=$?
+  set -e
+  timer_end "$stage"
+  return "$status"
+}
+
 run() {
   log "+ $*"
   "$@"
@@ -65,9 +95,9 @@ install_apt_packages() {
     fi
   done
   if [ -n "$missing" ]; then
-    run apt-get update
+    timed_run apt_update apt-get update
     # shellcheck disable=SC2086
-    run apt-get install -y $missing
+    timed_run apt_install apt-get install -y $missing
   else
     log "apt packages already present"
   fi
@@ -75,15 +105,17 @@ install_apt_packages() {
 
 ensure_python312_venv() {
   if [ ! -d "$PY312_VENV" ]; then
-    run python3.12 -m venv "$PY312_VENV"
+    timed_run python_venv_create python3.12 -m venv "$PY312_VENV"
+  else
+    log "venv already exists at $PY312_VENV"
   fi
-  run "$PY312_VENV/bin/python" -m pip install --upgrade pip wheel "$SETUPTOOLS_SPEC"
+  timed_run pip_upgrade_setup "$PY312_VENV/bin/python" -m pip install --upgrade pip wheel "$SETUPTOOLS_SPEC"
 }
 
 pin_torch_cu124() {
   # Remove any partial cu13/torch2.11 drift before pinning the known-good stack.
   "$PY312_VENV/bin/python" -m pip uninstall -y torch torchvision torchaudio >/dev/null 2>&1 || true
-  run "$PY312_VENV/bin/python" -m pip install \
+  timed_run torch_cu124_install "$PY312_VENV/bin/python" -m pip install \
     --index-url "$TORCH_INDEX_URL" \
     "$TORCH_SPEC" "$TORCHVISION_SPEC" "$TORCHAUDIO_SPEC"
 }
@@ -113,17 +145,31 @@ install_lerobot_and_runtime_deps() {
   fi
 
   # Editable registration only. Runtime deps are explicit below so torch stays cu124.
-  run "$PY312_VENV/bin/python" -m pip install -e "$LEROBOT_DIR" --no-deps
-  run "$PY312_VENV/bin/python" -m pip install \
+  timed_run lerobot_editable_install "$PY312_VENV/bin/python" -m pip install -e "$LEROBOT_DIR" --no-deps
+  timed_run base_runtime_deps_install "$PY312_VENV/bin/python" -m pip install \
     --constraint "$WORK_ROOT/torch-cu124-constraints.txt" \
-    "$NUMPY_SPEC" "$FSSPEC_SPEC" "$SETUPTOOLS_SPEC" \
-    "$MUJOCO_SPEC" "$ROBOSUITE_SPEC" "$LIBERO_SPEC" \
+    "$NUMPY_SPEC" "$FSSPEC_SPEC" "$SETUPTOOLS_SPEC"
+  timed_run sim_runtime_deps_install "$PY312_VENV/bin/python" -m pip install \
+    --constraint "$WORK_ROOT/torch-cu124-constraints.txt" \
+    "$MUJOCO_SPEC" "$ROBOSUITE_SPEC"
+  timed_run auxiliary_deps_install "$PY312_VENV/bin/python" -m pip install \
+    --constraint "$WORK_ROOT/torch-cu124-constraints.txt" \
     huggingface_hub draccus safetensors datasets transformers accelerate \
     imageio imageio-ffmpeg opencv-python-headless pyyaml einops num2words av
+  timed_run libero_install "$PY312_VENV/bin/python" -m pip install \
+    --constraint "$WORK_ROOT/torch-cu124-constraints.txt" \
+    "$LIBERO_SPEC"
   # Re-pin torch family after dependency installs as a guard against resolver drift.
-  run "$PY312_VENV/bin/python" -m pip install \
+  timed_run torch_cu124_repin "$PY312_VENV/bin/python" -m pip install \
     --index-url "$TORCH_INDEX_URL" \
     "$TORCH_SPEC" "$TORCHVISION_SPEC" "$TORCHAUDIO_SPEC"
+}
+
+download_libero_assets() {
+  "$PY312_VENV/bin/python" - <<PY
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id="lerobot/libero-assets", repo_type="dataset", local_dir="$LIBERO_ASSETS_DIR")
+PY
 }
 
 write_libero_config() {
@@ -135,10 +181,7 @@ PY
 )"
   libero_pkg="$site_packages/libero/libero"
   if [ -d "$libero_pkg" ]; then
-    "$PY312_VENV/bin/python" - <<PY
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id="lerobot/libero-assets", repo_type="dataset", local_dir="$LIBERO_ASSETS_DIR")
-PY
+    timed_run libero_assets_download download_libero_assets
     cat > "$LIBERO_CONFIG_DIR/config.yaml" <<EOF
 benchmark_root: $libero_pkg
 assets: $LIBERO_ASSETS_DIR
@@ -147,6 +190,10 @@ datasets: $site_packages/libero/datasets
 init_states: $libero_pkg/init_files
 EOF
     log "LIBERO config written to $LIBERO_CONFIG_DIR/config.yaml"
+    if command -v du >/dev/null 2>&1; then
+      log "LIBERO assets size=$(du -sh "$LIBERO_ASSETS_DIR" 2>/dev/null | awk '{print $1}') path=$LIBERO_ASSETS_DIR"
+      log "HF cache size=$(du -sh "$HF_HOME" 2>/dev/null | awk '{print $1}') path=$HF_HOME"
+    fi
   else
     log "warning: LIBERO package dir not found at $libero_pkg; import check will show the blocker"
   fi
@@ -158,7 +205,8 @@ print_checks() {
     echo "missing repo gate script: $PROJECT_DIR/scripts/runpod_check_libero_env.sh" >&2
     exit 1
   fi
-  PY312_VENV="$PY312_VENV" \
+  timed_run final_import_gate env \
+    PY312_VENV="$PY312_VENV" \
     REQUIRE_CUDA="${REQUIRE_CUDA:-1}" \
     EXPECTED_TORCH_PREFIX="$EXPECTED_TORCH_PREFIX" \
     EXPECTED_TORCHVISION_PREFIX="$EXPECTED_TORCHVISION_PREFIX" \
@@ -169,6 +217,7 @@ print_checks() {
 }
 
 main() {
+  timer_start total_bootstrap
   require_linux
   log "project=$PROJECT_DIR"
   log "venv=$PY312_VENV"
@@ -180,6 +229,7 @@ main() {
   install_lerobot_and_runtime_deps
   write_libero_config
   print_checks
+  timer_end total_bootstrap
   log "bootstrap complete"
 }
 

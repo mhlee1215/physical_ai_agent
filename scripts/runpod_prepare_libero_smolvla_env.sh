@@ -27,6 +27,36 @@ log() {
   printf '[runpod-libero-env-prepare] %s\n' "$*"
 }
 
+now_sec() {
+  date -u +%s
+}
+
+timer_start() {
+  stage="$1"
+  eval "TIMER_${stage}=$(now_sec)"
+  printf '[bootstrap-timer] %s start epoch_sec=%s\n' "$stage" "$(now_sec)"
+}
+
+timer_end() {
+  stage="$1"
+  end="$(now_sec)"
+  eval "start=\${TIMER_${stage}:-$end}"
+  duration=$((end - start))
+  printf '[bootstrap-timer] %s end epoch_sec=%s duration_sec=%s\n' "$stage" "$end" "$duration"
+}
+
+timed_run() {
+  stage="$1"
+  shift
+  timer_start "$stage"
+  set +e
+  "$@"
+  status=$?
+  set -e
+  timer_end "$stage"
+  return "$status"
+}
+
 die() {
   echo "[runpod-libero-env-prepare] error: $*" >&2
   exit 1
@@ -167,6 +197,7 @@ publish_build() {
 }
 
 main() {
+  timer_start prepare_total
   require_linux
   choose_profile
   resolve_project_dir
@@ -181,10 +212,11 @@ main() {
 
   if [ "$FORCE_REBUILD" != "1" ] && [ -x "$FINAL_VENV/bin/python" ]; then
     log "checking existing final venv"
-    if run_gate "$FINAL_VENV" > "$GATE_LOG" 2>&1; then
+    if timed_run existing_final_gate run_gate "$FINAL_VENV" > "$GATE_LOG" 2>&1; then
       log "existing env gate PASS"
       write_manifest "ready_existing"
       cat "$GATE_LOG"
+      timer_end prepare_total
       exit 0
     fi
     log "existing env gate failed ($(classify_log "$GATE_LOG")); rebuilding. See $GATE_LOG"
@@ -195,7 +227,8 @@ main() {
   fi
 
   log "building temporary venv=$BUILD_VENV"
-  if ! WORK_ROOT="$WORK_ROOT" \
+  if ! timed_run bootstrap_recipe env \
+    WORK_ROOT="$WORK_ROOT" \
     PROJECT_DIR="$PROJECT_DIR" \
     PY312_VENV="$BUILD_VENV" \
     sh "$PROJECT_DIR/scripts/bootstrap_runpod_libero_smolvla_env.sh" > "$BOOTSTRAP_LOG" 2>&1; then
@@ -206,16 +239,16 @@ main() {
   fi
 
   log "running hard gate against temporary venv"
-  if ! run_gate "$BUILD_VENV" > "$GATE_LOG" 2>&1; then
+  if ! timed_run temporary_env_gate run_gate "$BUILD_VENV" > "$GATE_LOG" 2>&1; then
     category="$(classify_log "$GATE_LOG")"
     log "temporary env gate failed ($category); see $GATE_LOG"
     write_manifest "gate_failed" "$category"
     exit 1
   fi
 
-  publish_build
+  timed_run publish_build publish_build
   log "running hard gate against published venv"
-  if ! run_gate "$FINAL_VENV" > "$GATE_LOG" 2>&1; then
+  if ! timed_run published_env_gate run_gate "$FINAL_VENV" > "$GATE_LOG" 2>&1; then
     category="$(classify_log "$GATE_LOG")"
     log "published env gate failed ($category); see $GATE_LOG"
     write_manifest "publish_gate_failed" "$category"
@@ -223,6 +256,7 @@ main() {
   fi
   write_manifest "ready"
   cat "$GATE_LOG"
+  timer_end prepare_total
   log "environment ready"
 }
 

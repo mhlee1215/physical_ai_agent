@@ -346,6 +346,14 @@ If this script exits non-zero, report `env_bootstrap_blocked`, fetch the
 `env_prepare_*` log directory, stop the Pod when no active run remains, and do
 not launch LIBERO diagnostics/probes/benchmarks.
 
+Bootstrap profiling is part of the environment gate. The prepare/bootstrap
+logs should contain grep-able `[bootstrap-timer]` markers for Pod/repo wrapper
+timing when available and package stages such as `python_venv_create`,
+`pip_upgrade_setup`, `torch_cu124_install`, `lerobot_editable_install`,
+`sim_runtime_deps_install`, `auxiliary_deps_install`, `libero_install`,
+`libero_assets_download`, and `final_import_gate`. Preserve these logs with the
+same artifact bundle as the import gate.
+
 Baseline parity evaluator:
 
 ```bash
