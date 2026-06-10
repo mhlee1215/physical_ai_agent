@@ -445,33 +445,22 @@ sh scripts/runpod_pod.sh status
 RUNPOD_SSH="$RUNPOD_SSH" sh scripts/runpod_check.sh
 ```
 
-RunPod capacity policy:
+RunPod capacity and ownership policy:
 
-- RunPod creation/start/reuse is pre-approved for planned verification work in
-  this project. Agents may create or start a cheaper/similar suitable Pod
-  without asking again when the work is already part of an approved evaluation
-  plan.
-- Minimize initialization waste: prefer an already-running or recently-used Pod,
-  an attached network volume, and cached repo/model/LIBERO assets. If a Pod
-  restarts without the expected environment, bootstrap from repo scripts and
-  keep the repaired environment/cache under the persistent work root whenever
-  the volume policy allows it.
-- Keep the Pod running while a planned verification batch is still active, so
-  related smoke/rerun/debug checks do not repeatedly pay the same setup cost.
-  Once the planned verification batch is done, artifacts are fetched, and no
-  active run remains, stop the Pod and confirm no Pods remain `RUNNING`.
-- If the preferred existing Pod or exact GPU spec is unavailable, do not stop at
-  `blocked_capacity` when the user has approved RunPod experimentation.
-- Create or start the cheapest available same-class or lower-cost GPU that can
-  run the target benchmark, preferring an existing network volume such as
-  `tchm4gxfvd` and SSH access. Reasonable fallbacks include L4, A10/A10G,
-  RTX 30xx, RTX A4000/A4500/A5000, or another similar/cheaper NVIDIA GPU.
-- Avoid moving to a materially more expensive GPU without explicit approval.
-- When using an ephemeral or no-volume Pod, write all results under a known
-  result directory and fetch them before stopping. Stop confirmation is still
-  mandatory.
-- Record the GPU, hourly cost, Pod ID, volume choice, SSH endpoint, and fallback
-  reason in `docs/runpod_worklog.md`.
+- RunPod allocation, create, start, reuse, bootstrap/install ownership, stop,
+  and no-`RUNNING` confirmation belong to the RunPod manager thread:
+  `019eaf4d-4157-7f51-9099-561b7c3a9c1e`.
+- Other specialist threads may research env/bootstrap reproducibility,
+  profiling, scripts, and gates, but they should request RunPod resource
+  actions from the manager and avoid competing for the same Pod.
+- If a specialist is already working on a Pod when ownership changes or another
+  manager takes over, hand off the current Pod id, active process state, log
+  paths, artifact roots, and stop status to the manager before continuing.
+- Keep a Pod running only while the manager-owned verification batch is active.
+  Once artifacts are fetched and no active process remains, the manager should
+  stop the Pod and confirm no Pods remain `RUNNING`.
+- Record the GPU, hourly cost, Pod ID, volume choice, SSH endpoint, fallback
+  reason, owner thread, and stop confirmation in `docs/runpod_worklog.md`.
 
 RunPod environment policy:
 
@@ -486,18 +475,25 @@ RunPod environment policy:
   On ephemeral Pods it may live under `/root/physical-ai`, but the Pod must be
   treated as disposable.
 - Treat `/root/physical-ai/envs/lerobot_py312/bin/python` as the canonical
-  command path only after `scripts/runpod_check_libero_env.sh` passes. The
-  network volume should hold repo checkouts, Hugging Face cache, LIBERO assets,
-  pip cache, the published `lerobot_py312` environment, and result artifacts.
-  Do not infer readiness from a clean checkout or venv directory alone.
+  command path only after `scripts/runpod_check_libero_env.sh` passes.
+  Network volumes should hold only reusable files: Hugging Face cache, LIBERO
+  assets, wheel/pip cache, reusable published environments, and fetched
+  artifacts. Do not infer readiness from a clean checkout or venv directory
+  alone.
 - Preferred LIBERO bootstrap/eval entrypoints:
   `scripts/runpod_prepare_libero_smolvla_env.sh` for environment creation,
   `scripts/runpod_check_libero_env.sh` for the hard gate, and
   `scripts/eval_smolvla_libero_linux.sh` for evaluation.
 - Next LIBERO/SmolVLA RunPod attempts should be volume-first. If network volume
-  `tchm4gxfvd` is available, attach it and keep the repo, Hugging Face cache,
-  LIBERO assets, pip cache, and any repaired `lerobot_py312` environment under
-  `/workspace/physical-ai` so the next run does not repeat the same bootstrap.
+  `tchm4gxfvd` is available and quota is healthy, attach it and keep reusable
+  Hugging Face cache, LIBERO assets, pip cache, any repaired published
+  `lerobot_py312` environment, and final artifacts under `/workspace/physical-ai`
+  so the next run does not repeat the same bootstrap.
+- Do not leave temporary clones, build directories, half-built virtualenvs, or
+  dirty worktrees on the network volume. Because `/workspace` previously hit a
+  git write-heavy `Disk quota exceeded` blocker, prefer ephemeral `/tmp` or
+  `/root` for clone/build/worktree activity and publish only reusable cache/env
+  or final artifacts to the network volume.
 - For no-volume ephemeral Pods, do not hand-install interactively. Use a
   prebuilt bootstrap script or explicit wheel constraints that pin CUDA PyTorch
   to `torch==2.5.1+cu124` from the PyTorch CUDA 12.4 wheel index before
@@ -523,6 +519,11 @@ RunPod environment policy:
   blocker. Only stop after either the benchmark artifact is produced or the
   bootstrap has a concrete, logged dependency failure that cannot be fixed
   within the current approved cost envelope.
+- Bootstrap profiling reports must include the active volume/cache policy,
+  cache hit/miss status, and the exact network-volume files or directories left
+  behind for reuse. If a run uses ephemeral `/root` or `/tmp`, report which
+  artifacts were fetched before stop and which ephemeral build paths were
+  intentionally discarded.
 
 Then, on the Pod:
 

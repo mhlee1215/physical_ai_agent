@@ -2958,6 +2958,36 @@ sh /tmp/runpod_smolvla_metaworld_official_repro.sh
   Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
   all accessible Pods `EXITED`; no `RUNNING` Pods remained.
 
+### RunPod Ownership and Storage Policy Update
+
+- Operating rule change:
+  RunPod allocation, create, start, reuse, bootstrap/install ownership, stop, and
+  no-`RUNNING` confirmation now belong to the RunPod manager thread
+  `019eaf4d-4157-7f51-9099-561b7c3a9c1e`.
+- Env/bootstrap researcher scope:
+  continue env/bootstrap reproducibility research, profiling, script fixes, and
+  gate design, but request actual RunPod resource actions through the manager
+  and avoid competing for the same Pod.
+- Handoff sent:
+  the manager thread was told that no active RunPod process remained from the
+  env bootstrap work, last Pod `h1yxes6375ymbd` had been stopped, all accessible
+  Pods were `EXITED`, and latest evidence/commits were:
+  `d935932d`, `174f21b`, and `1c87112`.
+- Storage policy:
+  network volumes should keep only reusable Hugging Face cache, LIBERO assets,
+  wheel/pip cache, reusable published environments, and final artifacts.
+  Temporary clones, build directories, half-built venvs, and dirty worktrees
+  should stay on ephemeral `/tmp` or `/root` and be discarded after artifact
+  fetch.
+- Known blocker:
+  `/workspace` previously failed during git write-heavy work with
+  `Disk quota exceeded`; treat `/root` or `/tmp` as the preferred location for
+  clone/build/worktree steps until the attached volume quota/path is repaired.
+- Profiling report requirement:
+  future profiling reports must state the selected volume/cache policy, whether
+  caches were hits or misses, exactly which reusable files/directories were left
+  on the network volume, and which ephemeral paths were intentionally discarded.
+
 ### Imagine-Then-Act L4 Environment Recovery and Backend Run
 
 - User direction:
