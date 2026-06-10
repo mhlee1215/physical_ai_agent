@@ -148,6 +148,11 @@ class RiskProbeTest(TestCase):
             self.assertTrue(Path(payload["summary_path"]).exists())
             self.assertTrue(Path(payload["events_path"]).exists())
             self.assertTrue(Path(payload["html_report"]).exists())
+            progress_path = Path(tmpdir) / "risk_probe_progress.jsonl"
+            self.assertTrue(progress_path.exists())
+            progress = progress_path.read_text(encoding="utf-8")
+            self.assertIn('"phase": "start"', progress)
+            self.assertIn('"phase": "summary_written"', progress)
 
     def test_cli_task_parser_supports_ranges(self) -> None:
         spec = importlib.util.spec_from_file_location(
@@ -164,6 +169,11 @@ class RiskProbeTest(TestCase):
         parsed = module.build_parser().parse_args(["--preset", "runpod-libero-double-sim-smoke"])
         config = module.build_config(parsed)
         self.assertTrue(config.direct_libero_double_sim)
+        self.assertEqual(config.actual_timeout_sec, 1800)
+        parsed_timeout = module.build_parser().parse_args(
+            ["--preset", "runpod-libero-double-sim-smoke", "--actual-timeout-sec", "12"]
+        )
+        self.assertEqual(module.build_config(parsed_timeout).actual_timeout_sec, 12)
 
     def test_fake_actual_adapter_helpers_record_proxy_only_evidence(self) -> None:
         with TemporaryDirectory() as tmpdir:

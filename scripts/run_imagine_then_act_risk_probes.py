@@ -66,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-num-steps", type=int, default=10)
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--actual-max-steps", type=int, default=15)
+    parser.add_argument("--actual-timeout-sec", type=int, default=1800)
     parser.add_argument("--image-frequency", type=int, default=1)
     parser.add_argument("--direct-libero-double-sim", action="store_true")
     parser.add_argument("--direct-camera-name", default="agentview")
@@ -96,6 +97,8 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         raise ValueError("policy horizon flags must be > 0")
     if args.actual_max_steps <= 0:
         raise ValueError("actual-max-steps must be > 0")
+    if args.actual_timeout_sec < 0:
+        raise ValueError("actual-timeout-sec must be >= 0")
     if args.image_frequency <= 0:
         raise ValueError("image-frequency must be > 0")
     if args.direct_image_width <= 0 or args.direct_image_height <= 0:
@@ -116,6 +119,7 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         policy_num_steps=args.policy_num_steps,
         policy_n_action_steps=args.policy_n_action_steps,
         actual_max_steps=args.actual_max_steps,
+        actual_timeout_sec=args.actual_timeout_sec,
         image_frequency=args.image_frequency,
         direct_libero_double_sim=direct_libero_double_sim,
         direct_camera_name=args.direct_camera_name,

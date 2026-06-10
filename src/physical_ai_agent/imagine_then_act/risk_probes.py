@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import copy
+import contextlib
 import html
 import json
 import math
 import random
+import signal
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +38,7 @@ class RiskProbeConfig:
     policy_num_steps: int = 10
     policy_n_action_steps: int = 15
     actual_max_steps: int = 15
+    actual_timeout_sec: int = 0
     image_frequency: int = 1
     direct_libero_double_sim: bool = False
     direct_camera_name: str = "agentview"
@@ -112,7 +116,9 @@ class RiskProbeReport:
 def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    write_probe_progress(output_dir, "start", {"backend": config.backend, "preset": config.preset})
     candidates = generate_mock_candidates(config)
+    write_probe_progress(output_dir, "candidates_generated", {"candidate_count": len(candidates)})
     outcomes = {candidate.candidate_id: simulate_mock_env(candidate.action_chunk) for candidate in candidates}
     visual_candidates = candidates
     diversity = compute_diversity_metrics(config, candidates)
@@ -121,7 +127,9 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
     blockers: list[str] = []
     actual_evidence: dict[str, Any] = {"mode": "mock", "available": False}
     if config.backend == "direct-libero":
+        write_probe_progress(output_dir, "direct_libero_probe_start")
         actual_evidence = run_direct_libero_double_sim_probe(config, candidates, output_dir)
+        write_probe_progress(output_dir, "direct_libero_probe_end", {"available": actual_evidence.get("available")})
         blockers.extend(actual_evidence.get("blockers", []))
         diversity = mark_diversity_as_synthetic_contract(diversity)
         if actual_evidence.get("outcomes"):
@@ -132,7 +140,9 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
             clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
         oracle_upper_bound = compute_actual_oracle_or_proxy_metrics(visual_candidates or candidates, outcomes, {"privileged_state_available": True})
     elif config.backend != "mock":
+        write_probe_progress(output_dir, "libero_actual_adapter_start", {"timeout_sec": config.actual_timeout_sec})
         actual_evidence = run_libero_actual_adapter(config, candidates, output_dir)
+        write_probe_progress(output_dir, "libero_actual_adapter_end", {"available": actual_evidence.get("available")})
         blockers.extend(actual_evidence.get("blockers", []))
         diversity = mark_diversity_as_synthetic_contract(diversity)
         if actual_evidence.get("outcomes"):
@@ -144,6 +154,8 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
         if actual_evidence.get("oracle_upper_bound"):
             oracle_upper_bound = OracleUpperBoundMetrics(**actual_evidence["oracle_upper_bound"])
     artifacts = write_visual_artifacts(output_dir, visual_candidates, outcomes, diversity, clone_fidelity, oracle_upper_bound)
+    write_probe_progress(output_dir, "visual_artifacts_written", {"artifact_count": len(artifacts)})
+    artifacts["progress"] = str(output_dir / "risk_probe_progress.jsonl")
     if actual_evidence.get("artifact_path"):
         key = "direct_libero_double_sim_evidence" if config.backend == "direct-libero" else "libero_adapter_evidence"
         artifacts[key] = actual_evidence["artifact_path"]
@@ -187,7 +199,43 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
         actual_evidence=actual_evidence,
     )
     write_report_bundle(output_dir, config, report)
+    write_probe_progress(output_dir, "summary_written", {"status": status})
     return report
+
+
+def write_probe_progress(output_dir: Path, phase: str, payload: dict[str, Any] | None = None) -> None:
+    event = {
+        "timestamp_unix": round(time.time(), 3),
+        "phase": phase,
+        "payload": payload or {},
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "risk_probe_progress.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True) + "\n")
+    print(f"[risk-probe] phase={phase} payload={json.dumps(event['payload'], sort_keys=True)}", file=sys.stderr, flush=True)
+
+
+class RiskProbeTimeoutError(TimeoutError):
+    pass
+
+
+@contextlib.contextmanager
+def risk_probe_timeout(seconds: int, phase: str):
+    if seconds <= 0 or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handle_timeout(_signum, _frame):  # noqa: ANN001
+        raise RiskProbeTimeoutError(f"{phase} exceeded timeout_sec={seconds}")
+
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def aggregate_status(verdicts: Any) -> str:
@@ -423,50 +471,75 @@ def run_libero_actual_adapter(
     output_dir: Path,
 ) -> dict[str, Any]:
     evidence_path = output_dir / "libero_adapter_evidence.json"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    write_probe_progress(output_dir, "libero_actual_adapter_import_compat_start")
     import_compat = apply_torch_transformers_import_compatibility_patch()
+    lerobot_eval = None
     try:
-        ensure_noninteractive_libero_config()
-        from lerobot.scripts import lerobot_eval
+        with risk_probe_timeout(config.actual_timeout_sec, "libero_actual_adapter"):
+            write_probe_progress(output_dir, "libero_actual_adapter_import_start")
+            ensure_noninteractive_libero_config()
+            from lerobot.scripts import lerobot_eval as imported_lerobot_eval
+
+            lerobot_eval = imported_lerobot_eval
+            write_probe_progress(output_dir, "libero_actual_adapter_import_done")
     except Exception as exc:  # noqa: BLE001 - import guard keeps local tests dependency-free.
+        is_timeout = isinstance(exc, RiskProbeTimeoutError)
         evidence = {
             "mode": "libero_actual_adapter",
             "available": False,
             "blockers": [
-                "LIBERO actual adapter blocked before env rollout: could not prepare non-interactive LIBERO config "
-                "or import lerobot.scripts.lerobot_eval "
-                f"({type(exc).__name__}: {str(exc)[:300]}). Run inside the prepared RunPod LeRobot/LIBERO environment."
+                (
+                    "LIBERO actual adapter timed out before env rollout: "
+                    if is_timeout
+                    else (
+                        "LIBERO actual adapter blocked before env rollout: could not prepare non-interactive LIBERO config "
+                        "or import lerobot.scripts.lerobot_eval "
+                    )
+                )
+                + f"({type(exc).__name__}: {str(exc)[:300]}). Run inside the prepared RunPod LeRobot/LIBERO environment."
             ],
             "import_error": {"type": type(exc).__name__, "message": str(exc)[:500]},
             "import_compat": import_compat,
+            "timeout_sec": config.actual_timeout_sec,
         }
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         evidence["artifact_path"] = str(evidence_path)
         return evidence
 
-    evidence_path.parent.mkdir(parents=True, exist_ok=True)
     old_argv = sys.argv[:]
     old_rollout = getattr(lerobot_eval, "rollout", None)
     try:
-        lerobot_eval.rollout = build_libero_risk_probe_rollout(
-            config=config,
-            evidence_path=evidence_path,
-            candidates=candidates,
-            seed=config.seed,
-            max_steps=config.actual_max_steps,
-        )
-        sys.argv = ["lerobot-eval", *build_lerobot_eval_argv(config, output_dir)]
-        lerobot_eval.main()
+        with risk_probe_timeout(config.actual_timeout_sec, "libero_actual_adapter_eval"):
+            write_probe_progress(output_dir, "libero_actual_adapter_rollout_patch_start")
+            lerobot_eval.rollout = build_libero_risk_probe_rollout(
+                config=config,
+                evidence_path=evidence_path,
+                candidates=candidates,
+                seed=config.seed,
+                max_steps=config.actual_max_steps,
+            )
+            sys.argv = ["lerobot-eval", *build_lerobot_eval_argv(config, output_dir)]
+            write_probe_progress(output_dir, "libero_actual_adapter_eval_main_start", {"argv": sys.argv[1:]})
+            lerobot_eval.main()
+            write_probe_progress(output_dir, "libero_actual_adapter_eval_main_end")
     except Exception as exc:  # noqa: BLE001 - adapter should report actionable failure.
+        is_timeout = isinstance(exc, RiskProbeTimeoutError)
+        blocker = (
+            "LIBERO actual adapter timed out during env/model rollout: "
+            if is_timeout
+            else "LIBERO actual adapter failed during env rollout: "
+        )
         evidence = {
             "mode": "libero_actual_adapter",
             "available": False,
             "blockers": [
-                "LIBERO actual adapter failed during env rollout: "
-                f"{type(exc).__name__}: {str(exc)[:500]}"
+                blocker + f"{type(exc).__name__}: {str(exc)[:500]}"
             ],
             "exception": {"type": type(exc).__name__, "message": str(exc)[:1000]},
             "argv": sys.argv[1:],
             "import_compat": import_compat,
+            "timeout_sec": config.actual_timeout_sec,
         }
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
