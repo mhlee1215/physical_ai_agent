@@ -34,6 +34,10 @@ class RiskProbeConfig:
     policy_n_action_steps: int = 15
     actual_max_steps: int = 15
     image_frequency: int = 1
+    direct_libero_double_sim: bool = False
+    direct_camera_name: str = "agentview"
+    direct_image_width: int = 128
+    direct_image_height: int = 128
     diversity_warn_threshold: float = 0.05
     diversity_fail_threshold: float = 0.001
     clone_state_l2_threshold: float = 1e-9
@@ -114,7 +118,18 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
     oracle_upper_bound = compute_oracle_upper_bound_metrics(candidates, outcomes)
     blockers: list[str] = []
     actual_evidence: dict[str, Any] = {"mode": "mock", "available": False}
-    if config.backend != "mock":
+    if config.backend == "direct-libero":
+        actual_evidence = run_direct_libero_double_sim_probe(config, candidates, output_dir)
+        blockers.extend(actual_evidence.get("blockers", []))
+        diversity = mark_diversity_as_synthetic_contract(diversity)
+        if actual_evidence.get("outcomes"):
+            outcomes = actual_evidence["outcomes"]
+            evaluated_ids = set(outcomes)
+            visual_candidates = [candidate for candidate in candidates if candidate.candidate_id in evaluated_ids]
+        if actual_evidence.get("clone_fidelity"):
+            clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
+        oracle_upper_bound = compute_actual_oracle_or_proxy_metrics(visual_candidates or candidates, outcomes, {"privileged_state_available": True})
+    elif config.backend != "mock":
         actual_evidence = run_libero_actual_adapter(config, candidates, output_dir)
         blockers.extend(actual_evidence.get("blockers", []))
         diversity = mark_diversity_as_synthetic_contract(diversity)
@@ -128,7 +143,11 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
             oracle_upper_bound = OracleUpperBoundMetrics(**actual_evidence["oracle_upper_bound"])
     artifacts = write_visual_artifacts(output_dir, visual_candidates, outcomes, diversity, clone_fidelity, oracle_upper_bound)
     if actual_evidence.get("artifact_path"):
-        artifacts["libero_adapter_evidence"] = actual_evidence["artifact_path"]
+        key = "direct_libero_double_sim_evidence" if config.backend == "direct-libero" else "libero_adapter_evidence"
+        artifacts[key] = actual_evidence["artifact_path"]
+    direct_evidence = actual_evidence.get("direct_libero_double_sim", {})
+    if isinstance(direct_evidence, dict) and direct_evidence.get("artifact_path"):
+        artifacts["direct_libero_double_sim_evidence"] = direct_evidence["artifact_path"]
     risk_verdicts = {
         "risk_1_candidate_diversity": diversity.verdict,
         "risk_2_clone_fidelity": clone_fidelity.verdict if clone_fidelity.verdict != PASS or not blockers else PASS,
@@ -425,6 +444,7 @@ def run_libero_actual_adapter(
     old_rollout = getattr(lerobot_eval, "rollout", None)
     try:
         lerobot_eval.rollout = build_libero_risk_probe_rollout(
+            config=config,
             evidence_path=evidence_path,
             candidates=candidates,
             seed=config.seed,
@@ -529,8 +549,253 @@ def build_lerobot_eval_argv(config: RiskProbeConfig, output_dir: Path) -> list[s
     ]
 
 
+def run_direct_libero_double_sim_probe(
+    config: RiskProbeConfig,
+    candidates: list[ActionChunkCandidate],
+    output_dir: Path,
+) -> dict[str, Any]:
+    evidence_path = output_dir / "direct_libero_double_sim_evidence.json"
+    try:
+        import numpy as np
+        from libero.libero import benchmark, get_libero_path
+        from libero.libero.envs import OffScreenRenderEnv
+    except Exception as exc:  # noqa: BLE001 - local tests must not require LIBERO.
+        evidence = {
+            "enabled": True,
+            "available": False,
+            "blockers": [
+                "direct LIBERO double-sim blocked before env creation: "
+                f"{type(exc).__name__}: {str(exc)[:400]}"
+            ],
+        }
+        evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        evidence["artifact_path"] = str(evidence_path)
+        return evidence
+
+    try:
+        benchmark_dict = benchmark.get_benchmark_dict()
+        bench = benchmark_dict[config.suite]()
+        task_id = config.task_ids[0] if config.task_ids else 0
+        task = bench.get_task(task_id)
+        bddl_file = Path(str(task.bddl_file))
+        if not bddl_file.is_absolute():
+            bddl_root = Path(get_libero_path("bddl_files"))
+            direct = bddl_root / bddl_file
+            if direct.exists():
+                bddl_file = direct
+            else:
+                matches = sorted(bddl_root.rglob(bddl_file.name))
+                if not matches:
+                    raise FileNotFoundError(f"Could not resolve LIBERO BDDL file: {bddl_file}")
+                bddl_file = matches[0]
+        env = OffScreenRenderEnv(
+            bddl_file_name=str(bddl_file),
+            camera_heights=config.direct_image_height,
+            camera_widths=config.direct_image_width,
+        )
+        env.seed(config.seed + task_id * 1000)
+        init_states = bench.get_task_init_states(task_id)
+        init_state = init_states[0] if len(init_states) > 0 else None
+        evidence = run_direct_env_snapshot_replay(
+            env=env,
+            init_state=init_state,
+            candidates=candidates,
+            output_dir=output_dir,
+            camera_name=config.direct_camera_name,
+            max_steps=config.actual_max_steps,
+            np_module=np,
+        )
+        evidence.update(
+            {
+                "enabled": True,
+                "available": True,
+                "suite": config.suite,
+                "task_id": task_id,
+                "task_name": getattr(task, "name", f"task_{task_id}"),
+                "bddl_file": str(bddl_file),
+                "sync_scope": "episode_start_init_state_only",
+                "mid_episode_sync": "future_work",
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - evidence should guide the RunPod rerun.
+        evidence = {
+            "enabled": True,
+            "available": False,
+            "blockers": [
+                "direct LIBERO double-sim failed during env rollout: "
+                f"{type(exc).__name__}: {str(exc)[:500]}"
+            ],
+            "exception": {"type": type(exc).__name__, "message": str(exc)[:1000]},
+        }
+    evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["artifact_path"] = str(evidence_path)
+    return evidence
+
+
+def run_direct_env_snapshot_replay(
+    *,
+    env: Any,
+    init_state: Any,
+    candidates: list[ActionChunkCandidate],
+    output_dir: Path,
+    camera_name: str,
+    max_steps: int,
+    np_module: Any,
+) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    selected = select_actual_probe_candidates(candidates)
+    handle = find_sim_clone_handle(env)
+    candidate_results: dict[str, dict[str, Any]] = {}
+    image_artifacts: dict[str, str] = {}
+    for candidate in selected:
+        start_observation = reset_direct_env_to_init_state(env, init_state)
+        start_state = capture_sim_state(handle)
+        committed = apply_candidate_to_direct_env(
+            env,
+            candidate,
+            max_steps,
+            np_module,
+            initial_observation=start_observation,
+        )
+        restore_result = restore_sim_state(handle, start_state)
+        replay_start_observation = start_observation if restore_result["restored"] else reset_direct_env_to_init_state(env, init_state)
+        replay = apply_candidate_to_direct_env(
+            env,
+            candidate,
+            max_steps,
+            np_module,
+            initial_observation=replay_start_observation,
+        )
+        state_l2 = l2(committed["state_vector"], replay["state_vector"]) if committed["state_vector"] and replay["state_vector"] else 0.0
+        image_mse, image_mae = image_errors_from_vectors(committed["image_vector"], replay["image_vector"])
+        artifact_path = output_dir / f"direct_future_{candidate.candidate_id}.svg"
+        artifact_path.write_text(
+            render_image_matrix_svg(
+                vector_to_image_matrix(committed["image_vector"]),
+                f"direct future {candidate.candidate_id}",
+            ),
+            encoding="utf-8",
+        )
+        image_artifacts[candidate.candidate_id] = str(artifact_path)
+        candidate_results[candidate.candidate_id] = {
+            "committed": committed,
+            "replay": replay,
+            "snapshot_restore": restore_result,
+            "state_l2": round(state_l2, 12),
+            "image_mse": round(image_mse, 12),
+            "image_mae": round(image_mae, 12),
+            "future_image_artifact": str(artifact_path),
+            "camera_name": camera_name,
+        }
+
+    chosen = selected[-1]
+    chosen_record = candidate_results[chosen.candidate_id]
+    snapshot_restored = bool(chosen_record["snapshot_restore"].get("restored"))
+    state_available = bool(chosen_record["committed"]["state_vector"] and chosen_record["replay"]["state_vector"])
+    image_available = bool(chosen_record["committed"]["image_vector"] and chosen_record["replay"]["image_vector"])
+    final_state_match = chosen_record["state_l2"] == 0.0
+    final_image_match = chosen_record["image_mse"] == 0.0
+    image_exists = Path(chosen_record["future_image_artifact"]).exists()
+    verdict = PASS if snapshot_restored and state_available and image_available and final_state_match and final_image_match and image_exists else BLOCKED
+    rationale = (
+        "episode-start double-sim PASS: direct LIBERO env used sim snapshot restore and replayed the same action chunk with matching state/image. "
+        "This does not prove mid-episode LeRobot env synchronization."
+        if verdict == PASS
+        else "direct LIBERO double-sim could not prove snapshot-restore replay with matching state/image."
+    )
+    outcomes = {
+        candidate_id: {
+            "success_proxy": record["committed"]["success_proxy"],
+            "state": record["committed"]["state_vector"][:3],
+            "image": vector_to_image_matrix(record["committed"]["image_vector"]),
+        }
+        for candidate_id, record in candidate_results.items()
+    }
+    clone_metrics = CloneFidelityMetrics(
+        verdict=verdict,
+        state_l2=chosen_record["state_l2"],
+        image_mse=chosen_record["image_mse"],
+        image_mae=chosen_record["image_mae"],
+        success_proxy_delta=abs(chosen_record["committed"]["success_proxy"] - chosen_record["replay"]["success_proxy"]),
+        deterministic_replay_mismatch=not (final_state_match and final_image_match),
+        rationale=rationale,
+    )
+    return {
+        "available": True,
+        "blockers": [] if verdict == PASS else [rationale],
+        "candidate_results": candidate_results,
+        "outcomes": outcomes,
+        "image_artifacts": image_artifacts,
+        "clone_restore_evidence": {
+            "selected_candidate_id": chosen.candidate_id,
+            "snapshot_restored": snapshot_restored,
+            "snapshot_source": chosen_record["snapshot_restore"].get("path", "unavailable"),
+            "restore_error": chosen_record["snapshot_restore"].get("reason"),
+            "future_image_artifact": chosen_record["future_image_artifact"],
+            "state_available": state_available,
+            "image_available": image_available,
+        },
+        "clone_fidelity": asdict(clone_metrics),
+        "sync_scope": "episode_start_init_state_only",
+        "mid_episode_sync": "future_work",
+    }
+
+
+def reset_direct_env_to_init_state(env: Any, init_state: Any) -> Any:
+    observation = env.reset()
+    if init_state is not None and hasattr(env, "set_init_state"):
+        observation = env.set_init_state(init_state)
+    return observation
+
+
+def apply_candidate_to_direct_env(
+    env: Any,
+    candidate: ActionChunkCandidate,
+    max_steps: int,
+    np_module: Any,
+    *,
+    initial_observation: Any,
+) -> dict[str, Any]:
+    observation = initial_observation
+    info: Any = {}
+    reward: Any = 0.0
+    done: Any = False
+    for row in candidate.action_chunk[:max_steps]:
+        action = np_module.asarray(row, dtype=getattr(np_module, "float32", None))
+        result = env.step(action)
+        if len(result) == 5:
+            observation, reward, terminated, truncated, info = result
+            done = is_done(terminated) or is_done(truncated)
+        else:
+            observation, reward, done, info = result
+            done = is_done(done)
+        if done:
+            break
+    state_vector, state_source = extract_state_vector(env, observation, info)
+    image_vector, image_source = extract_image_vector(observation)
+    success_proxy, success_source = extract_success_proxy(info, reward, state_vector)
+    privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
+    privileged_success = extract_privileged_success_proxy(env)
+    return {
+        "candidate_id": candidate.candidate_id,
+        "state_vector": state_vector,
+        "state_source": state_source,
+        "privileged_state_vector": privileged_state_vector[:64],
+        "privileged_state_source": privileged_state_source,
+        "image_vector": image_vector,
+        "image_source": image_source,
+        "success_proxy": success_proxy,
+        "success_proxy_source": success_source,
+        "privileged_success_proxy": privileged_success[0],
+        "privileged_success_proxy_source": privileged_success[1],
+        "done": bool(done),
+        "info_summary": summarize_value(info),
+    }
+
+
 def build_libero_risk_probe_rollout(
     *,
+    config: RiskProbeConfig,
     evidence_path: Path,
     candidates: list[ActionChunkCandidate],
     seed: int,
@@ -637,6 +902,24 @@ def build_libero_risk_probe_rollout(
             for candidate_id, record in candidate_results.items()
         }
         oracle_metrics = compute_actual_oracle_or_proxy_metrics(selected, outcomes, introspection)
+        direct_double_sim = (
+            run_direct_libero_double_sim_probe(config, selected, evidence_path.parent)
+            if config.direct_libero_double_sim
+            else {"enabled": False}
+        )
+        if direct_double_sim.get("clone_fidelity"):
+            direct_clone = CloneFidelityMetrics(**direct_double_sim["clone_fidelity"])
+            if direct_clone.verdict == PASS:
+                clone_verdict = PASS
+                clone_record = {
+                    **clone_record,
+                    "state_l2": direct_clone.state_l2,
+                    "image_mse": direct_clone.image_mse,
+                    "image_mae": direct_clone.image_mae,
+                    "success_proxy_delta": direct_clone.success_proxy_delta,
+                }
+                clone_rationale = direct_clone.rationale
+                clone_restore_evidence = direct_double_sim.get("clone_restore_evidence", clone_restore_evidence)
         evidence = {
             "mode": "libero_actual_adapter",
             "available": True,
@@ -645,6 +928,7 @@ def build_libero_risk_probe_rollout(
             "candidate_results": candidate_results,
             "outcomes": outcomes,
             "clone_restore_evidence": clone_restore_evidence,
+            "direct_libero_double_sim": direct_double_sim,
             "clone_fidelity": asdict(
                 CloneFidelityMetrics(
                     verdict=clone_verdict,
@@ -1159,6 +1443,21 @@ def vector_to_image_matrix(vector: list[float], size: int = 16) -> list[list[int
     ]
 
 
+def render_image_matrix_svg(matrix: list[list[int]], title: str) -> str:
+    cell = 8
+    height_cells = len(matrix)
+    width_cells = len(matrix[0]) if matrix else 1
+    rows = [f"<text x='8' y='18' font-size='13'>{html.escape(title)}</text>"]
+    for y, row in enumerate(matrix):
+        for x, value in enumerate(row):
+            color = max(0, min(255, int(value)))
+            rows.append(
+                f'<rect x="{8 + x * cell}" y="{28 + y * cell}" width="{cell}" height="{cell}" '
+                f'fill="rgb({color},{color},{color})"/>'
+            )
+    return svg_document(16 + width_cells * cell, 38 + height_cells * cell, "".join(rows))
+
+
 def compute_actual_oracle_or_proxy_metrics(
     candidates: list[ActionChunkCandidate],
     outcomes: dict[str, dict[str, Any]],
@@ -1315,6 +1614,11 @@ def render_html_report(report: RiskProbeReport) -> str:
         actual_link = (
             "<h2>Actual Adapter Evidence</h2>"
             f"<p><a href=\"{html.escape(artifact['libero_adapter_evidence'])}\">libero_adapter_evidence.json</a></p>"
+        )
+    if "direct_libero_double_sim_evidence" in artifact:
+        actual_link += (
+            "<h2>Direct LIBERO Double-Sim Evidence</h2>"
+            f"<p><a href=\"{html.escape(artifact['direct_libero_double_sim_evidence'])}\">direct_libero_double_sim_evidence.json</a></p>"
         )
     return f"""<!doctype html>
 <html>

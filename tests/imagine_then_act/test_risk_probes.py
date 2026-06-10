@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from physical_ai_agent.imagine_then_act.risk_probes import (
     ActionChunkCandidate,
+    BLOCKED,
     FAIL,
     PASS,
     WARN,
@@ -25,6 +26,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     generate_mock_candidates,
     inspect_actual_env,
     restore_sim_state,
+    run_direct_env_snapshot_replay,
     run_risk_probes,
     simulate_mock_env,
 )
@@ -155,6 +157,9 @@ class RiskProbeTest(TestCase):
         spec.loader.exec_module(module)
 
         self.assertEqual(module.parse_task_ids("0-2,2,4", "local-dry-run"), (0, 1, 2, 4))
+        parsed = module.build_parser().parse_args(["--preset", "runpod-libero-double-sim-smoke"])
+        config = module.build_config(parsed)
+        self.assertTrue(config.direct_libero_double_sim)
 
     def test_fake_actual_adapter_helpers_record_proxy_only_evidence(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -260,6 +265,39 @@ class RiskProbeTest(TestCase):
         self.assertTrue(metrics.oracle_beats_policy)
         self.assertTrue(metrics.oracle_beats_random)
 
+    def test_direct_libero_double_sim_fake_env_replays_from_snapshot(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-double-sim-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=3,
+                chunk_steps=2,
+                action_dim=3,
+                output_dir=tmpdir,
+                direct_libero_double_sim=True,
+            )
+            candidates = generate_mock_candidates(config)
+
+            evidence = run_direct_env_snapshot_replay(
+                env=_FakeVectorRobosuiteEnv(),
+                init_state=[0.0, 0.0, 0.0],
+                candidates=candidates,
+                output_dir=Path(tmpdir),
+                camera_name="agentview",
+                max_steps=2,
+                np_module=_FakeNumpy,
+            )
+
+            self.assertEqual(evidence["clone_fidelity"]["verdict"], PASS)
+            self.assertTrue(evidence["clone_restore_evidence"]["snapshot_restored"])
+            self.assertEqual(evidence["sync_scope"], "episode_start_init_state_only")
+            self.assertEqual(evidence["mid_episode_sync"], "future_work")
+            for artifact_path in evidence["image_artifacts"].values():
+                self.assertTrue(Path(artifact_path).exists())
+
     def test_libero_contract_writes_actionable_import_guard_blocker_without_dependencies(self) -> None:
         with TemporaryDirectory() as tmpdir:
             config = RiskProbeConfig(
@@ -279,6 +317,26 @@ class RiskProbeTest(TestCase):
             self.assertTrue(Path(report.artifacts["libero_adapter_evidence"]).exists())
             if report.status == "BLOCKED":
                 self.assertTrue(any("LIBERO actual adapter" in blocker for blocker in report.blockers))
+
+    def test_direct_libero_backend_import_guard_does_not_require_lerobot(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-double-sim-smoke",
+                backend="direct-libero",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=3,
+                chunk_steps=3,
+                action_dim=7,
+                output_dir=tmpdir,
+                direct_libero_double_sim=True,
+            )
+            report = run_risk_probes(config)
+
+            self.assertEqual(report.status, BLOCKED)
+            self.assertTrue(Path(report.artifacts["direct_libero_double_sim_evidence"]).exists())
+            self.assertTrue(any("direct LIBERO double-sim" in blocker for blocker in report.blockers))
 
     def test_actual_adapter_partial_outcomes_still_generate_full_artifact_bundle(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -399,8 +457,13 @@ class _FakeVectorRobosuiteEnv:
         self.sim.forward()
         return self._observation(), {"reset": True}
 
+    def set_init_state(self, init_state):  # noqa: ANN001
+        self.sim.set_state(init_state)
+        self.sim.forward()
+        return self._observation()
+
     def step(self, action):
-        row = action[0]
+        row = action[0] if action and isinstance(action[0], list) else action
         self.sim.state = [self.sim.state[index] + float(row[index]) for index in range(3)]
         self.sim.forward()
         info = {"success": [self.robosuite.check_success()]}

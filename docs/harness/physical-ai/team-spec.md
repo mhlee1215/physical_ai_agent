@@ -248,6 +248,31 @@ PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   --json
 ```
 
+For Risk 2 double-simulation, first check the direct LIBERO/MuJoCo path without
+LeRobot, then run the LeRobot-hooked double-sim smoke. A Risk 2 pass here is
+scoped to episode-start init-state double simulation; mid-episode exact LeRobot
+state sync remains future work:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-double-sim-smoke \
+  --backend direct-libero \
+  --output-dir _workspace/runpod_results/ita_risk_probes/direct_libero_double_sim_seed1201 \
+  --json
+
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-double-sim-smoke \
+  --backend libero-contract \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --actual-max-steps 15 \
+  --output-dir _workspace/runpod_results/ita_risk_probes/lerobot_hook_double_sim_seed1201 \
+  --json
+```
+
 ### RunPod LIBERO Environment and Parity Scripts
 
 Use these scripts for reproducible RunPod/LIBERO SmolVLA setup and evaluation

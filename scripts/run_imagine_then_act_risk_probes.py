@@ -12,6 +12,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import RiskProbeConfig, run_
 DEFAULT_TASK_IDS = {
     "local-dry-run": (6,),
     "runpod-libero-smoke": (6,),
+    "runpod-libero-double-sim-smoke": (6,),
     "runpod-libero-breadth": tuple(range(10)),
 }
 
@@ -50,10 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--preset",
-        choices=("local-dry-run", "runpod-libero-smoke", "runpod-libero-breadth"),
+        choices=("local-dry-run", "runpod-libero-smoke", "runpod-libero-double-sim-smoke", "runpod-libero-breadth"),
         default="local-dry-run",
     )
-    parser.add_argument("--backend", choices=("mock", "libero-contract"), default=None)
+    parser.add_argument("--backend", choices=("mock", "libero-contract", "direct-libero"), default=None)
     parser.add_argument("--suite", default="libero_goal")
     parser.add_argument("--task-ids", default=None)
     parser.add_argument("--seed", type=int, default=1201)
@@ -66,6 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--actual-max-steps", type=int, default=15)
     parser.add_argument("--image-frequency", type=int, default=1)
+    parser.add_argument("--direct-libero-double-sim", action="store_true")
+    parser.add_argument("--direct-camera-name", default="agentview")
+    parser.add_argument("--direct-image-width", type=int, default=128)
+    parser.add_argument("--direct-image-height", type=int, default=128)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--json", action="store_true")
     return parser
@@ -93,6 +98,9 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         raise ValueError("actual-max-steps must be > 0")
     if args.image_frequency <= 0:
         raise ValueError("image-frequency must be > 0")
+    if args.direct_image_width <= 0 or args.direct_image_height <= 0:
+        raise ValueError("direct image dimensions must be > 0")
+    direct_libero_double_sim = args.direct_libero_double_sim or args.preset == "runpod-libero-double-sim-smoke"
     return RiskProbeConfig(
         preset=args.preset,
         backend=backend_for_preset(args.preset, args.backend),
@@ -109,6 +117,10 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         policy_n_action_steps=args.policy_n_action_steps,
         actual_max_steps=args.actual_max_steps,
         image_frequency=args.image_frequency,
+        direct_libero_double_sim=direct_libero_double_sim,
+        direct_camera_name=args.direct_camera_name,
+        direct_image_width=args.direct_image_width,
+        direct_image_height=args.direct_image_height,
     )
 
 
