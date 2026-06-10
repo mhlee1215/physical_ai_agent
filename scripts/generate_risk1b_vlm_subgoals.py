@@ -174,7 +174,7 @@ def generate_mock_output(args: argparse.Namespace) -> str:
 
 
 def generate_transformers_output(args: argparse.Namespace, prompt: str) -> str:
-    components = resolve_transformers_components()
+    components = resolve_transformers_components(args.model_id)
     torch = components["torch"]
     image_module = components["pil_image"]
     processor_cls = components["processor_cls"]
@@ -205,7 +205,7 @@ def generate_transformers_output(args: argparse.Namespace, prompt: str) -> str:
     return decoded
 
 
-def resolve_transformers_components() -> dict[str, Any]:
+def resolve_transformers_components(model_id: str | None = None) -> dict[str, Any]:
     diagnostics: dict[str, Any] = {}
     missing: list[str] = []
     try:
@@ -232,12 +232,10 @@ def resolve_transformers_components() -> dict[str, Any]:
             "RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED: missing python import(s): "
             + "; ".join(missing)
         )
-    processor_cls = getattr(transformers, "AutoProcessor", None)
-    if processor_cls is None:
-        raise RuntimeError(
-            "RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED: transformers is installed but AutoProcessor is unavailable"
-        )
+    processor_cls, processor_name, processor_attempts = select_transformers_processor_class(transformers, model_id or "")
     model_cls, class_name = select_transformers_model_class(transformers)
+    diagnostics["processor_loader_class"] = processor_name
+    diagnostics["processor_loader_attempts"] = processor_attempts
     diagnostics["model_loader_class"] = class_name
     return {
         "torch": torch,
@@ -248,6 +246,40 @@ def resolve_transformers_components() -> dict[str, Any]:
     }
 
 
+def select_transformers_processor_class(transformers_module: Any, model_id: str) -> tuple[Any, str, list[dict[str, Any]]]:
+    model_lower = model_id.lower()
+    candidates = ["AutoProcessor"]
+    if "qwen2.5-vl" in model_lower or "qwen2_5_vl" in model_lower:
+        candidates.extend(("Qwen2_5_VLProcessor", "Qwen2VLProcessor"))
+    if "gemma-3" in model_lower or "gemma3" in model_lower:
+        candidates.append("Gemma3Processor")
+    attempts: list[dict[str, Any]] = []
+    for name in dict.fromkeys(candidates):
+        try:
+            cls = getattr(transformers_module, name)
+        except Exception as exc:  # noqa: BLE001 - Transformers lazy loader raises here for optional deps.
+            attempts.append(
+                {
+                    "class": name,
+                    "ok": False,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
+                }
+            )
+            continue
+        if cls is not None:
+            attempts.append({"class": name, "ok": True})
+            return cls, name, attempts
+        attempts.append({"class": name, "ok": False, "error_type": "AttributeError", "error": "attribute is None"})
+    raise RuntimeError(
+        "RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED_PROCESSOR_LOADER: transformers import passed, but no supported "
+        "processor class could be resolved. Attempts: "
+        + json.dumps(attempts, sort_keys=True)
+        + ". This usually means a Transformers lazy-loader optional dependency failure or an incompatible "
+        "Transformers/model combination."
+    )
+
+
 def select_transformers_model_class(transformers_module: Any) -> tuple[Any, str]:
     candidates = (
         "AutoModelForImageTextToText",
@@ -255,7 +287,10 @@ def select_transformers_model_class(transformers_module: Any) -> tuple[Any, str]
         "AutoModelForCausalLM",
     )
     for name in candidates:
-        cls = getattr(transformers_module, name, None)
+        try:
+            cls = getattr(transformers_module, name)
+        except Exception:  # noqa: BLE001 - keep trying less specific loaders.
+            cls = None
         if cls is not None:
             return cls, name
     raise RuntimeError(
@@ -349,7 +384,7 @@ def main(argv: list[str] | None = None) -> int:
     prompt = build_generation_prompt(args, context_summary)
     if args.dependency_check_only:
         try:
-            components = resolve_transformers_components()
+            components = resolve_transformers_components(args.model_id)
         except Exception as exc:  # noqa: BLE001
             print(f"dependency_check_error: {type(exc).__name__}: {str(exc)[:500]}", file=sys.stderr)
             return 2

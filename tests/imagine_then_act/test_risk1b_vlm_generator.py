@@ -159,6 +159,47 @@ class Risk1BVlmGeneratorTest(TestCase):
         with self.assertRaisesRegex(RuntimeError, "AutoModelForImageTextToText"):
             module.select_transformers_model_class(SimpleNamespace())
 
+    def test_select_processor_class_falls_back_when_autoprocessor_lazy_import_fails(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        class _FakeTransformers:
+            Qwen2_5_VLProcessor = object()
+
+            def __getattr__(self, name):  # noqa: ANN001
+                if name == "AutoProcessor":
+                    raise ModuleNotFoundError(
+                        "Could not import module 'AutoProcessor'. Are this object's requirements defined correctly?"
+                    )
+                raise AttributeError(name)
+
+        cls, name, attempts = module.select_transformers_processor_class(
+            _FakeTransformers(),
+            "Qwen/Qwen2.5-VL-7B-Instruct",
+        )
+
+        self.assertIs(cls, _FakeTransformers.Qwen2_5_VLProcessor)
+        self.assertEqual(name, "Qwen2_5_VLProcessor")
+        self.assertFalse(attempts[0]["ok"])
+        self.assertEqual(attempts[0]["class"], "AutoProcessor")
+
+    def test_select_processor_class_reports_lazy_loader_attempts(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        class _BrokenTransformers:
+            def __getattr__(self, name):  # noqa: ANN001
+                raise ModuleNotFoundError(f"Could not import module '{name}'.")
+
+        with self.assertRaisesRegex(RuntimeError, "PROCESSOR_LOADER"):
+            module.select_transformers_processor_class(_BrokenTransformers(), "Qwen/Qwen2.5-VL-7B-Instruct")
+
     def test_dependency_check_reports_specific_missing_imports_or_loader(self) -> None:
         completed = subprocess.run(
             [

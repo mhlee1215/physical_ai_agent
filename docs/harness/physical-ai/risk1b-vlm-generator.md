@@ -104,6 +104,11 @@ PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
 If this fails, report `RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED` with stderr and do
 not run the generator. If it passes but model loading fails, report the model
 load/download error separately.
+For Qwen/Gemma, package-level imports are not enough: the preflight also
+resolves the processor loader. If `AutoProcessor` fails through Transformers'
+lazy loader, the script tries model-specific fallbacks such as
+`Qwen2_5_VLProcessor` before reporting
+`RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED_PROCESSOR_LOADER`.
 
 ```bash
 PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
