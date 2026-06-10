@@ -30,6 +30,10 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     run_risk_probes,
     simulate_mock_env,
 )
+from physical_ai_agent.imagine_then_act.direct_libero_imagination import (
+    DirectLiberoProbeConfig,
+    build_risk_probe_config,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -297,6 +301,8 @@ class RiskProbeTest(TestCase):
             self.assertEqual(evidence["mid_episode_sync"], "future_work")
             for artifact_path in evidence["image_artifacts"].values():
                 self.assertTrue(Path(artifact_path).exists())
+                self.assertEqual(Path(artifact_path).suffix, ".ppm")
+                self.assertTrue(Path(artifact_path).read_text(encoding="ascii").startswith("P3\n"))
 
     def test_libero_contract_writes_actionable_import_guard_blocker_without_dependencies(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -337,6 +343,38 @@ class RiskProbeTest(TestCase):
             self.assertEqual(report.status, BLOCKED)
             self.assertTrue(Path(report.artifacts["direct_libero_double_sim_evidence"]).exists())
             self.assertTrue(any("direct LIBERO double-sim" in blocker for blocker in report.blockers))
+
+    def test_direct_libero_probe_module_builds_risk_config(self) -> None:
+        config = DirectLiberoProbeConfig(
+            suite="libero_goal",
+            task_id=6,
+            output_dir="/tmp/direct_probe",
+            backend="direct-libero",
+        )
+        risk_config = build_risk_probe_config(config)
+
+        self.assertEqual(risk_config.backend, "direct-libero")
+        self.assertEqual(risk_config.task_ids, (6,))
+        self.assertTrue(risk_config.direct_libero_double_sim)
+
+    def test_direct_libero_probe_cli_mock_dry_run(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            command = [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts" / "run_imagine_then_act_direct_libero_probe.py"),
+                "--backend",
+                "mock",
+                "--output-dir",
+                tmpdir,
+                "--json",
+            ]
+            completed = subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
+            payload = json.loads(completed.stdout)
+
+            self.assertEqual(payload["status"], PASS)
+            self.assertTrue(Path(payload["summary_path"]).exists())
+            self.assertTrue(Path(payload["html_report"]).exists())
 
     def test_actual_adapter_partial_outcomes_still_generate_full_artifact_bundle(self) -> None:
         with TemporaryDirectory() as tmpdir:

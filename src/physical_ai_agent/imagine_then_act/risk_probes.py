@@ -668,14 +668,7 @@ def run_direct_env_snapshot_replay(
         )
         state_l2 = l2(committed["state_vector"], replay["state_vector"]) if committed["state_vector"] and replay["state_vector"] else 0.0
         image_mse, image_mae = image_errors_from_vectors(committed["image_vector"], replay["image_vector"])
-        artifact_path = output_dir / f"direct_future_{candidate.candidate_id}.svg"
-        artifact_path.write_text(
-            render_image_matrix_svg(
-                vector_to_image_matrix(committed["image_vector"]),
-                f"direct future {candidate.candidate_id}",
-            ),
-            encoding="utf-8",
-        )
+        artifact_path = write_future_image_artifact(output_dir, candidate.candidate_id, committed)
         image_artifacts[candidate.candidate_id] = str(artifact_path)
         candidate_results[candidate.candidate_id] = {
             "committed": committed,
@@ -773,6 +766,7 @@ def apply_candidate_to_direct_env(
             break
     state_vector, state_source = extract_state_vector(env, observation, info)
     image_vector, image_source = extract_image_vector(observation)
+    rgb_image_matrix, rgb_image_source = extract_rgb_image_matrix(observation)
     success_proxy, success_source = extract_success_proxy(info, reward, state_vector)
     privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
     privileged_success = extract_privileged_success_proxy(env)
@@ -784,6 +778,8 @@ def apply_candidate_to_direct_env(
         "privileged_state_source": privileged_state_source,
         "image_vector": image_vector,
         "image_source": image_source,
+        "rgb_image_matrix": rgb_image_matrix,
+        "rgb_image_source": rgb_image_source,
         "success_proxy": success_proxy,
         "success_proxy_source": success_source,
         "privileged_success_proxy": privileged_success[0],
@@ -1243,6 +1239,82 @@ def extract_image_vector(observation: Any) -> tuple[list[float], str]:
                     return vector, str(key)
     vector = numeric_vector(observation, limit=4096)
     return vector, "observation_any" if vector else "unavailable"
+
+
+def extract_rgb_image_matrix(observation: Any) -> tuple[list[list[list[int]]], str]:
+    if not isinstance(observation, dict):
+        return [], "unavailable"
+    for key, value in observation.items():
+        if "image" not in str(key).lower():
+            continue
+        matrix = rgb_matrix_from_value(value)
+        if matrix:
+            return matrix, str(key)
+    return [], "unavailable"
+
+
+def rgb_matrix_from_value(value: Any, *, max_size: int = 128) -> list[list[list[int]]]:
+    if hasattr(value, "tolist"):
+        try:
+            value = value.tolist()
+        except Exception:  # noqa: BLE001
+            pass
+    while (
+        isinstance(value, list)
+        and len(value) == 1
+        and isinstance(value[0], list)
+        and value[0]
+        and isinstance(value[0][0], list)
+        and value[0][0]
+        and isinstance(value[0][0][0], list)
+    ):
+        value = value[0]
+    if not isinstance(value, list) or not value:
+        return []
+    rows: list[list[list[int]]] = []
+    for row in value[:max_size]:
+        if not isinstance(row, list):
+            return []
+        pixels: list[list[int]] = []
+        for pixel in row[:max_size]:
+            if not isinstance(pixel, list):
+                return []
+            channels = numeric_vector(pixel, limit=4)
+            if len(channels) < 3:
+                return []
+            if max(channels[:3]) <= 1.0:
+                channels = [channel * 255.0 for channel in channels]
+            pixels.append([max(0, min(255, int(round(channel)))) for channel in channels[:3]])
+        if pixels:
+            rows.append(pixels)
+    return rows
+
+
+def write_future_image_artifact(output_dir: Path, candidate_id: str, committed: dict[str, Any]) -> Path:
+    rgb_matrix = committed.get("rgb_image_matrix") or []
+    if rgb_matrix:
+        artifact_path = output_dir / f"direct_future_{candidate_id}.ppm"
+        write_ppm_image(artifact_path, rgb_matrix)
+        return artifact_path
+    artifact_path = output_dir / f"direct_future_{candidate_id}.svg"
+    artifact_path.write_text(
+        render_image_matrix_svg(
+            vector_to_image_matrix(committed["image_vector"]),
+            f"direct future {candidate_id}",
+        ),
+        encoding="utf-8",
+    )
+    return artifact_path
+
+
+def write_ppm_image(path: Path, rgb_matrix: list[list[list[int]]]) -> None:
+    height = len(rgb_matrix)
+    width = len(rgb_matrix[0]) if height else 0
+    header = f"P3\n{width} {height}\n255\n"
+    rows = []
+    for row in rgb_matrix:
+        rows.append(" ".join(f"{pixel[0]} {pixel[1]} {pixel[2]}" for pixel in row))
+    path.write_text(header + "\n".join(rows) + "\n", encoding="ascii")
 
 
 def extract_success_proxy(info: Any, reward: Any, state_vector: list[float]) -> tuple[float, str]:
