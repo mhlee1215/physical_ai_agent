@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest import TestCase
 
 from physical_ai_agent.imagine_then_act.risk_probes import build_risk1b_subgoal_portfolio
@@ -134,3 +135,49 @@ class Risk1BVlmGeneratorTest(TestCase):
 
         with self.assertRaises(SystemExit):
             module.build_parser().parse_args(["--model-id", "unknown/model"])
+
+    def test_select_transformers_model_class_falls_back_from_image_text_to_vision2seq(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        fake_transformers = SimpleNamespace(AutoModelForVision2Seq=object())
+
+        cls, name = module.select_transformers_model_class(fake_transformers)
+
+        self.assertIs(cls, fake_transformers.AutoModelForVision2Seq)
+        self.assertEqual(name, "AutoModelForVision2Seq")
+
+    def test_select_transformers_model_class_reports_specific_missing_loader(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with self.assertRaisesRegex(RuntimeError, "AutoModelForImageTextToText"):
+            module.select_transformers_model_class(SimpleNamespace())
+
+    def test_dependency_check_reports_specific_missing_imports_or_loader(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(SCRIPT),
+                "--backend",
+                "transformers",
+                "--dependency-check-only",
+                "--json",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        if completed.returncode == 0:
+            payload = json.loads(completed.stdout)
+            self.assertIn("model_loader_class", payload)
+            self.assertEqual(payload["status"], "PASS")
+        else:
+            self.assertIn("RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED", completed.stderr)

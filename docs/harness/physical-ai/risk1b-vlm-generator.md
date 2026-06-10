@@ -88,6 +88,23 @@ Run this after the RunPod VLM environment has `torch`, `transformers`, and
 `pillow` available and a start-observation/contact-sheet image or task context
 is ready.
 
+Before loading model weights, run the dependency/class preflight. This checks
+`torch`, `PIL.Image`, `transformers`, `AutoProcessor`, and the available model
+loader class (`AutoModelForImageTextToText`, `AutoModelForVision2Seq`, or
+`AutoModelForCausalLM`):
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/generate_risk1b_vlm_subgoals.py \
+  --backend transformers \
+  --dependency-check-only \
+  --json
+```
+
+If this fails, report `RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED` with stderr and do
+not run the generator. If it passes but model loading fails, report the model
+load/download error separately.
+
 ```bash
 PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   scripts/generate_risk1b_vlm_subgoals.py \

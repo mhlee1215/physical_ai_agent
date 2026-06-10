@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import re
 import sys
@@ -73,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--torch-dtype", default="auto")
+    parser.add_argument(
+        "--dependency-check-only",
+        action="store_true",
+        help="For RunPod diagnostics: check transformers backend imports/classes without loading model weights.",
+    )
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -168,17 +174,14 @@ def generate_mock_output(args: argparse.Namespace) -> str:
 
 
 def generate_transformers_output(args: argparse.Namespace, prompt: str) -> str:
-    try:
-        import torch
-        from PIL import Image
-        from transformers import AutoModelForImageTextToText, AutoProcessor
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(
-            "transformers backend requires torch, pillow, and transformers in the RunPod VLM environment"
-        ) from exc
+    components = resolve_transformers_components()
+    torch = components["torch"]
+    image_module = components["pil_image"]
+    processor_cls = components["processor_cls"]
+    model_cls = components["model_cls"]
 
-    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)
-    model = AutoModelForImageTextToText.from_pretrained(
+    processor = processor_cls.from_pretrained(args.model_id, trust_remote_code=True)
+    model = model_cls.from_pretrained(
         args.model_id,
         device_map=args.device_map,
         torch_dtype=args.torch_dtype,
@@ -186,7 +189,7 @@ def generate_transformers_output(args: argparse.Namespace, prompt: str) -> str:
     )
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     if args.context_image:
-        content.insert(0, {"type": "image", "image": Image.open(args.context_image).convert("RGB")})
+        content.insert(0, {"type": "image", "image": image_module.open(args.context_image).convert("RGB")})
     messages = [{"role": "user", "content": content}]
     try:
         text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -200,6 +203,65 @@ def generate_transformers_output(args: argparse.Namespace, prompt: str) -> str:
         outputs = model.generate(**inputs, max_new_tokens=args.max_new_tokens, temperature=args.temperature)
     decoded = processor.batch_decode(outputs, skip_special_tokens=True)[0]
     return decoded
+
+
+def resolve_transformers_components() -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {}
+    missing: list[str] = []
+    try:
+        torch = importlib.import_module("torch")
+        diagnostics["torch_version"] = getattr(torch, "__version__", "unknown")
+        diagnostics["torch_cuda_available"] = bool(getattr(getattr(torch, "cuda", None), "is_available", lambda: False)())
+    except Exception as exc:  # noqa: BLE001
+        torch = None
+        missing.append(f"torch ({type(exc).__name__}: {str(exc)[:200]})")
+    try:
+        pil_image = importlib.import_module("PIL.Image")
+        diagnostics["pil_import"] = "PIL.Image"
+    except Exception as exc:  # noqa: BLE001
+        pil_image = None
+        missing.append(f"PIL.Image ({type(exc).__name__}: {str(exc)[:200]})")
+    try:
+        transformers = importlib.import_module("transformers")
+        diagnostics["transformers_version"] = getattr(transformers, "__version__", "unknown")
+    except Exception as exc:  # noqa: BLE001
+        transformers = None
+        missing.append(f"transformers ({type(exc).__name__}: {str(exc)[:200]})")
+    if missing:
+        raise RuntimeError(
+            "RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED: missing python import(s): "
+            + "; ".join(missing)
+        )
+    processor_cls = getattr(transformers, "AutoProcessor", None)
+    if processor_cls is None:
+        raise RuntimeError(
+            "RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED: transformers is installed but AutoProcessor is unavailable"
+        )
+    model_cls, class_name = select_transformers_model_class(transformers)
+    diagnostics["model_loader_class"] = class_name
+    return {
+        "torch": torch,
+        "pil_image": pil_image,
+        "processor_cls": processor_cls,
+        "model_cls": model_cls,
+        "diagnostics": diagnostics,
+    }
+
+
+def select_transformers_model_class(transformers_module: Any) -> tuple[Any, str]:
+    candidates = (
+        "AutoModelForImageTextToText",
+        "AutoModelForVision2Seq",
+        "AutoModelForCausalLM",
+    )
+    for name in candidates:
+        cls = getattr(transformers_module, name, None)
+        if cls is not None:
+            return cls, name
+    raise RuntimeError(
+        "RUNPOD_VLM_ENV_OR_MODEL_LOAD_BLOCKED: transformers import passed, but none of "
+        f"{', '.join(candidates)} is available. Upgrade transformers or install the model-specific VLM loader."
+    )
 
 
 def extract_json_payload(raw_output: str) -> Any:
@@ -285,6 +347,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     context_summary = read_context_summary(args.context_json)
     prompt = build_generation_prompt(args, context_summary)
+    if args.dependency_check_only:
+        try:
+            components = resolve_transformers_components()
+        except Exception as exc:  # noqa: BLE001
+            print(f"dependency_check_error: {type(exc).__name__}: {str(exc)[:500]}", file=sys.stderr)
+            return 2
+        result = {"status": "PASS", **components["diagnostics"]}
+        print(json.dumps(result, indent=2, sort_keys=True) if args.json else f"status=PASS {result}")
+        return 0
     if args.backend == "transformers" and not is_actual_context(context_summary):
         print(
             "context_error: transformers generation requires actual Risk1-B context JSON "
