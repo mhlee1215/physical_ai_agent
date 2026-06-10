@@ -22,6 +22,11 @@ PASS = "PASS"
 WARN = "WARN"
 FAIL = "FAIL"
 BLOCKED = "BLOCKED"
+RISK1A_NATIVE_NOISE_REFERENCE = {
+    "mean_normalized_pairwise_l2": 0.048124,
+    "mean_pairwise_cosine_distance": 0.001218,
+}
+RISK1A_MIN_RELATIVE_GAIN = 1.25
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,8 @@ class RiskProbeConfig:
     direct_image_height: int = 128
     renderer_backend: str = "egl"
     debug_candidate_noise_scale: float = 0.0
+    risk1a_prompt_portfolio: bool = False
+    risk1a_ambiguity: bool = False
     diversity_warn_threshold: float = 0.05
     diversity_fail_threshold: float = 0.001
     clone_state_l2_threshold: float = 1e-9
@@ -176,6 +183,7 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
         if actual_candidates:
             report_candidates = actual_candidates
             diversity = compute_diversity_metrics(config, actual_candidates)
+            diversity = gate_risk1a_diversity_if_needed(diversity, actual_evidence)
         if actual_evidence.get("candidate_generation", {}).get("source") == "synthetic_fallback":
             diversity = mark_diversity_as_policy_sampling_unavailable(diversity, actual_evidence)
         if actual_evidence.get("outcomes"):
@@ -203,6 +211,14 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
     direct_evidence = actual_evidence.get("direct_libero_double_sim", {})
     if isinstance(direct_evidence, dict) and direct_evidence.get("artifact_path"):
         artifacts["direct_libero_double_sim_evidence"] = direct_evidence["artifact_path"]
+    if config.risk1a_prompt_portfolio:
+        artifacts["risk1a_prompt_portfolio"] = write_risk1a_prompt_portfolio_artifact(
+            output_dir=output_dir,
+            config=config,
+            evidence=actual_evidence,
+            diversity=diversity,
+            candidates=report_candidates,
+        )
     risk_verdicts = {
         "risk_1_candidate_diversity": diversity.verdict,
         "risk_2_clone_fidelity": clone_fidelity.verdict if clone_fidelity.verdict != PASS or not blockers else PASS,
@@ -552,6 +568,63 @@ def mark_diversity_as_policy_sampling_unavailable(metrics: DiversityMetrics, evi
         selected_vs_policy_l2=metrics.selected_vs_policy_l2,
         selected_vs_policy_cosine_distance=metrics.selected_vs_policy_cosine_distance,
         provenance="policy_sampling_unavailable",
+    )
+
+
+def gate_risk1a_diversity_if_needed(metrics: DiversityMetrics, evidence: dict[str, Any]) -> DiversityMetrics:
+    portfolio = evidence.get("risk1a_prompt_portfolio")
+    if not isinstance(portfolio, dict) or not portfolio.get("enabled"):
+        return metrics
+    if not portfolio.get("active"):
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "verdict": WARN,
+                "rationale": (
+                    "Risk1-A prompt portfolio was enabled but ambiguity was not requested/detected, so the "
+                    "baseline single-prompt path was preserved. This is not a Risk1-A diversity pass."
+                ),
+            }
+        )
+    if portfolio.get("provenance") != "policy_generated":
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "verdict": BLOCKED,
+                "rationale": "Risk1-A prompt portfolio did not produce actual policy-generated chunks; mock/fallback cannot pass.",
+                "provenance": "risk1a_unavailable",
+            }
+        )
+    min_mean_norm = RISK1A_NATIVE_NOISE_REFERENCE["mean_normalized_pairwise_l2"] * RISK1A_MIN_RELATIVE_GAIN
+    min_cosine = RISK1A_NATIVE_NOISE_REFERENCE["mean_pairwise_cosine_distance"] * RISK1A_MIN_RELATIVE_GAIN
+    beats_native = (
+        metrics.mean_normalized_pairwise_l2 > min_mean_norm
+        and metrics.mean_pairwise_cosine_distance > min_cosine
+        and metrics.selected_vs_policy_l2 > 0.0
+    )
+    if metrics.verdict == PASS and beats_native:
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "rationale": (
+                    "Risk1-A prompt portfolio produced actual policy-generated chunks with diversity above the "
+                    "native-noise reference gate. This is a Risk1-A candidate-diversity pass, not final benchmark success."
+                ),
+                "provenance": "policy_generated",
+            }
+        )
+    return DiversityMetrics(
+        **{
+            **asdict(metrics),
+            "verdict": WARN,
+            "rationale": (
+                "Risk1-A prompt portfolio ran through actual policy generation, but chunk diversity did not clear "
+                f"the conservative native-noise gate: mean_normalized_pairwise_l2>{min_mean_norm:.6f}, "
+                f"mean_pairwise_cosine_distance>{min_cosine:.6f}, and selected_vs_policy_l2>0 required. "
+                "Risk1-A remains WARN."
+            ),
+            "provenance": "policy_generated",
+        }
     )
 
 
@@ -1115,6 +1188,195 @@ def sample_policy_action_candidates(
     return candidates, metadata
 
 
+def sample_policy_prompt_portfolio_candidates(
+    *,
+    policy: Any,
+    raw_observation: Any,
+    env: Any,
+    env_preprocessor: Any,
+    preprocessor: Any,
+    preprocess_observation_fn: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    config: RiskProbeConfig,
+    torch_module: Any = None,
+    numpy_module: Any = None,
+) -> tuple[list[ActionChunkCandidate], dict[str, Any]]:
+    base_observation, base_metadata = prepare_lerobot_policy_observation(
+        observation=raw_observation,
+        env=env,
+        env_preprocessor=env_preprocessor,
+        preprocessor=preprocessor,
+        preprocess_observation_fn=preprocess_observation_fn,
+    )
+    base_prompt = str(base_metadata.get("task_text") or "")
+    prompts = build_risk1a_prompt_portfolio(
+        base_prompt=base_prompt,
+        num_prompts=config.num_candidates,
+        enabled=config.risk1a_prompt_portfolio,
+        ambiguity_requested=config.risk1a_ambiguity,
+    )
+    if len(prompts) <= 1:
+        candidates, metadata = sample_policy_action_candidates(
+            policy=policy,
+            observation=base_observation,
+            postprocessor=postprocessor,
+            env_postprocessor=env_postprocessor,
+            action_key=action_key,
+            config=config,
+            torch_module=torch_module,
+            numpy_module=numpy_module,
+        )
+        metadata["risk1a_prompt_portfolio"] = {
+            "enabled": config.risk1a_prompt_portfolio,
+            "active": False,
+            "reason": "ambiguity_not_requested_or_single_prompt",
+            "prompts": prompts,
+            "base_prompt": base_prompt,
+            "provenance": "single_prompt_baseline",
+        }
+        return candidates[:1], metadata
+
+    candidates: list[ActionChunkCandidate] = []
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, prompt in enumerate(prompts):
+        candidate_id = "candidate_00_policy_only" if index == 0 else f"candidate_{index:02d}"
+        seed = None if index == 0 else config.seed + index - 1
+        if seed is not None:
+            set_policy_sampling_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+        if hasattr(policy, "reset"):
+            try:
+                policy.reset()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{candidate_id} policy.reset failed: {type(exc).__name__}: {str(exc)[:200]}")
+        try:
+            prompt_observation, prompt_metadata = prepare_lerobot_policy_observation(
+                observation=raw_observation,
+                env=env,
+                env_preprocessor=env_preprocessor,
+                preprocessor=preprocessor,
+                preprocess_observation_fn=preprocess_observation_fn,
+                task_override=prompt["prompt"],
+            )
+            raw_chunk, source, limitation = capture_policy_raw_action_chunk(
+                policy=policy,
+                observation=prompt_observation,
+                torch_module=torch_module,
+                explicit_noise=None,
+            )
+            action_chunk = raw_policy_chunk_to_action_chunk(
+                raw_chunk=raw_chunk,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=action_key,
+                config=config,
+            )
+            candidate = ActionChunkCandidate(
+                candidate_id=candidate_id,
+                source=f"{source}+risk1a_prompt_portfolio",
+                action_chunk=action_chunk,
+                privileged_success_proxy=simulate_mock_env(action_chunk)["success_proxy"],
+                is_policy_only=index == 0,
+                seed=seed,
+                selection_role="baseline_original_prompt" if index == 0 else "risk1a_strategy_prompt",
+                sampling_metadata={
+                    "candidate_generation": "risk1a_prompt_portfolio",
+                    "seed": seed,
+                    "prompt_strategy": prompt["strategy"],
+                    "prompt_axis": prompt["axis"],
+                    "prompt_text": prompt["prompt"],
+                    "prompt_index": index,
+                    "task_source": prompt_metadata.get("task_source"),
+                    "raw_chunk_shape": shape_list(raw_chunk),
+                    "raw_chunk_preview": truncate_nested(to_plain_value(raw_chunk), max_items=256),
+                    "action_shape": [len(action_chunk), len(action_chunk[0]) if action_chunk else 0],
+                    "limitation": limitation,
+                },
+            )
+            candidates.append(candidate)
+            records.append(summarize_candidate(candidate))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{candidate_id} risk1a prompt candidate failed: {type(exc).__name__}: {str(exc)[:300]}")
+    metadata = {
+        "source": "risk1a_prompt_portfolio",
+        "requested_candidates": config.num_candidates,
+        "candidate_count": len(candidates),
+        "candidate_seeds": [config.seed + index for index in range(max(len(prompts) - 1, 0))],
+        "candidate_sampling_api": "prompt_portfolio_noise_free",
+        "errors": errors,
+        "candidates": records,
+        "risk1a_prompt_portfolio": {
+            "enabled": True,
+            "active": True,
+            "ambiguity_requested": config.risk1a_ambiguity,
+            "base_prompt": base_prompt,
+            "prompts": prompts,
+            "provenance": "policy_generated" if candidates else "unavailable",
+            "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+            "min_relative_gain": RISK1A_MIN_RELATIVE_GAIN,
+        },
+        "limitation": None,
+    }
+    return candidates, metadata
+
+
+def build_risk1a_prompt_portfolio(
+    *,
+    base_prompt: str,
+    num_prompts: int,
+    enabled: bool,
+    ambiguity_requested: bool,
+) -> list[dict[str, str]]:
+    clean_base = " ".join(str(base_prompt or "").split()) or "Complete the LIBERO task."
+    prompts = [
+        {
+            "strategy": "baseline_original_prompt",
+            "axis": "baseline",
+            "prompt": clean_base,
+        }
+    ]
+    if not enabled or not ambiguity_requested:
+        return prompts[: max(1, min(num_prompts, 1))]
+    strategy_specs = [
+        (
+            "direct_approach",
+            "direct_path",
+            "Use a direct approach to complete the same task without adding extra intermediate goals.",
+        ),
+        (
+            "conservative_alignment_before_contact",
+            "alignment_before_contact",
+            "First align the gripper conservatively with the object before making contact, then continue the same task.",
+        ),
+        (
+            "object_relative_open_side",
+            "object_centric_direction",
+            "Approach from the object-relative open side when it is visible, preserving the same target and task goal.",
+        ),
+        (
+            "precise_gripper_alignment_before_closing",
+            "gripper_alignment",
+            "Prioritize precise gripper pose alignment before closing or pushing, while preserving the same task goal.",
+        ),
+        (
+            "short_horizon_contact_first",
+            "contact_first",
+            "Choose a short-horizon first contact that improves the same task objective before committing further.",
+        ),
+    ]
+    for strategy, axis, suffix in strategy_specs[: max(0, num_prompts - 1)]:
+        prompts.append(
+            {
+                "strategy": strategy,
+                "axis": axis,
+                "prompt": f"{clean_base} {suffix}",
+            }
+        )
+    return prompts
+
+
 def prepare_lerobot_policy_observation(
     *,
     observation: Any,
@@ -1122,20 +1384,26 @@ def prepare_lerobot_policy_observation(
     env_preprocessor: Any,
     preprocessor: Any,
     preprocess_observation_fn: Any,
+    task_override: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     metadata: dict[str, Any] = {"steps": []}
     processed = preprocess_observation_fn(observation) if callable(preprocess_observation_fn) else observation
     metadata["steps"].append("preprocess_observation")
-    try:
-        processed["task"] = list(env.call("task_description"))
-        metadata["task_source"] = "task_description"
-    except Exception:  # noqa: BLE001
+    if task_override is not None:
+        processed["task"] = [task_override] * int(getattr(env, "num_envs", 1))
+        metadata["task_source"] = "risk1a_prompt_override"
+    else:
         try:
-            processed["task"] = list(env.call("task"))
-            metadata["task_source"] = "task"
-        except Exception as exc:  # noqa: BLE001
-            processed["task"] = [""] * int(getattr(env, "num_envs", 1))
-            metadata["task_source"] = f"fallback_empty_task:{type(exc).__name__}"
+            processed["task"] = list(env.call("task_description"))
+            metadata["task_source"] = "task_description"
+        except Exception:  # noqa: BLE001
+            try:
+                processed["task"] = list(env.call("task"))
+                metadata["task_source"] = "task"
+            except Exception as exc:  # noqa: BLE001
+                processed["task"] = [""] * int(getattr(env, "num_envs", 1))
+                metadata["task_source"] = f"fallback_empty_task:{type(exc).__name__}"
+    metadata["task_text"] = processed.get("task", [""])[0] if isinstance(processed, dict) else ""
     processed = env_preprocessor(processed) if callable(env_preprocessor) else processed
     metadata["steps"].append("env_preprocessor")
     processed = preprocessor(processed) if callable(preprocessor) else processed
@@ -1837,16 +2105,32 @@ def build_libero_risk_probe_rollout(
             preprocessor=preprocessor,
             preprocess_observation_fn=preprocess_observation,
         )
-        policy_candidates, candidate_generation = sample_policy_action_candidates(
-            policy=policy,
-            observation=policy_sampling_observation,
-            postprocessor=postprocessor,
-            env_postprocessor=env_postprocessor,
-            action_key=ACTION,
-            config=config,
-            torch_module=torch,
-            numpy_module=np,
-        )
+        if config.risk1a_prompt_portfolio:
+            policy_candidates, candidate_generation = sample_policy_prompt_portfolio_candidates(
+                policy=policy,
+                raw_observation=sampling_observation,
+                env=env,
+                env_preprocessor=env_preprocessor,
+                preprocessor=preprocessor,
+                preprocess_observation_fn=preprocess_observation,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=ACTION,
+                config=config,
+                torch_module=torch,
+                numpy_module=np,
+            )
+        else:
+            policy_candidates, candidate_generation = sample_policy_action_candidates(
+                policy=policy,
+                observation=policy_sampling_observation,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=ACTION,
+                config=config,
+                torch_module=torch,
+                numpy_module=np,
+            )
         candidate_generation["observation_preprocess"] = observation_preprocess_metadata
         if policy_candidates:
             active_candidates = policy_candidates
@@ -1993,6 +2277,7 @@ def build_libero_risk_probe_rollout(
             ),
             "oracle_upper_bound": asdict(oracle_metrics),
             "oracle_mode": "privileged" if introspection.get("privileged_state_available") else "proxy_only",
+            "risk1a_prompt_portfolio": candidate_generation.get("risk1a_prompt_portfolio", {"enabled": False}),
         }
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         reward = np.zeros((getattr(env, "num_envs", 1),), dtype=np.float32)
@@ -2853,6 +3138,52 @@ def write_report_bundle(output_dir: Path, config: RiskProbeConfig, report: RiskP
         for event in events:
             handle.write(json.dumps(event, sort_keys=True) + "\n")
     html_path.write_text(render_html_report(report), encoding="utf-8")
+
+
+def write_risk1a_prompt_portfolio_artifact(
+    *,
+    output_dir: Path,
+    config: RiskProbeConfig,
+    evidence: dict[str, Any],
+    diversity: DiversityMetrics,
+    candidates: list[ActionChunkCandidate],
+) -> str:
+    path = output_dir / "risk1a_prompt_portfolio.json"
+    portfolio = evidence.get("risk1a_prompt_portfolio")
+    if not isinstance(portfolio, dict):
+        portfolio = {
+            "enabled": config.risk1a_prompt_portfolio,
+            "active": False,
+            "ambiguity_requested": config.risk1a_ambiguity,
+            "base_prompt": "mock/local contract prompt",
+            "prompts": build_risk1a_prompt_portfolio(
+                base_prompt="mock/local contract prompt",
+                num_prompts=config.num_candidates,
+                enabled=config.risk1a_prompt_portfolio,
+                ambiguity_requested=config.risk1a_ambiguity,
+            ),
+            "provenance": "mock_contract" if config.backend == "mock" else "unavailable",
+            "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+            "min_relative_gain": RISK1A_MIN_RELATIVE_GAIN,
+        }
+    payload = {
+        "risk": "risk_1a_prompt_portfolio",
+        "enabled": config.risk1a_prompt_portfolio,
+        "active": bool(portfolio.get("active")),
+        "ambiguity_requested": config.risk1a_ambiguity,
+        "verdict": diversity.verdict if portfolio.get("active") else WARN,
+        "rationale": diversity.rationale if portfolio.get("active") else "Risk1-A was not active; baseline remains single-prompt.",
+        "provenance": portfolio.get("provenance", "unavailable"),
+        "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+        "min_relative_gain": RISK1A_MIN_RELATIVE_GAIN,
+        "prompts": portfolio.get("prompts", []),
+        "candidate_count": len(candidates),
+        "metrics": asdict(diversity),
+        "candidate_summaries": [summarize_candidate(candidate) for candidate in candidates],
+        "boundary": "not Risk1 final PASS; final success remains benchmark/environment success only",
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return str(path)
 
 
 def render_action_heatmap_svg(candidates: list[ActionChunkCandidate]) -> str:

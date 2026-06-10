@@ -17,6 +17,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     RiskProbeConfig,
     apply_candidate_to_env,
     apply_torch_transformers_import_compatibility_patch,
+    build_risk1a_prompt_portfolio,
     capture_sim_state,
     compute_clone_fidelity_metrics,
     compute_actual_oracle_or_proxy_metrics,
@@ -30,6 +31,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     run_risk_probes,
     prepare_lerobot_policy_observation,
     sample_policy_action_candidates,
+    sample_policy_prompt_portfolio_candidates,
     select_actual_probe_candidates,
     simulate_mock_env,
 )
@@ -184,6 +186,32 @@ class RiskProbeTest(TestCase):
             self.assertEqual(probe["mock_sampling"]["candidate_generation"]["candidate_sampling_api"], "predict_action_chunk(noise=...)")
             self.assertIn(probe["sampling_api_available"], {"yes", "no", "unclear"})
 
+    def test_cli_risk1a_prompt_portfolio_mock_writes_artifact(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            command = [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts" / "run_imagine_then_act_risk_probes.py"),
+                "--preset",
+                "local-dry-run",
+                "--risk1a-prompt-portfolio",
+                "--risk1a-ambiguity",
+                "--output-dir",
+                tmpdir,
+                "--json",
+            ]
+            completed = subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
+            payload = json.loads(completed.stdout)
+            artifact_path = Path(payload["risk1a_prompt_portfolio"])
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(artifact_path.exists())
+            self.assertEqual(artifact["risk"], "risk_1a_prompt_portfolio")
+            self.assertEqual(artifact["provenance"], "mock_contract")
+            self.assertEqual(len(artifact["prompts"]), 5)
+            self.assertIn("native_noise_reference", artifact)
+            self.assertNotEqual(artifact["provenance"], "policy_generated")
+
     def test_cli_task_parser_supports_ranges(self) -> None:
         spec = importlib.util.spec_from_file_location(
             "run_imagine_then_act_risk_probes_for_test",
@@ -208,6 +236,12 @@ class RiskProbeTest(TestCase):
             ["--preset", "runpod-libero-double-sim-smoke", "--renderer-backend", "osmesa"]
         )
         self.assertEqual(module.build_config(parsed_renderer).renderer_backend, "osmesa")
+        parsed_risk1a = module.build_parser().parse_args(
+            ["--preset", "runpod-libero-smoke", "--risk1a-prompt-portfolio", "--risk1a-ambiguity"]
+        )
+        risk1a_config = module.build_config(parsed_risk1a)
+        self.assertTrue(risk1a_config.risk1a_prompt_portfolio)
+        self.assertTrue(risk1a_config.risk1a_ambiguity)
 
     def test_fake_actual_adapter_helpers_record_proxy_only_evidence(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -905,6 +939,77 @@ class RiskProbeTest(TestCase):
             self.assertEqual(candidates[1].sampling_metadata["explicit_noise_shape"], [1, 2, 3])
             self.assertNotEqual(candidates[1].action_chunk, candidates[2].action_chunk)
 
+    def test_risk1a_prompt_portfolio_preserves_single_prompt_by_default(self) -> None:
+        disabled = build_risk1a_prompt_portfolio(
+            base_prompt="Move the object to the target.",
+            num_prompts=5,
+            enabled=False,
+            ambiguity_requested=True,
+        )
+        obvious = build_risk1a_prompt_portfolio(
+            base_prompt="Move the object to the target.",
+            num_prompts=5,
+            enabled=True,
+            ambiguity_requested=False,
+        )
+
+        self.assertEqual(len(disabled), 1)
+        self.assertEqual(len(obvious), 1)
+        self.assertEqual(disabled[0]["strategy"], "baseline_original_prompt")
+
+    def test_risk1a_prompt_portfolio_generates_subgoal_preserving_strategy_axes(self) -> None:
+        prompts = build_risk1a_prompt_portfolio(
+            base_prompt="Move the object to the target.",
+            num_prompts=5,
+            enabled=True,
+            ambiguity_requested=True,
+        )
+
+        self.assertEqual(len(prompts), 5)
+        self.assertEqual(prompts[0]["axis"], "baseline")
+        self.assertIn("alignment_before_contact", {prompt["axis"] for prompt in prompts})
+        self.assertTrue(all("Move the object to the target." in prompt["prompt"] for prompt in prompts))
+
+    def test_risk1a_prompt_portfolio_sampling_records_prompt_metadata(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=5,
+                chunk_steps=2,
+                action_dim=3,
+                output_dir=tmpdir,
+                risk1a_prompt_portfolio=True,
+                risk1a_ambiguity=True,
+            )
+
+            candidates, metadata = sample_policy_prompt_portfolio_candidates(
+                policy=_FakePromptAwarePolicy(config.chunk_steps, config.action_dim),
+                raw_observation={"state": [0.0]},
+                env=_FakeTaskEnv(),
+                env_preprocessor=lambda observation: observation,
+                preprocessor=lambda observation: observation,
+                preprocess_observation_fn=lambda observation: dict(observation),
+                postprocessor=lambda action: action,
+                env_postprocessor=lambda transition: transition,
+                action_key="action",
+                config=config,
+                torch_module=_FakeTorch,
+                numpy_module=None,
+            )
+            metrics = compute_diversity_metrics(config, candidates)
+
+            self.assertEqual(metadata["source"], "risk1a_prompt_portfolio")
+            self.assertTrue(metadata["risk1a_prompt_portfolio"]["active"])
+            self.assertEqual(len(candidates), 5)
+            self.assertEqual(candidates[0].selection_role, "baseline_original_prompt")
+            self.assertEqual(candidates[1].sampling_metadata["candidate_generation"], "risk1a_prompt_portfolio")
+            self.assertIn("prompt_text", candidates[1].sampling_metadata)
+            self.assertGreater(metrics.mean_normalized_pairwise_l2, 0.0)
+
     def test_debug_noise_candidate_diversity_cannot_be_method_pass(self) -> None:
         with TemporaryDirectory() as tmpdir:
             config = RiskProbeConfig(
@@ -1085,6 +1190,26 @@ class _FakeNoiseAwareChunkPolicy:
                 ]
             ]
         return noise
+
+
+class _FakePromptAwarePolicy:
+    name = "fake_smolvla"
+
+    def __init__(self, chunk_size: int, action_dim: int) -> None:
+        self.config = _FakeNoisePolicyConfig(chunk_size, action_dim)
+
+    def reset(self) -> None:
+        return None
+
+    def predict_action_chunk(self, observation, noise=None):  # noqa: ANN001, ARG002
+        task = observation.get("task", [""])[0] if isinstance(observation, dict) else ""
+        offset = (sum(ord(char) for char in task) % 17) / 100.0
+        return [
+            [
+                [round(offset + 0.01 * step + 0.001 * dim, 6) for dim in range(self.config.max_action_dim)]
+                for step in range(self.config.chunk_size)
+            ]
+        ]
 
 
 class _FakeConstantPolicy:

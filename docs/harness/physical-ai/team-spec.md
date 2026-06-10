@@ -250,6 +250,37 @@ PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   --output-dir _workspace/runpod_results/ita_risk_probes/smolvla_sampling_probe_seed1201 \
   --json
 ```
+If native-noise sampling remains weak, Risk1-A may test an
+ambiguity-triggered subgoal/prompt portfolio. It is opt-in only and must never
+change the default baseline path: without both `--risk1a-prompt-portfolio` and
+`--risk1a-ambiguity`, the policy uses the single original task prompt. With
+both flags, the adapter must write `risk1a_prompt_portfolio.json` containing
+the original prompt, 3-4 subgoal-preserving strategy prompts, strategy axes,
+policy-generated action chunks, and diversity metrics. Risk1-A can be a PASS
+candidate only when actual policy-generated chunks clear the native-noise
+reference by the documented relative gate; mock/fallback artifacts are contract
+evidence only:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-smoke \
+  --backend libero-contract \
+  --suite libero_goal \
+  --task-ids 6 \
+  --seed 1201 \
+  --num-candidates 5 \
+  --chunk-steps 15 \
+  --action-dim 7 \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --renderer-backend egl \
+  --risk1a-prompt-portfolio \
+  --risk1a-ambiguity \
+  --output-dir _workspace/runpod_results/ita_risk_probes/risk1a_prompt_portfolio_seed1201 \
+  --json
+```
 If direct LIBERO exposes privileged state or `check_success` but only one
 candidate is evaluated, or all evaluated policy/alternative candidates have no
 privileged score spread, report `privileged_oracle_available` with

@@ -87,6 +87,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Reports remain WARN for debug-noise diversity; do not use for method claims."
         ),
     )
+    parser.add_argument(
+        "--risk1a-prompt-portfolio",
+        action="store_true",
+        help="Enable Risk1-A prompt/subgoal portfolio instrumentation. Default baseline remains single-prompt.",
+    )
+    parser.add_argument(
+        "--risk1a-ambiguity",
+        action="store_true",
+        help="Request ambiguity-triggered Risk1-A strategy prompts. Without this flag Risk1-A preserves one prompt.",
+    )
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--json", action="store_true")
     return parser
@@ -144,6 +154,8 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         direct_image_height=args.direct_image_height,
         renderer_backend=args.renderer_backend,
         debug_candidate_noise_scale=args.debug_candidate_noise_scale,
+        risk1a_prompt_portfolio=args.risk1a_prompt_portfolio,
+        risk1a_ambiguity=args.risk1a_ambiguity,
     )
 
 
@@ -164,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
         "html_report": report.artifacts["html_report"],
         "blockers": report.blockers,
     }
+    if "risk1a_prompt_portfolio" in report.artifacts:
+        payload["risk1a_prompt_portfolio"] = report.artifacts["risk1a_prompt_portfolio"]
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
