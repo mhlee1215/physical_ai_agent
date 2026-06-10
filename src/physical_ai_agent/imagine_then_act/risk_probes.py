@@ -108,6 +108,9 @@ class OracleUpperBoundMetrics:
     oracle_beats_policy: bool
     oracle_beats_random: bool
     rationale: str
+    evidence_class: str = "mock_oracle"
+    privileged_oracle_available: bool = False
+    upper_bound_testable: bool = True
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,9 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
             clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
         if actual_evidence.get("oracle_upper_bound"):
             oracle_upper_bound = OracleUpperBoundMetrics(**actual_evidence["oracle_upper_bound"])
+        direct_evidence = actual_evidence.get("direct_libero_double_sim", {})
+        if isinstance(direct_evidence, dict) and direct_evidence.get("oracle_upper_bound"):
+            oracle_upper_bound = OracleUpperBoundMetrics(**direct_evidence["oracle_upper_bound"])
         if actual_evidence.get("available") is False:
             diversity = mark_diversity_as_actual_unavailable(diversity, actual_evidence)
             oracle_upper_bound = mark_oracle_as_actual_unavailable(oracle_upper_bound, actual_evidence)
@@ -563,6 +569,9 @@ def mark_oracle_as_actual_unavailable(metrics: OracleUpperBoundMetrics, evidence
             f"actual privileged oracle evidence unavailable ({category}): {reason} "
             "Risk5 cannot pass from proxy or mock scores."
         ),
+        evidence_class="unavailable",
+        privileged_oracle_available=False,
+        upper_bound_testable=False,
     )
 
 
@@ -753,6 +762,9 @@ def compute_oracle_upper_bound_metrics(
         oracle_beats_policy=beats_policy,
         oracle_beats_random=beats_random,
         rationale=rationale,
+        evidence_class="mock_oracle",
+        privileged_oracle_available=True,
+        upper_bound_testable=True,
     )
 
 
@@ -1552,6 +1564,7 @@ def run_direct_env_snapshot_replay(
         deterministic_replay_mismatch=not (final_state_match and final_image_match),
         rationale=rationale,
     )
+    oracle_metrics = compute_actual_oracle_or_proxy_metrics(selected, outcomes, introspection)
     return {
         "available": True,
         "blockers": [] if verdict == PASS else [rationale],
@@ -1578,6 +1591,7 @@ def run_direct_env_snapshot_replay(
             "image_available": image_available,
         },
         "clone_fidelity": asdict(clone_metrics),
+        "oracle_upper_bound": asdict(oracle_metrics),
         "sync_scope": "episode_start_init_state_only",
         "mid_episode_sync": "future_work",
     }
@@ -1853,9 +1867,10 @@ def build_libero_risk_probe_rollout(
 def select_actual_probe_candidates(candidates: list[ActionChunkCandidate]) -> list[ActionChunkCandidate]:
     policy = [candidate for candidate in candidates if candidate.is_policy_only][:1]
     random_candidates = [candidate for candidate in candidates if "random" in candidate.source][:1]
+    non_policy_comparison = [candidate for candidate in candidates if not candidate.is_policy_only][:1]
     oracle = [max(candidates, key=lambda item: item.privileged_success_proxy)]
     result: list[ActionChunkCandidate] = []
-    for candidate in [*policy, *random_candidates, *oracle]:
+    for candidate in [*policy, *(random_candidates or non_policy_comparison), *oracle]:
         if candidate.candidate_id not in {item.candidate_id for item in result}:
             result.append(candidate)
     return result or candidates[:1]
@@ -2550,20 +2565,75 @@ def compute_actual_oracle_or_proxy_metrics(
     outcomes: dict[str, dict[str, Any]],
     introspection: dict[str, Any],
 ) -> OracleUpperBoundMetrics:
-    metrics = compute_oracle_upper_bound_metrics(candidates, outcomes)
+    evaluated_candidates = [candidate for candidate in candidates if candidate.candidate_id in outcomes]
+    policy_candidates = [candidate for candidate in evaluated_candidates if candidate.is_policy_only]
+    alternative_candidates = [candidate for candidate in evaluated_candidates if not candidate.is_policy_only]
+    if not evaluated_candidates or not policy_candidates:
+        policy_score = random_score = oracle_score = 0.0
+        selected_candidate_id = "unavailable"
+        oracle_beats_policy = oracle_beats_random = False
+    else:
+        metrics = compute_oracle_upper_bound_metrics(evaluated_candidates, outcomes)
+        policy_score = metrics.policy_only_score
+        random_score = metrics.random_chunk_score
+        oracle_score = metrics.oracle_selector_score
+        selected_candidate_id = metrics.selected_candidate_id
+        oracle_beats_policy = metrics.oracle_beats_policy
+        oracle_beats_random = metrics.oracle_beats_random
     if not introspection.get("privileged_state_available"):
         return OracleUpperBoundMetrics(
             verdict=WARN,
-            policy_only_score=metrics.policy_only_score,
-            random_chunk_score=metrics.random_chunk_score,
-            oracle_selector_score=metrics.oracle_selector_score,
-            selected_candidate_id=metrics.selected_candidate_id,
-            oracle_beats_policy=metrics.oracle_beats_policy,
-            oracle_beats_random=metrics.oracle_beats_random,
+            policy_only_score=policy_score,
+            random_chunk_score=random_score,
+            oracle_selector_score=oracle_score,
+            selected_candidate_id=selected_candidate_id,
+            oracle_beats_policy=oracle_beats_policy,
+            oracle_beats_random=oracle_beats_random,
             rationale=(
                 "proxy_only: privileged oracle state was unavailable, so candidates were ranked by available env info/obs proxy only. "
                 "This is not benchmark success."
             ),
+            evidence_class="proxy_only",
+            privileged_oracle_available=False,
+            upper_bound_testable=False,
+        )
+    score_values = [float(outcomes[candidate.candidate_id].get("success_proxy", 0.0)) for candidate in evaluated_candidates]
+    score_spread = (max(score_values) - min(score_values)) if score_values else 0.0
+    if not policy_candidates or not alternative_candidates:
+        return OracleUpperBoundMetrics(
+            verdict=WARN,
+            policy_only_score=policy_score,
+            random_chunk_score=random_score,
+            oracle_selector_score=oracle_score,
+            selected_candidate_id=selected_candidate_id,
+            oracle_beats_policy=False,
+            oracle_beats_random=False,
+            rationale=(
+                "privileged_oracle_available_but_upper_bound_not_testable: direct LIBERO exposed privileged "
+                "state/success evidence, but fewer than one policy candidate plus one alternative candidate were "
+                "evaluated. Risk5 remains WARN; this is not benchmark success."
+            ),
+            evidence_class="privileged_oracle_available",
+            privileged_oracle_available=True,
+            upper_bound_testable=False,
+        )
+    if score_spread <= 1e-12:
+        return OracleUpperBoundMetrics(
+            verdict=WARN,
+            policy_only_score=policy_score,
+            random_chunk_score=random_score,
+            oracle_selector_score=oracle_score,
+            selected_candidate_id=selected_candidate_id,
+            oracle_beats_policy=False,
+            oracle_beats_random=oracle_beats_random,
+            rationale=(
+                "privileged_oracle_available_but_no_score_spread: privileged direct state/success evidence was "
+                "available, but evaluated candidates had identical privileged/proxy scores, so no oracle "
+                "upper-bound ranking was demonstrated. Risk5 remains WARN."
+            ),
+            evidence_class="privileged_oracle_available",
+            privileged_oracle_available=True,
+            upper_bound_testable=False,
         )
     return OracleUpperBoundMetrics(
         verdict=metrics.verdict,
@@ -2574,6 +2644,9 @@ def compute_actual_oracle_or_proxy_metrics(
         oracle_beats_policy=metrics.oracle_beats_policy,
         oracle_beats_random=metrics.oracle_beats_random,
         rationale="oracle_available: privileged env state/proxy was available for upper-bound candidate ranking; this is not benchmark success.",
+        evidence_class="privileged_oracle_available",
+        privileged_oracle_available=True,
+        upper_bound_testable=True,
     )
 
 

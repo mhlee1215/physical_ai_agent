@@ -30,6 +30,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     run_risk_probes,
     prepare_lerobot_policy_observation,
     sample_policy_action_candidates,
+    select_actual_probe_candidates,
     simulate_mock_env,
 )
 from physical_ai_agent.imagine_then_act.direct_libero_imagination import (
@@ -316,6 +317,81 @@ class RiskProbeTest(TestCase):
         self.assertIn("oracle_available", metrics.rationale)
         self.assertTrue(metrics.oracle_beats_policy)
         self.assertTrue(metrics.oracle_beats_random)
+        self.assertEqual(metrics.evidence_class, "privileged_oracle_available")
+        self.assertTrue(metrics.privileged_oracle_available)
+        self.assertTrue(metrics.upper_bound_testable)
+
+    def test_proxy_only_oracle_metrics_cannot_pass(self) -> None:
+        candidates = [
+            ActionChunkCandidate("candidate_00_policy_only", "policy", [[0.0]], 0.0, is_policy_only=True),
+            ActionChunkCandidate("candidate_01", "smolvla.predict_action_chunk", [[0.1]], 0.0),
+        ]
+        outcomes = {
+            "candidate_00_policy_only": {"success_proxy": 0.1},
+            "candidate_01": {"success_proxy": 0.9},
+        }
+
+        metrics = compute_actual_oracle_or_proxy_metrics(
+            candidates,
+            outcomes,
+            {"privileged_state_available": False},
+        )
+
+        self.assertEqual(metrics.verdict, WARN)
+        self.assertEqual(metrics.evidence_class, "proxy_only")
+        self.assertFalse(metrics.privileged_oracle_available)
+        self.assertFalse(metrics.upper_bound_testable)
+        self.assertIn("proxy_only", metrics.rationale)
+
+    def test_privileged_oracle_requires_policy_and_alternative_candidates(self) -> None:
+        candidates = [
+            ActionChunkCandidate("candidate_00_policy_only", "smolvla.predict_action_chunk", [[0.0]], 0.0, is_policy_only=True)
+        ]
+        outcomes = {"candidate_00_policy_only": {"success_proxy": 0.0}}
+
+        metrics = compute_actual_oracle_or_proxy_metrics(
+            candidates,
+            outcomes,
+            {"privileged_state_available": True},
+        )
+
+        self.assertEqual(metrics.verdict, WARN)
+        self.assertEqual(metrics.evidence_class, "privileged_oracle_available")
+        self.assertTrue(metrics.privileged_oracle_available)
+        self.assertFalse(metrics.upper_bound_testable)
+        self.assertIn("upper_bound_not_testable", metrics.rationale)
+
+    def test_privileged_oracle_requires_score_spread_for_upper_bound_claim(self) -> None:
+        candidates = [
+            ActionChunkCandidate("candidate_00_policy_only", "smolvla.predict_action_chunk", [[0.0]], 0.0, is_policy_only=True),
+            ActionChunkCandidate("candidate_01", "smolvla.predict_action_chunk", [[0.0]], 0.0),
+        ]
+        outcomes = {
+            "candidate_00_policy_only": {"success_proxy": 0.0},
+            "candidate_01": {"success_proxy": 0.0},
+        }
+
+        metrics = compute_actual_oracle_or_proxy_metrics(
+            candidates,
+            outcomes,
+            {"privileged_state_available": True},
+        )
+
+        self.assertEqual(metrics.verdict, WARN)
+        self.assertEqual(metrics.evidence_class, "privileged_oracle_available")
+        self.assertFalse(metrics.upper_bound_testable)
+        self.assertIn("no_score_spread", metrics.rationale)
+
+    def test_actual_probe_selection_keeps_policy_and_nonrandom_actual_comparison(self) -> None:
+        candidates = [
+            ActionChunkCandidate("candidate_00_policy_only", "smolvla.predict_action_chunk", [[0.0]], 0.0, is_policy_only=True),
+            ActionChunkCandidate("candidate_01", "smolvla.predict_action_chunk", [[0.0]], 0.0),
+            ActionChunkCandidate("candidate_02", "smolvla.predict_action_chunk", [[0.0]], 0.0),
+        ]
+
+        selected = select_actual_probe_candidates(candidates)
+
+        self.assertEqual([candidate.candidate_id for candidate in selected], ["candidate_00_policy_only", "candidate_01"])
 
     def test_direct_libero_double_sim_fake_env_replays_from_snapshot(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -347,6 +423,8 @@ class RiskProbeTest(TestCase):
             self.assertTrue(evidence["clone_restore_evidence"]["snapshot_restored"])
             self.assertEqual(evidence["sync_scope"], "episode_start_init_state_only")
             self.assertEqual(evidence["mid_episode_sync"], "future_work")
+            self.assertEqual(evidence["oracle_upper_bound"]["evidence_class"], "privileged_oracle_available")
+            self.assertTrue(evidence["oracle_upper_bound"]["privileged_oracle_available"])
             for artifact_path in evidence["image_artifacts"].values():
                 self.assertTrue(Path(artifact_path).exists())
                 self.assertEqual(Path(artifact_path).suffix, ".ppm")
@@ -643,6 +721,68 @@ class RiskProbeTest(TestCase):
             self.assertEqual(report.diversity.provenance, "policy_sampling_unavailable")
             self.assertIn("missing image features", report.diversity.rationale)
             self.assertNotEqual(report.risk_verdicts["risk_1_candidate_diversity"], PASS)
+
+    def test_direct_privileged_oracle_boundary_overrides_wrapper_proxy_only_report(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-double-sim-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=4,
+                chunk_steps=3,
+                action_dim=7,
+                output_dir=tmpdir,
+                direct_libero_double_sim=True,
+            )
+            candidates = generate_mock_candidates(config)
+            wrapper_oracle = compute_actual_oracle_or_proxy_metrics(
+                candidates[:2],
+                {
+                    candidates[0].candidate_id: {"success_proxy": 0.0},
+                    candidates[1].candidate_id: {"success_proxy": 0.0},
+                },
+                {"privileged_state_available": False},
+            )
+            direct_oracle = compute_actual_oracle_or_proxy_metrics(
+                candidates[:2],
+                {
+                    candidates[0].candidate_id: {"success_proxy": 0.0},
+                    candidates[1].candidate_id: {"success_proxy": 0.0},
+                },
+                {"privileged_state_available": True},
+            )
+
+            def fake_adapter(config, candidates, output_dir):  # noqa: ANN001, ARG001
+                evidence_path = Path(output_dir) / "libero_adapter_evidence.json"
+                evidence = {
+                    "mode": "libero_actual_adapter",
+                    "available": True,
+                    "blockers": [],
+                    "action_candidates": [candidate.__dict__ for candidate in candidates],
+                    "outcomes": {
+                        candidates[0].candidate_id: {"success_proxy": 0.0, "state": [0.0], "image": [[0]]},
+                        candidates[1].candidate_id: {"success_proxy": 0.0, "state": [0.0], "image": [[0]]},
+                    },
+                    "oracle_upper_bound": wrapper_oracle.__dict__,
+                    "direct_libero_double_sim": {"oracle_upper_bound": direct_oracle.__dict__},
+                    "artifact_path": str(evidence_path),
+                }
+                evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+                return evidence
+
+            with patch(
+                "physical_ai_agent.imagine_then_act.risk_probes.run_libero_actual_adapter",
+                side_effect=fake_adapter,
+            ):
+                report = run_risk_probes(config)
+
+            self.assertEqual(report.oracle_upper_bound.verdict, WARN)
+            self.assertEqual(report.oracle_upper_bound.evidence_class, "privileged_oracle_available")
+            self.assertTrue(report.oracle_upper_bound.privileged_oracle_available)
+            self.assertFalse(report.oracle_upper_bound.upper_bound_testable)
+            self.assertIn("no_score_spread", report.oracle_upper_bound.rationale)
 
     def test_lerobot_policy_observation_preparation_adds_task_and_preprocessor_features(self) -> None:
         raw_observation = {"pixels": [1], "robot_state": [0.1, 0.2]}
