@@ -180,6 +180,10 @@ class RiskProbeTest(TestCase):
             ["--preset", "runpod-libero-double-sim-smoke", "--actual-timeout-sec", "12"]
         )
         self.assertEqual(module.build_config(parsed_timeout).actual_timeout_sec, 12)
+        parsed_renderer = module.build_parser().parse_args(
+            ["--preset", "runpod-libero-double-sim-smoke", "--renderer-backend", "osmesa"]
+        )
+        self.assertEqual(module.build_config(parsed_renderer).renderer_backend, "osmesa")
 
     def test_fake_actual_adapter_helpers_record_proxy_only_evidence(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -545,6 +549,52 @@ class RiskProbeTest(TestCase):
             oracle_svg = Path(report.artifacts["oracle_scores"]).read_text(encoding="utf-8")
             self.assertIn("candidate_00_policy_only", oracle_svg)
             self.assertNotIn("candidate_01", oracle_svg)
+
+    def test_actual_adapter_egl_blocker_marks_actual_evidence_unavailable(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-double-sim-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=4,
+                chunk_steps=3,
+                action_dim=7,
+                output_dir=tmpdir,
+                renderer_backend="egl",
+            )
+
+            def fake_adapter(config, candidates, output_dir):  # noqa: ANN001, ARG001
+                evidence_path = Path(output_dir) / "libero_adapter_evidence.json"
+                evidence = {
+                    "mode": "libero_actual_adapter",
+                    "available": False,
+                    "blocker_category": "libero_egl_l4_blocked",
+                    "blockers": [
+                        "LIBERO actual adapter failed during env rollout: ImportError: Cannot initialize a EGL device display."
+                    ],
+                    "risk1_actual_unavailable_reason": "ImportError: Cannot initialize a EGL device display.",
+                    "risk5_actual_unavailable_reason": "ImportError: Cannot initialize a EGL device display.",
+                    "artifact_path": str(evidence_path),
+                }
+                evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+                return evidence
+
+            with patch(
+                "physical_ai_agent.imagine_then_act.risk_probes.run_libero_actual_adapter",
+                side_effect=fake_adapter,
+            ):
+                report = run_risk_probes(config)
+
+            self.assertEqual(report.status, BLOCKED)
+            self.assertEqual(report.diversity.verdict, WARN)
+            self.assertEqual(report.diversity.provenance, "actual_unavailable")
+            self.assertIn("libero_egl_l4_blocked", report.diversity.rationale)
+            self.assertEqual(report.oracle_upper_bound.verdict, BLOCKED)
+            self.assertIn("actual privileged oracle evidence unavailable", report.oracle_upper_bound.rationale)
+            summary = json.loads(Path(report.artifacts["summary"]).read_text(encoding="utf-8"))
+            self.assertIn("libero_egl_l4_blocked", summary["diversity"]["rationale"])
 
     def test_policy_candidate_sampling_records_seeded_action_chunks(self) -> None:
         with TemporaryDirectory() as tmpdir:

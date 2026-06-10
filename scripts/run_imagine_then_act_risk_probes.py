@@ -73,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--direct-image-width", type=int, default=128)
     parser.add_argument("--direct-image-height", type=int, default=128)
     parser.add_argument(
+        "--renderer-backend",
+        choices=("egl", "osmesa", "auto"),
+        default="egl",
+        help="Renderer backend for actual LIBERO probes. Use osmesa only as an explicit limited smoke fallback.",
+    )
+    parser.add_argument(
         "--debug-candidate-noise-scale",
         type=float,
         default=0.0,
@@ -136,6 +142,7 @@ def build_config(args: argparse.Namespace) -> RiskProbeConfig:
         direct_camera_name=args.direct_camera_name,
         direct_image_width=args.direct_image_width,
         direct_image_height=args.direct_image_height,
+        renderer_backend=args.renderer_backend,
         debug_candidate_noise_scale=args.debug_candidate_noise_scale,
     )
 

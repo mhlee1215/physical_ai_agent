@@ -44,7 +44,7 @@ export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
-APT_PACKAGES="${APT_PACKAGES:-python3.12 python3.12-dev python3.12-venv build-essential cmake git ffmpeg libegl1 libgl1 libglib2.0-0 libglvnd0 libglx0 libxrender1 libsm6 libxext6}"
+APT_PACKAGES="${APT_PACKAGES:-python3.12 python3.12-dev python3.12-venv build-essential cmake git ffmpeg libegl1 libgl1 libglib2.0-0 libglvnd0 libglx0 libopengl0 libosmesa6 libglfw3 libxrender1 libsm6 libxext6}"
 
 log() {
   printf '[runpod-libero-bootstrap] %s\n' "$*"

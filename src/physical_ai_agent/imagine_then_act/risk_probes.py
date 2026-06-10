@@ -5,6 +5,7 @@ import contextlib
 import html
 import json
 import math
+import os
 import random
 import signal
 import sys
@@ -44,6 +45,7 @@ class RiskProbeConfig:
     direct_camera_name: str = "agentview"
     direct_image_width: int = 128
     direct_image_height: int = 128
+    renderer_backend: str = "egl"
     debug_candidate_noise_scale: float = 0.0
     diversity_warn_threshold: float = 0.05
     diversity_fail_threshold: float = 0.001
@@ -157,6 +159,9 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
         if actual_evidence.get("clone_fidelity"):
             clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
         oracle_upper_bound = compute_actual_oracle_or_proxy_metrics(visual_candidates or candidates, outcomes, oracle_introspection)
+        if actual_evidence.get("available") is False:
+            diversity = mark_diversity_as_actual_unavailable(diversity, actual_evidence)
+            oracle_upper_bound = mark_oracle_as_actual_unavailable(oracle_upper_bound, actual_evidence)
     elif config.backend != "mock":
         write_probe_progress(output_dir, "libero_actual_adapter_start", {"timeout_sec": config.actual_timeout_sec})
         actual_evidence = run_libero_actual_adapter(config, candidates, output_dir)
@@ -175,6 +180,9 @@ def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
             clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
         if actual_evidence.get("oracle_upper_bound"):
             oracle_upper_bound = OracleUpperBoundMetrics(**actual_evidence["oracle_upper_bound"])
+        if actual_evidence.get("available") is False:
+            diversity = mark_diversity_as_actual_unavailable(diversity, actual_evidence)
+            oracle_upper_bound = mark_oracle_as_actual_unavailable(oracle_upper_bound, actual_evidence)
     if outcomes and (config.backend == "mock" or actual_evidence.get("outcomes")):
         actual_evidence.setdefault("outcome_diversity", compute_outcome_diversity_metrics(outcomes))
     artifacts = write_visual_artifacts(output_dir, visual_candidates, outcomes, diversity, clone_fidelity, oracle_upper_bound)
@@ -481,6 +489,62 @@ def mark_diversity_as_synthetic_contract(metrics: DiversityMetrics) -> Diversity
     )
 
 
+def mark_diversity_as_actual_unavailable(metrics: DiversityMetrics, evidence: dict[str, Any]) -> DiversityMetrics:
+    category = evidence.get("blocker_category", "actual_adapter_unavailable")
+    reason = evidence.get("risk1_actual_unavailable_reason") or first_blocker(evidence)
+    return DiversityMetrics(
+        verdict=WARN,
+        min_pairwise_l2=metrics.min_pairwise_l2,
+        mean_pairwise_l2=metrics.mean_pairwise_l2,
+        max_pairwise_l2=metrics.max_pairwise_l2,
+        endpoint_spread_l2=metrics.endpoint_spread_l2,
+        mean_per_dim_variance=metrics.mean_per_dim_variance,
+        gripper_command_variance=metrics.gripper_command_variance,
+        candidate_count=metrics.candidate_count,
+        rationale=(
+            f"actual policy-generated candidate diversity unavailable ({category}): {reason} "
+            "Risk1 cannot pass without SmolVLA/LeRobot-generated action chunk evidence."
+        ),
+        min_pairwise_cosine_distance=metrics.min_pairwise_cosine_distance,
+        mean_pairwise_cosine_distance=metrics.mean_pairwise_cosine_distance,
+        min_normalized_pairwise_l2=metrics.min_normalized_pairwise_l2,
+        mean_normalized_pairwise_l2=metrics.mean_normalized_pairwise_l2,
+        mean_per_step_variance=metrics.mean_per_step_variance,
+        max_per_step_variance=metrics.max_per_step_variance,
+        selected_vs_policy_l2=metrics.selected_vs_policy_l2,
+        selected_vs_policy_cosine_distance=metrics.selected_vs_policy_cosine_distance,
+        provenance="actual_unavailable",
+    )
+
+
+def mark_oracle_as_actual_unavailable(metrics: OracleUpperBoundMetrics, evidence: dict[str, Any]) -> OracleUpperBoundMetrics:
+    category = evidence.get("blocker_category", "actual_adapter_unavailable")
+    reason = evidence.get("risk5_actual_unavailable_reason") or first_blocker(evidence)
+    return OracleUpperBoundMetrics(
+        verdict=BLOCKED,
+        policy_only_score=metrics.policy_only_score,
+        random_chunk_score=metrics.random_chunk_score,
+        oracle_selector_score=metrics.oracle_selector_score,
+        selected_candidate_id=metrics.selected_candidate_id,
+        oracle_beats_policy=metrics.oracle_beats_policy,
+        oracle_beats_random=metrics.oracle_beats_random,
+        rationale=(
+            f"actual privileged oracle evidence unavailable ({category}): {reason} "
+            "Risk5 cannot pass from proxy or mock scores."
+        ),
+    )
+
+
+def first_blocker(evidence: dict[str, Any]) -> str:
+    blockers = evidence.get("blockers")
+    if isinstance(blockers, list) and blockers:
+        return str(blockers[0])
+    exception = evidence.get("exception")
+    if isinstance(exception, dict):
+        return f"{exception.get('type', 'Exception')}: {exception.get('message', '')}"
+    return "actual adapter did not produce evidence"
+
+
 def summarize_candidate(candidate: ActionChunkCandidate) -> dict[str, Any]:
     flat = flatten_chunk(candidate.action_chunk)
     return {
@@ -673,14 +737,16 @@ def run_libero_actual_adapter(
     lerobot_eval = None
     try:
         with risk_probe_timeout(config.actual_timeout_sec, "libero_actual_adapter"):
-            write_probe_progress(output_dir, "libero_actual_adapter_import_start")
-            ensure_noninteractive_libero_config()
-            from lerobot.scripts import lerobot_eval as imported_lerobot_eval
+            with renderer_env(config.renderer_backend):
+                write_probe_progress(output_dir, "libero_actual_adapter_import_start", renderer_env_snapshot(config))
+                ensure_noninteractive_libero_config()
+                from lerobot.scripts import lerobot_eval as imported_lerobot_eval
 
-            lerobot_eval = imported_lerobot_eval
-            write_probe_progress(output_dir, "libero_actual_adapter_import_done")
+                lerobot_eval = imported_lerobot_eval
+                write_probe_progress(output_dir, "libero_actual_adapter_import_done", renderer_env_snapshot(config))
     except Exception as exc:  # noqa: BLE001 - import guard keeps local tests dependency-free.
         is_timeout = isinstance(exc, RiskProbeTimeoutError)
+        failure = classify_actual_adapter_failure(exc, config)
         evidence = {
             "mode": "libero_actual_adapter",
             "available": False,
@@ -696,6 +762,13 @@ def run_libero_actual_adapter(
                 + f"({type(exc).__name__}: {str(exc)[:300]}). Run inside the prepared RunPod LeRobot/LIBERO environment."
             ],
             "import_error": {"type": type(exc).__name__, "message": str(exc)[:500]},
+            "blocker_category": failure["category"],
+            "blocker_hint": failure["hint"],
+            "renderer_backend": config.renderer_backend,
+            "renderer_env": renderer_env_snapshot(config),
+            "actual_candidate_evidence_available": False,
+            "risk1_actual_unavailable_reason": failure["risk1_reason"],
+            "risk5_actual_unavailable_reason": failure["risk5_reason"],
             "import_compat": import_compat,
             "timeout_sec": config.actual_timeout_sec,
         }
@@ -707,20 +780,26 @@ def run_libero_actual_adapter(
     old_rollout = getattr(lerobot_eval, "rollout", None)
     try:
         with risk_probe_timeout(config.actual_timeout_sec, "libero_actual_adapter_eval"):
-            write_probe_progress(output_dir, "libero_actual_adapter_rollout_patch_start")
-            lerobot_eval.rollout = build_libero_risk_probe_rollout(
-                config=config,
-                evidence_path=evidence_path,
-                candidates=candidates,
-                seed=config.seed,
-                max_steps=config.actual_max_steps,
-            )
-            sys.argv = ["lerobot-eval", *build_lerobot_eval_argv(config, output_dir)]
-            write_probe_progress(output_dir, "libero_actual_adapter_eval_main_start", {"argv": sys.argv[1:]})
-            lerobot_eval.main()
-            write_probe_progress(output_dir, "libero_actual_adapter_eval_main_end")
+            with renderer_env(config.renderer_backend):
+                write_probe_progress(output_dir, "libero_actual_adapter_rollout_patch_start", renderer_env_snapshot(config))
+                lerobot_eval.rollout = build_libero_risk_probe_rollout(
+                    config=config,
+                    evidence_path=evidence_path,
+                    candidates=candidates,
+                    seed=config.seed,
+                    max_steps=config.actual_max_steps,
+                )
+                sys.argv = ["lerobot-eval", *build_lerobot_eval_argv(config, output_dir)]
+                write_probe_progress(
+                    output_dir,
+                    "libero_actual_adapter_eval_main_start",
+                    {"argv": sys.argv[1:], **renderer_env_snapshot(config)},
+                )
+                lerobot_eval.main()
+                write_probe_progress(output_dir, "libero_actual_adapter_eval_main_end", renderer_env_snapshot(config))
     except Exception as exc:  # noqa: BLE001 - adapter should report actionable failure.
         is_timeout = isinstance(exc, RiskProbeTimeoutError)
+        failure = classify_actual_adapter_failure(exc, config)
         blocker = (
             "LIBERO actual adapter timed out during env/model rollout: "
             if is_timeout
@@ -734,6 +813,13 @@ def run_libero_actual_adapter(
             ],
             "exception": {"type": type(exc).__name__, "message": str(exc)[:1000]},
             "argv": sys.argv[1:],
+            "blocker_category": failure["category"],
+            "blocker_hint": failure["hint"],
+            "renderer_backend": config.renderer_backend,
+            "renderer_env": renderer_env_snapshot(config),
+            "actual_candidate_evidence_available": False,
+            "risk1_actual_unavailable_reason": failure["risk1_reason"],
+            "risk5_actual_unavailable_reason": failure["risk5_reason"],
             "import_compat": import_compat,
             "timeout_sec": config.actual_timeout_sec,
         }
@@ -799,6 +885,65 @@ def apply_torch_transformers_import_compatibility_patch() -> dict[str, Any]:
         "patch": "torch.float8_e8m0fnu",
         "reason": "source_attr_missing",
         "torch_version": getattr(torch, "__version__", "unknown"),
+    }
+
+
+@contextlib.contextmanager
+def renderer_env(renderer_backend: str):
+    keys = ("MUJOCO_GL", "PYOPENGL_PLATFORM")
+    previous = {key: os.environ.get(key) for key in keys}
+    backend = renderer_backend.lower()
+    if backend == "egl":
+        os.environ["MUJOCO_GL"] = "egl"
+        os.environ["PYOPENGL_PLATFORM"] = "egl"
+    elif backend == "osmesa":
+        os.environ["MUJOCO_GL"] = "osmesa"
+        os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def renderer_env_snapshot(config: RiskProbeConfig) -> dict[str, Any]:
+    return {
+        "renderer_backend": config.renderer_backend,
+        "MUJOCO_GL": os.environ.get("MUJOCO_GL"),
+        "PYOPENGL_PLATFORM": os.environ.get("PYOPENGL_PLATFORM"),
+        "EGL_VISIBLE_DEVICES": os.environ.get("EGL_VISIBLE_DEVICES"),
+        "MUJOCO_EGL_DEVICE_ID": os.environ.get("MUJOCO_EGL_DEVICE_ID"),
+    }
+
+
+def classify_actual_adapter_failure(exc: Exception, config: RiskProbeConfig) -> dict[str, str]:
+    message = str(exc)
+    lowered = message.lower()
+    if "platform_device" in lowered or "egl device display" in lowered:
+        category = "libero_egl_l4_blocked"
+        hint = (
+            "EGL context creation failed before actual SmolVLA candidate rollout. "
+            "Prefer RTX 4090 / RTX 4000 Ada / A5000-A6000 class GPUs with working EGL, "
+            "or rerun smoke with --renderer-backend osmesa as a limited CPU-render fallback."
+        )
+    elif "permission denied" in lowered and "/dev/dri" in lowered:
+        category = "egl_dri_permission_denied"
+        hint = "Container cannot open /dev/dri render/card devices; use a Pod/runtime with EGL device access."
+    elif config.renderer_backend == "osmesa" and ("osmesa" in lowered or "opengl" in lowered):
+        category = "osmesa_runtime_missing"
+        hint = "OSMesa fallback requested but runtime libraries appear missing; install libosmesa6/libopengl0 or use EGL-capable GPU."
+    else:
+        category = "libero_actual_rollout_failed"
+        hint = "Actual LIBERO rollout failed before risk-probe evidence; inspect run.log and libero_adapter_evidence.json."
+    reason = f"{type(exc).__name__}: {message[:500]}"
+    return {
+        "category": category,
+        "hint": hint,
+        "risk1_reason": reason,
+        "risk5_reason": reason,
     }
 
 
@@ -1075,25 +1220,29 @@ def run_direct_libero_double_sim_probe(
         return evidence
 
     try:
-        direct_setup = make_direct_libero_env(config)
-        env = direct_setup["env"]
-        task_id = direct_setup["task_id"]
-        env.seed(config.seed + task_id * 1000)
-        init_states = direct_setup["bench"].get_task_init_states(task_id)
-        init_state = init_states[0] if len(init_states) > 0 else None
-        evidence = run_direct_env_snapshot_replay(
-            env=env,
-            init_state=init_state,
-            candidates=candidates,
-            output_dir=output_dir,
-            camera_name=config.direct_camera_name,
-            max_steps=config.actual_max_steps,
-            np_module=np,
-        )
+        with renderer_env(config.renderer_backend):
+            active_renderer_env = renderer_env_snapshot(config)
+            direct_setup = make_direct_libero_env(config)
+            env = direct_setup["env"]
+            task_id = direct_setup["task_id"]
+            env.seed(config.seed + task_id * 1000)
+            init_states = direct_setup["bench"].get_task_init_states(task_id)
+            init_state = init_states[0] if len(init_states) > 0 else None
+            evidence = run_direct_env_snapshot_replay(
+                env=env,
+                init_state=init_state,
+                candidates=candidates,
+                output_dir=output_dir,
+                camera_name=config.direct_camera_name,
+                max_steps=config.actual_max_steps,
+                np_module=np,
+            )
         evidence.update(
             {
                 "enabled": True,
                 "available": True,
+                "renderer_backend": config.renderer_backend,
+                "renderer_env": active_renderer_env,
                 "suite": config.suite,
                 "task_id": task_id,
                 "task_name": getattr(direct_setup["task"], "name", f"task_{task_id}"),
@@ -1103,6 +1252,7 @@ def run_direct_libero_double_sim_probe(
             }
         )
     except Exception as exc:  # noqa: BLE001 - evidence should guide the RunPod rerun.
+        failure = classify_actual_adapter_failure(exc, config)
         evidence = {
             "enabled": True,
             "available": False,
@@ -1110,6 +1260,10 @@ def run_direct_libero_double_sim_probe(
                 "direct LIBERO double-sim failed during env rollout: "
                 f"{type(exc).__name__}: {str(exc)[:500]}"
             ],
+            "blocker_category": failure["category"],
+            "blocker_hint": failure["hint"],
+            "renderer_backend": config.renderer_backend,
+            "renderer_env": renderer_env_snapshot(config),
             "exception": {"type": type(exc).__name__, "message": str(exc)[:1000]},
         }
     evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -257,6 +257,17 @@ PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   --json
 ```
 
+For actual LIBERO Risk1/Risk5 probes, do not treat NVIDIA L4 as an EGL-capable
+default target. The 2026-06-10 L4 run blocked before actual SmolVLA candidate
+evidence with `Cannot initialize a EGL device display` /
+`PLATFORM_DEVICE extension` plus `/dev/dri` permission warnings. Prefer a
+known-good renderer GPU first: RTX 4090, RTX 4000 Ada, RTX A5000/A6000, or a
+previously validated A-series/RTX Pod. If manager explicitly chooses to debug
+the same L4 class, run the same smoke with `--renderer-backend osmesa` only as a
+limited CPU-render fallback; it may unblock plumbing evidence, but any Risk1
+PASS still requires actual policy-generated chunks and any Risk5 PASS still
+requires privileged oracle/object-state evidence.
+
 For Risk 2 double-simulation, first check the direct LIBERO/MuJoCo path without
 LeRobot, then run the LeRobot-hooked double-sim smoke. A Risk 2 pass here is
 scoped to episode-start init-state double simulation; mid-episode exact LeRobot
@@ -445,9 +456,11 @@ RunPod lifecycle policy:
 - After the approved run is complete and artifacts are fetched, stop the Pod and
   confirm no Pods remain `RUNNING`.
 - If the current instance is unavailable, cheaper or similar SSH-capable GPU
-  fallbacks are acceptable: L4, A10/A10G, RTX 4000 Ada, RTX A4000/A4500/A5000,
-  RTX 3090/3080-class. Prefer an existing network volume when it works; if using
-  ephemeral storage, fetch results before stop.
+  fallbacks are acceptable for non-rendering gates: L4, A10/A10G, RTX 4000 Ada,
+  RTX A4000/A4500/A5000, RTX 3090/3080-class. For actual LIBERO offscreen
+  rendering probes, exclude L4 unless a renderer preflight or explicit OSMesa
+  fallback smoke is the goal. Prefer an existing network volume when it works;
+  if using ephemeral storage, fetch results before stop.
 
 ## Required Checkpoint 01 Verification
 
