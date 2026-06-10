@@ -443,9 +443,16 @@ RunPod environment policy:
   `/root/physical-ai/envs/lerobot_py312`; keep pip/model/data caches under
   `/workspace/physical-ai` but avoid creating package-heavy virtualenvs on the
   network volume unless persistence is more important than install speed.
-- Preferred LIBERO bootstrap/eval entrypoint:
-  `scripts/eval_smolvla_libero_linux.sh`, with `WORK_ROOT=/workspace/physical-ai`
-  and `PY312_VENV=/root/physical-ai/envs/lerobot_py312`.
+- Treat `/root/physical-ai/envs/lerobot_py312` as the canonical runtime venv
+  even when the source checkout is a clean worktree under
+  `/workspace/physical-ai/eval_worktrees/...`. The network volume should hold
+  repo checkouts, Hugging Face cache, LIBERO assets, pip cache, and result
+  artifacts; do not infer the venv location from the clean checkout path.
+- Preferred LIBERO bootstrap/eval entrypoints:
+  `scripts/bootstrap_runpod_libero_smolvla_env.sh` for environment creation and
+  `scripts/eval_smolvla_libero_linux.sh` for evaluation, with
+  `WORK_ROOT=/workspace/physical-ai` and
+  `PY312_VENV=/root/physical-ai/envs/lerobot_py312`.
 - Next LIBERO/SmolVLA RunPod attempts should be volume-first. If network volume
   `tchm4gxfvd` is available, attach it and keep the repo, Hugging Face cache,
   LIBERO assets, pip cache, and any repaired `lerobot_py312` environment under
@@ -463,6 +470,14 @@ RunPod environment policy:
   `torch.cuda.is_available() == True`, confirm `torch.version.cuda` reports a
   CUDA 12.x/cu124-compatible stack, import `lerobot`, `libero`, and `robosuite`,
   and run the Imagine-Then-Act CLI dry-run successfully.
+- Run the hard environment gate before any diagnostic, direct probe, LeRobot
+  smoke, or benchmark:
+  `PY312_VENV=/root/physical-ai/envs/lerobot_py312 sh scripts/runpod_check_libero_env.sh`.
+  The gate must exit non-zero if the venv python is missing, `torch` is absent,
+  CUDA is false, torch-family versions drift away from the cu124 pins, or any
+  required import fails: `lerobot`, `libero`, `robosuite`, `mujoco`, `av`, or
+  `num2words`. If this gate fails, report `env_bootstrap_blocked` and do not
+  run Risk 2/5 probes.
 - If `lerobot` is missing, bootstrap it instead of reporting a benchmark
   blocker. Only stop after either the benchmark artifact is produced or the
   bootstrap has a concrete, logged dependency failure that cannot be fixed

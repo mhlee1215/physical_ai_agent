@@ -22,6 +22,9 @@ TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
 TORCH_SPEC="${TORCH_SPEC:-torch==2.5.1+cu124}"
 TORCHVISION_SPEC="${TORCHVISION_SPEC:-torchvision==0.20.1+cu124}"
 TORCHAUDIO_SPEC="${TORCHAUDIO_SPEC:-torchaudio==2.5.1+cu124}"
+EXPECTED_TORCH_PREFIX="${EXPECTED_TORCH_PREFIX:-2.5.1+cu124}"
+EXPECTED_TORCHVISION_PREFIX="${EXPECTED_TORCHVISION_PREFIX:-0.20.1+cu124}"
+EXPECTED_TORCHAUDIO_PREFIX="${EXPECTED_TORCHAUDIO_PREFIX:-2.5.1+cu124}"
 NUMPY_SPEC="${NUMPY_SPEC:-numpy==2.2.6}"
 FSSPEC_SPEC="${FSSPEC_SPEC:-fsspec==2026.2.0}"
 SETUPTOOLS_SPEC="${SETUPTOOLS_SPEC:-setuptools>=71,<81}"
@@ -150,35 +153,17 @@ EOF
 }
 
 print_checks() {
-  log "version checks"
-  "$PY312_VENV/bin/python" - <<'PY'
-import importlib.metadata as md
-
-import torch
-
-print("python import check:")
-print("torch", torch.__version__)
-print("torch.version.cuda", torch.version.cuda)
-print("torch.cuda.is_available", torch.cuda.is_available())
-print("torch.cuda.device", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NO_CUDA")
-for package, module in [
-    ("torchvision", "torchvision"),
-    ("torchaudio", "torchaudio"),
-    ("lerobot", "lerobot"),
-    ("libero", "libero"),
-    ("robosuite", "robosuite"),
-    ("mujoco", "mujoco"),
-]:
-    try:
-        __import__(module)
-        try:
-            version = md.version(package)
-        except md.PackageNotFoundError:
-            version = "unknown"
-        print(f"{module} OK {version}")
-    except Exception as exc:
-        print(f"{module} FAIL {type(exc).__name__}: {exc}")
-PY
+  log "hard import/CUDA gate"
+  if [ ! -f "$PROJECT_DIR/scripts/runpod_check_libero_env.sh" ]; then
+    echo "missing repo gate script: $PROJECT_DIR/scripts/runpod_check_libero_env.sh" >&2
+    exit 1
+  fi
+  PY312_VENV="$PY312_VENV" \
+    REQUIRE_CUDA="${REQUIRE_CUDA:-1}" \
+    EXPECTED_TORCH_PREFIX="$EXPECTED_TORCH_PREFIX" \
+    EXPECTED_TORCHVISION_PREFIX="$EXPECTED_TORCHVISION_PREFIX" \
+    EXPECTED_TORCHAUDIO_PREFIX="$EXPECTED_TORCHAUDIO_PREFIX" \
+    sh "$PROJECT_DIR/scripts/runpod_check_libero_env.sh"
   log "pip check (remaining LeRobot torch>=2.7 conflicts can be recorded if imports/CUDA are OK)"
   "$PY312_VENV/bin/python" -m pip check || true
 }
