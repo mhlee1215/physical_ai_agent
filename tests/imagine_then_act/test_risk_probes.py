@@ -162,6 +162,28 @@ class RiskProbeTest(TestCase):
             self.assertIn('"phase": "start"', progress)
             self.assertIn('"phase": "summary_written"', progress)
 
+    def test_smolvla_sampling_probe_cli_mock_writes_probe_json(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            command = [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts" / "probe_smolvla_sampling_api.py"),
+                "--mode",
+                "mock",
+                "--output-dir",
+                tmpdir,
+                "--json",
+            ]
+            completed = subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
+            payload = json.loads(completed.stdout)
+            probe_path = Path(payload["output_path"])
+            probe = json.loads(probe_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(probe_path.exists())
+            self.assertEqual(probe["probe"], "smolvla_sampling_api")
+            self.assertEqual(probe["mock_sampling"]["candidate_generation"]["candidate_sampling_api"], "predict_action_chunk(noise=...)")
+            self.assertIn(probe["sampling_api_available"], {"yes", "no", "unclear"})
+
     def test_cli_task_parser_supports_ranges(self) -> None:
         spec = importlib.util.spec_from_file_location(
             "run_imagine_then_act_risk_probes_for_test",
@@ -852,6 +874,37 @@ class RiskProbeTest(TestCase):
             self.assertGreater(metrics.min_pairwise_l2, 0.0)
             self.assertGreaterEqual(metrics.selected_vs_policy_l2, 0.0)
 
+    def test_policy_candidate_sampling_uses_explicit_noise_when_policy_exposes_api(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            config = RiskProbeConfig(
+                preset="runpod-libero-smoke",
+                backend="libero-contract",
+                suite="libero_goal",
+                task_ids=(6,),
+                seed=1201,
+                num_candidates=3,
+                chunk_steps=2,
+                action_dim=3,
+                output_dir=tmpdir,
+            )
+
+            candidates, metadata = sample_policy_action_candidates(
+                policy=_FakeNoiseAwareChunkPolicy(config.chunk_steps, config.action_dim),
+                observation={"state": _FakeTensor([[0.0]])},
+                postprocessor=lambda action: action,
+                env_postprocessor=lambda transition: transition,
+                action_key="action",
+                config=config,
+                torch_module=_FakeNoiseTorch,
+                numpy_module=None,
+            )
+
+            self.assertEqual(metadata["candidate_sampling_api"], "predict_action_chunk(noise=...)")
+            self.assertFalse(candidates[0].sampling_metadata["explicit_noise_requested"])
+            self.assertTrue(candidates[1].sampling_metadata["explicit_noise_used"])
+            self.assertEqual(candidates[1].sampling_metadata["explicit_noise_shape"], [1, 2, 3])
+            self.assertNotEqual(candidates[1].action_chunk, candidates[2].action_chunk)
+
     def test_debug_noise_candidate_diversity_cannot_be_method_pass(self) -> None:
         with TemporaryDirectory() as tmpdir:
             config = RiskProbeConfig(
@@ -958,6 +1011,41 @@ class _FakeTorch:
         random.seed(seed)
 
 
+class _FakeNoiseTorch(_FakeTorch):
+    float32 = "float32"
+
+    @staticmethod
+    def normal(**kwargs):  # noqa: ANN003
+        import random
+
+        size = kwargs["size"]
+        return [
+            [
+                [round(random.uniform(-0.5, 0.5), 6) for _dim in range(size[2])]
+                for _step in range(size[1])
+            ]
+            for _batch in range(size[0])
+        ]
+
+
+class _FakeTensor(list):
+    @property
+    def shape(self) -> tuple[int, ...]:
+        if self and isinstance(self[0], list):
+            return (len(self), len(self[0]))
+        return (len(self),)
+
+    @property
+    def device(self) -> str:
+        return "cpu"
+
+
+class _FakeNoisePolicyConfig:
+    def __init__(self, chunk_size: int, action_dim: int) -> None:
+        self.chunk_size = chunk_size
+        self.max_action_dim = action_dim
+
+
 class _FakeChunkPolicy:
     name = "fake_smolvla"
 
@@ -977,6 +1065,26 @@ class _FakeChunkPolicy:
                 [round(random.uniform(-0.2, 0.2) + offset, 4), 0.2 + offset, -0.2],
             ]
         ]
+
+
+class _FakeNoiseAwareChunkPolicy:
+    name = "fake_smolvla"
+
+    def __init__(self, chunk_size: int, action_dim: int) -> None:
+        self.config = _FakeNoisePolicyConfig(chunk_size, action_dim)
+
+    def reset(self) -> None:
+        return None
+
+    def predict_action_chunk(self, observation, noise=None):  # noqa: ANN001, ARG002
+        if noise is None:
+            return [
+                [
+                    [0.0 for _dim in range(self.config.max_action_dim)]
+                    for _step in range(self.config.chunk_size)
+                ]
+            ]
+        return noise
 
 
 class _FakeConstantPolicy:

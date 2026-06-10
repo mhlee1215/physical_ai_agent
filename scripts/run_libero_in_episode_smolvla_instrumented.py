@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import sys
 from copy import deepcopy
@@ -607,6 +608,11 @@ def build_ita_candidate_decision(
         for index, seed in enumerate(seeds):
             candidate_id = f"candidate_{index + 1:02d}"
             set_ita_policy_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+            explicit_noise, explicit_noise_metadata = build_ita_policy_explicit_noise(
+                policy=policy,
+                observation=observation,
+                torch_module=torch_module,
+            )
             policy.reset()
             candidate = sample_policy_candidate_chunk(
                 policy=policy,
@@ -616,8 +622,16 @@ def build_ita_candidate_decision(
                 action_key=action_key,
                 torch_module=torch_module,
                 commit_steps=commit_steps,
+                explicit_noise=explicit_noise,
             )
-            candidate.update({"candidate_id": candidate_id, "seed": seed, "is_baseline": False})
+            candidate.update(
+                {
+                    "candidate_id": candidate_id,
+                    "seed": seed,
+                    "is_baseline": False,
+                    "sampling_metadata": explicit_noise_metadata,
+                }
+            )
             candidates.append(candidate)
     selected = choose_ita_candidate(candidates, forced_candidate_id, selector_strategy=selector_strategy)
     selected_actions = list(selected["actions"])
@@ -637,6 +651,7 @@ def build_ita_candidate_decision(
                 "is_baseline": bool(candidate.get("is_baseline", False)),
                 "selection_role": candidate.get("selection_role"),
                 "limitation": candidate["limitation"],
+                "sampling_metadata": candidate.get("sampling_metadata", {}),
             }
             for candidate in candidates
         ],
@@ -661,11 +676,17 @@ def sample_policy_candidate_chunk(
     action_key: str,
     torch_module: Any,
     commit_steps: int,
+    explicit_noise: Any = None,
 ) -> dict[str, Any]:
     limitation = None
     with torch_module.inference_mode():
         if hasattr(policy, "predict_action_chunk"):
-            raw_chunk = policy.predict_action_chunk(clone_policy_observation(observation))
+            if explicit_noise is not None and callable_accepts_keyword(policy.predict_action_chunk, "noise"):
+                raw_chunk = policy.predict_action_chunk(clone_policy_observation(observation), noise=explicit_noise)
+            else:
+                raw_chunk = policy.predict_action_chunk(clone_policy_observation(observation))
+                if explicit_noise is not None:
+                    limitation = "Policy predict_action_chunk does not expose a noise keyword; candidate seed only set global RNG."
             source = f"{getattr(policy, 'name', 'policy')}.predict_action_chunk"
         else:
             raw_action = policy.select_action(clone_policy_observation(observation))
@@ -758,6 +779,93 @@ def set_ita_policy_seed(seed: int, *, numpy_module: Any, torch_module: Any) -> N
             cuda.manual_seed_all(seed)
         except Exception:  # noqa: BLE001 - CUDA may be unavailable in CPU-only jobs.
             pass
+
+
+def callable_accepts_keyword(function: Any, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return True
+    if keyword in signature.parameters:
+        return True
+    return any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+
+
+def build_ita_policy_explicit_noise(*, policy: Any, observation: Any, torch_module: Any) -> tuple[Any, dict[str, Any]]:
+    metadata: dict[str, Any] = {
+        "explicit_noise_requested": True,
+        "explicit_noise_used": False,
+    }
+    predict_action_chunk = getattr(policy, "predict_action_chunk", None)
+    if not callable(predict_action_chunk):
+        metadata["explicit_noise_reason"] = "predict_action_chunk_unavailable"
+        return None, metadata
+    if not callable_accepts_keyword(predict_action_chunk, "noise"):
+        metadata["explicit_noise_reason"] = "predict_action_chunk_noise_keyword_unavailable"
+        return None, metadata
+    if not hasattr(torch_module, "normal"):
+        metadata["explicit_noise_reason"] = "torch_normal_unavailable"
+        return None, metadata
+    shape = infer_ita_policy_noise_shape(policy, observation)
+    if shape is None:
+        metadata["explicit_noise_reason"] = "noise_shape_unavailable"
+        return None, metadata
+    kwargs: dict[str, Any] = {"mean": 0.0, "std": 1.0, "size": tuple(shape)}
+    dtype = getattr(torch_module, "float32", None)
+    if dtype is not None:
+        kwargs["dtype"] = dtype
+    device = infer_ita_tensor_device(observation) or infer_ita_policy_device(policy)
+    if device is not None:
+        kwargs["device"] = device
+    try:
+        noise = torch_module.normal(**kwargs)
+    except TypeError:
+        kwargs.pop("dtype", None)
+        kwargs.pop("device", None)
+        noise = torch_module.normal(**kwargs)
+    metadata.update(
+        {
+            "explicit_noise_used": True,
+            "explicit_noise_source": "torch.normal",
+            "explicit_noise_shape": _shape_list(noise) or list(shape),
+        }
+    )
+    return noise, metadata
+
+
+def infer_ita_policy_noise_shape(policy: Any, observation: Any) -> tuple[int, int, int] | None:
+    config = getattr(policy, "config", None)
+    chunk_size = getattr(config, "chunk_size", None)
+    max_action_dim = getattr(config, "max_action_dim", None)
+    if chunk_size is None or max_action_dim is None:
+        return None
+    return (infer_ita_batch_size(observation), int(chunk_size), int(max_action_dim))
+
+
+def infer_ita_batch_size(observation: Any) -> int:
+    if isinstance(observation, dict):
+        for value in observation.values():
+            shape = getattr(value, "shape", None)
+            if shape is not None and len(list(shape)) >= 1:
+                return int(list(shape)[0])
+    return 1
+
+
+def infer_ita_tensor_device(value: Any) -> Any:
+    if isinstance(value, dict):
+        for item in value.values():
+            device = getattr(item, "device", None)
+            if device is not None:
+                return device
+    return getattr(value, "device", None)
+
+
+def infer_ita_policy_device(policy: Any) -> Any:
+    try:
+        parameter = next(policy.parameters())
+    except Exception:  # noqa: BLE001
+        return None
+    return getattr(parameter, "device", None)
 
 
 def clone_policy_observation(observation: Any) -> Any:

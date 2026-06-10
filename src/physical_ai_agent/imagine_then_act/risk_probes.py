@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import contextlib
 import html
+import inspect
 import json
 import math
 import os
@@ -1028,8 +1029,18 @@ def sample_policy_action_candidates(
     for index in range(config.num_candidates):
         candidate_id = "candidate_00_policy_only" if index == 0 else f"candidate_{index:02d}"
         seed = None if index == 0 else seeds[index - 1]
+        explicit_noise = None
+        explicit_noise_metadata: dict[str, Any] = {
+            "explicit_noise_requested": seed is not None,
+            "explicit_noise_used": False,
+        }
         if seed is not None:
             set_policy_sampling_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+            explicit_noise, explicit_noise_metadata = build_policy_explicit_noise(
+                policy=policy,
+                observation=observation,
+                torch_module=torch_module,
+            )
             if hasattr(policy, "reset"):
                 try:
                     policy.reset()
@@ -1040,6 +1051,7 @@ def sample_policy_action_candidates(
                 policy=policy,
                 observation=observation,
                 torch_module=torch_module,
+                explicit_noise=explicit_noise,
             )
             action_chunk = raw_policy_chunk_to_action_chunk(
                 raw_chunk=raw_chunk,
@@ -1070,6 +1082,8 @@ def sample_policy_action_candidates(
                     "candidate_generation": "policy",
                     "seed": seed,
                     "raw_chunk_shape": shape_list(raw_chunk),
+                    "raw_chunk_preview": truncate_nested(to_plain_value(raw_chunk), max_items=256),
+                    **explicit_noise_metadata,
                     "action_shape": [len(action_chunk), len(action_chunk[0]) if action_chunk else 0],
                     "limitation": limitation,
                 },
@@ -1084,6 +1098,9 @@ def sample_policy_action_candidates(
         "candidate_count": len(candidates),
         "candidate_seeds": seeds,
         "debug_candidate_noise_scale": config.debug_candidate_noise_scale,
+        "candidate_sampling_api": "predict_action_chunk(noise=...)" if any(
+            candidate.sampling_metadata.get("explicit_noise_used") for candidate in candidates
+        ) else "global_seed_or_deterministic",
         "errors": errors,
         "candidates": records,
         "limitation": (
@@ -1127,18 +1144,123 @@ def prepare_lerobot_policy_observation(
     return processed, metadata
 
 
-def capture_policy_raw_action_chunk(*, policy: Any, observation: Any, torch_module: Any = None) -> tuple[Any, str, str | None]:
+def capture_policy_raw_action_chunk(
+    *,
+    policy: Any,
+    observation: Any,
+    torch_module: Any = None,
+    explicit_noise: Any = None,
+) -> tuple[Any, str, str | None]:
     context = torch_module.inference_mode() if torch_module is not None and hasattr(torch_module, "inference_mode") else contextlib.nullcontext()
     with context:
         if hasattr(policy, "predict_action_chunk"):
+            accepts_noise = callable_accepts_keyword(policy.predict_action_chunk, "noise")
+            if explicit_noise is not None and accepts_noise:
+                raw_chunk = policy.predict_action_chunk(clone_observation(observation), noise=explicit_noise)
+                return raw_chunk, f"{getattr(policy, 'name', 'policy')}.predict_action_chunk", None
             raw_chunk = policy.predict_action_chunk(clone_observation(observation))
-            return raw_chunk, f"{getattr(policy, 'name', 'policy')}.predict_action_chunk", None
+            limitation = None
+            if explicit_noise is not None and not accepts_noise:
+                limitation = "Policy predict_action_chunk does not expose a noise keyword; candidate seed only set global RNG."
+            return raw_chunk, f"{getattr(policy, 'name', 'policy')}.predict_action_chunk", limitation
         raw_action = policy.select_action(clone_observation(observation))
         return (
             raw_action,
             f"{getattr(policy, 'name', 'policy')}.select_action",
             "Policy does not expose predict_action_chunk; sampled one-step action candidates.",
         )
+
+
+def callable_accepts_keyword(function: Any, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return True
+    if keyword in signature.parameters:
+        return True
+    return any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+
+
+def build_policy_explicit_noise(*, policy: Any, observation: Any, torch_module: Any = None) -> tuple[Any, dict[str, Any]]:
+    metadata: dict[str, Any] = {
+        "explicit_noise_requested": True,
+        "explicit_noise_used": False,
+    }
+    predict_action_chunk = getattr(policy, "predict_action_chunk", None)
+    if not callable(predict_action_chunk):
+        metadata["explicit_noise_reason"] = "predict_action_chunk_unavailable"
+        return None, metadata
+    if not callable_accepts_keyword(predict_action_chunk, "noise"):
+        metadata["explicit_noise_reason"] = "predict_action_chunk_noise_keyword_unavailable"
+        return None, metadata
+    if torch_module is None or not hasattr(torch_module, "normal"):
+        metadata["explicit_noise_reason"] = "torch_normal_unavailable"
+        return None, metadata
+    shape = infer_policy_noise_shape(policy, observation)
+    if not shape:
+        metadata["explicit_noise_reason"] = "noise_shape_unavailable"
+        return None, metadata
+    device = infer_tensor_device(observation) or infer_policy_device(policy)
+    kwargs: dict[str, Any] = {
+        "mean": 0.0,
+        "std": 1.0,
+        "size": tuple(shape),
+    }
+    dtype = getattr(torch_module, "float32", None)
+    if dtype is not None:
+        kwargs["dtype"] = dtype
+    if device is not None:
+        kwargs["device"] = device
+    try:
+        noise = torch_module.normal(**kwargs)
+    except TypeError:
+        kwargs.pop("dtype", None)
+        kwargs.pop("device", None)
+        noise = torch_module.normal(**kwargs)
+    metadata.update(
+        {
+            "explicit_noise_used": True,
+            "explicit_noise_source": "torch.normal",
+            "explicit_noise_shape": shape_list(noise) or list(shape),
+        }
+    )
+    return noise, metadata
+
+
+def infer_policy_noise_shape(policy: Any, observation: Any) -> tuple[int, int, int] | None:
+    config = getattr(policy, "config", None)
+    chunk_size = getattr(config, "chunk_size", None)
+    max_action_dim = getattr(config, "max_action_dim", None)
+    if chunk_size is None or max_action_dim is None:
+        return None
+    batch_size = infer_batch_size(observation)
+    return (batch_size, int(chunk_size), int(max_action_dim))
+
+
+def infer_batch_size(observation: Any) -> int:
+    if isinstance(observation, dict):
+        for value in observation.values():
+            shape = getattr(value, "shape", None)
+            if shape is not None and len(list(shape)) >= 1:
+                return int(list(shape)[0])
+    return 1
+
+
+def infer_tensor_device(value: Any) -> Any:
+    if isinstance(value, dict):
+        for item in value.values():
+            device = getattr(item, "device", None)
+            if device is not None:
+                return device
+    return getattr(value, "device", None)
+
+
+def infer_policy_device(policy: Any) -> Any:
+    try:
+        parameter = next(policy.parameters())
+    except Exception:  # noqa: BLE001
+        return None
+    return getattr(parameter, "device", None)
 
 
 def raw_policy_chunk_to_action_chunk(
@@ -1256,6 +1378,30 @@ def to_plain_value(value: Any) -> Any:
         except Exception:  # noqa: BLE001
             pass
     return value
+
+
+def truncate_nested(value: Any, *, max_items: int) -> Any:
+    remaining = {"count": max_items}
+
+    def visit(item: Any) -> Any:
+        if remaining["count"] <= 0:
+            return "...truncated..."
+        if isinstance(item, list):
+            output = []
+            for child in item:
+                if remaining["count"] <= 0:
+                    output.append("...truncated...")
+                    break
+                output.append(visit(child))
+            return output
+        if isinstance(item, tuple):
+            return visit(list(item))
+        remaining["count"] -= 1
+        if isinstance(item, float):
+            return round(item, 8)
+        return item
+
+    return visit(value)
 
 
 def shape_list(value: Any) -> list[int]:

@@ -229,6 +229,27 @@ and selected-vs-policy-only distance. Synthetic/mock candidates or
 `WARN`, even when the numeric spread is large. Risk 5 can pass only with
 privileged oracle state/success access; obs/info proxy ranking must remain
 `WARN`/`proxy_only` and must not be reported as benchmark success.
+Before using policy-centered perturbations to address weak Risk 1 diversity,
+inspect the installed LeRobot SmolVLA API first. SmolVLA exposes
+`predict_action_chunk(..., noise=...)` in current LeRobot builds; candidate
+sampling should prefer explicit seeded noise tensors over natural-language or
+post-hoc action perturbation. The diagnostic command must write
+`smolvla_sampling_probe.json` and must not claim Risk 1 PASS by itself:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/probe_smolvla_sampling_api.py \
+  --mode libero-contract \
+  --suite libero_goal \
+  --task-id 6 \
+  --seed 1201 \
+  --num-candidates 5 \
+  --chunk-steps 15 \
+  --action-dim 7 \
+  --renderer-backend egl \
+  --output-dir _workspace/runpod_results/ita_risk_probes/smolvla_sampling_probe_seed1201 \
+  --json
+```
 If direct LIBERO exposes privileged state or `check_success` but only one
 candidate is evaluated, or all evaluated policy/alternative candidates have no
 privileged score spread, report `privileged_oracle_available` with
