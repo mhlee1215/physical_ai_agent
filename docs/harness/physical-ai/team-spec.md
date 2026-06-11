@@ -22,8 +22,149 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 | --- | --- | --- | --- |
 | Orchestrator | Select the next checkpoint and enforce validation | `.agents/skills/physical-ai-orchestrator/SKILL.md` | final response or `_workspace/*` |
 | Real SO-100 Agentic SmolVLA Specialist | Preserve real hardware camera routing, SmolVLA execution gates, observer evidence, and agentic-loop semantics | `.agents/skills/real-so100-agentic-smolvla/SKILL.md` | `_workspace/real_so100/*`, `docs/real_so100_*` |
+| Evaluation Results Manager | Maintain the paper-facing results ledger and classify evidence as paper-ready, diagnostic-only, or blocked | n/a | `_workspace/runpod_results/*`, paper result summaries |
 | Implementer | Add code, config, and tests for the checkpoint | n/a | repo files |
 | Verifier | Run required commands and report pass/fail/blockers | n/a | command evidence |
+
+## Thread Reporting Protocol
+
+Long-running multi-thread work must not end silently. Every owner thread must
+report state transitions to the PM thread before it stops working or waits for
+another owner. The postdoc/orchestrator is the user-facing synthesis layer, not
+the direct inbox for every worker. Except when the postdoc directly asks a
+worker a one-off question, specialist threads report completion, blockers,
+handoffs, and cleanup status to PM. PM then reports to the postdoc whenever the
+task completes, becomes blocked, changes owner, or needs a user decision.
+
+Required reports:
+
+- `COMPLETE`: include changed files, commit hash when applicable, tests run,
+  artifact paths, exact command lines, and the next owner/action.
+- `BLOCKED`: include blocker category, owner, exact evidence path or log
+  excerpt, what was tried, and the smallest next action needed to unblock.
+- `WAITING_FOR_HANDOFF`: include which thread owns the next step, the expected
+  handoff contents, and whether any RunPod Pod is still running.
+- `IDLE_WITH_REASON`: use only when no work can proceed; include the dependency
+  and who was notified.
+
+The PM thread must keep one current checkbox board per active objective with:
+current owner, blocker, last report time, next action, artifact root, and Pod
+status when cloud work is involved. While an objective is active, the PM should
+nudge the current owner after 10-15 minutes without a concrete progress report.
+PM must not silently absorb worker reports. When all subtasks close, when a
+blocker stops progress, or when a task is paused, PM must send a final rollup to
+the postdoc with the verdict, artifacts, cleanup state, and next decision.
+
+RunPod-specific reporting is stricter: allocation/start, env-ready handoff,
+researcher run completion, artifact fetch, stop request, and no-`RUNNING`
+confirmation are all separate reportable transitions. No Pod should remain
+running while ownership is unclear.
+
+Paper-facing evaluation results have an additional route. Any RunPod,
+LIBERO/SmolVLA, Risk1/Risk2/Risk5, or real-robot result that may be used in a
+paper must be reported to the PM and to the Evaluation Results Manager thread
+(`019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`). The report must include experiment
+id, status (`PASS`, `WARN`, `BLOCKED`, or `PENDING`), commit, artifact root,
+key files, environment/pod, metrics, allowed claims, disallowed claims, and
+open TODOs. PM status boards for paper-relevant experiments must include
+`reported_to_eval_results_manager`. Paper-writing threads should not treat a
+result as paper evidence until the Evaluation Results Manager classifies it as
+paper-ready, diagnostic-only, or blocked.
+
+The Evaluation Results Manager must keep candidate diversity, candidate
+selection, benchmark/environment success, oracle/proxy evidence, and
+mock/fixture plumbing evidence separate. Mock, fixture, proxy-only, or debug
+evidence must never be promoted to paper-ready benchmark success.
+
+The PM owns the routing discipline for paper results. When a new evaluation
+result appears, PM must confirm that the producer reported it to the Evaluation
+Results Manager, wait for the manager's classification, then update the PM
+board with the classification before forwarding the result to paper-writing
+threads. If a result is still blocked or diagnostic-only, the PM may summarize
+it for context but must label it as non-paper-ready evidence.
+
+## Default Multi-Thread Orchestration
+
+Default new conversations should behave like ordinary Codex collaboration, not
+as the postdoc/orchestrator. Activate postdoc orchestration only when the user
+explicitly says one of these trigger sentences:
+
+- `포닥 모드로 전환해서 PM과 스레드들을 오케스트레이션해줘.`
+- `포닥 모드 켜줘.`
+
+After activation, the postdoc/orchestrator thread is expected to delegate work
+without waiting for the user to explicitly request a new thread whenever the
+task crosses role boundaries. The user may primarily talk to the postdoc
+thread; the postdoc is responsible for routing work, keeping claim boundaries,
+and synthesizing specialist reports.
+
+Default role routing:
+
+- PM/watchdog thread `019eaf36-bb40-7182-8c92-a40550455ca3`: owns checklists,
+  owner tracking, status boards, stale-owner nudges, worker report collection,
+  and final rollups to the postdoc. PM is the required reporting hub for every
+  specialist thread.
+- Tech Lead thread `019eab52-10fb-78f0-923d-678ab82cc70f`: owns repo-backed
+  implementation, tests, diagnostics, install-script changes, and pushed
+  commits. Reports `COMPLETE`, `BLOCKED`, and commit/test summaries to PM.
+- RunPod Manager thread `019eaf4d-4157-7f51-9099-561b7c3a9c1e`: owns RunPod
+  allocation, start/reuse, GitHub remote source staging, install/bootstrap,
+  environment gates, env-ready handoff, stop, and no-`RUNNING` confirmation.
+  Reports allocation, handoff, blocker, cleanup, and no-`RUNNING` status to PM.
+- RunPod Researcher thread `019eab62-ca0b-7770-ad27-5d95f66ebd62`: owns
+  approved experiment execution only after a manager handoff, artifact fetch,
+  and result reporting. Reports exact commands, artifacts, verdicts, and
+  cleanup requests to PM.
+- Evaluation Results Manager thread `019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`:
+  owns paper-facing evidence classification. Reports paper-ready,
+  diagnostic-only, or blocked classifications to PM.
+- Paper-writing thread `019e9e01-32c0-7641-92b7-0f6c23800122`: owns manuscript
+  prose, figures, captions, and the separate TODO/checklist. Reports draft
+  section completion, unresolved TODOs, and manuscript blockers to PM.
+- Related Works thread `019eaa3f-c52b-7d43-ae62-da4fa5532ec6`: owns citation
+  clusters, overlap checks, and paper-ready related-work synthesis. Reports
+  citation packs, overlap risks, and paper-ready summaries to PM.
+
+Delegation defaults:
+
+- Implementation, install-script cleanup, diagnostics, and tests go to Tech
+  Lead.
+- RunPod lifecycle, volume, cache, source staging, and environment readiness go
+  to RunPod Manager.
+- Actual experiments go to RunPod Researcher only after RunPod Manager reports
+  an env-ready handoff.
+- Paper evidence goes to Evaluation Results Manager before it is forwarded to
+  paper-writing.
+- Manuscript prose and figure integration go to the paper-writing thread.
+- Broad literature checks go to the related-works thread.
+
+Every delegated task must name the next owner, expected artifact, allowed claim,
+disallowed claim, and cleanup condition. The postdoc should send PM a tracking
+checklist for any multi-step task and should ask PM to report back when the
+task closes. If a worker reports `BLOCKED`, PM keeps ownership tracking active
+until the blocker has a new owner or the user explicitly stops the objective.
+
+## Main-vs-Legacy State Policy
+
+Keep the active project state small. Current state is maintained in:
+
+- `Summary.md`
+- `AGENTS.md`
+- `docs/harness/physical-ai/team-spec.md`
+- PM checkbox boards
+- Evaluation Results Manager classifications
+- `papers/rss2026_semrob/` for the active manuscript
+
+Development logs, dated experiment notes, old handoff reports, intermediate
+HTML reports, old RunPod recovery notes, and fetched `_workspace/` artifacts are
+legacy by default. Legacy files are useful for provenance and exact evidence,
+but they must not be treated as the current plan unless `Summary.md`, PM, or the
+Evaluation Results Manager explicitly promotes them.
+
+When a worker consults legacy material, it must report that it is using legacy
+evidence and state whether the evidence is still current, superseded, or only
+diagnostic. Paper-writing threads must not cite legacy logs directly as method
+claims.
 
 ## Phase Order
 
@@ -287,6 +428,19 @@ Risk1 reclassification boundaries:
 - Risk1-A template prompt portfolio may be treated as candidate-generation
   `PASS` when actual `policy_generated` chunks beat native noise. This does
   not require selector or environment success.
+- Keep Risk1 checkpoints dependency-light:
+  - Risk1-A answers only whether template prompt portfolios expand the frozen
+    SmolVLA candidate action space.
+  - Risk1-B answers only whether an external VLM subgoal generator can produce
+    grounded prompt portfolios that expand that action space.
+  - Risk1-C answers whether a selector can choose a better or more plausible
+    candidate from an already generated set.
+  - Risk1-D answers whether candidate generation plus selection improves
+    LIBERO benchmark success.
+- Do not downgrade Risk1-A or Risk1-B because `selected_vs_policy_l2=0`,
+  `pc_success=0`, or selector fallback was used; those are Risk1-C/D evidence.
+- Do not upgrade Risk1-C/D from diversity alone; diversity is Risk1-A/B
+  evidence unless a selection or benchmark-success gate also passes.
 
 Risk1-B tests external VLM-generated grounded subgoals against the accepted
 Risk1-A template reference. It is opt-in and should usually run as a separate
@@ -337,6 +491,15 @@ rollout/proxy metrics, and plausibility failures. `C0` can show the candidate
 set contains a better chunk but is not a deployable method. `C1` is closer to
 the method claim and needs separate validation. Example combined B+C artifact
 smoke:
+
+Risk1-D is the first end-to-end success checkpoint. It may use candidates from
+Risk1-A or Risk1-B plus a Risk1-C selector, but it must report benchmark
+success separately from candidate diversity and selector diagnostics. For
+LIBERO, start with the fixed focused task (`libero_goal`, task id `6`) and a
+small seed/episode budget before widening to 50+ episodes or more tasks. If a
+condition is substantially underway and still at `0` success, stop that
+condition, fetch artifacts, and debug rather than consuming the rest of the
+budget.
 
 ```bash
 PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
@@ -512,7 +675,7 @@ sh scripts/install/runpod_install.sh --component libero-smolvla
 
 Preferred reusable volume:
 
-- RunPod volume name/id: `physical_ai_network_volume` / `w59nxx3o43`
+- RunPod volume name/id: `physical_ai_volume_60` / `otq1k142hf`
 - Mount/root: `/workspace` with project root `/workspace/physical-ai`
 - Source checkout: `/workspace/physical-ai/physical_ai_agent`
 - Published venv: `/workspace/physical-ai/envs/lerobot_py312`
@@ -522,12 +685,13 @@ Preferred reusable volume:
 - Reusable caches/assets: `/workspace/physical-ai/hf_home`,
   `/workspace/physical-ai/libero_assets`, and
   `/workspace/physical-ai/vendor/lerobot`
-- Large external VLM weights for Qwen/Gemma Risk1-B generation are not
-  persistent assets by default because the network volume capacity is limited.
-  Keep reusable envs/config/artifacts on the volume, but use pod-local cache
-  such as `/tmp/risk1b_vlm_hf_home` for Qwen/Gemma downloads or clean that cache
-  after generated JSON/artifacts are fetched. Persist VLM model weights only
-  with explicit PM approval.
+- Qwen2.5-VL-7B weights may be persisted on this 60GB volume after the
+  Qwen/Gemma model cache policy is explicitly approved by PM. Older 40GB
+  storage could not reliably hold reusable envs plus 7B weights. If a future
+  volume is smaller or under quota pressure, keep reusable envs/config/artifacts
+  on the volume but use pod-local cache such as `/tmp/risk1b_vlm_hf_home` for
+  Qwen/Gemma downloads or clean that cache after generated JSON/artifacts are
+  fetched.
 - Non-interactive LIBERO config: `/workspace/physical-ai/libero_config/config.yaml`.
   The config must exist before any script calls `libero.libero.get_libero_path()`;
   otherwise LIBERO may prompt for dataset folders and crash headless runs with
@@ -636,11 +800,13 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 Use RunPod as the Linux/NVIDIA execution lane for LIBERO, LeRobot/SmolVLA,
 ManiSkill GPU rendering, Isaac, and paper-comparable evaluation runs.
 
-Maintain `docs/runpod_worklog.md` as the durable handoff journal for cloud work.
-Update it whenever a RunPod evaluation, setup fix, result fetch, or lifecycle
-decision changes the state a future conversation needs to recover. Do not
-include API keys, private SSH keys, full `.env` contents, or raw secret-bearing
-API responses.
+Treat `docs/runpod_worklog.md` as a legacy recovery log, not the current RunPod
+state. Current RunPod state must be summarized in `Summary.md`, PM boards, and
+the latest RunPod Manager report. If a manager consults `docs/runpod_worklog.md`
+to recover a command or blocker, it must report that the information came from a
+legacy log and verify it against the current volume/env policy before acting.
+Do not include API keys, private SSH keys, full `.env` contents, or raw
+secret-bearing API responses in any log.
 
 Default workflow:
 
@@ -667,14 +833,19 @@ RunPod capacity and ownership policy:
 - Keep a Pod running only while the manager-owned verification batch is active.
   Once artifacts are fetched and no active process remains, the manager should
   stop the Pod and confirm no Pods remain `RUNNING`.
-- Record the GPU, hourly cost, Pod ID, volume choice, SSH endpoint, fallback
-  reason, owner thread, and stop confirmation in `docs/runpod_worklog.md`.
+- Report the GPU, hourly cost, Pod ID, volume choice, SSH endpoint, fallback
+  reason, owner thread, and stop confirmation to PM and, for paper-facing runs,
+  the Evaluation Results Manager. `docs/runpod_worklog.md` is legacy provenance
+  only and must not be the current operating board.
 
 RunPod environment policy:
 
 - Environment setup failures are not final blockers until the agent has checked
-  `docs/runpod_worklog.md`, the repo scripts, and relevant official install
-  instructions or package metadata for a known working path.
+  the current harness/Summary, canonical repo install scripts, latest RunPod
+  Manager report, and relevant official install instructions or package metadata
+  for a known working path. If `docs/runpod_worklog.md` is consulted, it must be
+  treated as legacy recovery evidence and verified against the current 60GB
+  volume policy before use.
 - For LIBERO/SmolVLA, first reuse or bootstrap the LeRobot Python environment at
   `/root/physical-ai/envs/lerobot_py312` by running
   `scripts/install/runpod_install.sh --component libero-smolvla`. On network-volume Pods this
@@ -692,20 +863,21 @@ RunPod environment policy:
   `scripts/install/runpod_install.sh --component libero-smolvla` for environment creation,
   `scripts/install/runpod_check.sh --component libero-smolvla` for the hard gate, and
   `scripts/eval_smolvla_libero_linux.sh` for evaluation.
-- Next LIBERO/SmolVLA RunPod attempts must attach `physical_ai_network_volume`
-  (`w59nxx3o43`) whenever possible. Keep reusable Hugging Face cache, LIBERO
+- Next LIBERO/SmolVLA RunPod attempts must attach `physical_ai_volume_60`
+  (`otq1k142hf`) whenever possible. Keep reusable Hugging Face cache, LIBERO
   assets, reusable vendor checkouts, the published `lerobot_py312` environment,
   source snapshots intended for reuse, and final artifacts under
   `/workspace/physical-ai` so the next Pod can start with the hard gate instead
-  of reinstalling. The older volume `tchm4gxfvd` had quota pressure and is not
-  the preferred target for new eval handoffs.
+  of reinstalling. The old 40GB volume `physical_ai_network_volume`
+  (`w59nxx3o43`) has been retired and must not be used for new handoffs.
 - Risk1-B external VLM generation must use a separate reusable environment on
   the network volume, not the canonical LIBERO/SmolVLA environment. Preserve
   `/workspace/physical-ai/envs/risk1b_vlm_py312` for Qwen/Gemma JSON
   generation, but treat large model weights as cache-on-demand. Use pod-local
   cache such as `/tmp/risk1b_vlm_hf_home` for Qwen/Gemma downloads or clean
   model weights after generated JSON/artifacts are fetched unless PM explicitly
-  approves persistent storage. The canonical LIBERO/SmolVLA env at
+  approves persistent storage. Qwen2.5-VL-7B persistence is approved on the
+  60GB volume after model-load preflight passes. The canonical LIBERO/SmolVLA env at
   `/workspace/physical-ai/envs/lerobot_py312` must not be mutated to satisfy VLM
   compatibility. RunPod manager handoffs involving Qwen/Gemma must report the
   VLM env path, `HF_HOME`, cache hit/miss status, whether model weights were
