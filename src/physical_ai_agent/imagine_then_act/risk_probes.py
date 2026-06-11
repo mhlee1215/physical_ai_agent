@@ -1800,13 +1800,48 @@ def clean_relation_phrase(value: str) -> str:
 
 def risk1b_subgoal_to_prompt(base_prompt: str, subgoal: dict[str, Any]) -> str:
     clean_base = " ".join(str(base_prompt or "").split()) or "Complete the LIBERO task."
+    strategy_directive = risk1b_strategy_directive(
+        str(subgoal.get("strategy_axis", "")),
+        str(subgoal.get("target_object", "")),
+        str(subgoal.get("target_region_or_point", "")),
+    )
     return (
-        f"{clean_base} Subgoal: {subgoal['subgoal_text']} "
-        f"Strategy axis: {subgoal['strategy_axis']}. "
+        f"{clean_base} "
+        f"Execution prompt: {subgoal['subgoal_text']} "
+        f"Strategy instruction: {strategy_directive} "
         f"Target object: {subgoal['target_object']}. "
         f"Target region or point: {subgoal['target_region_or_point']}. "
         f"Stop condition: {subgoal['stop_condition']}."
     )
+
+
+def risk1b_strategy_directive(strategy_axis: str, target_object: str, target_region: str) -> str:
+    axis = clean_relation_phrase(strategy_axis.replace("_", " "))
+    obj = target_object or "the manipulated object"
+    region = target_region or "the target region"
+    directives = {
+        "baseline": f"Use the original task wording and move {obj} into {region} without extra constraints.",
+        "object centric open side": (
+            f"Approach {obj} from the visible open side of {region}; bias the first motion laterally toward "
+            "the least obstructed side before moving inward."
+        ),
+        "pre contact alignment": (
+            f"Before contact, align the gripper and {obj} with the center of {region}; prefer a slower "
+            "centering motion before lifting or pushing."
+        ),
+        "gripper pose precision": (
+            f"Prioritize wrist and gripper orientation around {obj}; reduce sideways drift and make a precise "
+            f"placement motion toward {region}."
+        ),
+        "short horizon contact": (
+            f"Choose the nearest useful first contact on {obj}; make a short corrective motion that visibly "
+            f"reduces the distance to {region}."
+        ),
+        "collision avoidant approach": (
+            f"Keep clearance from {region}'s rim and nearby objects; arc around obstacles before placing {obj}."
+        ),
+    }
+    return directives.get(axis, f"Use strategy axis '{strategy_axis}' while preserving {obj} into {region}.")
 
 
 def prepare_lerobot_policy_observation(
@@ -2154,6 +2189,7 @@ def run_direct_libero_double_sim_probe(
                 camera_name=config.direct_camera_name,
                 max_steps=config.actual_max_steps,
                 np_module=np,
+                task_description=str(getattr(direct_setup["task"], "language", "") or ""),
             )
         evidence.update(
             {
@@ -2314,6 +2350,7 @@ def run_direct_env_snapshot_replay(
     camera_name: str,
     max_steps: int,
     np_module: Any,
+    task_description: str | None = None,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     selected = select_actual_probe_candidates(candidates)
@@ -2337,6 +2374,7 @@ def run_direct_env_snapshot_replay(
             max_steps,
             np_module,
             initial_observation=start_observation,
+            task_description=task_description,
         )
         restore_result = {"restored": False, "reason": "sim_handle_unavailable"}
         selected_handle_summary = None
@@ -2359,6 +2397,7 @@ def run_direct_env_snapshot_replay(
             max_steps,
             np_module,
             initial_observation=replay_start_observation,
+            task_description=task_description,
         )
         state_l2 = l2(committed["state_vector"], replay["state_vector"]) if committed["state_vector"] and replay["state_vector"] else 0.0
         image_mse, image_mae = image_errors_from_vectors(committed["image_vector"], replay["image_vector"])
@@ -2396,6 +2435,8 @@ def run_direct_env_snapshot_replay(
     outcomes = {
         candidate_id: {
             "success_proxy": record["committed"]["success_proxy"],
+            "task_relation_proxy": record["committed"].get("task_relation_proxy"),
+            "task_relation_proxy_source": record["committed"].get("task_relation_proxy_source"),
             "state": record["committed"]["state_vector"][:3],
             "image": vector_to_image_matrix(record["committed"]["image_vector"]),
         }
@@ -2457,6 +2498,7 @@ def apply_candidate_to_direct_env(
     np_module: Any,
     *,
     initial_observation: Any,
+    task_description: str | None = None,
 ) -> dict[str, Any]:
     observation = initial_observation
     info: Any = {}
@@ -2477,6 +2519,7 @@ def apply_candidate_to_direct_env(
     image_vector, image_source = extract_image_vector(observation)
     rgb_image_matrix, rgb_image_source = extract_rgb_image_matrix(observation)
     success_proxy, success_source = extract_success_proxy(info, reward, state_vector)
+    task_proxy = compute_task_relation_proxy(observation, task_description)
     privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
     privileged_success = extract_privileged_success_proxy(env)
     return {
@@ -2491,6 +2534,9 @@ def apply_candidate_to_direct_env(
         "rgb_image_source": rgb_image_source,
         "success_proxy": success_proxy,
         "success_proxy_source": success_source,
+        "task_relation_proxy": task_proxy["score"],
+        "task_relation_proxy_source": task_proxy["source"],
+        "task_relation_proxy_details": task_proxy,
         "privileged_success_proxy": privileged_success[0],
         "privileged_success_proxy_source": privileged_success[1],
         "done": bool(done),
@@ -2613,6 +2659,7 @@ def build_libero_risk_probe_rollout(
                 reset_before=False,
                 initial_observation=start_observation,
                 initial_info=start_info,
+                task_description=str(base_metadata.get("task_text") or ""),
             )
             restore_result = restore_sim_state(clone_handle, start_state)
             clone = apply_candidate_to_env(
@@ -2624,6 +2671,7 @@ def build_libero_risk_probe_rollout(
                 reset_before=not restore_result["restored"],
                 initial_observation=start_observation if restore_result["restored"] else None,
                 initial_info=start_info if restore_result["restored"] else None,
+                task_description=str(base_metadata.get("task_text") or ""),
             )
             state_l2 = l2(committed["state_vector"], clone["state_vector"]) if committed["state_vector"] and clone["state_vector"] else 0.0
             image_mse, image_mae = image_errors_from_vectors(committed["image_vector"], clone["image_vector"])
@@ -2672,6 +2720,8 @@ def build_libero_risk_probe_rollout(
         outcomes = {
             candidate_id: {
                 "success_proxy": record["committed"]["success_proxy"],
+                "task_relation_proxy": record["committed"].get("task_relation_proxy"),
+                "task_relation_proxy_source": record["committed"].get("task_relation_proxy_source"),
                 "state": record["committed"]["state_vector"][:3],
                 "image": vector_to_image_matrix(record["committed"]["image_vector"]),
             }
@@ -2765,6 +2815,7 @@ def apply_candidate_to_env(
     reset_before: bool = True,
     initial_observation: Any = None,
     initial_info: Any = None,
+    task_description: str | None = None,
 ) -> dict[str, Any]:
     if reset_before:
         observation, reset_info = env.reset(seed=seed_value)
@@ -2783,6 +2834,7 @@ def apply_candidate_to_env(
     state_vector, state_source = extract_state_vector(env, observation, info)
     image_vector, image_source = extract_image_vector(observation)
     success_proxy, success_source = extract_success_proxy(info, reward, state_vector)
+    task_proxy = compute_task_relation_proxy(observation, task_description)
     privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
     privileged_success = extract_privileged_success_proxy(env)
     if privileged_success[1] != "unavailable" and success_source == "state_norm_proxy":
@@ -2797,6 +2849,9 @@ def apply_candidate_to_env(
         "image_source": image_source,
         "success_proxy": success_proxy,
         "success_proxy_source": success_source,
+        "task_relation_proxy": task_proxy["score"],
+        "task_relation_proxy_source": task_proxy["source"],
+        "task_relation_proxy_details": task_proxy,
         "privileged_success_proxy": privileged_success[0],
         "privileged_success_proxy_source": privileged_success[1],
         "info_summary": summarize_value(info),
@@ -3242,6 +3297,78 @@ def extract_success_proxy(info: Any, reward: Any, state_vector: list[float]) -> 
     if state_vector:
         return max(0.0, min(1.0, 1.0 / (1.0 + math.sqrt(sum(value * value for value in state_vector[:8]))))), "state_norm_proxy"
     return 0.0, "unavailable"
+
+
+def compute_task_relation_proxy(observation: Any, task_description: str | None) -> dict[str, Any]:
+    relation = parse_simple_manipulation_relation(" ".join(str(task_description or "").lower().split()))
+    if relation is None:
+        return {
+            "available": False,
+            "score": None,
+            "source": "unavailable",
+            "reason": "task_relation_unparsed",
+        }
+    manipulated_object, target_region = relation
+    object_pos = find_observation_position(observation, manipulated_object)
+    target_pos = find_observation_position(observation, target_region)
+    if object_pos is None or target_pos is None:
+        return {
+            "available": False,
+            "score": None,
+            "source": "unavailable",
+            "reason": "object_or_target_position_unavailable",
+            "manipulated_object": manipulated_object,
+            "target_region": target_region,
+            "object_position_found": object_pos is not None,
+            "target_position_found": target_pos is not None,
+        }
+    distance = l2(object_pos[:3], target_pos[:3])
+    score = 1.0 / (1.0 + distance)
+    return {
+        "available": True,
+        "score": round(score, 8),
+        "source": "observation_object_target_distance_proxy",
+        "distance_l2": round(distance, 8),
+        "manipulated_object": manipulated_object,
+        "target_region": target_region,
+        "object_position": [round(value, 8) for value in object_pos[:3]],
+        "target_position": [round(value, 8) for value in target_pos[:3]],
+        "claim_boundary": (
+            "Non-oracle observation-state proxy for candidate ranking only; "
+            "not benchmark success and not privileged oracle evidence."
+        ),
+    }
+
+
+def find_observation_position(observation: Any, phrase: str) -> list[float] | None:
+    if not isinstance(observation, dict):
+        return None
+    phrase_tokens = tokenize_relation_phrase(phrase)
+    best_key: str | None = None
+    best_score = -1
+    best_values: list[float] | None = None
+    for key, value in observation.items():
+        key_text = str(key).lower()
+        if not key_text.endswith("_pos") or "_to_robot" in key_text:
+            continue
+        key_tokens = tokenize_relation_phrase(key_text.replace("_pos", ""))
+        if not phrase_tokens or not set(phrase_tokens).issubset(set(key_tokens)):
+            continue
+        values = numeric_vector(value, limit=3)
+        if len(values) < 3:
+            continue
+        score = len(set(phrase_tokens).intersection(set(key_tokens))) * 10 - len(key_tokens)
+        if score > best_score:
+            best_key = key_text
+            best_score = score
+            best_values = values[:3]
+    return best_values if best_key is not None else None
+
+
+def tokenize_relation_phrase(value: str) -> list[str]:
+    cleaned = clean_relation_phrase(str(value).replace("_", " "))
+    stopwords = {"in", "into", "on", "onto", "to", "inside", "region", "point"}
+    return [token for token in cleaned.split() if token and token not in stopwords]
 
 
 def extract_privileged_state_vector(env: Any) -> tuple[list[float], str]:
@@ -3709,7 +3836,6 @@ def compute_risk1c_selector_evidence(
     oracle: OracleUpperBoundMetrics,
     actual_evidence: dict[str, Any],
 ) -> dict[str, Any]:
-    del actual_evidence
     policy = next((candidate for candidate in candidates if candidate.is_policy_only), candidates[0] if candidates else None)
     policy_id = policy.candidate_id if policy else None
     outcome_scores = {
@@ -3718,6 +3844,9 @@ def compute_risk1c_selector_evidence(
     }
     score_values = list(outcome_scores.values())
     score_spread = round((max(score_values) - min(score_values)) if score_values else 0.0, 8)
+    c1_scores, c1_source, c1_details = build_c1_non_oracle_proxy_scores(candidates, outcomes)
+    c1_score_values = list(c1_scores.values())
+    c1_score_spread = round((max(c1_score_values) - min(c1_score_values)) if c1_score_values else 0.0, 8)
     modes: dict[str, Any] = {}
     if "c0" in config.risk1c_selector_modes:
         modes["c0_privileged_oracle"] = {
@@ -3734,18 +3863,24 @@ def compute_risk1c_selector_evidence(
             "rationale": oracle.rationale,
         }
     if "c1" in config.risk1c_selector_modes:
-        selected_id = max(outcome_scores, key=outcome_scores.get) if outcome_scores else None
+        selected_id = max(c1_scores, key=c1_scores.get) if c1_scores else None
         non_baseline = bool(policy_id and selected_id and selected_id != policy_id)
         modes["c1_non_oracle_proxy"] = {
             "selector_class": "C1",
-            "available": bool(outcome_scores),
-            "verdict": WARN if outcome_scores else BLOCKED,
+            "available": bool(c1_scores),
+            "verdict": WARN if c1_scores else BLOCKED,
             "selected_candidate_id": selected_id,
-            "score_spread": score_spread,
+            "score_spread": c1_score_spread,
+            "score_source": c1_source,
+            "scores": c1_scores,
+            "score_details": c1_details,
             "selected_vs_policy_l2": selected_vs_policy_distance(candidates, selected_id),
             "non_baseline_selection": non_baseline,
-            "plausibility_failures": [] if score_spread > 0 else ["proxy scores have no spread"],
-            "claim_boundary": "non-oracle proxy selector; requires separate validation before method claims",
+            "plausibility_failures": [] if c1_score_spread > 0 else ["proxy scores have no spread"],
+            "claim_boundary": (
+                "non-oracle proxy selector; observation object-target distance is candidate-ranking evidence only, "
+                "not benchmark success or privileged oracle evidence"
+            ),
         }
     if "c2" in config.risk1c_selector_modes:
         selected = min(candidates, key=lambda candidate: vector_norm(flatten_chunk(candidate.action_chunk))) if candidates else None
@@ -3766,12 +3901,43 @@ def compute_risk1c_selector_evidence(
         "candidate_count": len(candidates),
         "policy_candidate_id": policy_id,
         "outcome_score_source": "success_proxy_or_privileged_proxy",
+        "c1_score_source": c1_source,
         "score_spread": score_spread,
         "modes": modes,
         "boundary": (
             "Risk1-C tests whether a selector can identify a better chunk from an existing candidate set. "
             "C0 is privileged/oracle upper-bound, C1 is non-oracle proxy if available, and C2 is action-only debug."
         ),
+    }
+
+
+def build_c1_non_oracle_proxy_scores(
+    candidates: list[ActionChunkCandidate],
+    outcomes: dict[str, dict[str, Any]],
+) -> tuple[dict[str, float], str, dict[str, Any]]:
+    relation_scores: dict[str, float] = {}
+    relation_details: dict[str, Any] = {}
+    for candidate in candidates:
+        outcome = outcomes.get(candidate.candidate_id, {})
+        score = outcome.get("task_relation_proxy")
+        if score is None:
+            continue
+        try:
+            relation_scores[candidate.candidate_id] = float(score)
+        except (TypeError, ValueError):
+            continue
+        relation_details[candidate.candidate_id] = {
+            "task_relation_proxy": score,
+            "task_relation_proxy_source": outcome.get("task_relation_proxy_source"),
+        }
+    if relation_scores:
+        return relation_scores, "observation_object_target_distance_proxy", relation_details
+    fallback_scores = {
+        candidate.candidate_id: float(outcomes.get(candidate.candidate_id, {}).get("success_proxy", candidate.privileged_success_proxy))
+        for candidate in candidates
+    }
+    return fallback_scores, "success_proxy_or_privileged_proxy", {
+        "fallback_reason": "task_relation_proxy_unavailable",
     }
 
 

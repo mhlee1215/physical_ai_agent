@@ -47,6 +47,14 @@ Rules:
 - Each non-baseline candidate must use a distinct strategy axis from this set
   when possible: object_centric_open_side, pre_contact_alignment,
   gripper_pose_precision, short_horizon_contact, collision_avoidant_approach.
+- Do not vary only verbs such as put/place/move/transfer. Each non-baseline
+  candidate must include a behaviorally distinct motion cue that a frozen
+  SmolVLA executor can condition on, such as approach side, centering before
+  contact, wrist/gripper orientation, short first contact, or clearance around
+  the bowl rim.
+- The strategy cue must still preserve X-in-Y semantics. For a task like
+  "put cream cheese in bowl", every candidate must move the cream cheese
+  toward/into the bowl; none may become a bowl pickup task.
 - Make each candidate directly usable as one prompt to the frozen SmolVLA
   executor for the next action chunk.
 - Do not introduce cleanup, repetition, extra objects, or any task not visible

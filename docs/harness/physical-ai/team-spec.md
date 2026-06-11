@@ -485,6 +485,13 @@ evidence. Risk1-B PASS requires validated external-VLM subgoals plus actual
 policy-generated chunks with diversity comparable to or better than the Risk1-A
 template reference:
 
+Latest Risk1-B next-loop rule: the closed `99e88` shallow OSMesa run is a
+WARN baseline (`mean_normalized_pairwise_l2=0.066457`,
+`mean_pairwise_cosine_distance=0.002257`). The next prompt loop must not rerun
+that command unchanged. It should use strategy prompts with concrete
+object-centric motion cues, not only put/place/move synonyms, and compare
+against `0.066457` while preserving the cream-cheese-to-bowl relation.
+
 ```bash
 PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   scripts/run_imagine_then_act_risk_probes.py \
@@ -513,7 +520,10 @@ set, not candidate generation. Keep its evidence classes separated:
 - `C0` privileged/oracle simulator selector upper-bound from cloned LIBERO
   short rollouts and privileged state/success proxies.
 - `C1` non-oracle simulator proxy selector when obs/info/state proxies are
-  available.
+  available. Prefer observation object-target distance proxies for manipulation
+  tasks when object positions are exposed in the observation; this is a
+  non-oracle selector diagnostic, not benchmark success or privileged oracle
+  evidence.
 - `C2` action-only sanity selector, debug only.
 
 Risk1-C must write `risk1c_sim_selector.json` with selected candidate id,

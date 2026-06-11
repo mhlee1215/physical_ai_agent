@@ -300,6 +300,8 @@ class Risk1BVlmGeneratorTest(TestCase):
         self.assertIn("Do NOT decompose the task over time", prompt)
         self.assertIn("same target object, same target relation, and", prompt)
         self.assertIn("varying only the approach strategy", prompt)
+        self.assertIn("Do not vary only verbs", prompt)
+        self.assertIn("behaviorally distinct motion cue", prompt)
         self.assertIn("object_centric_open_side", prompt)
         self.assertIn("pre_contact_alignment", prompt)
         self.assertIn("collision_avoidant_approach", prompt)

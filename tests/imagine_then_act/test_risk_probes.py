@@ -25,6 +25,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     compute_actual_oracle_or_proxy_metrics,
     compute_diversity_metrics,
     compute_oracle_upper_bound_metrics,
+    compute_task_relation_proxy,
     find_sim_clone_handle,
     generate_mock_candidates,
     inspect_actual_env,
@@ -32,6 +33,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     run_direct_env_snapshot_replay,
     run_risk_probes,
     prepare_lerobot_policy_observation,
+    risk1b_subgoal_to_prompt,
     sample_policy_action_candidates,
     sample_policy_prompt_portfolio_candidates,
     sample_policy_vlm_subgoal_candidates,
@@ -1162,6 +1164,46 @@ class RiskProbeTest(TestCase):
             self.assertEqual(len(candidates), 3)
             self.assertEqual(candidates[1].sampling_metadata["candidate_generation"], "risk1b_vlm_subgoals")
             self.assertEqual(candidates[1].sampling_metadata["strategy_axis"], "object_centric_direction")
+            self.assertIn("Strategy instruction:", candidates[1].sampling_metadata["prompt_text"])
+
+    def test_risk1b_subgoal_prompt_expands_strategy_axis_into_actionable_directive(self) -> None:
+        prompt = risk1b_subgoal_to_prompt(
+            "put the cream cheese in the bowl",
+            {
+                "subgoal_text": "Move the cream cheese into the bowl.",
+                "strategy_axis": "object_centric_open_side",
+                "target_object": "cream_cheese_1",
+                "target_region_or_point": "akita_black_bowl_1",
+                "stop_condition": "cream_cheese_1_in_bowl",
+                "confidence": 0.8,
+            },
+        )
+
+        self.assertIn("Strategy instruction:", prompt)
+        self.assertIn("visible open side", prompt)
+        self.assertIn("least obstructed side", prompt)
+        self.assertIn("cream_cheese_1", prompt)
+        self.assertIn("akita_black_bowl_1", prompt)
+
+    def test_task_relation_proxy_scores_observation_object_target_distance(self) -> None:
+        near = compute_task_relation_proxy(
+            {
+                "cream_cheese_1_pos": [0.1, 0.0, 0.0],
+                "akita_black_bowl_1_pos": [0.2, 0.0, 0.0],
+            },
+            "put the cream cheese in the bowl",
+        )
+        far = compute_task_relation_proxy(
+            {
+                "cream_cheese_1_pos": [0.1, 0.0, 0.0],
+                "akita_black_bowl_1_pos": [1.1, 0.0, 0.0],
+            },
+            "put the cream cheese in the bowl",
+        )
+
+        self.assertTrue(near["available"])
+        self.assertEqual(near["source"], "observation_object_target_distance_proxy")
+        self.assertGreater(near["score"], far["score"])
 
     def test_cli_risk1b_and_risk1c_mock_write_contract_artifacts(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -1219,6 +1261,48 @@ class RiskProbeTest(TestCase):
         self.assertEqual(evidence["modes"]["c1_non_oracle_proxy"]["selector_class"], "C1")
         self.assertEqual(evidence["modes"]["c2_action_only_debug"]["selector_class"], "C2")
         self.assertIn("debug baseline only", evidence["modes"]["c2_action_only_debug"]["claim_boundary"])
+
+    def test_risk1c_c1_prefers_observation_relation_proxy_when_available(self) -> None:
+        config = RiskProbeConfig(
+            preset="local-dry-run",
+            backend="mock",
+            suite="libero_goal",
+            task_ids=(6,),
+            seed=1201,
+            num_candidates=2,
+            chunk_steps=2,
+            action_dim=3,
+            output_dir="/tmp/risk1c-test",
+            risk1c_sim_selector=True,
+        )
+        candidates = [
+            ActionChunkCandidate("candidate_00_policy_only", "policy", [[0.0, 0.0, 0.0]], 0.0, is_policy_only=True),
+            ActionChunkCandidate("candidate_01", "policy", [[0.1, 0.0, 0.0]], 0.0),
+        ]
+        outcomes = {
+            "candidate_00_policy_only": {"success_proxy": 0.0, "task_relation_proxy": 0.3},
+            "candidate_01": {"success_proxy": 0.0, "task_relation_proxy": 0.7},
+        }
+        oracle = compute_actual_oracle_or_proxy_metrics(
+            candidates,
+            {"candidate_00_policy_only": {"success_proxy": 0.0}, "candidate_01": {"success_proxy": 0.0}},
+            {"privileged_state_available": False},
+        )
+
+        evidence = compute_risk1c_selector_evidence(
+            config=config,
+            candidates=candidates,
+            outcomes=outcomes,
+            oracle=oracle,
+            actual_evidence={},
+        )
+
+        c1 = evidence["modes"]["c1_non_oracle_proxy"]
+        self.assertEqual(c1["score_source"], "observation_object_target_distance_proxy")
+        self.assertEqual(c1["score_spread"], 0.4)
+        self.assertEqual(c1["selected_candidate_id"], "candidate_01")
+        self.assertTrue(c1["non_baseline_selection"])
+        self.assertEqual(c1["plausibility_failures"], [])
 
     def test_debug_noise_candidate_diversity_cannot_be_method_pass(self) -> None:
         with TemporaryDirectory() as tmpdir:
