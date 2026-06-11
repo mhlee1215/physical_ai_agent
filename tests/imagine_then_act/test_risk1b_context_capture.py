@@ -138,6 +138,75 @@ class Risk1BContextCaptureTest(TestCase):
             self.assertEqual(Path(result["contact_sheet"]).name, "contact_sheet_task6_seed1201.png")
             self.assertEqual(payload["observation_source"], "existing_actual_artifact")
 
+    def test_shallow_backend_is_explicit_opt_in(self) -> None:
+        module = load_capture_module()
+        args = module.build_parser().parse_args(
+            [
+                "--backend",
+                "libero-shallow",
+                "--suite",
+                "libero_goal",
+                "--task-id",
+                "6",
+                "--seed",
+                "1201",
+                "--renderer-backend",
+                "osmesa",
+            ]
+        )
+
+        self.assertEqual(args.backend, "libero-shallow")
+        self.assertEqual(args.renderer_backend, "osmesa")
+
+    def test_shallow_actual_context_schema_records_policy_free_provenance(self) -> None:
+        module = load_capture_module()
+        with TemporaryDirectory() as tmpdir:
+            args = module.build_parser().parse_args(
+                [
+                    "--backend",
+                    "libero-shallow",
+                    "--suite",
+                    "libero_goal",
+                    "--task-id",
+                    "6",
+                    "--seed",
+                    "1201",
+                    "--output-dir",
+                    tmpdir,
+                    "--renderer-backend",
+                    "osmesa",
+                ]
+            )
+            image = module.solid_image(16, 16, (10, 20, 30))
+
+            module.write_actual_context_artifacts(
+                args=args,
+                output_dir=Path(tmpdir),
+                observation={"agentview_image": image},
+                info={"init_state_source": "fake_direct_env"},
+                task_descriptions=["put the bowl on the plate"],
+                provenance={
+                    "backend": "libero-shallow",
+                    "actual_context": True,
+                    "env_type": "direct LIBERO OffScreenRenderEnv",
+                    "observation_step": "episode_start_reset",
+                    "policy_loaded": False,
+                    "renderer_path": "direct_libero_offscreen_env_reset_observation",
+                    "claim_boundary": "actual context only",
+                },
+                image_source="direct_libero_start_observation",
+                images=[("agentview_image", image)],
+            )
+
+            payload = json.loads((Path(tmpdir) / "context_task6_seed1201.json").read_text(encoding="utf-8"))
+
+            self.assertTrue(payload["provenance"]["actual_context"])
+            self.assertFalse(payload["provenance"]["policy_loaded"])
+            self.assertEqual(payload["provenance"]["backend"], "libero-shallow")
+            self.assertEqual(payload["observation_source"], "direct_libero_offscreen_env_reset_observation")
+            self.assertEqual(payload["camera_images"][0]["source"], "direct_libero_start_observation")
+            self.assertTrue((Path(tmpdir) / "contact_sheet_task6_seed1201.png").exists())
+
     def test_context_capture_preflight_builds_exact_libero_command(self) -> None:
         module = load_preflight_module()
         args = module.build_parser().parse_args(
@@ -247,6 +316,15 @@ def load_preflight_module():
     spec = importlib.util.spec_from_file_location("risk1b_context_preflight_for_test", PREFLIGHT_SCRIPT)
     if spec is None or spec.loader is None:
         raise RuntimeError("failed to load preflight script")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_capture_module():
+    spec = importlib.util.spec_from_file_location("risk1b_context_capture_for_test", CAPTURE_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("failed to load context capture script")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

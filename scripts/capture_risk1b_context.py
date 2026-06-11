@@ -29,12 +29,15 @@ def build_parser() -> argparse.ArgumentParser:
             "captures actual LeRobot/LIBERO start observation."
         )
     )
-    parser.add_argument("--backend", choices=("mock", "artifact", "libero"), default="mock")
+    parser.add_argument("--backend", choices=("mock", "artifact", "libero", "libero-shallow"), default="mock")
     parser.add_argument("--suite", default="libero_goal")
     parser.add_argument("--task-id", type=int, default=6)
     parser.add_argument("--seed", type=int, default=1201)
     parser.add_argument("--policy-path", default="lerobot/smolvla_libero")
     parser.add_argument("--camera-mapping", default='{"agentview_image":"camera1","robot0_eye_in_hand_image":"camera2"}')
+    parser.add_argument("--camera-names", default="agentview,robot0_eye_in_hand")
+    parser.add_argument("--image-width", type=int, default=360)
+    parser.add_argument("--image-height", type=int, default=360)
     parser.add_argument("--policy-num-steps", type=int, default=10)
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--renderer-backend", choices=("egl", "osmesa", "auto"), default="egl")
@@ -163,6 +166,57 @@ def artifact_context(args: argparse.Namespace) -> tuple[Path, Path]:
     return sheet_path, context_path
 
 
+def libero_shallow_context(args: argparse.Namespace) -> tuple[Path, Path]:
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with renderer_env(args.renderer_backend):
+        ensure_noninteractive_libero_config()
+        bench = load_libero_benchmark(args.suite)
+        task = bench.get_task(args.task_id)
+        env = make_direct_libero_env(task, args.image_width, args.image_height)
+        try:
+            if hasattr(env, "seed"):
+                env.seed(args.seed)
+            observation = env.reset()
+            init_state_source = "env.reset"
+            try:
+                init_states = bench.get_task_init_states(args.task_id)
+                if len(init_states) > 0 and hasattr(env, "set_init_state"):
+                    observation = env.set_init_state(init_states[args.seed % len(init_states)])
+                    init_state_source = "bench.get_task_init_states+env.set_init_state"
+            except Exception as exc:  # noqa: BLE001
+                init_state_source = f"env.reset_only:init_state_error:{type(exc).__name__}"
+            images = extract_images_from_observation(observation)
+            if not images:
+                images = render_direct_libero_images(env, args)
+            if not images:
+                raise RuntimeError("libero-shallow did not find RGB images in reset observation or sim.render")
+            write_actual_context_artifacts(
+                args=args,
+                output_dir=output_dir,
+                observation=observation,
+                info={"init_state_source": init_state_source},
+                task_descriptions=[getattr(task, "language", ""), getattr(task, "problem_folder", "")],
+                provenance={
+                    "backend": "libero-shallow",
+                    "actual_context": True,
+                    "env_type": "direct LIBERO OffScreenRenderEnv",
+                    "observation_step": "episode_start_reset",
+                    "policy_loaded": False,
+                    "renderer_path": "direct_libero_offscreen_env_reset_observation",
+                    "claim_boundary": (
+                        "Actual LIBERO start-observation context only; this does not prove "
+                        "Risk1-B candidate diversity or Risk1-C selector quality."
+                    ),
+                },
+                image_source="direct_libero_start_observation",
+                images=images,
+            )
+        finally:
+            close_env(env)
+    return contact_sheet_path(output_dir, args.task_id, args.seed), context_json_path(output_dir, args.task_id, args.seed)
+
+
 def libero_context(args: argparse.Namespace) -> tuple[Path, Path]:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -231,40 +285,23 @@ def build_context_rollout(args: argparse.Namespace, output_dir: Path, import_com
                 pass
         task_descriptions = safe_env_call(env, "task_description") or safe_env_call(env, "task") or []
         images = extract_images_from_observation(observation)
-        camera_images = []
-        image_matrices = []
-        for key, image in images:
-            image_path = output_dir / f"camera_{sanitize_name(key)}_task{args.task_id}_seed{args.seed}.png"
-            write_png(image_path, image)
-            image_matrices.append(image)
-            camera_images.append({"camera_key": key, "path": str(image_path), "source": "libero_start_observation"})
-        sheet_path = contact_sheet_path(output_dir, args.task_id, args.seed)
-        write_png(sheet_path, make_contact_sheet(image_matrices))
-        context_path = context_json_path(output_dir, args.task_id, args.seed)
-        write_context_json(
-            context_path,
-            {
-                "suite": args.suite,
-                "task_id": args.task_id,
-                "seed": args.seed,
-                "task_description": str(task_descriptions[0]) if task_descriptions else "",
-                "task_descriptions": [str(item) for item in task_descriptions],
-                "observation_source": "lerobot_libero_env_reset",
-                "camera_mapping": args.camera_mapping,
-                "camera_images": camera_images,
-                "camera_count": len(camera_images),
-                "contact_sheet": str(sheet_path),
-                "info_summary": summarize_context_value(info),
-                "renderer_env": renderer_env_snapshot(config_like(args)),
-                "import_compat": import_compat,
-                "timestamp_unix": round(time.time(), 3),
-                "provenance": {
-                    "backend": "libero",
-                    "actual_context": True,
-                    "env_type": "LeRobot LIBERO",
-                    "observation_step": "episode_start_reset",
-                },
+        write_actual_context_artifacts(
+            args=args,
+            output_dir=output_dir,
+            observation=observation,
+            info=info,
+            task_descriptions=task_descriptions,
+            provenance={
+                "backend": "libero",
+                "actual_context": True,
+                "env_type": "LeRobot LIBERO",
+                "observation_step": "episode_start_reset",
+                "policy_loaded": True,
+                "renderer_path": "lerobot_eval_rollout_env_reset_observation",
             },
+            image_source="libero_start_observation",
+            images=images,
+            extra={"import_compat": import_compat},
         )
         action_dim = 1
         action = np.zeros((getattr(env, "num_envs", 1), 1, action_dim), dtype=np.float32)
@@ -278,6 +315,116 @@ def build_context_rollout(args: argparse.Namespace, output_dir: Path, import_com
         }
 
     return rollout
+
+
+def write_actual_context_artifacts(
+    *,
+    args: argparse.Namespace,
+    output_dir: Path,
+    observation: Any,
+    info: Any,
+    task_descriptions: list[Any],
+    provenance: dict[str, Any],
+    image_source: str,
+    images: list[tuple[str, list[list[list[int]]]]],
+    extra: dict[str, Any] | None = None,
+) -> None:
+    camera_images = []
+    image_matrices = []
+    for key, image in images:
+        image_path = output_dir / f"camera_{sanitize_name(key)}_task{args.task_id}_seed{args.seed}.png"
+        write_png(image_path, image)
+        image_matrices.append(image)
+        camera_images.append({"camera_key": key, "path": str(image_path), "source": image_source})
+    sheet_path = contact_sheet_path(output_dir, args.task_id, args.seed)
+    write_png(sheet_path, make_contact_sheet(image_matrices))
+    context_path = context_json_path(output_dir, args.task_id, args.seed)
+    payload = {
+        "suite": args.suite,
+        "task_id": args.task_id,
+        "seed": args.seed,
+        "task_description": str(task_descriptions[0]) if task_descriptions else "",
+        "task_descriptions": [str(item) for item in task_descriptions if str(item)],
+        "observation_source": provenance.get("renderer_path", image_source),
+        "camera_mapping": args.camera_mapping,
+        "camera_images": camera_images,
+        "camera_count": len(camera_images),
+        "contact_sheet": str(sheet_path),
+        "info_summary": summarize_context_value(info),
+        "observation_summary": summarize_context_value(observation),
+        "renderer_env": renderer_env_snapshot(config_like(args)),
+        "timestamp_unix": round(time.time(), 3),
+        "provenance": provenance,
+    }
+    if extra:
+        payload.update(extra)
+    write_context_json(context_path, payload)
+
+
+def load_libero_benchmark(suite: str) -> Any:
+    from libero.libero import benchmark
+
+    benchmark_dict = benchmark.get_benchmark_dict()
+    if suite not in benchmark_dict:
+        raise KeyError(f"Unknown LIBERO suite {suite!r}; available={sorted(benchmark_dict)}")
+    return benchmark_dict[suite]()
+
+
+def make_direct_libero_env(task: Any, width: int, height: int) -> Any:
+    from pathlib import Path as LibPath
+
+    from libero.libero import get_libero_path
+    from libero.libero.envs import OffScreenRenderEnv
+
+    bddl_file = LibPath(str(task.bddl_file))
+    if not bddl_file.is_absolute():
+        bddl_root = LibPath(get_libero_path("bddl_files"))
+        direct = bddl_root / bddl_file
+        if direct.exists():
+            bddl_file = direct
+        else:
+            matches = sorted(bddl_root.rglob(bddl_file.name))
+            if not matches:
+                raise FileNotFoundError(f"Could not resolve LIBERO BDDL file: {bddl_file}")
+            bddl_file = matches[0]
+    return OffScreenRenderEnv(
+        bddl_file_name=str(bddl_file),
+        camera_heights=height,
+        camera_widths=width,
+    )
+
+
+def render_direct_libero_images(env: Any, args: argparse.Namespace) -> list[tuple[str, list[list[list[int]]]]]:
+    images: list[tuple[str, list[list[list[int]]]]] = []
+    sim = getattr(env, "sim", None)
+    if sim is None:
+        return images
+    for camera_name in [item.strip() for item in args.camera_names.split(",") if item.strip()]:
+        try:
+            image = sim.render(
+                camera_name=camera_name,
+                width=args.image_width,
+                height=args.image_height,
+                depth=False,
+            )
+        except TypeError:
+            image = sim.render(args.image_width, args.image_height, camera_name=camera_name)
+        except Exception:  # noqa: BLE001
+            continue
+        converted = to_rgb_image(image)
+        if converted is not None:
+            images.append((f"{camera_name}_sim_render", converted))
+    return images
+
+
+def close_env(env: Any) -> None:
+    for name in ("close",):
+        method = getattr(env, name, None)
+        if callable(method):
+            try:
+                method()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def config_like(args: argparse.Namespace) -> RiskProbeConfig:
@@ -398,6 +545,8 @@ def main(argv: list[str] | None = None) -> int:
             sheet_path, context_path = mock_context(args)
         elif args.backend == "artifact":
             sheet_path, context_path = artifact_context(args)
+        elif args.backend == "libero-shallow":
+            sheet_path, context_path = libero_shallow_context(args)
         else:
             sheet_path, context_path = libero_context(args)
     except Exception as exc:  # noqa: BLE001
