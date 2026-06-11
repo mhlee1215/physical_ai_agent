@@ -2519,7 +2519,7 @@ def apply_candidate_to_direct_env(
     image_vector, image_source = extract_image_vector(observation)
     rgb_image_matrix, rgb_image_source = extract_rgb_image_matrix(observation)
     success_proxy, success_source = extract_success_proxy(info, reward, state_vector)
-    task_proxy = compute_task_relation_proxy(observation, task_description)
+    task_proxy = compute_task_relation_proxy_with_env_fallback(observation, task_description, env)
     privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
     privileged_success = extract_privileged_success_proxy(env)
     return {
@@ -2834,7 +2834,7 @@ def apply_candidate_to_env(
     state_vector, state_source = extract_state_vector(env, observation, info)
     image_vector, image_source = extract_image_vector(observation)
     success_proxy, success_source = extract_success_proxy(info, reward, state_vector)
-    task_proxy = compute_task_relation_proxy(observation, task_description)
+    task_proxy = compute_task_relation_proxy_with_env_fallback(observation, task_description, env)
     privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
     privileged_success = extract_privileged_success_proxy(env)
     if privileged_success[1] != "unavailable" and success_source == "state_norm_proxy":
@@ -3338,6 +3338,53 @@ def compute_task_relation_proxy(observation: Any, task_description: str | None) 
             "not benchmark success and not privileged oracle evidence."
         ),
     }
+
+
+def compute_task_relation_proxy_with_env_fallback(
+    observation: Any,
+    task_description: str | None,
+    env: Any,
+) -> dict[str, Any]:
+    proxy = compute_task_relation_proxy(observation, task_description)
+    if proxy.get("available"):
+        return proxy
+    raw_observation, raw_source = extract_raw_env_observation_with_positions(env)
+    if raw_observation is None:
+        return proxy
+    raw_proxy = compute_task_relation_proxy(raw_observation, task_description)
+    if not raw_proxy.get("available"):
+        return {
+            **proxy,
+            "raw_observation_source": raw_source,
+            "raw_observation_proxy": raw_proxy,
+        }
+    return {
+        **raw_proxy,
+        "observation_source": raw_source,
+        "primary_observation_proxy": proxy,
+    }
+
+
+def extract_raw_env_observation_with_positions(env: Any) -> tuple[Any | None, str]:
+    getter_names = ("_get_observations", "_get_observation", "get_observation", "get_observations")
+    for node in traverse_env_object_graph(env):
+        value = node["object"]
+        for name in getter_names:
+            if not has_callable(value, name):
+                continue
+            try:
+                observation = getattr(value, name)()
+            except Exception:  # noqa: BLE001
+                continue
+            if observation_contains_position_keys(observation):
+                return observation, f"{node['path']}.{name}()"
+    return None, "unavailable"
+
+
+def observation_contains_position_keys(observation: Any) -> bool:
+    if not isinstance(observation, dict):
+        return False
+    return any(str(key).lower().endswith("_pos") and numeric_vector(value, limit=3) for key, value in observation.items())
 
 
 def find_observation_position(observation: Any, phrase: str) -> list[float] | None:

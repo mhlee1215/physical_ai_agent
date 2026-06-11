@@ -27,6 +27,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     compute_diversity_metrics,
     compute_oracle_upper_bound_metrics,
     compute_task_relation_proxy,
+    compute_task_relation_proxy_with_env_fallback,
     find_sim_clone_handle,
     generate_mock_candidates,
     inspect_actual_env,
@@ -1205,6 +1206,25 @@ class RiskProbeTest(TestCase):
         self.assertTrue(near["available"])
         self.assertEqual(near["source"], "observation_object_target_distance_proxy")
         self.assertGreater(near["score"], far["score"])
+
+    def test_task_relation_proxy_uses_raw_env_observation_fallback(self) -> None:
+        class RawObservationEnv:
+            def _get_observations(self):
+                return {
+                    "cream_cheese_1_pos": [0.2, 0.0, 0.0],
+                    "akita_black_bowl_1_pos": [0.4, 0.0, 0.0],
+                }
+
+        proxy = compute_task_relation_proxy_with_env_fallback(
+            {"agentview_image": [[[0, 0, 0]]]},
+            "put the cream cheese in the bowl",
+            RawObservationEnv(),
+        )
+
+        self.assertTrue(proxy["available"])
+        self.assertEqual(proxy["source"], "observation_object_target_distance_proxy")
+        self.assertEqual(proxy["observation_source"], "root._get_observations()")
+        self.assertEqual(proxy["primary_observation_proxy"]["reason"], "object_or_target_position_unavailable")
 
     def test_actual_rollout_closure_records_task_relation_proxy_without_name_error(self) -> None:
         previous_modules = {name: sys.modules.get(name) for name in ("lerobot", "lerobot.envs", "lerobot.utils", "lerobot.utils.constants", "torch")}
