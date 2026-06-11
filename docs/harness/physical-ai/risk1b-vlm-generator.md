@@ -11,6 +11,14 @@ move, place". All entries should target the same object, same target relation,
 and same stop condition while varying the approach strategy. Risk1-B is testing
 solution-mode diversity, not plan-step enumeration.
 
+The actual context task description is the source of truth for object roles.
+If the context says `put the cream cheese in the bowl`, the manipulated object
+is the cream cheese and the bowl is the destination/container. The generator
+must not switch to a visually salient or first-listed state key such as the bowl
+as the object to pick up. The generator command should still pass
+`--task-description`, but the script prioritizes `context_json.task_description`
+when actual context is available.
+
 ## Required Schema
 
 Each generated strategy entry must include:

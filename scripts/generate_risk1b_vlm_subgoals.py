@@ -13,6 +13,7 @@ from typing import Any
 from physical_ai_agent.imagine_then_act.risk_probes import (
     RISK1B_CANDIDATE_MODELS,
     RISK1B_REQUIRED_FIELDS,
+    validate_risk1b_task_relation,
     validate_risk1b_subgoal_records,
 )
 
@@ -55,8 +56,17 @@ Context:
 suite={suite}
 task_id={task_id}
 seed={seed}
-task_description={task_description}
+task_goal={task_description}
+task_goal_source={task_goal_source}
 context_summary={context_summary}
+
+Task-grounding rules:
+- Treat task_goal as the authority over object roles.
+- Candidate 0 subgoal_text must preserve task_goal as closely as possible.
+- If task_goal says to put/place/move X in/on/to Y, X is the manipulated
+  object and Y is the destination/target region. Do not invert those roles.
+- Do not choose a different object just because it appears first in state keys
+  or is visually salient in the image.
 """
 
 
@@ -120,15 +130,72 @@ def is_actual_context(context_summary: dict[str, Any]) -> bool:
 
 
 def build_generation_prompt(args: argparse.Namespace, context_summary: dict[str, Any]) -> str:
-    compact_context = json.dumps(context_summary, sort_keys=True)[:2000] if context_summary else "none"
+    task_description, task_goal_source = effective_task_description(args, context_summary)
+    compact_context = json.dumps(compact_context_for_prompt(context_summary), sort_keys=True) if context_summary else "none"
     return PROMPT_TEMPLATE.format(
         num_subgoals=args.num_subgoals,
         suite=args.suite,
         task_id=args.task_id,
         seed=args.seed,
-        task_description=args.task_description,
+        task_description=task_description,
+        task_goal_source=task_goal_source,
         context_summary=compact_context,
     )
+
+
+def effective_task_description(args: argparse.Namespace, context_summary: dict[str, Any]) -> tuple[str, str]:
+    context_task = context_summary.get("task_description")
+    if isinstance(context_task, str) and context_task.strip():
+        return context_task.strip(), "context_json.task_description"
+    task_descriptions = context_summary.get("task_descriptions")
+    if isinstance(task_descriptions, list):
+        for candidate in task_descriptions:
+            if isinstance(candidate, str) and candidate.strip() and candidate.strip() != args.suite:
+                return candidate.strip(), "context_json.task_descriptions"
+    return str(args.task_description).strip(), "cli.task_description"
+
+
+def compact_context_for_prompt(context_summary: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in (
+        "task_description",
+        "task_descriptions",
+        "suite",
+        "task_id",
+        "seed",
+        "camera_count",
+        "camera_mapping",
+        "observation_source",
+        "info_summary",
+        "provenance",
+    ):
+        if key in context_summary:
+            compact[key] = context_summary[key]
+    observation_summary = context_summary.get("observation_summary")
+    if isinstance(observation_summary, dict):
+        image_keys: list[str] = []
+        object_state_keys: list[str] = []
+        for key, value in sorted(observation_summary.items()):
+            if "image" in key:
+                image_keys.append(key)
+            elif not key.startswith("robot0_"):
+                object_state_keys.append(key)
+        compact["observation_summary_compact"] = {
+            "image_keys": image_keys,
+            "object_state_keys": object_state_keys[:30],
+            "object_state_key_count": len(object_state_keys),
+        }
+    camera_images = context_summary.get("camera_images")
+    if isinstance(camera_images, list):
+        compact["camera_images"] = [
+            {
+                "camera_key": item.get("camera_key"),
+                "source": item.get("source"),
+            }
+            for item in camera_images
+            if isinstance(item, dict)
+        ]
+    return compact
 
 
 def generate_mock_output(args: argparse.Namespace) -> str:
@@ -373,6 +440,8 @@ def build_output_payload(
 ) -> dict[str, Any]:
     records = parsed.get("subgoals", parsed) if isinstance(parsed, dict) else parsed
     subgoals, errors = validate_risk1b_subgoal_records(records, limit=args.num_subgoals)
+    task_description, task_goal_source = effective_task_description(args, context_summary)
+    errors = [*errors, *validate_risk1b_task_relation(subgoals, task_description)]
     valid = not errors and len(subgoals) >= 2
     provenance = "external_vlm_json" if args.backend == "transformers" else f"{args.backend}_contract"
     return {
@@ -383,7 +452,8 @@ def build_output_payload(
             "suite": args.suite,
             "task_id": args.task_id,
             "seed": args.seed,
-            "task_description": args.task_description,
+            "task_description": task_description,
+            "task_goal_source": task_goal_source,
             "context_image": args.context_image,
             "context_json": args.context_json,
             "context_summary": context_summary,

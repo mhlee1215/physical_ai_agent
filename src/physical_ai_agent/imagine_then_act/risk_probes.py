@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import re
 import signal
 import sys
 import time
@@ -1715,6 +1716,8 @@ def validate_risk1b_subgoal_records(records: Any, *, limit: int) -> tuple[list[d
         if not isinstance(record, dict):
             errors.append(f"subgoal[{index}] must be an object")
             continue
+        if "subgoal" in record and isinstance(record.get("subgoal"), dict):
+            record = record["subgoal"]
         missing = [field_name for field_name in RISK1B_REQUIRED_FIELDS if field_name not in record]
         if missing:
             errors.append(f"subgoal[{index}] missing required fields: {', '.join(missing)}")
@@ -1739,6 +1742,60 @@ def validate_risk1b_subgoal_records(records: Any, *, limit: int) -> tuple[list[d
     if len(normalized) < 2:
         errors.append("Risk1-B requires at least two valid subgoals including baseline")
     return normalized, errors
+
+
+def validate_risk1b_task_relation(records: list[dict[str, Any]], task_description: str) -> list[str]:
+    task = " ".join(str(task_description or "").lower().split())
+    if not task:
+        return []
+    relation = parse_simple_manipulation_relation(task)
+    if relation is None:
+        return []
+    manipulated_object, target_region = relation
+    errors: list[str] = []
+    for index, record in enumerate(records):
+        combined = " ".join(
+            str(record.get(field_name, ""))
+            for field_name in ("subgoal_text", "target_object", "target_region_or_point", "stop_condition")
+        ).lower()
+        target_object_text = str(record.get("target_object", "")).lower()
+        target_region_text = str(record.get("target_region_or_point", "")).lower()
+        stop_condition = str(record.get("stop_condition", "")).lower()
+        if not all(token in combined for token in manipulated_object.split()):
+            errors.append(f"subgoal[{index}] must preserve manipulated object: {manipulated_object}")
+        if not (
+            all(token in target_region_text for token in target_region.split())
+            or all(token in stop_condition for token in target_region.split())
+            or all(token in combined for token in target_region.split())
+        ):
+            errors.append(f"subgoal[{index}] must preserve target region/relation: {target_region}")
+        if all(token in target_object_text for token in target_region.split()) and not all(
+            token in target_object_text for token in manipulated_object.split()
+        ):
+            errors.append(
+                f"subgoal[{index}] targets destination as manipulated object; expected {manipulated_object} into {target_region}"
+            )
+    return errors
+
+
+def parse_simple_manipulation_relation(task_description: str) -> tuple[str, str] | None:
+    match = re.search(
+        r"\b(?:put|place|move)\s+(?:the\s+)?(?P<object>.+?)\s+(?:in|into|on|onto|to)\s+(?:the\s+)?(?P<target>.+)$",
+        task_description,
+    )
+    if not match:
+        return None
+    manipulated_object = clean_relation_phrase(match.group("object"))
+    target_region = clean_relation_phrase(match.group("target"))
+    if not manipulated_object or not target_region:
+        return None
+    return manipulated_object, target_region
+
+
+def clean_relation_phrase(value: str) -> str:
+    value = re.sub(r"\b(?:a|an|the)\b", " ", value)
+    value = re.sub(r"[^a-z0-9_ ]+", " ", value)
+    return " ".join(value.split())
 
 
 def risk1b_subgoal_to_prompt(base_prompt: str, subgoal: dict[str, Any]) -> str:

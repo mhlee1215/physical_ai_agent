@@ -83,6 +83,144 @@ class Risk1BVlmGeneratorTest(TestCase):
             self.assertFalse(payload["schema_validation"]["valid"])
             self.assertEqual(payload["provenance"], "fixture_contract")
 
+    def test_fixture_backend_unwraps_nested_subgoal_records(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            context = Path(tmpdir) / "context.json"
+            context.write_text(
+                json.dumps(
+                    {
+                        "task_description": "put the cream cheese in the bowl",
+                        "provenance": {"actual_context": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fixture = Path(tmpdir) / "nested_output.txt"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "subgoals": [
+                            {
+                                "subgoal": {
+                                    "subgoal_text": "put the cream cheese in the bowl",
+                                    "strategy_axis": "baseline",
+                                    "target_object": "cream cheese",
+                                    "target_region_or_point": "inside the bowl",
+                                    "stop_condition": "cream cheese is in the bowl",
+                                    "confidence": 1.0,
+                                }
+                            },
+                            {
+                                "subgoal": {
+                                    "subgoal_text": "align the cream cheese before placing it in the bowl",
+                                    "strategy_axis": "pre_contact_alignment",
+                                    "target_object": "cream cheese",
+                                    "target_region_or_point": "inside the bowl",
+                                    "stop_condition": "cream cheese is in the bowl",
+                                    "confidence": 0.8,
+                                }
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output_path = Path(tmpdir) / "nested.json"
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(SCRIPT),
+                    "--backend",
+                    "fixture",
+                    "--fixture-output",
+                    str(fixture),
+                    "--context-json",
+                    str(context),
+                    "--output-path",
+                    str(output_path),
+                    "--json",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            result = json.loads(completed.stdout)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "PASS")
+            self.assertTrue(payload["schema_validation"]["valid"])
+            self.assertEqual(payload["subgoals"][0]["target_object"], "cream cheese")
+
+    def test_fixture_backend_rejects_wrong_object_relation_for_cream_cheese_task(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            context = Path(tmpdir) / "context.json"
+            context.write_text(
+                json.dumps(
+                    {
+                        "task_description": "put the cream cheese in the bowl",
+                        "provenance": {"actual_context": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fixture = Path(tmpdir) / "wrong_object_output.txt"
+            fixture.write_text(
+                json.dumps(
+                    [
+                        {
+                            "subgoal": {
+                                "subgoal_text": "Pick up the black bowl.",
+                                "strategy_axis": "object_centric_open_side",
+                                "target_object": "akita_black_bowl_1",
+                                "target_region_or_point": "akita_black_bowl_1_to_robot0_eef_pos",
+                                "stop_condition": "gripper is closed and holding the bowl",
+                                "confidence": 0.8,
+                            }
+                        },
+                        {
+                            "subgoal": {
+                                "subgoal_text": "Pick up the black bowl.",
+                                "strategy_axis": "pre_contact_alignment",
+                                "target_object": "akita_black_bowl_1",
+                                "target_region_or_point": "akita_black_bowl_1_to_robot0_eef_pos",
+                                "stop_condition": "gripper is closed and holding the bowl",
+                                "confidence": 0.8,
+                            }
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            output_path = Path(tmpdir) / "wrong_object.json"
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(SCRIPT),
+                    "--backend",
+                    "fixture",
+                    "--fixture-output",
+                    str(fixture),
+                    "--context-json",
+                    str(context),
+                    "--output-path",
+                    str(output_path),
+                    "--json",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 2)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertFalse(payload["schema_validation"]["valid"])
+            self.assertIn("expected cream cheese into bowl", "\n".join(payload["schema_validation"]["errors"]))
+
     def test_fixture_contract_ingestion_cannot_be_external_vlm_provenance(self) -> None:
         with TemporaryDirectory() as tmpdir:
             generated = Path(tmpdir) / "fixture_contract.json"
@@ -166,6 +304,171 @@ class Risk1BVlmGeneratorTest(TestCase):
         self.assertIn("pre_contact_alignment", prompt)
         self.assertIn("collision_avoidant_approach", prompt)
         self.assertNotIn("Prefer grounded, visually actionable axes", prompt)
+
+    def test_generation_prompt_prefers_actual_context_task_goal(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        args = SimpleNamespace(
+            num_subgoals=5,
+            suite="libero_goal",
+            task_id=6,
+            seed=1201,
+            task_description="Complete the LIBERO goal task from the current observation.",
+        )
+
+        prompt = module.build_generation_prompt(
+            args,
+            {
+                "task_description": "put the cream cheese in the bowl",
+                "provenance": {"actual_context": True},
+                "observation_summary": {
+                    "akita_black_bowl_1_pos": {"type": "ndarray"},
+                    "cream_cheese_1_pos": {"type": "ndarray"},
+                    "robot0_joint_pos": {"type": "ndarray"},
+                },
+            },
+        )
+
+        self.assertIn("task_goal=put the cream cheese in the bowl", prompt)
+        self.assertIn("task_goal_source=context_json.task_description", prompt)
+        self.assertIn("If task_goal says to put/place/move X in/on/to Y", prompt)
+        self.assertIn('"object_state_keys": ["akita_black_bowl_1_pos", "cream_cheese_1_pos"]', prompt)
+        self.assertNotIn("robot0_joint_pos", prompt)
+
+    def test_output_payload_accepts_nested_subgoal_records(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        args = SimpleNamespace(
+            backend="transformers",
+            model_id="Qwen/Qwen2.5-VL-7B-Instruct",
+            suite="libero_goal",
+            task_id=6,
+            seed=1201,
+            num_subgoals=2,
+            task_description="put the cream cheese in the bowl",
+            context_image="contact.png",
+            context_json="context.json",
+        )
+
+        payload = module.build_output_payload(
+            args=args,
+            prompt="prompt",
+            context_summary={"provenance": {"actual_context": True}},
+            raw_output=json.dumps(
+                [
+                    {
+                        "subgoal": {
+                            "subgoal_text": "put the cream cheese in the bowl",
+                            "strategy_axis": "baseline",
+                            "target_object": "cream_cheese_1",
+                            "target_region_or_point": "akita_black_bowl_1",
+                            "stop_condition": "cream cheese is in the bowl",
+                            "confidence": 1.0,
+                        }
+                    },
+                    {
+                        "subgoal": {
+                            "subgoal_text": "put the cream cheese in the bowl using pre-contact alignment",
+                            "strategy_axis": "pre_contact_alignment",
+                            "target_object": "cream_cheese_1",
+                            "target_region_or_point": "akita_black_bowl_1",
+                            "stop_condition": "cream cheese is in the bowl",
+                            "confidence": 0.8,
+                        }
+                    },
+                ]
+            ),
+            parsed=[
+                {
+                    "subgoal": {
+                        "subgoal_text": "put the cream cheese in the bowl",
+                        "strategy_axis": "baseline",
+                        "target_object": "cream_cheese_1",
+                        "target_region_or_point": "akita_black_bowl_1",
+                        "stop_condition": "cream cheese is in the bowl",
+                        "confidence": 1.0,
+                    }
+                },
+                {
+                    "subgoal": {
+                        "subgoal_text": "put the cream cheese in the bowl using pre-contact alignment",
+                        "strategy_axis": "pre_contact_alignment",
+                        "target_object": "cream_cheese_1",
+                        "target_region_or_point": "akita_black_bowl_1",
+                        "stop_condition": "cream cheese is in the bowl",
+                        "confidence": 0.8,
+                    }
+                },
+            ],
+            latency_ms=1,
+            memory_mb=None,
+            raw_output_path=Path("raw.txt"),
+        )
+
+        self.assertTrue(payload["schema_validation"]["valid"])
+        self.assertEqual(payload["subgoals"][0]["target_object"], "cream_cheese_1")
+        self.assertEqual(payload["subgoals"][1]["strategy_axis"], "pre_contact_alignment")
+
+    def test_output_payload_rejects_inverted_task_object_relation(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        args = SimpleNamespace(
+            backend="transformers",
+            model_id="Qwen/Qwen2.5-VL-7B-Instruct",
+            suite="libero_goal",
+            task_id=6,
+            seed=1201,
+            num_subgoals=2,
+            task_description="put the cream cheese in the bowl",
+            context_image="contact.png",
+            context_json="context.json",
+        )
+        bad_records = [
+            {
+                "subgoal": {
+                    "subgoal_text": "Pick up the black bowl.",
+                    "strategy_axis": "object_centric_open_side",
+                    "target_object": "akita_black_bowl_1",
+                    "target_region_or_point": "akita_black_bowl_1_to_robot0_eef_pos",
+                    "stop_condition": "gripper is closed and holding the bowl",
+                    "confidence": 0.8,
+                }
+            },
+            {
+                "subgoal": {
+                    "subgoal_text": "Pick up the black bowl using pre-contact alignment.",
+                    "strategy_axis": "pre_contact_alignment",
+                    "target_object": "akita_black_bowl_1",
+                    "target_region_or_point": "akita_black_bowl_1_to_robot0_eef_pos",
+                    "stop_condition": "gripper is closed and holding the bowl",
+                    "confidence": 0.8,
+                }
+            },
+        ]
+
+        payload = module.build_output_payload(
+            args=args,
+            prompt="prompt",
+            context_summary={"task_description": "put the cream cheese in the bowl"},
+            raw_output=json.dumps(bad_records),
+            parsed=bad_records,
+            latency_ms=1,
+            memory_mb=None,
+            raw_output_path=Path("raw.txt"),
+        )
+
+        self.assertFalse(payload["schema_validation"]["valid"])
+        self.assertIn("must preserve manipulated object: cream cheese", "\n".join(payload["schema_validation"]["errors"]))
+        self.assertIn("targets destination as manipulated object", "\n".join(payload["schema_validation"]["errors"]))
 
     def test_select_transformers_model_class_falls_back_from_image_text_to_vision2seq(self) -> None:
         spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
