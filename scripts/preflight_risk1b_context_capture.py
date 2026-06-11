@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import grp
 import json
+import os
+import pwd
+import stat
 import subprocess
 import sys
 import time
@@ -28,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--renderer-backend", choices=("egl", "osmesa", "auto"), default="egl")
     parser.add_argument("--actual-timeout-sec", type=int, default=600)
     parser.add_argument("--output-dir", default="_workspace/runpod_results/ita_risk_probes/risk1b_context_preflight")
+    parser.add_argument(
+        "--skip-dri-permission-check",
+        action="store_true",
+        help="Skip the cheap /dev/dri EGL permission gate before running full context capture.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser
@@ -109,6 +118,75 @@ def parse_json_payload(stdout: str) -> dict[str, Any] | None:
     return None
 
 
+def inspect_dri_devices(dri_root: Path = Path("/dev/dri")) -> dict[str, Any]:
+    devices: list[dict[str, Any]] = []
+    if not dri_root.exists():
+        return {
+            "status": "missing",
+            "root": str(dri_root),
+            "devices": devices,
+            "egl_render_device_accessible": False,
+        }
+    for path in sorted(dri_root.iterdir()):
+        if not (path.name.startswith("renderD") or path.name.startswith("card")):
+            continue
+        try:
+            st = path.stat()
+            owner = pwd.getpwuid(st.st_uid).pw_name
+        except KeyError:
+            owner = str(st.st_uid)
+        except OSError as exc:
+            devices.append({"path": str(path), "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        try:
+            group = grp.getgrgid(st.st_gid).gr_name
+        except KeyError:
+            group = str(st.st_gid)
+        mode = stat.filemode(st.st_mode)
+        devices.append(
+            {
+                "path": str(path),
+                "name": path.name,
+                "owner": owner,
+                "group": group,
+                "mode": mode,
+                "readable": os.access(path, os.R_OK),
+                "writable": os.access(path, os.W_OK),
+                "is_render_node": path.name.startswith("renderD"),
+            }
+        )
+    render_nodes = [device for device in devices if device.get("is_render_node")]
+    accessible_render_nodes = [
+        device for device in render_nodes if bool(device.get("readable")) and bool(device.get("writable"))
+    ]
+    status = "pass" if accessible_render_nodes else "blocked"
+    if not devices:
+        status = "missing"
+    return {
+        "status": status,
+        "root": str(dri_root),
+        "devices": devices,
+        "egl_render_device_accessible": bool(accessible_render_nodes),
+        "accessible_render_nodes": [device["path"] for device in accessible_render_nodes],
+    }
+
+
+def dri_permission_blocker(dri: dict[str, Any]) -> dict[str, Any] | None:
+    if dri.get("egl_render_device_accessible"):
+        return None
+    if dri.get("status") == "missing":
+        category = "CONTEXT_CAPTURE_LIBERO_BLOCKED_EGL_DRI_DEVICE_MISSING"
+        hint = "No /dev/dri render devices are visible; EGL context capture should not start."
+    else:
+        category = "CONTEXT_CAPTURE_LIBERO_BLOCKED_EGL_DEVICE_PERMISSION"
+        hint = (
+            "No readable+writable /dev/dri/renderD* node is available to the container user. "
+            "Avoid secure/runtime configurations that expose render nodes as inaccessible "
+            "nobody:nogroup crw-rw---- devices, or run with proper render-device permissions."
+        )
+    return {"category": category, "hint": hint}
+
+
 def run_preflight(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +199,23 @@ def run_preflight(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "claim_boundary": "dry-run only; no actual LIBERO context was captured",
         }
     started = time.time()
+    if args.renderer_backend == "egl" and not args.skip_dri_permission_check:
+        dri = inspect_dri_devices()
+        blocker = dri_permission_blocker(dri)
+        if blocker is not None:
+            return 2, {
+                "status": "BLOCKED",
+                "operation": "risk1b_context_capture_preflight",
+                "blocker_category": blocker["category"],
+                "hint": blocker["hint"],
+                "command_argv": argv,
+                "dri_devices": dri,
+                "elapsed_sec": round(time.time() - started, 3),
+                "claim_boundary": (
+                    "Qwen/Gemma generation and Risk1-C must not run until EGL render-device "
+                    "permissions are fixed or an explicitly limited renderer fallback is approved."
+                ),
+            }
     try:
         completed = subprocess.run(argv, cwd=Path.cwd(), capture_output=True, text=True, timeout=args.actual_timeout_sec)
     except subprocess.TimeoutExpired as exc:

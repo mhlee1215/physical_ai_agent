@@ -210,6 +210,38 @@ class Risk1BContextCaptureTest(TestCase):
             self.assertIn("scripts/capture_risk1b_context.py", result["command_argv"])
             self.assertTrue((Path(tmpdir) / "risk1b_context_capture_preflight.json").exists())
 
+    def test_context_capture_preflight_blocks_inaccessible_dri_render_node(self) -> None:
+        module = load_preflight_module()
+        with TemporaryDirectory() as tmpdir:
+            dri = Path(tmpdir) / "dev" / "dri"
+            dri.mkdir(parents=True)
+            render = dri / "renderD128"
+            render.write_text("", encoding="utf-8")
+            render.chmod(0)
+            try:
+                inspection = module.inspect_dri_devices(dri)
+                blocker = module.dri_permission_blocker(inspection)
+            finally:
+                render.chmod(0o600)
+
+            self.assertFalse(inspection["egl_render_device_accessible"])
+            self.assertIsNotNone(blocker)
+            self.assertEqual(blocker["category"], "CONTEXT_CAPTURE_LIBERO_BLOCKED_EGL_DEVICE_PERMISSION")
+
+    def test_context_capture_preflight_allows_accessible_dri_render_node(self) -> None:
+        module = load_preflight_module()
+        with TemporaryDirectory() as tmpdir:
+            dri = Path(tmpdir) / "dev" / "dri"
+            dri.mkdir(parents=True)
+            render = dri / "renderD128"
+            render.write_text("", encoding="utf-8")
+            render.chmod(0o600)
+
+            inspection = module.inspect_dri_devices(dri)
+
+            self.assertTrue(inspection["egl_render_device_accessible"])
+            self.assertIsNone(module.dri_permission_blocker(inspection))
+
 
 def load_preflight_module():
     spec = importlib.util.spec_from_file_location("risk1b_context_preflight_for_test", PREFLIGHT_SCRIPT)
