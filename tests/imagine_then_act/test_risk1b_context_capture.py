@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ from unittest import TestCase
 ROOT = Path(__file__).resolve().parents[2]
 CAPTURE_SCRIPT = ROOT / "scripts" / "capture_risk1b_context.py"
 GENERATOR_SCRIPT = ROOT / "scripts" / "generate_risk1b_vlm_subgoals.py"
+PREFLIGHT_SCRIPT = ROOT / "scripts" / "preflight_risk1b_context_capture.py"
 
 
 class Risk1BContextCaptureTest(TestCase):
@@ -135,3 +137,84 @@ class Risk1BContextCaptureTest(TestCase):
             self.assertTrue(payload["provenance"]["actual_context"])
             self.assertEqual(Path(result["contact_sheet"]).name, "contact_sheet_task6_seed1201.png")
             self.assertEqual(payload["observation_source"], "existing_actual_artifact")
+
+    def test_context_capture_preflight_builds_exact_libero_command(self) -> None:
+        module = load_preflight_module()
+        args = module.build_parser().parse_args(
+            [
+                "--python-bin",
+                "/workspace/physical-ai/envs/lerobot_py312/bin/python",
+                "--suite",
+                "libero_goal",
+                "--task-id",
+                "6",
+                "--seed",
+                "1201",
+                "--policy-path",
+                "lerobot/smolvla_libero",
+                "--policy-num-steps",
+                "10",
+                "--policy-n-action-steps",
+                "15",
+                "--renderer-backend",
+                "egl",
+                "--output-dir",
+                "_workspace/runpod_results/ita_risk_probes/risk1b_context_preflight",
+            ]
+        )
+
+        argv = module.build_context_capture_argv(args)
+
+        self.assertEqual(argv[0], "/workspace/physical-ai/envs/lerobot_py312/bin/python")
+        self.assertIn("scripts/capture_risk1b_context.py", argv)
+        self.assertEqual(argv[argv.index("--backend") + 1], "libero")
+        self.assertEqual(argv[argv.index("--renderer-backend") + 1], "egl")
+        self.assertEqual(argv[argv.index("--policy-num-steps") + 1], "10")
+        self.assertEqual(argv[argv.index("--policy-n-action-steps") + 1], "15")
+        self.assertTrue(any(item.endswith("risk1b_context") for item in argv))
+
+    def test_context_capture_preflight_classifies_dri_permission(self) -> None:
+        module = load_preflight_module()
+        failure = module.classify_context_capture_failure(
+            "libEGL warning: failed to open /dev/dri/renderD129: Permission denied\n"
+            "context_capture_error: ImportError: Cannot initialize a EGL device display",
+            "",
+        )
+
+        self.assertEqual(failure["category"], "CONTEXT_CAPTURE_LIBERO_BLOCKED_EGL_DEVICE_PERMISSION")
+        self.assertIn("render/card devices", failure["hint"])
+
+    def test_context_capture_preflight_dry_run_writes_report_without_libero(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(PREFLIGHT_SCRIPT),
+                    "--python-bin",
+                    sys.executable,
+                    "--output-dir",
+                    tmpdir,
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            result = json.loads(completed.stdout)
+
+            self.assertEqual(result["status"], "DRY_RUN")
+            self.assertEqual(result["operation"], "risk1b_context_capture_preflight")
+            self.assertIn("scripts/capture_risk1b_context.py", result["command_argv"])
+            self.assertTrue((Path(tmpdir) / "risk1b_context_capture_preflight.json").exists())
+
+
+def load_preflight_module():
+    spec = importlib.util.spec_from_file_location("risk1b_context_preflight_for_test", PREFLIGHT_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("failed to load preflight script")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
