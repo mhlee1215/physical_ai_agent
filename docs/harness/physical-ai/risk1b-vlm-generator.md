@@ -1,13 +1,19 @@
-# Risk1-B External VLM Subgoal Generator
+# Risk1-B External VLM Strategy-Portfolio Generator
 
-Risk1-B validates candidate generation only: an external VLM proposes grounded
-subgoal prompts, frozen SmolVLA produces one action chunk per prompt, and
-diversity is compared against Risk1-A and native-noise references. Do not count
-mock or fixture outputs as Risk1-B PASS evidence.
+Risk1-B validates candidate generation only: an external VLM proposes a
+grounded strategy portfolio for the same immediate LIBERO subgoal, frozen
+SmolVLA produces one action chunk per prompt, and diversity is compared against
+Risk1-A and native-noise references. Do not count mock or fixture outputs as
+Risk1-B PASS evidence.
+
+The generator must not decompose the task into a temporal plan such as "pick,
+move, place". All entries should target the same object, same target relation,
+and same stop condition while varying the approach strategy. Risk1-B is testing
+solution-mode diversity, not plan-step enumeration.
 
 ## Required Schema
 
-Each generated subgoal must include:
+Each generated strategy entry must include:
 
 - `subgoal_text`
 - `strategy_axis`
@@ -18,7 +24,9 @@ Each generated subgoal must include:
 - optional `rationale`
 
 The generator writes `risk1b_subgoals_<model>_<suite>_task<id>_seed<seed>.json`
-plus a sibling `.raw.txt` file with the raw model output.
+plus a sibling `.raw.txt` file with the raw model output. The filename keeps
+`subgoals` for backward compatibility, but the intended semantics are
+same-subgoal strategy alternatives.
 
 ## Local Contract Smoke
 

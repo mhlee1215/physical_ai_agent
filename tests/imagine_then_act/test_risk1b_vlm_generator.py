@@ -136,6 +136,37 @@ class Risk1BVlmGeneratorTest(TestCase):
         with self.assertRaises(SystemExit):
             module.build_parser().parse_args(["--model-id", "unknown/model"])
 
+    def test_generation_prompt_requests_same_subgoal_strategy_portfolio(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        args = SimpleNamespace(
+            num_subgoals=5,
+            suite="libero_goal",
+            task_id=6,
+            seed=1201,
+            task_description="Put the cream cheese in the black bowl.",
+        )
+
+        prompt = module.build_generation_prompt(
+            args,
+            {
+                "provenance": {"actual_context": True},
+                "observation_source": "direct_libero_offscreen_env_reset_observation",
+            },
+        )
+
+        self.assertIn("SAME immediate next subgoal", prompt)
+        self.assertIn("Do NOT decompose the task over time", prompt)
+        self.assertIn("same target object, same target relation, and", prompt)
+        self.assertIn("varying only the approach strategy", prompt)
+        self.assertIn("object_centric_open_side", prompt)
+        self.assertIn("pre_contact_alignment", prompt)
+        self.assertIn("collision_avoidant_approach", prompt)
+        self.assertNotIn("Prefer grounded, visually actionable axes", prompt)
+
     def test_select_transformers_model_class_falls_back_from_image_text_to_vision2seq(self) -> None:
         spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
         self.assertIsNotNone(spec)

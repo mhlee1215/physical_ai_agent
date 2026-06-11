@@ -17,7 +17,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
 )
 
 
-PROMPT_TEMPLATE = """You are generating grounded subgoal candidates for a frozen SmolVLA LIBERO policy.
+PROMPT_TEMPLATE = """You are generating a strategy portfolio for a frozen SmolVLA LIBERO policy.
 
 Return only valid JSON with this schema:
 {{
@@ -35,12 +35,21 @@ Return only valid JSON with this schema:
 }}
 
 Rules:
-- Produce exactly {num_subgoals} subgoals.
-- The first subgoal must be the baseline/original task.
-- Every subgoal must preserve the same final task goal.
-- Prefer grounded, visually actionable axes such as alignment_before_contact,
-  object_centric_direction, gripper_alignment, and contact_first.
-- Do not invent a different object or target.
+- Produce exactly {num_subgoals} alternative prompt candidates.
+- All candidates must describe the SAME immediate next subgoal, not sequential
+  steps in a plan.
+- Do NOT decompose the task over time. Do NOT output "pick up, then move, then
+  place" as separate entries.
+- Candidate 0 must preserve the original task wording as the baseline.
+- Candidates 1..N must keep the same target object, same target relation, and
+  same stop condition as the baseline, while varying only the approach strategy.
+- Each non-baseline candidate must use a distinct strategy axis from this set
+  when possible: object_centric_open_side, pre_contact_alignment,
+  gripper_pose_precision, short_horizon_contact, collision_avoidant_approach.
+- Make each candidate directly usable as one prompt to the frozen SmolVLA
+  executor for the next action chunk.
+- Do not introduce cleanup, repetition, extra objects, or any task not visible
+  in the context.
 
 Context:
 suite={suite}
@@ -134,40 +143,40 @@ def generate_mock_output(args: argparse.Namespace) -> str:
             "rationale": "mock baseline for schema plumbing only",
         },
         {
-            "subgoal_text": "Align the gripper with the task object before first contact while preserving the final goal.",
-            "strategy_axis": "alignment_before_contact",
+            "subgoal_text": "Approach the same task object from the most open visible side while preserving the original goal.",
+            "strategy_axis": "object_centric_open_side",
             "target_object": "task object",
-            "target_region_or_point": "pre-contact alignment region",
-            "stop_condition": "gripper is aligned and close enough for stable contact",
+            "target_region_or_point": "task target region",
+            "stop_condition": "original task success condition is reached",
             "confidence": 0.75,
-            "rationale": "mock contract branch",
+            "rationale": "same-subgoal strategy branch for schema plumbing only",
         },
         {
-            "subgoal_text": "Approach the task object from the most open visible side before manipulation.",
-            "strategy_axis": "object_centric_direction",
+            "subgoal_text": "Pause at a pre-contact alignment pose before executing the same original task.",
+            "strategy_axis": "pre_contact_alignment",
             "target_object": "task object",
-            "target_region_or_point": "object-relative open side",
-            "stop_condition": "object can be manipulated without collision from that side",
+            "target_region_or_point": "task target region",
+            "stop_condition": "original task success condition is reached",
             "confidence": 0.72,
-            "rationale": "mock contract branch",
+            "rationale": "same-subgoal strategy branch for schema plumbing only",
         },
         {
-            "subgoal_text": "Prioritize precise gripper pose alignment before closing or pushing.",
-            "strategy_axis": "gripper_alignment",
-            "target_object": "gripper and task object",
-            "target_region_or_point": "pre-grasp or pre-push alignment point",
-            "stop_condition": "gripper pose is aligned with the intended contact direction",
-            "confidence": 0.7,
-            "rationale": "mock contract branch",
-        },
-        {
-            "subgoal_text": "Make short-horizon contact that visibly improves progress toward the same final goal.",
-            "strategy_axis": "contact_first",
+            "subgoal_text": "Use a precise gripper pose for the same task object and same final placement relation.",
+            "strategy_axis": "gripper_pose_precision",
             "target_object": "task object",
-            "target_region_or_point": "nearest useful contact point",
-            "stop_condition": "first contact produces visible progress toward the target",
+            "target_region_or_point": "task target region",
+            "stop_condition": "original task success condition is reached",
+            "confidence": 0.7,
+            "rationale": "same-subgoal strategy branch for schema plumbing only",
+        },
+        {
+            "subgoal_text": "Make the smallest useful contact that advances the same original goal without changing the target.",
+            "strategy_axis": "short_horizon_contact",
+            "target_object": "task object",
+            "target_region_or_point": "task target region",
+            "stop_condition": "original task success condition is reached",
             "confidence": 0.65,
-            "rationale": "mock contract branch",
+            "rationale": "same-subgoal strategy branch for schema plumbing only",
         },
     ][: args.num_subgoals]
     return json.dumps({"subgoals": subgoals}, indent=2)

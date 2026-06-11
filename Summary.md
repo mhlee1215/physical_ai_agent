@@ -161,8 +161,10 @@ Known thread roles:
   Runs approved experiments only after manager handoff, fetches artifacts, and
   reports commands, artifacts, and verdicts to PM.
 - Evaluation Results Manager: `019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`.
-  Classifies paper-facing results as paper-ready, diagnostic-only, or blocked
-  and reports classifications to PM.
+  Classifies paper-facing evaluation result packages as paper-ready,
+  diagnostic-only, or blocked and reports classifications to PM. This manager
+  is not a general inbox for RunPod allocation, install, cache, volume, or
+  cleanup status.
 - Paper-writing thread: `019e9e01-32c0-7641-92b7-0f6c23800122`.
   Owns the manuscript draft and separate TODO/checklist. Reports completed
   sections and unresolved TODOs to PM.
@@ -180,8 +182,15 @@ Known thread roles:
 - RunPod Manager must stage the relevant pushed commit exactly and report the
   source path plus `.source_commit`.
 - Install/check commands should use the canonical `scripts/install/*` entrypoints.
-- Paper-facing results must be reported to both PM and Evaluation Results
-  Manager.
+- When RunPod capacity is the only blocker and the user/PM says to continue,
+  RunPod Manager remains the owner until a usable instance is secured or the
+  user/PM cancels. Retries run in repeated 10-attempt batches with 20-30 minute
+  sleep/backoff, no idle Pod while sleeping, and a PM report after each attempt
+  and batch. Capacity shortage is a polling state, not a terminal experiment
+  blocker.
+- Paper-facing evaluation result packages must be reported to PM and Evaluation
+  Results Manager by the RunPod Researcher or another result reviewer after
+  artifacts/metrics exist. Routine infra status goes to PM only.
 - Paper drafts must not contain internal management labels, blockers, TODOs, or
   status-board language. TODOs belong in a separate checklist.
 - Mock, fixture, proxy-only, debug, OSMesa fallback, or plumbing evidence must

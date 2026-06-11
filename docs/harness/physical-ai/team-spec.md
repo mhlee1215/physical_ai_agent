@@ -22,7 +22,7 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 | --- | --- | --- | --- |
 | Orchestrator | Select the next checkpoint and enforce validation | `.agents/skills/physical-ai-orchestrator/SKILL.md` | final response or `_workspace/*` |
 | Real SO-100 Agentic SmolVLA Specialist | Preserve real hardware camera routing, SmolVLA execution gates, observer evidence, and agentic-loop semantics | `.agents/skills/real-so100-agentic-smolvla/SKILL.md` | `_workspace/real_so100/*`, `docs/real_so100_*` |
-| Evaluation Results Manager | Maintain the paper-facing results ledger and classify evidence as paper-ready, diagnostic-only, or blocked | n/a | `_workspace/runpod_results/*`, paper result summaries |
+| Evaluation Results Manager | Classify paper-facing evaluation result packages as paper-ready, diagnostic-only, or blocked | n/a | result ledger summaries from researcher/reviewer packages |
 | Implementer | Add code, config, and tests for the checkpoint | n/a | repo files |
 | Verifier | Run required commands and report pass/fail/blockers | n/a | command evidence |
 
@@ -60,16 +60,41 @@ researcher run completion, artifact fetch, stop request, and no-`RUNNING`
 confirmation are all separate reportable transitions. No Pod should remain
 running while ownership is unclear.
 
-Paper-facing evaluation results have an additional route. Any RunPod,
-LIBERO/SmolVLA, Risk1/Risk2/Risk5, or real-robot result that may be used in a
-paper must be reported to the PM and to the Evaluation Results Manager thread
-(`019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`). The report must include experiment
-id, status (`PASS`, `WARN`, `BLOCKED`, or `PENDING`), commit, artifact root,
-key files, environment/pod, metrics, allowed claims, disallowed claims, and
-open TODOs. PM status boards for paper-relevant experiments must include
-`reported_to_eval_results_manager`. Paper-writing threads should not treat a
-result as paper evidence until the Evaluation Results Manager classifies it as
-paper-ready, diagnostic-only, or blocked.
+When RunPod allocation is the active blocker and the user has asked to keep
+going, the RunPod Manager remains the active owner until a usable instance is
+secured or the user/PM explicitly cancels the objective. Capacity shortage is a
+polling state, not a terminal experiment blocker. Default retry policy: run
+allocation attempts in batches of up to 10, sleep/backoff 20-30 minutes between
+attempts, and perform immediate no-`RUNNING` cleanup after each failed attempt.
+If a 10-attempt batch is exhausted with capacity-only failures, the manager must
+report the batch summary to PM and continue the next 10-attempt polling batch
+unless PM/user cancels, changes policy, credentials are missing, or a
+non-capacity blocker is reached. Each retry batch must preserve the active
+source, volume, GPU policy, and hard gates. The manager should report
+`ALLOCATION_RETRY` progress to PM after each attempt. This retry loop must not
+keep an idle Pod running while sleeping.
+
+Paper-facing evaluation results have an additional route, but the Evaluation
+Results Manager is not a general status inbox. Only the thread that actually
+ran or reviewed an evaluation result should report to the Evaluation Results
+Manager thread (`019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`). In the normal RunPod
+path this is the RunPod Researcher, after artifact fetch. The report must be a
+result package, not an operations log: experiment id, status (`PASS`, `WARN`,
+`BLOCKED`, or `PENDING`), commit, artifact root, key files, metrics, renderer
+or evaluation context when claim-relevant, allowed claims, disallowed claims,
+and open result TODOs.
+
+RunPod Manager must not report routine allocation, capacity, source staging,
+install, env-gate, cache, volume, pod lifecycle, or no-`RUNNING` status to the
+Evaluation Results Manager. Those operational reports go to PM only. PM may
+summarize an operational blocker in its own board, but should involve the
+Evaluation Results Manager only after a researcher or reviewer has an
+evaluation result package to classify. PM status boards for paper-relevant
+experiments should track whether a result package was sent to the Evaluation
+Results Manager, not whether every infra transition was sent there.
+Paper-writing threads should not treat a result as paper evidence until the
+Evaluation Results Manager classifies it as paper-ready, diagnostic-only, or
+blocked.
 
 The Evaluation Results Manager must keep candidate diversity, candidate
 selection, benchmark/environment success, oracle/proxy evidence, and
@@ -111,13 +136,18 @@ Default role routing:
   allocation, start/reuse, GitHub remote source staging, install/bootstrap,
   environment gates, env-ready handoff, stop, and no-`RUNNING` confirmation.
   Reports allocation, handoff, blocker, cleanup, and no-`RUNNING` status to PM.
+  When capacity is the only blocker and PM/user says to continue, keeps polling
+  in repeated 10-attempt batches until a usable instance is secured or PM/user
+  explicitly cancels.
 - RunPod Researcher thread `019eab62-ca0b-7770-ad27-5d95f66ebd62`: owns
   approved experiment execution only after a manager handoff, artifact fetch,
   and result reporting. Reports exact commands, artifacts, verdicts, and
   cleanup requests to PM.
 - Evaluation Results Manager thread `019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`:
-  owns paper-facing evidence classification. Reports paper-ready,
-  diagnostic-only, or blocked classifications to PM.
+  owns paper-facing evidence classification. Receives only evaluation result
+  packages from the RunPod Researcher or another result reviewer, not routine
+  PM/RunPod Manager operations reports. Reports paper-ready, diagnostic-only,
+  or blocked classifications to PM.
 - Paper-writing thread `019e9e01-32c0-7641-92b7-0f6c23800122`: owns manuscript
   prose, figures, captions, and the separate TODO/checklist. Reports draft
   section completion, unresolved TODOs, and manuscript blockers to PM.
@@ -134,7 +164,8 @@ Delegation defaults:
 - Actual experiments go to RunPod Researcher only after RunPod Manager reports
   an env-ready handoff.
 - Paper evidence goes to Evaluation Results Manager before it is forwarded to
-  paper-writing.
+  paper-writing, but only as an evaluation result package after a researcher or
+  reviewer has produced artifacts/metrics. Infrastructure status stays with PM.
 - Manuscript prose and figure integration go to the paper-writing thread.
 - Broad literature checks go to the related-works thread.
 
@@ -834,9 +865,11 @@ RunPod capacity and ownership policy:
   Once artifacts are fetched and no active process remains, the manager should
   stop the Pod and confirm no Pods remain `RUNNING`.
 - Report the GPU, hourly cost, Pod ID, volume choice, SSH endpoint, fallback
-  reason, owner thread, and stop confirmation to PM and, for paper-facing runs,
-  the Evaluation Results Manager. `docs/runpod_worklog.md` is legacy provenance
-  only and must not be the current operating board.
+  reason, owner thread, and stop confirmation to PM only. Do not route these
+  operational RunPod lifecycle reports to the Evaluation Results Manager unless
+  they are later included by a researcher/reviewer inside an evaluation result
+  package. `docs/runpod_worklog.md` is legacy provenance only and must not be
+  the current operating board.
 
 RunPod environment policy:
 
