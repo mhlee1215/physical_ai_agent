@@ -14,7 +14,7 @@
 ## How
 
 - Bootstrap checkpoint 01 local sim dependency:
-  `sh scripts/install/bootstrap_checkpoint_01.sh`
+  `sh scripts/install/local_install.sh --checkpoint 01`
 - Lightweight checkpoint 01 smoke:
   `sh scripts/checkpoint_01.sh`
 - Mac-local checkpoint 01 simulation gate:
@@ -30,7 +30,7 @@
 - Checkpoint 05-06 policy adapter and SmolVLA probe:
   `sh scripts/checkpoint_05_06.sh`
 - Bootstrap CP05-06 SmolVLA dependencies:
-  `sh scripts/install/bootstrap_checkpoint_05_06.sh`
+  `sh scripts/install/local_install.sh --checkpoint 05-06`
 - Checkpoint 14-15 3D render and real SmolVLA rollout:
   `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`
 - Live SO101 MuJoCo viewer:

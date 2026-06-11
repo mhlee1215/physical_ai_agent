@@ -451,7 +451,7 @@ PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
 
 All local and RunPod install/bootstrap implementations must live under
 `scripts/install/`. Future setup instructions should call those paths directly,
-for example `sh scripts/install/runpod_prepare_libero_smolvla_env.sh`, instead
+for example `sh scripts/install/runpod_install.sh --component libero-smolvla`, instead
 of adding new install scripts at `scripts/`. Root-level scripts with historical
 names may exist only as compatibility shims that delegate into
 `scripts/install/`; they are not the canonical implementation surface. Missing
@@ -465,10 +465,10 @@ Environment bootstrap:
 
 ```bash
 cd /workspace/physical-ai/physical_ai_agent
-sh scripts/install/runpod_prepare_libero_smolvla_env.sh
+sh scripts/install/runpod_install.sh --component libero-smolvla
 ```
 
-Use `scripts/install/runpod_prepare_libero_smolvla_env.sh` as the operational entrypoint,
+Use `scripts/install/runpod_install.sh --component libero-smolvla` as the operational entrypoint,
 not ad hoc pip commands. It selects a storage profile, runs the package
 bootstrap into a temporary venv, runs the hard CUDA/import gate, and only then
 publishes the venv as usable. A venv directory existing is not sufficient
@@ -488,18 +488,17 @@ Profiles:
   the venv under `/root/physical-ai`; artifacts must be fetched before stop.
 - `RUNPOD_ENV_PROFILE=auto`: chooses `volume` when `/workspace` exists.
 
-The lower-level package recipe,
-`scripts/install/bootstrap_runpod_libero_smolvla_env.sh`, is intended for
-`runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` or a similar
-CUDA-12.4-capable Linux image. It creates or reuses
-the venv path supplied by `PY312_VENV`, pins `torch==2.5.1+cu124`,
+The `libero-smolvla` component of `scripts/install/runpod_install.sh` is
+intended for `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` or a
+similar CUDA-12.4-capable Linux image. It creates or reuses the venv path
+supplied by `PY312_VENV`, pins `torch==2.5.1+cu124`,
 `torchvision==0.20.1+cu124`, and `torchaudio==2.5.1+cu124`, installs LeRobot
 editable with `--no-deps`, installs LIBERO/robosuite/MuJoCo runtime packages
-under constraints, writes a non-interactive LIBERO config through
-`scripts/install/runpod_prepare_libero_config.sh`, downloads LIBERO assets, and runs
-`scripts/install/runpod_check_libero_env.sh`. The key failure mode it prevents is LeRobot
-dependency resolution pulling torch 2.11/CUDA 13 wheels, which produced
-`torch.cuda.is_available() == False` on the tested RunPod driver.
+under constraints, writes a non-interactive LIBERO config, downloads LIBERO
+assets, and runs `scripts/install/runpod_check.sh --component libero-smolvla`.
+The key failure mode it prevents is LeRobot dependency resolution pulling torch
+2.11/CUDA 13 wheels, which produced `torch.cuda.is_available() == False` on the
+tested RunPod driver.
 
 Example persistent-volume setup:
 
@@ -508,7 +507,7 @@ cd /workspace/physical-ai/physical_ai_agent
 RUNPOD_ENV_PROFILE=volume \
 PROJECT_DIR="$PWD" \
 LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config \
-sh scripts/install/runpod_prepare_libero_smolvla_env.sh
+sh scripts/install/runpod_install.sh --component libero-smolvla
 ```
 
 Preferred reusable volume:
@@ -541,12 +540,12 @@ the existing env:
 cd /workspace/physical-ai/physical_ai_agent
 PY312_VENV=/workspace/physical-ai/envs/lerobot_py312 \
 LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config \
-sh scripts/install/runpod_check_libero_env.sh
+sh scripts/install/runpod_check.sh --component libero-smolvla
 LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config \
 PYTHONPATH=src /workspace/physical-ai/envs/lerobot_py312/bin/python <experiment>
 ```
 
-Only rerun `scripts/install/runpod_prepare_libero_smolvla_env.sh` when the hard gate
+Only rerun `scripts/install/runpod_install.sh --component libero-smolvla` when the hard gate
 fails or the requested source/env contract intentionally changes.
 
 If this script exits non-zero, report `env_bootstrap_blocked`, fetch the
@@ -617,7 +616,7 @@ RunPod lifecycle policy:
 Run these commands before completing checkpoint 01:
 
 ```bash
-sh scripts/install/bootstrap_checkpoint_01.sh
+sh scripts/install/local_install.sh --checkpoint 01
 sh scripts/checkpoint_01.sh
 sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco
 sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env
@@ -678,20 +677,20 @@ RunPod environment policy:
   instructions or package metadata for a known working path.
 - For LIBERO/SmolVLA, first reuse or bootstrap the LeRobot Python environment at
   `/root/physical-ai/envs/lerobot_py312` by running
-  `scripts/install/runpod_prepare_libero_smolvla_env.sh`. On network-volume Pods this
+  `scripts/install/runpod_install.sh --component libero-smolvla`. On network-volume Pods this
   path should resolve through `/root/physical-ai -> /workspace/physical-ai` so
   the actual venv is persistent at `/workspace/physical-ai/envs/lerobot_py312`.
   On ephemeral Pods it may live under `/root/physical-ai`, but the Pod must be
   treated as disposable.
 - Treat `/root/physical-ai/envs/lerobot_py312/bin/python` as the canonical
-  command path only after `scripts/install/runpod_check_libero_env.sh` passes.
+  command path only after `scripts/install/runpod_check.sh --component libero-smolvla` passes.
   Network volumes should hold only reusable files: Hugging Face cache, LIBERO
   assets, wheel/pip cache, reusable published environments, and fetched
   artifacts. Do not infer readiness from a clean checkout or venv directory
   alone.
 - Preferred LIBERO bootstrap/eval entrypoints:
-  `scripts/install/runpod_prepare_libero_smolvla_env.sh` for environment creation,
-  `scripts/install/runpod_check_libero_env.sh` for the hard gate, and
+  `scripts/install/runpod_install.sh --component libero-smolvla` for environment creation,
+  `scripts/install/runpod_check.sh --component libero-smolvla` for the hard gate, and
   `scripts/eval_smolvla_libero_linux.sh` for evaluation.
 - Next LIBERO/SmolVLA RunPod attempts must attach `physical_ai_network_volume`
   (`w59nxx3o43`) whenever possible. Keep reusable Hugging Face cache, LIBERO
@@ -733,7 +732,7 @@ RunPod environment policy:
   and run the Imagine-Then-Act CLI dry-run successfully.
 - Run the hard environment gate before any diagnostic, direct probe, LeRobot
   smoke, or benchmark:
-  `LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config PY312_VENV=/root/physical-ai/envs/lerobot_py312 sh scripts/install/runpod_check_libero_env.sh`.
+  `LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config PY312_VENV=/root/physical-ai/envs/lerobot_py312 sh scripts/install/runpod_check.sh --component libero-smolvla`.
   The gate must exit non-zero if the venv python is missing, `torch` is absent,
   CUDA is false, torch-family versions drift away from the cu124 pins, or any
   required import fails: `lerobot`, `libero`, `robosuite`, `mujoco`, `av`, or
@@ -928,17 +927,17 @@ Current lifecycle convention:
 
 ## Validation Checks
 
-- `sh scripts/install/bootstrap_checkpoint_01.sh`
+- `sh scripts/install/local_install.sh --checkpoint 01`
 - `sh scripts/checkpoint_01.sh`
 - `sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco`
 - `sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env`
 - `sh scripts/checkpoint_02_04.sh`
-- `sh scripts/install/bootstrap_checkpoint_05_06.sh`
+- `sh scripts/install/local_install.sh --checkpoint 05-06`
 - `sh scripts/checkpoint_05_06.sh`
 - `sh scripts/checkpoint_05_06.sh --require-real-smolvla --output-dir _workspace/checkpoints/checkpoint_05_06_require_real`
-- `sh scripts/install/bootstrap_checkpoint_07_13.sh`
+- `sh scripts/install/local_install.sh --checkpoint 07-13`
 - `sh scripts/checkpoint_07_13.sh`
-- `sh scripts/install/bootstrap_checkpoint_14_15.sh`
+- `sh scripts/install/local_install.sh --checkpoint 14-15`
 - `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`
 - `sh scripts/checkpoint_16.sh`
 - `sh scripts/checkpoint_17.sh`
@@ -949,7 +948,7 @@ Current lifecycle convention:
 - `sh scripts/checkpoint_21.sh`
 - `sh scripts/checkpoint_22.sh`
 - `sh scripts/checkpoint_23.sh`
-- `sh scripts/install/bootstrap_checkpoint_24.sh`
+- `sh scripts/install/local_install.sh --checkpoint 24`
 - `sh scripts/checkpoint_24.sh`
 - `sh scripts/checkpoint_24.sh --require-maniskill`
 - `sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_1ep_1step`
@@ -967,7 +966,7 @@ Current lifecycle convention:
 Run these commands before completing checkpoints 07-13:
 
 ```bash
-sh scripts/install/bootstrap_checkpoint_07_13.sh
+sh scripts/install/local_install.sh --checkpoint 07-13
 sh scripts/checkpoint_07_13.sh
 ```
 
@@ -978,7 +977,7 @@ The bootstrap command installs SO101-Nexus MuJoCo into `.venv`. The checkpoint c
 Run these commands before completing checkpoints 14-15:
 
 ```bash
-sh scripts/install/bootstrap_checkpoint_14_15.sh
+sh scripts/install/local_install.sh --checkpoint 14-15
 sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla
 ```
 
@@ -1033,7 +1032,7 @@ Checkpoint 20 must write a rule-based SO101 subgoal plan. Checkpoint 21 must exe
 Run these commands before completing checkpoint 24:
 
 ```bash
-sh scripts/install/bootstrap_checkpoint_24.sh
+sh scripts/install/local_install.sh --checkpoint 24
 sh scripts/checkpoint_24.sh --require-maniskill
 sh scripts/checkpoint_24.sh --require-maniskill --episodes 20 --steps 100 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_pickcube_baselines_20ep_100step
 sh scripts/checkpoint_24.sh --require-maniskill --episodes 10 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_dry_10ep_50step

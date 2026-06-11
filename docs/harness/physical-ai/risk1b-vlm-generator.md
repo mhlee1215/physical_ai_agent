@@ -97,7 +97,7 @@ PROJECT_DIR="$PWD" \
 WORK_ROOT=/workspace/physical-ai \
 VLM_VENV=/workspace/physical-ai/envs/risk1b_vlm_py312 \
 RISK1B_VLM_HF_HOME=/tmp/risk1b_vlm_hf_home \
-sh scripts/install/bootstrap_runpod_risk1b_vlm_env.sh
+sh scripts/install/runpod_install.sh --component risk1b-vlm
 ```
 
 The network volume preserves reusable envs, LIBERO config/assets, and fetched
