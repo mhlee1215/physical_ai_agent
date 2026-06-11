@@ -2659,7 +2659,7 @@ def build_libero_risk_probe_rollout(
                 reset_before=False,
                 initial_observation=start_observation,
                 initial_info=start_info,
-                task_description=str(base_metadata.get("task_text") or ""),
+                task_description=str(observation_preprocess_metadata.get("task_text") or ""),
             )
             restore_result = restore_sim_state(clone_handle, start_state)
             clone = apply_candidate_to_env(
@@ -2671,7 +2671,7 @@ def build_libero_risk_probe_rollout(
                 reset_before=not restore_result["restored"],
                 initial_observation=start_observation if restore_result["restored"] else None,
                 initial_info=start_info if restore_result["restored"] else None,
-                task_description=str(base_metadata.get("task_text") or ""),
+                task_description=str(observation_preprocess_metadata.get("task_text") or ""),
             )
             state_l2 = l2(committed["state_vector"], clone["state_vector"]) if committed["state_vector"] and clone["state_vector"] else 0.0
             image_mse, image_mae = image_errors_from_vectors(committed["image_vector"], clone["image_vector"])

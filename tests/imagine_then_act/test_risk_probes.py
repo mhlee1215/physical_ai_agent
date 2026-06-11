@@ -17,6 +17,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     RiskProbeConfig,
     apply_candidate_to_env,
     apply_torch_transformers_import_compatibility_patch,
+    build_libero_risk_probe_rollout,
     build_risk1a_prompt_portfolio,
     build_risk1b_subgoal_portfolio,
     capture_sim_state,
@@ -1205,6 +1206,96 @@ class RiskProbeTest(TestCase):
         self.assertEqual(near["source"], "observation_object_target_distance_proxy")
         self.assertGreater(near["score"], far["score"])
 
+    def test_actual_rollout_closure_records_task_relation_proxy_without_name_error(self) -> None:
+        previous_modules = {name: sys.modules.get(name) for name in ("lerobot", "lerobot.envs", "lerobot.utils", "lerobot.utils.constants", "torch")}
+        lerobot_module = types.ModuleType("lerobot")
+        envs_module = types.ModuleType("lerobot.envs")
+        utils_module = types.ModuleType("lerobot.utils")
+        constants_module = types.ModuleType("lerobot.utils.constants")
+        torch_module = types.ModuleType("torch")
+        envs_module.preprocess_observation = lambda observation: dict(observation)
+        constants_module.ACTION = "action"
+        torch_module.from_numpy = lambda value: value
+        sys.modules["lerobot"] = lerobot_module
+        sys.modules["lerobot.envs"] = envs_module
+        sys.modules["lerobot.utils"] = utils_module
+        sys.modules["lerobot.utils.constants"] = constants_module
+        sys.modules["torch"] = torch_module
+        try:
+            with TemporaryDirectory() as tmpdir:
+                payload_path = Path(tmpdir) / "vlm_subgoals.json"
+                payload_path.write_text(
+                    json.dumps(
+                        {
+                            "subgoals": [
+                                {
+                                    "subgoal_text": "Put the cream cheese in the bowl.",
+                                    "strategy_axis": "baseline",
+                                    "target_object": "cream_cheese_1",
+                                    "target_region_or_point": "akita_black_bowl_1",
+                                    "stop_condition": "cream_cheese_1_in_bowl",
+                                    "confidence": 1.0,
+                                },
+                                {
+                                    "subgoal_text": "Approach the cream cheese from the open side before placing it in the bowl.",
+                                    "strategy_axis": "object_centric_open_side",
+                                    "target_object": "cream_cheese_1",
+                                    "target_region_or_point": "akita_black_bowl_1",
+                                    "stop_condition": "cream_cheese_1_in_bowl",
+                                    "confidence": 0.8,
+                                },
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                config = RiskProbeConfig(
+                    preset="runpod-libero-smoke",
+                    backend="libero-contract",
+                    suite="libero_goal",
+                    task_ids=(6,),
+                    seed=1201,
+                    num_candidates=2,
+                    chunk_steps=2,
+                    action_dim=3,
+                    output_dir=tmpdir,
+                    risk1b_vlm_subgoals=True,
+                    risk1b_generator_backend="json",
+                    risk1b_subgoals_json=str(payload_path),
+                )
+                evidence_path = Path(tmpdir) / "libero_adapter_evidence.json"
+                rollout = build_libero_risk_probe_rollout(
+                    config=config,
+                    evidence_path=evidence_path,
+                    candidates=generate_mock_candidates(config),
+                    seed=config.seed,
+                    max_steps=2,
+                )
+
+                rollout(
+                    _FakeTaskRelationVectorEnv(),
+                    _FakePromptAwarePolicy(config.chunk_steps, config.action_dim),
+                    env_preprocessor=lambda observation: observation,
+                    env_postprocessor=lambda transition: transition,
+                    preprocessor=lambda observation: observation,
+                    postprocessor=lambda action: action,
+                    seeds=[config.seed],
+                )
+
+                evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                outcomes = evidence["outcomes"]
+                self.assertTrue(evidence["available"])
+                self.assertTrue(outcomes)
+                self.assertTrue(
+                    all(item["task_relation_proxy_source"] == "observation_object_target_distance_proxy" for item in outcomes.values())
+                )
+        finally:
+            for name, module in previous_modules.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
     def test_cli_risk1b_and_risk1c_mock_write_contract_artifacts(self) -> None:
         with TemporaryDirectory() as tmpdir:
             command = [
@@ -1552,6 +1643,36 @@ class _FakeActualEnv:
         return {
             "state": [self.state[:]],
             "agentview_image": [[[base, base, base], [base, base, base]]],
+        }
+
+
+class _FakeTaskRelationVectorEnv:
+    num_envs = 1
+
+    def __init__(self) -> None:
+        self.cream_x = 0.0
+        self.bowl_x = 1.0
+
+    def reset(self, seed=None):  # noqa: ARG002
+        self.cream_x = 0.0
+        self.bowl_x = 1.0
+        return self._observation(), {"reset": True}
+
+    def step(self, action):
+        row = action[0]
+        self.cream_x = min(self.bowl_x, self.cream_x + abs(float(row[0])) + 0.05)
+        return self._observation(), [0.0], [False], [False], {"is_success": [False]}
+
+    def call(self, name):
+        if name == "task_description":
+            return ["put the cream cheese in the bowl"]
+        raise AttributeError(name)
+
+    def _observation(self):
+        return {
+            "cream_cheese_1_pos": [self.cream_x, 0.0, 0.0],
+            "akita_black_bowl_1_pos": [self.bowl_x, 0.0, 0.0],
+            "agentview_image": [[[0, 0, 0], [0, 0, 0]]],
         }
 
 
