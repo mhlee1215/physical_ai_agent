@@ -28,8 +28,8 @@ fi
 
 log "python=$PYTHON_BIN"
 
-if [ ! -f "$PROJECT_DIR/scripts/install/runpod_prepare_libero_config.sh" ]; then
-  echo "missing repo LIBERO config script: $PROJECT_DIR/scripts/install/runpod_prepare_libero_config.sh" >&2
+if [ ! -f "$PROJECT_DIR/scripts/install/recipes/runpod_prepare_libero_config.sh" ]; then
+  echo "missing repo LIBERO config script: $PROJECT_DIR/scripts/install/recipes/runpod_prepare_libero_config.sh" >&2
   echo "BLOCKER_CATEGORY=libero_config_missing" >&2
   exit 1
 fi
@@ -42,7 +42,7 @@ PYTHON_BIN="$PYTHON_BIN" \
 LIBERO_CONFIG_PATH="$LIBERO_CONFIG_PATH" \
 LIBERO_CONFIG_DIR="$LIBERO_CONFIG_PATH" \
 LIBERO_ASSETS_DIR="$LIBERO_ASSETS_DIR" \
-sh "$PROJECT_DIR/scripts/install/runpod_prepare_libero_config.sh"
+sh "$PROJECT_DIR/scripts/install/recipes/runpod_prepare_libero_config.sh"
 
 REQUIRE_CUDA="$REQUIRE_CUDA" \
 EXPECTED_TORCH_PREFIX="$EXPECTED_TORCH_PREFIX" \

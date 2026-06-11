@@ -32,14 +32,14 @@ done
 
 case "$COMPONENT" in
   libero-smolvla)
-    exec sh "$SCRIPT_DIR/runpod_check_libero_env.sh"
+    exec sh "$SCRIPT_DIR/recipes/runpod_check_libero_env.sh"
     ;;
   risk1b-vlm)
-    exec sh "$SCRIPT_DIR/runpod_check_risk1b_vlm_env.sh"
+    exec sh "$SCRIPT_DIR/recipes/runpod_check_risk1b_vlm_env.sh"
     ;;
   all)
-    sh "$SCRIPT_DIR/runpod_check_libero_env.sh"
-    sh "$SCRIPT_DIR/runpod_check_risk1b_vlm_env.sh"
+    sh "$SCRIPT_DIR/recipes/runpod_check_libero_env.sh"
+    sh "$SCRIPT_DIR/recipes/runpod_check_risk1b_vlm_env.sh"
     ;;
   *)
     echo "unknown component: $COMPONENT" >&2

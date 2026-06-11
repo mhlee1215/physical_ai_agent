@@ -32,7 +32,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 check_syntax() {
-  for path in "$PROJECT_DIR"/scripts/install/*.sh; do
+  find "$PROJECT_DIR/scripts/install" -type f -name "*.sh" | sort | while IFS= read -r path; do
     sh -n "$path"
   done
 }

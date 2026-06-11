@@ -61,4 +61,4 @@ log "installing Qwen/Gemma VLM runtime without touching canonical LeRobot env"
   "$QWEN_VL_UTILS_SPEC"
 
 log "running Risk1-B VLM env gate"
-PROJECT_DIR="$PROJECT_DIR" VLM_PYTHON_BIN="$PY" sh "$PROJECT_DIR/scripts/install/runpod_check_risk1b_vlm_env.sh"
+PROJECT_DIR="$PROJECT_DIR" VLM_PYTHON_BIN="$PY" sh "$PROJECT_DIR/scripts/install/recipes/runpod_check_risk1b_vlm_env.sh"

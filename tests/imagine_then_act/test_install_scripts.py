@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class InstallScriptConsolidationTests(TestCase):
-    def test_four_canonical_install_scripts_exist(self) -> None:
+    def test_install_top_level_contains_only_four_canonical_scripts(self) -> None:
         expected = {
             "local_install.sh",
             "runpod_install.sh",
@@ -17,7 +17,7 @@ class InstallScriptConsolidationTests(TestCase):
         }
         actual = {path.name for path in (ROOT / "scripts" / "install").glob("*.sh")}
 
-        self.assertTrue(expected.issubset(actual))
+        self.assertEqual(actual, expected)
 
     def test_checkpoint_install_scripts_are_compatibility_shims(self) -> None:
         mappings = {
@@ -29,7 +29,7 @@ class InstallScriptConsolidationTests(TestCase):
         }
         for filename, flag in mappings.items():
             with self.subTest(filename=filename):
-                text = (ROOT / "scripts" / "install" / filename).read_text(encoding="utf-8")
+                text = (ROOT / "scripts" / "install" / "legacy" / filename).read_text(encoding="utf-8")
                 self.assertIn("local_install.sh", text)
                 self.assertIn(flag, text)
 

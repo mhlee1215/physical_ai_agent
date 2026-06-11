@@ -11,7 +11,7 @@ set -eu
 # - profile=ephemeral: keep env under /root/physical-ai for throwaway Pods.
 #
 # A venv is never considered usable because the directory exists. The script
-# first runs scripts/install/runpod_check_libero_env.sh. If the gate fails, it builds a
+# first runs scripts/install/runpod_check.sh --component libero-smolvla. If the gate fails, it builds a
 # fresh temporary venv, runs the bootstrap recipe against that temporary path,
 # runs the hard gate again, and only then publishes it as the final venv.
 
@@ -135,8 +135,8 @@ write_manifest() {
   "libero_config_path": "$LIBERO_CONFIG_PATH",
   "libero_assets_dir": "$LIBERO_ASSETS_DIR",
   "build_venv": "$BUILD_VENV",
-  "bootstrap_script": "$PROJECT_DIR/scripts/install/bootstrap_runpod_libero_smolvla_env.sh",
-  "gate_script": "$PROJECT_DIR/scripts/install/runpod_check_libero_env.sh",
+  "bootstrap_script": "$PROJECT_DIR/scripts/install/recipes/bootstrap_runpod_libero_smolvla_env.sh",
+  "gate_script": "$PROJECT_DIR/scripts/install/recipes/runpod_check_libero_env.sh",
   "bootstrap_log": "$BOOTSTRAP_LOG",
   "gate_log": "$GATE_LOG"
 }
@@ -192,7 +192,7 @@ run_gate() {
     LIBERO_ASSETS_DIR="$LIBERO_ASSETS_DIR" \
   PY312_VENV="$venv" \
     REQUIRE_CUDA="${REQUIRE_CUDA:-1}" \
-    sh "$PROJECT_DIR/scripts/install/runpod_check_libero_env.sh"
+    sh "$PROJECT_DIR/scripts/install/recipes/runpod_check_libero_env.sh"
 }
 
 publish_build() {
@@ -241,7 +241,7 @@ main() {
     PY312_VENV="$BUILD_VENV" \
     LIBERO_CONFIG_PATH="$LIBERO_CONFIG_PATH" \
     LIBERO_ASSETS_DIR="$LIBERO_ASSETS_DIR" \
-    sh "$PROJECT_DIR/scripts/install/bootstrap_runpod_libero_smolvla_env.sh" > "$BOOTSTRAP_LOG" 2>&1; then
+    sh "$PROJECT_DIR/scripts/install/recipes/bootstrap_runpod_libero_smolvla_env.sh" > "$BOOTSTRAP_LOG" 2>&1; then
     category="$(classify_log "$BOOTSTRAP_LOG")"
     log "bootstrap failed ($category); see $BOOTSTRAP_LOG"
     write_manifest "bootstrap_failed" "$category"

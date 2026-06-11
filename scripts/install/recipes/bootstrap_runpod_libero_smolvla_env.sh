@@ -187,8 +187,8 @@ PY
   libero_pkg="$site_packages/libero/libero"
   if [ -d "$libero_pkg" ]; then
     timed_run libero_assets_download download_libero_assets
-    if [ ! -f "$PROJECT_DIR/scripts/install/runpod_prepare_libero_config.sh" ]; then
-      echo "missing repo LIBERO config script: $PROJECT_DIR/scripts/install/runpod_prepare_libero_config.sh" >&2
+    if [ ! -f "$PROJECT_DIR/scripts/install/recipes/runpod_prepare_libero_config.sh" ]; then
+      echo "missing repo LIBERO config script: $PROJECT_DIR/scripts/install/recipes/runpod_prepare_libero_config.sh" >&2
       exit 1
     fi
     timed_run libero_config_prepare env \
@@ -198,7 +198,7 @@ PY
       LIBERO_CONFIG_PATH="$LIBERO_CONFIG_DIR" \
       LIBERO_ASSETS_DIR="$LIBERO_ASSETS_DIR" \
       LIBERO_PACKAGE_DIR="$libero_pkg" \
-      sh "$PROJECT_DIR/scripts/install/runpod_prepare_libero_config.sh"
+      sh "$PROJECT_DIR/scripts/install/recipes/runpod_prepare_libero_config.sh"
     log "LIBERO config written to $LIBERO_CONFIG_DIR/config.yaml"
     if command -v du >/dev/null 2>&1; then
       log "LIBERO assets size=$(du -sh "$LIBERO_ASSETS_DIR" 2>/dev/null | awk '{print $1}') path=$LIBERO_ASSETS_DIR"
@@ -211,8 +211,8 @@ PY
 
 print_checks() {
   log "hard import/CUDA gate"
-  if [ ! -f "$PROJECT_DIR/scripts/install/runpod_check_libero_env.sh" ]; then
-    echo "missing repo gate script: $PROJECT_DIR/scripts/install/runpod_check_libero_env.sh" >&2
+  if [ ! -f "$PROJECT_DIR/scripts/install/recipes/runpod_check_libero_env.sh" ]; then
+    echo "missing repo gate script: $PROJECT_DIR/scripts/install/recipes/runpod_check_libero_env.sh" >&2
     exit 1
   fi
   timed_run final_import_gate env \
@@ -221,7 +221,7 @@ print_checks() {
     EXPECTED_TORCH_PREFIX="$EXPECTED_TORCH_PREFIX" \
     EXPECTED_TORCHVISION_PREFIX="$EXPECTED_TORCHVISION_PREFIX" \
     EXPECTED_TORCHAUDIO_PREFIX="$EXPECTED_TORCHAUDIO_PREFIX" \
-    sh "$PROJECT_DIR/scripts/install/runpod_check_libero_env.sh"
+    sh "$PROJECT_DIR/scripts/install/recipes/runpod_check_libero_env.sh"
   log "pip check (remaining LeRobot torch>=2.7 conflicts can be recorded if imports/CUDA are OK)"
   "$PY312_VENV/bin/python" -m pip check || true
 }
