@@ -492,6 +492,35 @@ that command unchanged. It should use strategy prompts with concrete
 object-centric motion cues, not only put/place/move synonyms, and compare
 against `0.066457` while preserving the cream-cheese-to-bowl relation.
 
+Risk1-B/C selector usefulness must not be judged only on one easy task. If the
+policy-only baseline already solves a row, selecting the baseline candidate may
+be correct. Next-loop runs should use the baseline-difficulty manifest and keep
+easy controls, hard baseline-fail rows, and uncertain rows separated:
+
+```bash
+PYTHONPATH=src /workspace/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk1bc_difficulty_eval.py \
+  --manifest configs/eval/risk1bc_baseline_difficulty_manifest.json \
+  --categories baseline_fail_hard,ambiguous_uncertain \
+  --python-bin /workspace/physical-ai/envs/lerobot_py312/bin/python \
+  --vlm-python-bin /workspace/physical-ai/envs/risk1b_vlm_py312/bin/python \
+  --renderer-backend osmesa \
+  --context-backend libero-shallow \
+  --risk-backend libero-contract \
+  --output-dir _workspace/runpod_results/ita_risk_probes/risk1bc_difficulty_split \
+  --json
+```
+
+This command writes `risk1bc_difficulty_plan.json`, `results.jsonl`, and
+`summary.json` without running heavy commands unless `--execute` is added. Each
+row must record `task_id`, `seed`, baseline category/evidence provenance,
+Risk1-B diversity metrics, selected candidate id, selected-vs-policy distance,
+Risk1-C mode, score source, score spread, per-candidate details, and environment
+success separately. Rows whose baseline category is a control pool or unknown
+must not be promoted to easy/hard per-task claims until policy-only evidence for
+that exact task/seed exists. Shallow OSMesa remains diagnostic/plumbing evidence
+unless separate EGL benchmark success evidence is produced.
+
 ```bash
 PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   scripts/run_imagine_then_act_risk_probes.py \
