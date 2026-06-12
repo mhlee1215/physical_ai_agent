@@ -112,6 +112,57 @@ class Risk1BcDifficultyEvalTest(unittest.TestCase):
         self.assertEqual(record["risk1c_selected_vs_policy_l2"], 0.4)
         self.assertEqual(record["pc_success"], 100.0)
 
+    def test_collect_row_result_prefers_c1_mode_score_spread_over_top_level_selector_spread(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            probe = base / "risk1bc_probe"
+            probe.mkdir(parents=True)
+            (probe / "summary.json").write_text(
+                json.dumps({"risk1b": {"diversity_metrics": {}}, "candidate_provenance": "policy_generated"}),
+                encoding="utf-8",
+            )
+            (probe / "risk1c_sim_selector.json").write_text(
+                json.dumps(
+                    {
+                        "score_spread": 0.0,
+                        "modes": {
+                            "c1_non_oracle_proxy": {
+                                "selector_class": "C1",
+                                "selected_candidate_id": "candidate_01",
+                                "selected_vs_policy_l2": 1.2,
+                                "score_source": "observation_object_target_distance_proxy",
+                                "score_spread": 0.03252453,
+                                "score_details": {"candidate_01": {"task_relation_proxy": 0.75}},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan = {
+                "row_id": "row",
+                "suite": "libero_goal",
+                "task_id": 6,
+                "seed": 1200,
+                "baseline_category": "baseline_fail_hard",
+                "baseline_evidence": {"provenance": "test"},
+                "baseline_success": False,
+                "baseline_pc_success": 0.0,
+                "output_dir": str(base),
+                "expected_artifacts": {
+                    "risk1bc_summary": str(probe / "summary.json"),
+                    "risk1c_selector": str(probe / "risk1c_sim_selector.json"),
+                },
+            }
+
+            record = collect_row_result(plan)
+
+        self.assertEqual(record["score_spread"], 0.03252453)
+        self.assertEqual(record["selected_candidate_id"], "candidate_01")
+        self.assertEqual(record["risk1c_selected_candidate_id"], "candidate_01")
+        self.assertEqual(record["selected_vs_policy_l2"], 1.2)
+        self.assertEqual(record["per_candidate_details"], {"candidate_01": {"task_relation_proxy": 0.75}})
+
 
 if __name__ == "__main__":
     unittest.main()

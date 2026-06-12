@@ -389,7 +389,7 @@ def extract_risk1b_metrics(summary: dict[str, Any]) -> dict[str, Any]:
 def extract_risk1c_metrics(selector: dict[str, Any]) -> dict[str, Any]:
     if not selector:
         return {}
-    c1 = selector.get("c1") if isinstance(selector.get("c1"), dict) else selector
+    c1 = select_c1_selector_payload(selector)
     selected_candidate_id = nested_find(c1, {"selected_candidate_id", "selected_id"})
     selected_vs_policy_l2 = nested_find(c1, {"selected_vs_policy_l2"})
     return {
@@ -402,6 +402,18 @@ def extract_risk1c_metrics(selector: dict[str, Any]) -> dict[str, Any]:
         "score_spread": nested_find(c1, {"score_spread"}),
         "per_candidate_details": nested_find(c1, {"per_candidate_details", "candidate_scores", "score_details"}),
     }
+
+
+def select_c1_selector_payload(selector: dict[str, Any]) -> dict[str, Any]:
+    c1 = selector.get("c1")
+    if isinstance(c1, dict):
+        return c1
+    modes = selector.get("modes")
+    if isinstance(modes, dict):
+        c1_mode = modes.get("c1_non_oracle_proxy")
+        if isinstance(c1_mode, dict):
+            return c1_mode
+    return selector
 
 
 def extract_env_success(row_dir: Path) -> dict[str, Any]:
