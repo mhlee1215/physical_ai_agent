@@ -47,6 +47,35 @@ Required reports:
 - `IDLE_WITH_REASON`: use only when no work can proceed; include the dependency
   and who was notified.
 
+### Research Mode
+
+The user may explicitly enter research mode by saying `리서치 모드` or
+`리서치 모드 들어간다`. Research mode is an override for exploratory
+RunPod debugging loops, not the default lifecycle policy.
+
+When research mode is active:
+
+- RunPod Pods must not be stopped by default after handoff, result fetch, or a
+  temporary stall. Preserve the live Pod so the RunPod Researcher and Tech Lead
+  can debug 1:1 on the same environment.
+- RunPod Researcher and Tech Lead may coordinate directly about commands,
+  artifacts, stack traces, code fixes, and rerun strategy. They still report
+  meaningful state changes to PM, but PM does not need to proxy every technical
+  exchange.
+- PM remains the user-facing coordination hub: PM tracks owner, Pod id, hourly
+  cost, current phase, artifact roots, and whether research mode is still
+  active. PM sends the postdoc only decision-relevant updates.
+- RunPod Manager must not stop a research-mode Pod unless PM/user explicitly
+  requests cleanup, the user exits research mode, or there is an urgent
+  cost/security/safety risk. If cleanup is requested, Manager must still fetch
+  or preserve known artifact paths when possible before stop.
+- Evaluation Results Manager routing is unchanged. It receives only final
+  artifact-backed evaluation result packages, not research-mode chat,
+  allocation logs, setup logs, or intermediate debugging notes.
+
+When research mode is not active, the normal no-idle-billing cleanup policy
+below applies.
+
 The PM thread must keep one current checkbox board per active objective with:
 current owner, blocker, last report time, next action, artifact root, and Pod
 status when cloud work is involved. While an objective is active, the PM should
@@ -57,8 +86,8 @@ the postdoc with the verdict, artifacts, cleanup state, and next decision.
 
 RunPod-specific reporting is stricter: allocation/start, env-ready handoff,
 researcher run completion, artifact fetch, stop request, and no-`RUNNING`
-confirmation are all separate reportable transitions. No Pod should remain
-running while ownership is unclear.
+confirmation are all separate reportable transitions. Outside research mode,
+no Pod should remain running while ownership is unclear.
 
 When RunPod allocation is the active blocker and the user has asked to keep
 going, the RunPod Manager remains the active owner until a usable instance is
@@ -138,11 +167,14 @@ Default role routing:
   Reports allocation, handoff, blocker, cleanup, and no-`RUNNING` status to PM.
   When capacity is the only blocker and PM/user says to continue, keeps polling
   in repeated 10-attempt batches until a usable instance is secured or PM/user
-  explicitly cancels.
+  explicitly cancels. In research mode, preserves the live Pod unless PM/user
+  explicitly requests cleanup or an urgent cost/security/safety risk appears.
 - RunPod Researcher thread `019eab62-ca0b-7770-ad27-5d95f66ebd62`: owns
   approved experiment execution only after a manager handoff, artifact fetch,
   and result reporting. Reports exact commands, artifacts, verdicts, and
-  cleanup requests to PM.
+  cleanup requests to PM. In research mode, may coordinate directly with Tech
+  Lead on the live Pod and should report meaningful progress/checkpoints to PM
+  instead of requesting automatic cleanup after every attempt.
 - Evaluation Results Manager thread `019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`:
   owns paper-facing evidence classification. Receives only evaluation result
   packages from the RunPod Researcher or another result reviewer, not routine
@@ -163,6 +195,8 @@ Delegation defaults:
   to RunPod Manager.
 - Actual experiments go to RunPod Researcher only after RunPod Manager reports
   an env-ready handoff.
+- Research-mode debugging goes to RunPod Researcher and Tech Lead as a direct
+  pair on the live Pod, with PM monitoring progress and ownership.
 - Paper evidence goes to Evaluation Results Manager before it is forwarded to
   paper-writing, but only as an evaluation result package after a researcher or
   reviewer has produced artifacts/metrics. Infrastructure status stays with PM.
@@ -934,7 +968,10 @@ RunPod capacity and ownership policy:
   paths, artifact roots, and stop status to the manager before continuing.
 - Keep a Pod running only while the manager-owned verification batch is active.
   Once artifacts are fetched and no active process remains, the manager should
-  stop the Pod and confirm no Pods remain `RUNNING`.
+  stop the Pod and confirm no Pods remain `RUNNING`. This cleanup default is
+  suspended in research mode: preserve the live Pod for Researcher/Tech Lead
+  1:1 debugging unless PM/user requests cleanup, research mode is exited, or an
+  urgent cost/security/safety risk appears.
 - Report the GPU, hourly cost, Pod ID, volume choice, SSH endpoint, fallback
   reason, owner thread, and stop confirmation to PM only. Do not route these
   operational RunPod lifecycle reports to the Evaluation Results Manager unless

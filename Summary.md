@@ -127,8 +127,14 @@ Latest mitigation:
     `/workspace/physical-ai/pip_cache`
 - Qwen2.5-VL-7B weights fit on the 60GB volume and model-load preflight has
   passed once.
-- RunPod pods must be stopped after artifact fetch or blocker. No pod should be
-  left running while ownership is unclear.
+- Default mode: RunPod pods must be stopped after artifact fetch or blocker. No
+  pod should be left running while ownership is unclear.
+- Research mode override: when the user says `리서치 모드` or `리서치 모드 들어간다`,
+  do not stop the active RunPod Pod by default. Preserve it so RunPod
+  Researcher and Tech Lead can debug 1:1 on the same environment. PM tracks
+  progress/cost/ownership and reports decision-relevant updates to the postdoc.
+  Stop only on explicit PM/user cleanup request, research-mode exit, or urgent
+  cost/security/safety risk.
 
 ## Thread Topology
 
@@ -176,6 +182,10 @@ Known thread roles:
 
 - Do not run RunPod install/allocation from researcher threads. Researchers must
   wait for a manager handoff.
+- In research mode, after a manager handoff, RunPod Researcher and Tech Lead may
+  coordinate directly on the live Pod. PM monitors and reports meaningful
+  updates; RunPod Manager does not stop the Pod unless explicitly asked or an
+  urgent risk appears.
 - RunPod Manager must use GitHub remote source staging only unless the user
   separately approves local workspace upload.
 - RunPod Manager must use the new 60GB volume `otq1k142hf`.
