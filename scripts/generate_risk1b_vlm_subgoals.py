@@ -427,12 +427,71 @@ def extract_json_payload(raw_output: str) -> Any:
         pass
     fence_match = re.search(r"```(?:json)?\s*(.*?)```", raw_output, re.DOTALL | re.IGNORECASE)
     if fence_match:
-        return json.loads(fence_match.group(1))
+        try:
+            return json.loads(fence_match.group(1))
+        except json.JSONDecodeError:
+            pass
     start = raw_output.find("{")
     end = raw_output.rfind("}")
     if start >= 0 and end > start:
-        return json.loads(raw_output[start : end + 1])
+        try:
+            return json.loads(raw_output[start : end + 1])
+        except json.JSONDecodeError:
+            pass
+    repaired = extract_wrapped_subgoal_records(raw_output)
+    if repaired:
+        return {
+            "subgoals": repaired,
+            "_schema_repair": {
+                "strategy": "extract_wrapped_subgoal_objects",
+                "record_count": len(repaired),
+                "reason": "model output contained malformed JSON but valid nested subgoal objects",
+            },
+        }
     raise ValueError("model output did not contain a JSON object")
+
+
+def balanced_json_object_at(text: str, start: int) -> str | None:
+    if start < 0 or start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None
+
+
+def extract_wrapped_subgoal_records(raw_output: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for match in re.finditer(r'"subgoal"\s*:', raw_output):
+        object_start = raw_output.find("{", match.end())
+        object_text = balanced_json_object_at(raw_output, object_start)
+        if not object_text:
+            continue
+        try:
+            record = json.loads(object_text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and any(field in record for field in RISK1B_REQUIRED_FIELDS):
+            records.append({"subgoal": record})
+    return records
 
 
 def build_output_payload(
@@ -476,6 +535,7 @@ def build_output_payload(
             "valid": valid,
             "errors": errors,
             "required_fields": list(RISK1B_REQUIRED_FIELDS),
+            "repair": parsed.get("_schema_repair") if isinstance(parsed, dict) else None,
         },
         "subgoals": subgoals,
         "boundary": (

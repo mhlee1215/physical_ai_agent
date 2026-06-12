@@ -106,7 +106,10 @@ class Risk1BcDifficultyEvalTest(unittest.TestCase):
         self.assertEqual(record["risk1b_provenance"], "policy_generated")
         self.assertEqual(record["risk1b_diversity_metrics"]["mean_normalized_pairwise_l2"], 0.12)
         self.assertEqual(record["selected_candidate_id"], "candidate_03")
+        self.assertEqual(record["selected_vs_policy_l2"], 0.4)
+        self.assertEqual(record["risk1c_selected_candidate_id"], "candidate_03")
         self.assertEqual(record["score_source"], "observation_object_target_distance_proxy")
+        self.assertEqual(record["risk1c_selected_vs_policy_l2"], 0.4)
         self.assertEqual(record["pc_success"], 100.0)
 
 

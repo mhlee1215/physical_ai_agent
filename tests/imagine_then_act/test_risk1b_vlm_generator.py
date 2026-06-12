@@ -417,6 +417,57 @@ class Risk1BVlmGeneratorTest(TestCase):
         self.assertEqual(payload["subgoals"][0]["target_object"], "cream_cheese_1")
         self.assertEqual(payload["subgoals"][1]["strategy_axis"], "pre_contact_alignment")
 
+    def test_extract_json_payload_repairs_malformed_wrapped_subgoal_objects(self) -> None:
+        spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        raw_output = """
+assistant
+```json
+[
+  {
+    "subgoal": {
+      "subgoal_text": "open the middle drawer of the cabinet",
+      "strategy_axis": "baseline",
+      "target_object": "drawer",
+      "target_region_or_point": "middle drawer",
+      "stop_condition": "drawer fully open",
+      "confidence": 0.8
+    }
+  },
+  {
+    {
+      "subgoal": {
+        "subgoal_text": "open the middle drawer of the cabinet",
+        "strategy_axis": "pre_contact_alignment",
+        "target_object": "drawer",
+        "target_region_or_point": "middle drawer",
+        "stop_condition": "drawer fully open",
+        "confidence": 0.7
+      }
+    },
+    {
+      "subgoal": {
+        "subgoal_text": "open the middle drawer of the cabinet",
+        "strategy_axis": "collision_avoidant_approach",
+        "target_object": "drawer",
+        "target_region_or_point": "middle drawer",
+        "stop_condition": "drawer fully open",
+        "confidence": 0.6
+      }
+    }
+]
+```
+"""
+
+        parsed = module.extract_json_payload(raw_output)
+
+        self.assertEqual(parsed["_schema_repair"]["strategy"], "extract_wrapped_subgoal_objects")
+        self.assertEqual(len(parsed["subgoals"]), 3)
+        self.assertEqual(parsed["subgoals"][1]["subgoal"]["strategy_axis"], "pre_contact_alignment")
+
     def test_output_payload_rejects_inverted_task_object_relation(self) -> None:
         spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
         self.assertIsNotNone(spec)

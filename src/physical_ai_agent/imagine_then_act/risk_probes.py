@@ -3842,6 +3842,7 @@ def write_risk1b_vlm_subgoals_artifact(
             "memory_mb": validation.get("memory_mb"),
             "cost_usd": validation.get("cost_usd"),
         }
+    diversity_selected = max(candidates, key=lambda item: item.privileged_success_proxy) if candidates else None
     payload = {
         "risk": "risk_1b_external_vlm_subgoal_generator",
         "enabled": config.risk1b_vlm_subgoals,
@@ -3865,6 +3866,12 @@ def write_risk1b_vlm_subgoals_artifact(
         "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
         "candidate_count": len(candidates),
         "metrics": asdict(diversity),
+        "diversity_selected_candidate_id": diversity_selected.candidate_id if diversity_selected else None,
+        "selected_vs_policy_l2_semantics": (
+            "metrics.selected_vs_policy_l2 belongs to the Risk1-B diversity/proxy-selected candidate, "
+            "not the Risk1-C simulator selector. Use risk1c_sim_selector.json for C1 selected_candidate_id "
+            "and C1 selected_vs_policy_l2."
+        ),
         "candidate_summaries": [summarize_candidate(candidate) for candidate in candidates],
         "boundary": (
             "Risk1-B is candidate-generation evidence only. PASS requires validated external VLM subgoals plus "

@@ -379,6 +379,10 @@ def extract_risk1b_metrics(summary: dict[str, Any]) -> dict[str, Any]:
         "risk1b_verdict": nested_find(summary, {"risk1b_verdict", "risk_1_candidate_diversity"}),
         "risk1b_provenance": nested_find(summary, {"provenance", "candidate_provenance"}),
         "risk1b_diversity_metrics": diversity if isinstance(diversity, dict) else {},
+        "risk1b_selected_vs_policy_l2_semantics": (
+            "Risk1-B selected_vs_policy_l2 is a diversity/proxy-selected metric and does not reflect "
+            "Risk1-C C1 selected candidate. Inspect risk1c_selected_vs_policy_l2 for selector distance."
+        ),
     }
 
 
@@ -386,9 +390,13 @@ def extract_risk1c_metrics(selector: dict[str, Any]) -> dict[str, Any]:
     if not selector:
         return {}
     c1 = selector.get("c1") if isinstance(selector.get("c1"), dict) else selector
+    selected_candidate_id = nested_find(c1, {"selected_candidate_id", "selected_id"})
+    selected_vs_policy_l2 = nested_find(c1, {"selected_vs_policy_l2"})
     return {
-        "selected_candidate_id": nested_find(c1, {"selected_candidate_id", "selected_id"}),
-        "selected_vs_policy_l2": nested_find(c1, {"selected_vs_policy_l2"}),
+        "selected_candidate_id": selected_candidate_id,
+        "selected_vs_policy_l2": selected_vs_policy_l2,
+        "risk1c_selected_candidate_id": selected_candidate_id,
+        "risk1c_selected_vs_policy_l2": selected_vs_policy_l2,
         "risk1c_mode": nested_find(c1, {"mode"}) or "c1",
         "score_source": nested_find(c1, {"score_source"}),
         "score_spread": nested_find(c1, {"score_spread"}),
