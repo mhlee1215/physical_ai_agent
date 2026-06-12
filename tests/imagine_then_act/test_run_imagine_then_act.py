@@ -798,6 +798,68 @@ class ImagineThenActTest(TestCase):
         self.assertEqual(decision["selected_actions"][0].tolist(), [[1.0, 2.0, 3.0]])
         self.assertEqual(decision["selected_actions"][1].tolist(), [[4.0, 5.0, 6.0]])
 
+    def test_first_nonbaseline_uses_candidate_prompt_json_for_full_rollout_ablation(self) -> None:
+        module = _load_instrumented_module()
+        policy = _FixedChunkPolicy([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]])
+
+        with TemporaryDirectory() as tmpdir:
+            prompts_path = Path(tmpdir) / "candidate_prompts.json"
+            prompts_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_prompts": [
+                            {
+                                "candidate_prompt": "Put the cream cheese in the bowl using a low approach.",
+                                "strategy_axis": "low_approach",
+                                "target_object": "cream_cheese_1",
+                                "target_region_or_point": "akita_black_bowl_1",
+                                "stop_condition": "cream cheese is in the bowl",
+                            },
+                            {
+                                "candidate_prompt": "Put the cream cheese in the bowl using a side approach.",
+                                "strategy_axis": "side_approach",
+                                "target_object": "cream_cheese_1",
+                                "target_region_or_point": "akita_black_bowl_1",
+                                "stop_condition": "cream cheese is in the bowl",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            decision = module.build_ita_candidate_decision(
+                policy=policy,
+                observation={"state": _FakeTensor([[0.0]]), "task": ["put the cream cheese in the bowl"]},
+                postprocessor=lambda action: action,
+                env_postprocessor=lambda transition: transition,
+                action_key="action",
+                torch_module=_FakeTorch,
+                numpy_module=_FakeNumpy,
+                candidate_seeds=[1200, 1201],
+                num_candidates=2,
+                commit_steps=2,
+                forced_candidate_id=None,
+                candidate_prompts_json=prompts_path,
+                selector_strategy="first_nonbaseline",
+            )
+
+        self.assertEqual(policy.predict_count, 3)
+        self.assertEqual(decision["candidate_count"], 3)
+        self.assertEqual(decision["selected_candidate_id"], "candidate_01")
+        self.assertFalse(decision["baseline_candidate_selected"])
+        self.assertEqual(decision["selector_strategy"], "first_nonbaseline")
+        self.assertEqual(decision["selector_confidence"], 1.0)
+        self.assertFalse(decision["selector_fallback_used"])
+        self.assertTrue(decision["method_claim_ready"])
+        self.assertEqual(
+            decision["candidates"][1]["candidate_prompt"]["candidate_prompt"],
+            "Put the cream cheese in the bowl using a low approach.",
+        )
+        self.assertEqual(policy.observed_tasks[0], ["put the cream cheese in the bowl"])
+        self.assertEqual(policy.observed_tasks[1], ["Put the cream cheese in the bowl using a low approach."])
+        self.assertEqual(policy.observed_tasks[2], ["Put the cream cheese in the bowl using a side approach."])
+
     def test_chunk_extraction_applies_postprocessors_for_batch1_chunk2_actiondim7(self) -> None:
         module = _load_instrumented_module()
         raw_chunk = [
@@ -1012,12 +1074,15 @@ class _FixedChunkPolicy:
         self.chunk = chunk
         self.reset_count = 0
         self.predict_count = 0
+        self.observed_tasks: list[object] = []
 
     def reset(self) -> None:
         self.reset_count += 1
 
     def predict_action_chunk(self, _observation: object) -> _FakeTensor:
         self.predict_count += 1
+        if isinstance(_observation, dict):
+            self.observed_tasks.append(json.loads(json.dumps(_observation.get("task"))))
         return _FakeTensor(json.loads(json.dumps(self.chunk)))
 
 

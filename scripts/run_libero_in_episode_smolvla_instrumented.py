@@ -90,10 +90,23 @@ def main() -> None:
         help="Optional candidate id to force; use only for debug/sanity checks.",
     )
     parser.add_argument(
+        "--ita-candidate-prompts-json",
+        type=Path,
+        default=None,
+        help=(
+            "Risk1-B/C full-rollout input: JSON file containing candidate_prompts/"
+            "strategy variants. When set, non-baseline candidates are sampled with "
+            "their prompt text in observation['task']."
+        ),
+    )
+    parser.add_argument(
         "--ita-selector-strategy",
-        choices=("baseline_fallback", "debug_min_action_norm"),
+        choices=("baseline_fallback", "debug_min_action_norm", "first_nonbaseline"),
         default="baseline_fallback",
-        help="baseline_fallback preserves policy-only chunks; debug_min_action_norm is not a method selector.",
+        help=(
+            "baseline_fallback preserves policy-only chunks; first_nonbaseline is the "
+            "minimal Risk1-B/C full-rollout ablation; debug_min_action_norm is not a method selector."
+        ),
     )
     args, lerobot_args = parser.parse_known_args()
 
@@ -127,6 +140,7 @@ def main() -> None:
         ita_num_candidates=args.ita_num_candidates,
         ita_commit_steps=args.ita_commit_steps,
         ita_selected_candidate_id=args.ita_selected_candidate_id or None,
+        ita_candidate_prompts_json=args.ita_candidate_prompts_json,
         ita_selector_strategy=args.ita_selector_strategy,
     )
     sys.argv = ["lerobot-eval", *lerobot_args]
@@ -158,6 +172,7 @@ def build_instrumented_rollout(
     ita_num_candidates: int = 0,
     ita_commit_steps: int = 1,
     ita_selected_candidate_id: str | None = None,
+    ita_candidate_prompts_json: Path | None = None,
     ita_selector_strategy: str = "baseline_fallback",
 ):
     def instrumented_rollout(
@@ -276,6 +291,7 @@ def build_instrumented_rollout(
                     num_candidates=ita_num_candidates,
                     commit_steps=ita_commit_steps,
                     forced_candidate_id=ita_selected_candidate_id,
+                    candidate_prompts_json=ita_candidate_prompts_json,
                     selector_strategy=ita_selector_strategy,
                 )
                 ita_action_queue = list(decision["selected_actions"])
@@ -286,6 +302,7 @@ def build_instrumented_rollout(
                 ita_baseline_candidate_selected = bool(decision["baseline_candidate_selected"])
                 ita_selector_confidence = decision["selector_confidence"]
                 ita_selector_fallback_used = bool(decision["selector_fallback_used"])
+                ita_method_claim_ready = bool(decision["method_claim_ready"])
                 ita_candidate_generation_done = True
                 ita_step_record.update(
                     {
@@ -299,7 +316,7 @@ def build_instrumented_rollout(
                         "selector_strategy": decision["selector_strategy"],
                         "selector_confidence": decision["selector_confidence"],
                         "selector_fallback_used": decision["selector_fallback_used"],
-                        "method_claim_ready": False,
+                        "method_claim_ready": decision["method_claim_ready"],
                         "limitation": decision["limitation"],
                     }
                 )
@@ -321,6 +338,7 @@ def build_instrumented_rollout(
                         "selector_strategy": ita_selector_strategy,
                         "selector_confidence": ita_selector_confidence,
                         "selector_fallback_used": ita_selector_fallback_used,
+                        "method_claim_ready": ita_method_claim_ready,
                     }
                 )
                 if not ita_action_queue and not (
@@ -484,7 +502,6 @@ def build_instrumented_rollout(
             ret[OBS_STR] = stacked_observations
 
         rollout_success = bool(any(any(record["successes"]) for record in trace_records))
-        ita_method_claim_ready = False
         with trace_path.open("a", encoding="utf-8") as handle:
             handle.write(
                 json.dumps(
@@ -564,6 +581,58 @@ def normalize_ita_candidate_seeds(candidate_seeds: list[int] | None, num_candida
     return seeds[:num_candidates]
 
 
+def load_ita_candidate_prompt_variants(path: Path | None, *, limit: int) -> list[dict[str, Any]]:
+    if path is None:
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        records = payload.get("candidate_prompts") or payload.get("strategy_variants") or payload.get("subgoals") or []
+    else:
+        records = payload
+    if not isinstance(records, list):
+        raise ValueError("--ita-candidate-prompts-json must contain a list or candidate_prompts list")
+    variants: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        nested = record.get("subgoal")
+        if isinstance(nested, dict):
+            record = {**record, **nested}
+        prompt_text = (
+            record.get("candidate_prompt")
+            or record.get("prompt")
+            or record.get("subgoal_text")
+            or record.get("goal_text")
+        )
+        if not prompt_text:
+            continue
+        variants.append(
+            {
+                "candidate_prompt": str(prompt_text),
+                "strategy_axis": record.get("strategy_axis"),
+                "target_object": record.get("target_object"),
+                "target_region_or_point": record.get("target_region_or_point"),
+                "stop_condition": record.get("stop_condition"),
+            }
+        )
+    if limit > 0:
+        return variants[:limit]
+    return variants
+
+
+def apply_ita_candidate_prompt_to_observation(observation: Any, prompt_variant: dict[str, Any] | None) -> Any:
+    if not prompt_variant:
+        return observation
+    cloned = clone_policy_observation(observation)
+    prompt = str(prompt_variant["candidate_prompt"])
+    existing_task = cloned.get("task")
+    if isinstance(existing_task, list):
+        cloned["task"] = [prompt for _ in existing_task]
+    else:
+        cloned["task"] = [prompt]
+    return cloned
+
+
 def build_ita_candidate_decision(
     *,
     policy: Any,
@@ -577,9 +646,12 @@ def build_ita_candidate_decision(
     num_candidates: int,
     commit_steps: int,
     forced_candidate_id: str | None = None,
+    candidate_prompts_json: Path | None = None,
     selector_strategy: str = "baseline_fallback",
 ) -> dict[str, Any]:
-    seeds = normalize_ita_candidate_seeds(candidate_seeds, num_candidates)
+    prompt_variants = load_ita_candidate_prompt_variants(candidate_prompts_json, limit=num_candidates)
+    effective_num_candidates = max(num_candidates, len(prompt_variants))
+    seeds = normalize_ita_candidate_seeds(candidate_seeds, effective_num_candidates)
     if not seeds:
         seeds = [0]
     commit_steps = max(1, int(commit_steps))
@@ -604,9 +676,12 @@ def build_ita_candidate_decision(
     candidates.append(baseline_candidate)
     should_sample_nonbaseline = bool(forced_candidate_id and forced_candidate_id != "candidate_00_policy_only")
     should_sample_nonbaseline = should_sample_nonbaseline or selector_strategy == "debug_min_action_norm"
+    should_sample_nonbaseline = should_sample_nonbaseline or selector_strategy == "first_nonbaseline"
+    should_sample_nonbaseline = should_sample_nonbaseline or bool(prompt_variants)
     if should_sample_nonbaseline:
-        for index, seed in enumerate(seeds):
+        for index, seed in enumerate(seeds[:effective_num_candidates]):
             candidate_id = f"candidate_{index + 1:02d}"
+            prompt_variant = prompt_variants[index] if index < len(prompt_variants) else None
             set_ita_policy_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
             explicit_noise, explicit_noise_metadata = build_ita_policy_explicit_noise(
                 policy=policy,
@@ -616,7 +691,7 @@ def build_ita_candidate_decision(
             policy.reset()
             candidate = sample_policy_candidate_chunk(
                 policy=policy,
-                observation=observation,
+                observation=apply_ita_candidate_prompt_to_observation(observation, prompt_variant),
                 postprocessor=postprocessor,
                 env_postprocessor=env_postprocessor,
                 action_key=action_key,
@@ -629,6 +704,7 @@ def build_ita_candidate_decision(
                     "candidate_id": candidate_id,
                     "seed": seed,
                     "is_baseline": False,
+                    "candidate_prompt": prompt_variant,
                     "sampling_metadata": explicit_noise_metadata,
                 }
             )
@@ -637,7 +713,9 @@ def build_ita_candidate_decision(
     selected_actions = list(selected["actions"])
     baseline_candidate_selected = selected["candidate_id"] == "candidate_00_policy_only"
     selector_fallback_used = selector_strategy == "baseline_fallback" and not forced_candidate_id
-    selector_confidence = 1.0 if baseline_candidate_selected and selector_fallback_used else 0.0
+    selector_confidence = 1.0 if (selector_strategy == "first_nonbaseline" and not baseline_candidate_selected) else 0.0
+    if baseline_candidate_selected and selector_fallback_used:
+        selector_confidence = 1.0
     return {
         "candidate_generation_source": selected["source"],
         "candidate_count": len(candidates),
@@ -650,6 +728,7 @@ def build_ita_candidate_decision(
                 "score": candidate["score"],
                 "is_baseline": bool(candidate.get("is_baseline", False)),
                 "selection_role": candidate.get("selection_role"),
+                "candidate_prompt": candidate.get("candidate_prompt"),
                 "limitation": candidate["limitation"],
                 "sampling_metadata": candidate.get("sampling_metadata", {}),
             }
@@ -663,7 +742,13 @@ def build_ita_candidate_decision(
         "selector_strategy": selector_strategy,
         "selector_confidence": selector_confidence,
         "selector_fallback_used": selector_fallback_used,
+        "method_claim_ready": bool(
+            candidate_prompts_json
+            and selector_strategy == "first_nonbaseline"
+            and not baseline_candidate_selected
+        ),
         "limitation": selected["limitation"],
+        "candidate_prompts_json": str(candidate_prompts_json) if candidate_prompts_json else None,
     }
 
 
@@ -746,6 +831,10 @@ def choose_ita_candidate(
     if selector_strategy == "baseline_fallback":
         for candidate in candidates:
             if candidate["candidate_id"] == "candidate_00_policy_only":
+                return candidate
+    if selector_strategy == "first_nonbaseline":
+        for candidate in candidates:
+            if candidate["candidate_id"] != "candidate_00_policy_only":
                 return candidate
     return min(candidates, key=lambda candidate: (candidate["score"], candidate["candidate_id"]))
 
