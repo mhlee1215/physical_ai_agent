@@ -81,10 +81,16 @@ class Risk1BcLibero10ComparisonTableTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue((root / "risk1bc_libero10_comparison_table.json").exists())
             markdown = (root / "risk1bc_libero10_comparison_table.md").read_text(encoding="utf-8")
+            payload = json.loads((root / "risk1bc_libero10_comparison_table.json").read_text(encoding="utf-8"))
             self.assertIn("Our SmolVLA baseline", markdown)
             self.assertIn("Reference paper number", markdown)
+            self.assertIn("ActionX Table 1, SmolVLA", markdown)
+            self.assertIn("frontiersin.org", markdown)
             self.assertIn("Risk1-B/C alternative-goal experiment", markdown)
             self.assertIn("not a fair full benchmark success comparison", markdown)
+            self.assertEqual(payload["baseline_libero10_pc_success"], 75.0)
+            self.assertEqual(payload["reference_libero10_pc_success"], 77.0)
+            self.assertEqual(payload["reference_label"], "ActionX Table 1, SmolVLA")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,9 @@ from typing import Any
 
 DEFAULT_BASELINE_LONG_PC_SUCCESS = 75.0
 DEFAULT_REFERENCE_LONG_PC_SUCCESS = 77.0
+DEFAULT_BASELINE_LABEL = "Internal routed SmolVLA baseline (`docs/smolvla_libero_baseline_report.md`)"
+DEFAULT_REFERENCE_LABEL = "ActionX Table 1, SmolVLA"
+DEFAULT_REFERENCE_URL = "https://www.frontiersin.org/journals/neurorobotics/articles/10.3389/fnbot.2026.1806605/full"
 
 
 def now_iso() -> str:
@@ -100,6 +103,8 @@ def build_markdown(args: argparse.Namespace, summary: dict[str, Any]) -> str:
         f"- Generated: `{now_iso()}`",
         f"- Experiment: `{experiment_label}`",
         f"- Result root: `{args.risk1bc_root}`",
+        f"- Baseline source: {args.baseline_label}",
+        f"- Reference source: {args.reference_label} ({args.reference_url})",
         f"- Rows: `{summary['row_count']}`; suites: `{fmt(summary['suites'])}`; task_ids: `{fmt(summary['task_ids'])}`; seeds: `{fmt(summary['seeds'])}`",
         "- Boundary: Risk1-B/C metrics are shallow OSMesa first-action-chunk candidate-generation/selector diagnostics, not EGL benchmark/deployment evidence.",
         "- Boundary: smoke `pc_success` is reported separately and must not be compared as a full closed-loop benchmark unless a full-horizon success protocol is explicitly run.",
@@ -108,8 +113,8 @@ def build_markdown(args: argparse.Namespace, summary: dict[str, Any]) -> str:
         "| --- | --- | --- | --- | --- |",
         (
             "| LIBERO long-horizon benchmark success | "
-            f"{args.baseline_libero10_pc_success:.1f}% (`libero_10`, local baseline report) | "
-            f"{args.reference_libero10_pc_success:.1f}% (`libero_10`, reference/paper comparator) | "
+            f"{args.baseline_libero10_pc_success:.1f}% (`libero_10`; {args.baseline_label}) | "
+            f"{args.reference_libero10_pc_success:.1f}% (`libero_10`; {args.reference_label}) | "
             f"smoke pc_success mean {fmt(summary['smoke_pc_success_mean'])}; values {fmt(summary['smoke_pc_success_values'])} | "
             "Experiment smoke is first-chunk diagnostic, not a fair full benchmark success comparison. |"
         ),
@@ -140,6 +145,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--experiment-label", default="Risk1-B/C alternative-goal shallow OSMesa diagnostic")
     parser.add_argument("--baseline-libero10-pc-success", type=float, default=DEFAULT_BASELINE_LONG_PC_SUCCESS)
     parser.add_argument("--reference-libero10-pc-success", type=float, default=DEFAULT_REFERENCE_LONG_PC_SUCCESS)
+    parser.add_argument("--baseline-label", default=DEFAULT_BASELINE_LABEL)
+    parser.add_argument("--reference-label", default=DEFAULT_REFERENCE_LABEL)
+    parser.add_argument("--reference-url", default=DEFAULT_REFERENCE_URL)
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -158,6 +166,9 @@ def main(argv: list[str] | None = None) -> int:
         "risk1bc_root": str(root),
         "baseline_libero10_pc_success": args.baseline_libero10_pc_success,
         "reference_libero10_pc_success": args.reference_libero10_pc_success,
+        "baseline_label": args.baseline_label,
+        "reference_label": args.reference_label,
+        "reference_url": args.reference_url,
         "summary": summary,
         "claim_boundary": (
             "Risk1-B/C is first-action-chunk alternative-goal candidate-generation/selector evidence. "
