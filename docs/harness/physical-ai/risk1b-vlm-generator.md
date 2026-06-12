@@ -64,6 +64,31 @@ If context artifacts are missing or have `provenance.actual_context=false`,
 the transformers generator must stay blocked. Do not fabricate context for a
 Risk1-B PASS claim.
 
+## Task0 Repair-Only Handoff Preflight
+
+For the Risk1-B/C task0 repair-only lane, RunPod Manager should run one bounded
+handoff-preflight command instead of a loose sequence of shell steps:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+/usr/bin/python3.12 -B scripts/runpod_risk1bc_task0_repair_handoff_preflight.py \
+  --project-dir /workspace/physical-ai/physical_ai_agent \
+  --work-root /workspace/physical-ai \
+  --output-dir /workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/ita_risk_probes/risk1bc_task0_repair_handoff_preflight \
+  --suite libero_goal \
+  --task-id 0 \
+  --seed 1201 \
+  --renderer-backend osmesa \
+  --qwen-readiness-mode model-load \
+  --json
+```
+
+The wrapper writes one machine-readable final report:
+`risk1bc_task0_repair_handoff_preflight.json`. It may return
+`ENV_READY_HANDOFF_READY` or `BLOCKED`, with the blocked phase and log paths.
+It verifies readiness only and does not run Qwen generation, SmolVLA Risk1-B/C
+probes, benchmark evaluation, or any paper-facing experiment.
+
 ## RunPod Context Capture
 
 ```bash

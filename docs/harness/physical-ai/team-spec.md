@@ -497,6 +497,35 @@ policy-only baseline already solves a row, selecting the baseline candidate may
 be correct. Next-loop runs should use the baseline-difficulty manifest and keep
 easy controls, hard baseline-fail rows, and uncertain rows separated:
 
+For the task0 repair-only Risk1-B/C handoff lane, RunPod Manager must not run
+the old loose multi-step handoff. Use the bounded wrapper below as the single
+manager command. It verifies pod-local `/usr/bin/python3.12` plus OSMesa/EGL/GL,
+the canonical LIBERO/SmolVLA env, the separate Risk1-B VLM env, Qwen 7B
+readiness, and the shallow OSMesa actual-context/provenance preflight. It does
+not run Qwen generation, SmolVLA probes, or any Researcher experiment.
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+/usr/bin/python3.12 -B scripts/runpod_risk1bc_task0_repair_handoff_preflight.py \
+  --project-dir /workspace/physical-ai/physical_ai_agent \
+  --work-root /workspace/physical-ai \
+  --output-dir /workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/ita_risk_probes/risk1bc_task0_repair_handoff_preflight \
+  --suite libero_goal \
+  --task-id 0 \
+  --seed 1201 \
+  --renderer-backend osmesa \
+  --qwen-readiness-mode model-load \
+  --json
+```
+
+The wrapper writes
+`risk1bc_task0_repair_handoff_preflight.json`. Manager may hand off to
+Researcher only when `status=ENV_READY_HANDOFF_READY`. On `status=BLOCKED`,
+fetch the wrapper output directory, report the `blocked_phase`,
+`blocker_category`, and phase log paths, then stop the pod. This is infra
+orchestration only; Evaluation Results Manager routing is not applicable until
+a Researcher experiment produces actual evaluation artifacts.
+
 ```bash
 PYTHONPATH=src /workspace/physical-ai/envs/lerobot_py312/bin/python -B \
   scripts/run_imagine_then_act_risk1bc_difficulty_eval.py \
