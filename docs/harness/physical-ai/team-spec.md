@@ -519,12 +519,15 @@ cd /workspace/physical-ai/physical_ai_agent
 ```
 
 The wrapper writes
-`risk1bc_task0_repair_handoff_preflight.json`. Manager may hand off to
-Researcher only when `status=ENV_READY_HANDOFF_READY`. On `status=BLOCKED`,
-fetch the wrapper output directory, report the `blocked_phase`,
-`blocker_category`, and phase log paths, then stop the pod. This is infra
-orchestration only; Evaluation Results Manager routing is not applicable until
-a Researcher experiment produces actual evaluation artifacts.
+`risk1bc_task0_repair_handoff_preflight.json` plus `heartbeat.json` and
+`progress.jsonl`. Manager should monitor the heartbeat/report files, not
+terminal stdout only, because model-load and install phases can be quiet for
+long windows. Manager may hand off to Researcher only when
+`status=ENV_READY_HANDOFF_READY`. On `status=BLOCKED`, fetch the wrapper output
+directory, report the `blocked_phase`, `blocker_category`, and phase log paths,
+then stop the pod. This is infra orchestration only; Evaluation Results Manager
+routing is not applicable until a Researcher experiment produces actual
+evaluation artifacts.
 
 ```bash
 PYTHONPATH=src /workspace/physical-ai/envs/lerobot_py312/bin/python -B \

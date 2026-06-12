@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -89,6 +90,9 @@ class Risk1BCTask0RepairHandoffPreflightTests(TestCase):
             self.assertEqual(code, 0)
             report_path = Path(tmpdir) / "risk1bc_task0_repair_handoff_preflight.json"
             report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertTrue((Path(tmpdir) / "heartbeat.json").exists())
+            self.assertTrue((Path(tmpdir) / "progress.jsonl").exists())
+            heartbeat = json.loads((Path(tmpdir) / "heartbeat.json").read_text(encoding="utf-8"))
 
         self.assertEqual(report["operation"], "risk1bc_task0_repair_handoff_preflight")
         self.assertEqual(report["status"], "DRY_RUN")
@@ -96,6 +100,9 @@ class Risk1BCTask0RepairHandoffPreflightTests(TestCase):
         self.assertEqual(report["seed"], 1201)
         self.assertEqual(len(report["phase_results"]), 7)
         self.assertIn("does not run Qwen generation", report["claim_boundary"])
+        self.assertEqual(heartbeat["operation"], "risk1bc_task0_repair_handoff_preflight")
+        self.assertEqual(heartbeat["last_status"], "DRY_RUN")
+        self.assertIn("not terminal stdout only", heartbeat["handoff_boundary"])
 
     def test_blocked_report_stops_after_first_failed_phase(self) -> None:
         module = load_module()
@@ -116,7 +123,7 @@ class Risk1BCTask0RepairHandoffPreflightTests(TestCase):
 
             calls: list[str] = []
 
-            def fake_run_phase(phase, output_dir, dry_run=False):  # noqa: ANN001
+            def fake_run_phase(phase, output_dir, report_path, heartbeat_interval_sec=30, dry_run=False):  # noqa: ANN001
                 calls.append(phase.name)
                 return fake_results[len(calls) - 1]
 
@@ -133,3 +140,33 @@ class Risk1BCTask0RepairHandoffPreflightTests(TestCase):
         self.assertEqual(report["blocked_phase"], "canonical_env_gate")
         self.assertEqual(report["blocker_category"], "RUNPOD_TASK0_REPAIR_CANONICAL_ENV_GATE_BLOCKED")
         self.assertIn("stop the pod", report["cleanup_instruction"])
+
+    def test_timeout_phase_writes_heartbeat_and_log_paths(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            report_path = output_dir / "risk1bc_task0_repair_handoff_preflight.json"
+            phase = module.Phase(
+                name="slow_phase",
+                argv=[sys.executable, "-B", "-c", "import time; time.sleep(5)"],
+                timeout_sec=1,
+                env=os.environ.copy(),
+                blocker_category="RUNPOD_TASK0_REPAIR_SLOW_PHASE_BLOCKED",
+            )
+            result = module.run_phase(
+                phase,
+                output_dir,
+                report_path,
+                heartbeat_interval_sec=1,
+                dry_run=False,
+            )
+            heartbeat = json.loads((output_dir / "heartbeat.json").read_text(encoding="utf-8"))
+            stderr_exists = Path(result["stderr_log"]).exists()
+
+        self.assertEqual(result["status"], "TIMEOUT")
+        self.assertEqual(result["returncode"], 124)
+        self.assertTrue(result["timeout"])
+        self.assertEqual(result["blocker_category"], "RUNPOD_TASK0_REPAIR_SLOW_PHASE_BLOCKED_TIMEOUT")
+        self.assertEqual(heartbeat["last_status"], "TIMEOUT")
+        self.assertEqual(heartbeat["phase"], "slow_phase")
+        self.assertTrue(stderr_exists)

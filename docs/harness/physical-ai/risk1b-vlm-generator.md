@@ -84,9 +84,11 @@ cd /workspace/physical-ai/physical_ai_agent
 ```
 
 The wrapper writes one machine-readable final report:
-`risk1bc_task0_repair_handoff_preflight.json`. It may return
-`ENV_READY_HANDOFF_READY` or `BLOCKED`, with the blocked phase and log paths.
-It verifies readiness only and does not run Qwen generation, SmolVLA Risk1-B/C
+`risk1bc_task0_repair_handoff_preflight.json`, plus `heartbeat.json` and
+`progress.jsonl` for long quiet phases. Manager should monitor those files
+rather than terminal stdout only. The wrapper may return
+`ENV_READY_HANDOFF_READY` or `BLOCKED`, with the blocked phase and log paths. It
+verifies readiness only and does not run Qwen generation, SmolVLA Risk1-B/C
 probes, benchmark evaluation, or any paper-facing experiment.
 
 ## RunPod Context Capture

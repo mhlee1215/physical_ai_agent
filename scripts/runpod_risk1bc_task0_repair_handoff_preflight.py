@@ -166,6 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--phase-timeout-sec", type=int, default=900)
     parser.add_argument("--qwen-readiness-timeout-sec", type=int, default=2400)
     parser.add_argument("--context-timeout-sec", type=int, default=900)
+    parser.add_argument("--heartbeat-interval-sec", type=int, default=30)
     parser.add_argument(
         "--qwen-readiness-mode",
         choices=("dependency-check", "model-load"),
@@ -337,6 +338,23 @@ def parse_phase_payload(stdout: str) -> dict[str, Any] | None:
     return None
 
 
+def utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
 def cleanup_instruction(status: str) -> str:
     if status == "ENV_READY_HANDOFF_READY":
         return (
@@ -346,12 +364,88 @@ def cleanup_instruction(status: str) -> str:
     return "Fetch this preflight output directory and stop the pod; do not hand off to Researcher."
 
 
-def run_phase(phase: Phase, output_dir: Path, dry_run: bool = False) -> dict[str, Any]:
+def phase_heartbeat_payload(
+    phase: Phase,
+    output_dir: Path,
+    report_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    *,
+    status: str,
+    phase_started_at: str,
+    pid: int | None = None,
+    elapsed_sec: float = 0.0,
+    returncode: int | None = None,
+    timeout: bool = False,
+) -> dict[str, Any]:
+    return {
+        "operation": "risk1bc_task0_repair_handoff_preflight",
+        "phase": phase.name,
+        "phase_started_at": phase_started_at,
+        "last_update_at": utc_now(),
+        "pid": pid,
+        "timeout_sec": phase.timeout_sec,
+        "last_status": status,
+        "returncode": returncode,
+        "elapsed_sec": round(elapsed_sec, 3),
+        "timeout": timeout,
+        "stdout_log": str(stdout_path),
+        "stderr_log": str(stderr_path),
+        "report_path": str(report_path),
+        "output_dir": str(output_dir),
+        "cleanup_instruction": cleanup_instruction("BLOCKED"),
+        "handoff_boundary": (
+            "Manager should monitor heartbeat.json/progress.jsonl and the final report, not terminal stdout only. "
+            "This wrapper prepares handoff readiness only and does not run the Researcher experiment."
+        ),
+    }
+
+
+def write_phase_progress(
+    phase: Phase,
+    output_dir: Path,
+    report_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    *,
+    status: str,
+    phase_started_at: str,
+    pid: int | None = None,
+    elapsed_sec: float = 0.0,
+    returncode: int | None = None,
+    timeout: bool = False,
+) -> None:
+    payload = phase_heartbeat_payload(
+        phase,
+        output_dir,
+        report_path,
+        stdout_path,
+        stderr_path,
+        status=status,
+        phase_started_at=phase_started_at,
+        pid=pid,
+        elapsed_sec=elapsed_sec,
+        returncode=returncode,
+        timeout=timeout,
+    )
+    write_json_atomic(output_dir / "heartbeat.json", payload)
+    append_jsonl(output_dir / "progress.jsonl", payload)
+
+
+def run_phase(
+    phase: Phase,
+    output_dir: Path,
+    report_path: Path,
+    *,
+    heartbeat_interval_sec: int = 30,
+    dry_run: bool = False,
+) -> dict[str, Any]:
     phase_dir = output_dir / phase.name
     phase_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = phase_dir / "stdout.log"
     stderr_path = phase_dir / "stderr.log"
     started = time.time()
+    phase_started_at = utc_now()
     result: dict[str, Any] = {
         "phase": phase.name,
         "argv": phase.argv,
@@ -359,53 +453,144 @@ def run_phase(phase: Phase, output_dir: Path, dry_run: bool = False) -> dict[str
         "stdout_log": str(stdout_path),
         "stderr_log": str(stderr_path),
         "blocker_category": phase.blocker_category,
+        "heartbeat_path": str(output_dir / "heartbeat.json"),
+        "progress_path": str(output_dir / "progress.jsonl"),
+        "phase_started_at": phase_started_at,
     }
+    write_phase_progress(
+        phase,
+        output_dir,
+        report_path,
+        stdout_path,
+        stderr_path,
+        status="DRY_RUN" if dry_run else "STARTING",
+        phase_started_at=phase_started_at,
+    )
     if dry_run:
         result.update({"status": "DRY_RUN", "returncode": None, "elapsed_sec": 0.0})
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
         return result
-    try:
-        completed = subprocess.run(
+
+    timed_out = False
+    with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open("w", encoding="utf-8") as stderr_handle:
+        process = subprocess.Popen(
             phase.argv,
             cwd=Path.cwd(),
             env=phase.env,
-            capture_output=True,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
             text=True,
-            timeout=phase.timeout_sec,
         )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-        stderr = exc.stderr if isinstance(exc.stderr, str) else f"timeout after {phase.timeout_sec}s"
-        completed = subprocess.CompletedProcess(phase.argv, 124, stdout=stdout, stderr=stderr)
+        result["pid"] = process.pid
+        write_phase_progress(
+            phase,
+            output_dir,
+            report_path,
+            stdout_path,
+            stderr_path,
+            status="RUNNING",
+            phase_started_at=phase_started_at,
+            pid=process.pid,
+        )
+        deadline = started + phase.timeout_sec
+        next_heartbeat = time.time() + max(1, heartbeat_interval_sec)
+        while True:
+            returncode = process.poll()
+            now = time.time()
+            elapsed = now - started
+            if returncode is not None:
+                break
+            if now >= deadline:
+                timed_out = True
+                write_phase_progress(
+                    phase,
+                    output_dir,
+                    report_path,
+                    stdout_path,
+                    stderr_path,
+                    status="TIMEOUT",
+                    phase_started_at=phase_started_at,
+                    pid=process.pid,
+                    elapsed_sec=elapsed,
+                    returncode=124,
+                    timeout=True,
+                )
+                stderr_handle.write(f"\nTIMEOUT: phase {phase.name} exceeded {phase.timeout_sec}s\n")
+                stderr_handle.flush()
+                process.kill()
+                try:
+                    returncode = process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    returncode = 124
+                break
+            if now >= next_heartbeat:
+                write_phase_progress(
+                    phase,
+                    output_dir,
+                    report_path,
+                    stdout_path,
+                    stderr_path,
+                    status="RUNNING",
+                    phase_started_at=phase_started_at,
+                    pid=process.pid,
+                    elapsed_sec=elapsed,
+                )
+                next_heartbeat = now + max(1, heartbeat_interval_sec)
+            time.sleep(min(1.0, max(0.1, deadline - now)))
 
-    stdout_path.write_text(completed.stdout or "", encoding="utf-8")
-    stderr_path.write_text(completed.stderr or "", encoding="utf-8")
-    payload = parse_phase_payload(completed.stdout or "")
-    ok = completed.returncode == 0
+    stdout_text = stdout_path.read_text(encoding="utf-8")
+    payload = parse_phase_payload(stdout_text)
+    ok = returncode == 0 and not timed_out
+    status = "PASS" if ok else "TIMEOUT" if timed_out else "BLOCKED"
+    blocker_category = phase.blocker_category
+    if timed_out:
+        blocker_category = f"{phase.blocker_category}_TIMEOUT"
     result.update(
         {
-            "status": "PASS" if ok else "BLOCKED",
-            "returncode": completed.returncode,
+            "status": status,
+            "returncode": 124 if timed_out else returncode,
             "elapsed_sec": round(time.time() - started, 3),
             "payload": payload,
+            "timeout": timed_out,
         }
     )
     if not ok and isinstance(payload, dict) and payload.get("blocker_category"):
-        result["blocker_category"] = payload["blocker_category"]
+        blocker_category = payload["blocker_category"]
+    result["blocker_category"] = blocker_category
+    write_phase_progress(
+        phase,
+        output_dir,
+        report_path,
+        stdout_path,
+        stderr_path,
+        status=status,
+        phase_started_at=phase_started_at,
+        pid=result.get("pid"),
+        elapsed_sec=float(result["elapsed_sec"]),
+        returncode=result["returncode"],
+        timeout=timed_out,
+    )
     return result
 
 
 def run_preflight(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / "risk1bc_task0_repair_handoff_preflight.json"
     phases = build_phase_specs(args)
     phase_results: list[dict[str, Any]] = []
     final_status = "ENV_READY_HANDOFF_READY"
     blocked_phase: dict[str, Any] | None = None
 
     for phase in phases:
-        result = run_phase(phase, output_dir, dry_run=args.dry_run)
+        result = run_phase(
+            phase,
+            output_dir,
+            report_path,
+            heartbeat_interval_sec=args.heartbeat_interval_sec,
+            dry_run=args.dry_run,
+        )
         phase_results.append(result)
         if not args.dry_run and result["status"] != "PASS":
             final_status = "BLOCKED"
@@ -426,6 +611,9 @@ def run_preflight(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "renderer_backend": args.renderer_backend,
         "model_id": args.model_id,
         "qwen_readiness_mode": args.qwen_readiness_mode,
+        "heartbeat_path": str(output_dir / "heartbeat.json"),
+        "progress_path": str(output_dir / "progress.jsonl"),
+        "report_path": str(report_path),
         "phase_results": phase_results,
         "cleanup_instruction": cleanup_instruction(final_status),
         "claim_boundary": (
@@ -447,8 +635,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     code, report = run_preflight(args)
     report_path = Path(args.output_dir) / "risk1bc_task0_repair_handoff_preflight.json"
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    report["report_path"] = str(report_path)
+    write_json_atomic(report_path, report)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
