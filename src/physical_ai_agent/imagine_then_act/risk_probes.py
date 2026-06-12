@@ -3303,13 +3303,22 @@ def compute_task_relation_proxy(observation: Any, task_description: str | None) 
     task_text = " ".join(str(task_description or "").lower().split())
     articulated_relation = parse_articulated_open_relation(task_text)
     if articulated_relation is not None:
-        articulated_object, fixture = articulated_relation
+        action, articulated_object, fixture = articulated_relation
+        articulated_proxy = compute_articulated_open_proxy(
+            observation=observation,
+            action=action,
+            articulated_object=articulated_object,
+            fixture=fixture,
+        )
+        if articulated_proxy.get("available"):
+            return articulated_proxy
         return {
             "available": False,
             "score": None,
             "source": "unavailable",
             "reason": "articulated_open_relation_requires_handle_or_joint_proxy",
             "relation_type": "articulated_open",
+            "action": action,
             "articulated_object": articulated_object,
             "fixture": fixture,
             "required_proxy": "drawer_joint_progress_or_eef_to_handle_distance_proxy",
@@ -3383,19 +3392,228 @@ def compute_task_relation_proxy_with_env_fallback(
     }
 
 
-def parse_articulated_open_relation(task_description: str) -> tuple[str, str] | None:
+def compute_articulated_open_proxy(
+    *,
+    observation: Any,
+    action: str,
+    articulated_object: str,
+    fixture: str,
+) -> dict[str, Any]:
+    joint_value, joint_key = find_articulated_joint_progress(observation, articulated_object, fixture)
+    if joint_value is not None:
+        score = joint_value if action == "open" else -joint_value
+        return {
+            "available": True,
+            "score": round(float(score), 8),
+            "source": "observation_articulated_drawer_joint_progress_proxy",
+            "relation_type": "articulated_open",
+            "progress_stage": "completion_proxy",
+            "action": action,
+            "articulated_object": articulated_object,
+            "fixture": fixture,
+            "joint_progress": round(float(joint_value), 8),
+            "joint_progress_key": joint_key,
+            "evidence_used": "drawer_joint_progress",
+            "claim_boundary": (
+                "Non-oracle articulated-state proxy for candidate ranking only; "
+                "not benchmark success and not privileged oracle evidence."
+            ),
+        }
+    handle_pos, handle_key = find_articulated_handle_position(observation, articulated_object, fixture)
+    initial_handle_pos, initial_handle_key = find_initial_articulated_handle_position(observation, articulated_object, fixture)
+    if handle_pos is not None and initial_handle_pos is not None:
+        displacement = l2(handle_pos[:3], initial_handle_pos[:3])
+        score = displacement if action == "open" else -displacement
+        return {
+            "available": True,
+            "score": round(float(score), 8),
+            "source": "observation_articulated_handle_displacement_proxy",
+            "relation_type": "articulated_open",
+            "progress_stage": "completion_proxy",
+            "action": action,
+            "articulated_object": articulated_object,
+            "fixture": fixture,
+            "handle_position": [round(value, 8) for value in handle_pos[:3]],
+            "initial_handle_position": [round(value, 8) for value in initial_handle_pos[:3]],
+            "handle_position_key": handle_key,
+            "initial_handle_position_key": initial_handle_key,
+            "handle_displacement_l2": round(float(displacement), 8),
+            "evidence_used": "handle_pose_displacement",
+            "claim_boundary": (
+                "Non-oracle articulated handle displacement proxy for candidate ranking only; "
+                "not benchmark success and not privileged oracle evidence."
+            ),
+        }
+    eef_pos = find_eef_position(observation)
+    if handle_pos is not None and eef_pos is not None:
+        distance = l2(eef_pos[:3], handle_pos[:3])
+        return {
+            "available": True,
+            "score": round(1.0 / (1.0 + distance), 8),
+            "source": "observation_articulated_eef_to_handle_approach_proxy",
+            "relation_type": "articulated_open",
+            "progress_stage": "approach_only",
+            "action": action,
+            "articulated_object": articulated_object,
+            "fixture": fixture,
+            "eef_position": [round(value, 8) for value in eef_pos[:3]],
+            "handle_position": [round(value, 8) for value in handle_pos[:3]],
+            "handle_position_key": handle_key,
+            "eef_to_handle_distance_l2": round(float(distance), 8),
+            "evidence_used": "eef_to_handle_distance",
+            "claim_boundary": (
+                "Approach-only non-oracle proxy for candidate ranking; it can indicate movement toward a handle, "
+                "but does not prove drawer opening, benchmark success, or privileged oracle progress."
+            ),
+        }
+    return {
+        "available": False,
+        "score": None,
+        "source": "unavailable",
+        "reason": "articulated_open_relation_requires_handle_or_joint_proxy",
+        "relation_type": "articulated_open",
+        "action": action,
+        "articulated_object": articulated_object,
+        "fixture": fixture,
+        "joint_progress_found": False,
+        "handle_position_found": handle_pos is not None,
+        "eef_position_found": eef_pos is not None,
+        "required_proxy": "drawer_joint_progress_or_handle_pose_or_eef_to_handle_distance_proxy",
+    }
+
+
+def parse_articulated_open_relation(task_description: str) -> tuple[str, str, str] | None:
     task = " ".join(str(task_description or "").lower().split())
     match = re.search(
-        r"\b(?:open|close)\s+(?:the\s+)?(?P<object>[^.]*?(?:drawer|door))\s+(?:of|in|on)\s+(?:the\s+)?(?P<fixture>[^.]+)$",
+        r"\b(?P<action>open|close)\s+(?:the\s+)?(?P<object>[^.]*?(?:drawer|door))\s+(?:of|in|on)\s+(?:the\s+)?(?P<fixture>[^.]+)$",
         task,
     )
     if not match:
         return None
+    action = match.group("action")
     articulated_object = clean_relation_phrase(match.group("object"))
     fixture = clean_relation_phrase(match.group("fixture"))
     if not articulated_object or not fixture:
         return None
-    return articulated_object, fixture
+    return action, articulated_object, fixture
+
+
+def find_articulated_joint_progress(observation: Any, articulated_object: str, fixture: str) -> tuple[float | None, str | None]:
+    if not isinstance(observation, dict):
+        return None, None
+    object_tokens = set(tokenize_relation_phrase(articulated_object))
+    fixture_tokens = set(tokenize_relation_phrase(fixture))
+    best_key: str | None = None
+    best_score = -1
+    best_value: float | None = None
+    for key, value in observation.items():
+        key_text = str(key).lower()
+        key_tokens = set(tokenize_relation_phrase(key_text.replace("_", " ")))
+        if not key_tokens.intersection(object_tokens) and not key_tokens.intersection(fixture_tokens):
+            continue
+        if not any(token in key_text for token in ("joint", "qpos", "open_amount", "open_progress", "drawer_pos")):
+            continue
+        if "qvel" in key_text or "velocity" in key_text:
+            continue
+        values = numeric_vector(value, limit=1)
+        if not values:
+            continue
+        score = len(key_tokens.intersection(object_tokens)) * 10 + len(key_tokens.intersection(fixture_tokens))
+        if "drawer" in key_text:
+            score += 5
+        if "open" in key_text:
+            score += 3
+        if score > best_score:
+            best_key = str(key)
+            best_score = score
+            best_value = values[0]
+    return best_value, best_key
+
+
+def find_articulated_handle_position(observation: Any, articulated_object: str, fixture: str) -> tuple[list[float] | None, str | None]:
+    return find_articulated_position_key(
+        observation=observation,
+        articulated_object=articulated_object,
+        fixture=fixture,
+        required_tokens={"handle"},
+        preferred_tokens={"drawer", "door"},
+        disallowed_tokens={"initial", "start", "rest", "closed"},
+    )
+
+
+def find_initial_articulated_handle_position(observation: Any, articulated_object: str, fixture: str) -> tuple[list[float] | None, str | None]:
+    return find_articulated_position_key(
+        observation=observation,
+        articulated_object=articulated_object,
+        fixture=fixture,
+        required_tokens={"handle"},
+        preferred_tokens={"initial", "start", "rest", "closed"},
+        disallowed_tokens=set(),
+        required_any_tokens={"initial", "start", "rest", "closed"},
+    )
+
+
+def find_articulated_position_key(
+    *,
+    observation: Any,
+    articulated_object: str,
+    fixture: str,
+    required_tokens: set[str],
+    preferred_tokens: set[str],
+    disallowed_tokens: set[str],
+    required_any_tokens: set[str] | None = None,
+) -> tuple[list[float] | None, str | None]:
+    if not isinstance(observation, dict):
+        return None, None
+    object_tokens = set(tokenize_relation_phrase(articulated_object))
+    fixture_tokens = set(tokenize_relation_phrase(fixture))
+    best_key: str | None = None
+    best_score = -1
+    best_values: list[float] | None = None
+    for key, value in observation.items():
+        key_text = str(key).lower()
+        if not key_text.endswith("_pos"):
+            continue
+        key_tokens = set(tokenize_relation_phrase(key_text.replace("_pos", "").replace("_", " ")))
+        if not required_tokens.issubset(key_tokens):
+            continue
+        if required_any_tokens and not key_tokens.intersection(required_any_tokens):
+            continue
+        if key_tokens.intersection(disallowed_tokens):
+            continue
+        if not key_tokens.intersection(object_tokens) and not key_tokens.intersection(fixture_tokens):
+            continue
+        values = numeric_vector(value, limit=3)
+        if len(values) < 3:
+            continue
+        score = (
+            len(key_tokens.intersection(object_tokens)) * 10
+            + len(key_tokens.intersection(fixture_tokens)) * 4
+            + len(key_tokens.intersection(preferred_tokens)) * 6
+            - len(key_tokens)
+        )
+        if score > best_score:
+            best_key = str(key)
+            best_score = score
+            best_values = values[:3]
+    return best_values, best_key
+
+
+def find_eef_position(observation: Any) -> list[float] | None:
+    if not isinstance(observation, dict):
+        return None
+    for key in ("robot0_eef_pos", "eef_pos", "end_effector_pos", "gripper_pos"):
+        if key in observation:
+            values = numeric_vector(observation[key], limit=3)
+            if len(values) >= 3:
+                return values[:3]
+    for key, value in observation.items():
+        key_text = str(key).lower()
+        if key_text.endswith("_pos") and ("eef" in key_text or "end_effector" in key_text):
+            values = numeric_vector(value, limit=3)
+            if len(values) >= 3:
+                return values[:3]
+    return None
 
 
 def extract_raw_env_observation_with_positions(env: Any) -> tuple[Any | None, str]:
@@ -4004,6 +4222,7 @@ def build_c1_non_oracle_proxy_scores(
 ) -> tuple[dict[str, float], str, dict[str, Any]]:
     relation_scores: dict[str, float] = {}
     relation_details: dict[str, Any] = {}
+    relation_sources: set[str] = set()
     for candidate in candidates:
         outcome = outcomes.get(candidate.candidate_id, {})
         score = outcome.get("task_relation_proxy")
@@ -4013,12 +4232,19 @@ def build_c1_non_oracle_proxy_scores(
             relation_scores[candidate.candidate_id] = float(score)
         except (TypeError, ValueError):
             continue
+        source = str(outcome.get("task_relation_proxy_source") or "observation_object_target_distance_proxy")
+        relation_sources.add(source)
         relation_details[candidate.candidate_id] = {
             "task_relation_proxy": score,
-            "task_relation_proxy_source": outcome.get("task_relation_proxy_source"),
+            "task_relation_proxy_source": source,
+            "task_relation_proxy_details": outcome.get("task_relation_proxy_details"),
         }
     if relation_scores:
-        return relation_scores, "observation_object_target_distance_proxy", relation_details
+        if len(relation_sources) == 1:
+            source = next(iter(relation_sources))
+        else:
+            source = "observation_relation_proxy_mixed"
+        return relation_scores, source, relation_details
     unavailable_details: dict[str, Any] = {}
     for candidate in candidates:
         outcome = outcomes.get(candidate.candidate_id, {})
