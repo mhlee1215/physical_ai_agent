@@ -1378,6 +1378,7 @@ class RiskProbeTest(TestCase):
                 self.assertTrue(
                     all(item["task_relation_proxy_source"] == "observation_object_target_distance_proxy" for item in outcomes.values())
                 )
+                self.assertTrue(all(isinstance(item.get("task_relation_proxy_details"), dict) for item in outcomes.values()))
         finally:
             for name, module in previous_modules.items():
                 if module is None:

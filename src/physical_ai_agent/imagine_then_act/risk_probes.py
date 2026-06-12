@@ -2437,6 +2437,7 @@ def run_direct_env_snapshot_replay(
             "success_proxy": record["committed"]["success_proxy"],
             "task_relation_proxy": record["committed"].get("task_relation_proxy"),
             "task_relation_proxy_source": record["committed"].get("task_relation_proxy_source"),
+            "task_relation_proxy_details": record["committed"].get("task_relation_proxy_details"),
             "state": record["committed"]["state_vector"][:3],
             "image": vector_to_image_matrix(record["committed"]["image_vector"]),
         }
@@ -2722,6 +2723,7 @@ def build_libero_risk_probe_rollout(
                 "success_proxy": record["committed"]["success_proxy"],
                 "task_relation_proxy": record["committed"].get("task_relation_proxy"),
                 "task_relation_proxy_source": record["committed"].get("task_relation_proxy_source"),
+                "task_relation_proxy_details": record["committed"].get("task_relation_proxy_details"),
                 "state": record["committed"]["state_vector"][:3],
                 "image": vector_to_image_matrix(record["committed"]["image_vector"]),
             }
