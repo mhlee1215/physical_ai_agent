@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from physical_ai_agent.imagine_then_act.risk_probes import (
+    RISK1B_CANDIDATE_PROMPT_SEMANTICS,
     RISK1B_CANDIDATE_MODELS,
+    RISK1B_LEGACY_SCHEMA_NOTE,
     RISK1B_REQUIRED_FIELDS,
     validate_risk1b_task_relation,
     validate_risk1b_subgoal_records,
@@ -22,6 +24,7 @@ PROMPT_TEMPLATE = """You are generating a strategy portfolio for a frozen SmolVL
 
 Return only valid JSON with this schema:
 {{
+  "candidate_prompt_semantics": "same_immediate_goal_strategy_variants_first_action_chunk",
   "subgoals": [
     {{
       "subgoal_text": "...",
@@ -36,6 +39,9 @@ Return only valid JSON with this schema:
 }}
 
 Rules:
+- The key "subgoals" is a legacy compatibility key. These records are
+  alternative goal-conditioned candidate prompts / strategy variants for the
+  same immediate objective, not temporal subgoal-completion plan steps.
 - Produce exactly {num_subgoals} alternative prompt candidates.
 - All candidates must describe the SAME immediate next subgoal, not sequential
   steps in a plan.
@@ -88,8 +94,10 @@ Task-grounding rules:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate Risk1-B external VLM subgoal JSON. The mock/fixture backends are "
-            "contract-only and cannot count as Risk1-B PASS evidence."
+            "Generate Risk1-B external VLM alternative goal / strategy-variant JSON. "
+            "The legacy filename/key still says subgoals for compatibility; these are "
+            "not temporal subgoal-completion plans. Mock/fixture backends are contract-only "
+            "and cannot count as Risk1-B PASS evidence."
         )
     )
     parser.add_argument("--backend", choices=("mock", "fixture", "transformers"), default="mock")
@@ -97,7 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--suite", default="libero_goal")
     parser.add_argument("--task-id", type=int, default=6)
     parser.add_argument("--seed", type=int, default=1201)
-    parser.add_argument("--num-subgoals", type=int, default=5)
+    parser.add_argument(
+        "--num-subgoals",
+        type=int,
+        default=5,
+        help="Number of strategy variants / candidate prompts to generate. Name is legacy-compatible.",
+    )
     parser.add_argument("--task-description", default="Complete the LIBERO task from the current observation.")
     parser.add_argument("--context-image", default=None, help="Optional start observation/contact sheet image for VLM input.")
     parser.add_argument("--context-json", default=None, help="Optional JSON context summary to include in the prompt.")
@@ -512,7 +525,14 @@ def build_output_payload(
     memory_mb: float | None,
     raw_output_path: Path,
 ) -> dict[str, Any]:
-    records = parsed.get("subgoals", parsed) if isinstance(parsed, dict) else parsed
+    records = (
+        parsed.get("candidate_prompts")
+        or parsed.get("strategy_variants")
+        or parsed.get("subgoals")
+        or parsed
+        if isinstance(parsed, dict)
+        else parsed
+    )
     subgoals, errors = validate_risk1b_subgoal_records(records, limit=args.num_subgoals)
     task_description, task_goal_source = effective_task_description(args, context_summary)
     errors = [*errors, *validate_risk1b_task_relation(subgoals, task_description)]
@@ -522,6 +542,8 @@ def build_output_payload(
         "model": args.model_id,
         "generator_backend": args.backend,
         "provenance": provenance,
+        "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+        "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
         "source_context": {
             "suite": args.suite,
             "task_id": args.task_id,
@@ -545,9 +567,13 @@ def build_output_payload(
             "repair": parsed.get("_schema_repair") if isinstance(parsed, dict) else None,
         },
         "subgoals": subgoals,
+        "strategy_variants": subgoals,
+        "candidate_prompts": subgoals,
         "boundary": (
             "mock/fixture generation is schema plumbing only and cannot count as Risk1-B PASS; "
-            "PASS requires external VLM provenance plus actual SmolVLA policy-generated chunks."
+            "PASS requires external VLM provenance plus actual SmolVLA policy-generated first action chunks. "
+            "This is alternative-goal/strategy-variant candidate generation, not temporal subgoal completion "
+            "or full-task benchmark success."
         ),
     }
 

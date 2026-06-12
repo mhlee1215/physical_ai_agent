@@ -32,9 +32,11 @@ Each generated strategy entry must include:
 - optional `rationale`
 
 The generator writes `risk1b_subgoals_<model>_<suite>_task<id>_seed<seed>.json`
-plus a sibling `.raw.txt` file with the raw model output. The filename keeps
-`subgoals` for backward compatibility, but the intended semantics are
-same-subgoal strategy alternatives.
+plus a sibling `.raw.txt` file with the raw model output. The filename and
+legacy JSON key keep `subgoals` for backward compatibility, but the intended
+semantics are alternative goal-conditioned candidate prompts / strategy
+variants for the same immediate objective, not temporal subgoal-completion
+plan steps.
 
 ## Local Contract Smoke
 
@@ -57,8 +59,9 @@ cannot drive a Risk1-B PASS claim.
 Risk1-B actual validation must run in this order:
 
 1. Capture actual LIBERO/LeRobot context artifacts.
-2. Generate external VLM subgoal JSON from those artifacts.
-3. Run the frozen SmolVLA Risk1-B probe with `--risk1b-subgoals-json`.
+2. Generate external VLM strategy-variant / candidate-prompt JSON from those artifacts.
+3. Run the frozen SmolVLA Risk1-B probe with `--risk1b-candidate-prompts-json`
+   or the backward-compatible `--risk1b-subgoals-json` alias.
 
 If context artifacts are missing or have `provenance.actual_context=false`,
 the transformers generator must stay blocked. Do not fabricate context for a

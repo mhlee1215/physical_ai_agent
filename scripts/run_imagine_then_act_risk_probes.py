@@ -99,20 +99,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--risk1b-vlm-subgoals",
+        dest="risk1b_vlm_subgoals",
         action="store_true",
-        help="Enable Risk1-B external VLM subgoal/prompt candidate-generation instrumentation.",
+        help=(
+            "Backward-compatible alias for --risk1b-vlm-strategy-variants. Enables Risk1-B external "
+            "VLM candidate-prompt generation; records are not temporal subgoal plans."
+        ),
+    )
+    parser.add_argument(
+        "--risk1b-vlm-strategy-variants",
+        dest="risk1b_vlm_subgoals",
+        action="store_true",
+        help="Enable Risk1-B external VLM strategy-variant / candidate-prompt instrumentation.",
     )
     parser.add_argument(
         "--risk1b-generator-backend",
         choices=("contract", "json"),
         default="contract",
-        help="Risk1-B subgoal source. contract is local schema plumbing only; json expects external VLM output.",
+        help=(
+            "Risk1-B candidate-prompt source. contract is local schema plumbing only; "
+            "json expects external VLM output."
+        ),
     )
     parser.add_argument("--risk1b-model", default="Qwen/Qwen2.5-VL-7B-Instruct")
     parser.add_argument(
         "--risk1b-subgoals-json",
+        dest="risk1b_subgoals_json",
         default=None,
-        help="Path to validated external VLM subgoal JSON for Risk1-B when --risk1b-generator-backend=json.",
+        help=(
+            "Backward-compatible path to validated external VLM candidate-prompt JSON for Risk1-B "
+            "when --risk1b-generator-backend=json."
+        ),
+    )
+    parser.add_argument(
+        "--risk1b-candidate-prompts-json",
+        dest="risk1b_subgoals_json",
+        default=None,
+        help="Path to validated external VLM candidate-prompt JSON for Risk1-B.",
+    )
+    parser.add_argument(
+        "--risk1b-strategy-variants-json",
+        dest="risk1b_subgoals_json",
+        default=None,
+        help="Alias for --risk1b-candidate-prompts-json.",
     )
     parser.add_argument(
         "--risk1c-sim-selector",

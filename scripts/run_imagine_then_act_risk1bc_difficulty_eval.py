@@ -106,8 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     parser.add_argument(
         "--categories",
-        default="baseline_fail_hard,ambiguous_uncertain",
-        help="Comma-separated baseline categories to include.",
+        default="baseline_fail_hard",
+        help=(
+            "Comma-separated baseline categories to include. Default is all baseline_fail_hard rows; "
+            "ambiguous/control rows must be requested explicitly."
+        ),
     )
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--python-bin", default=sys.executable)
@@ -271,12 +274,12 @@ def build_probe_argv(config: DifficultyEvalConfig, row: dict[str, Any], row_dir:
         str(config.policy_n_action_steps),
         "--renderer-backend",
         config.renderer_backend,
-        "--risk1b-vlm-subgoals",
+        "--risk1b-vlm-strategy-variants",
         "--risk1b-generator-backend",
         "json",
         "--risk1b-model",
         config.model_id,
-        "--risk1b-subgoals-json",
+        "--risk1b-candidate-prompts-json",
         str(subgoals_path(row_dir, config.model_id, str(row["suite"]), task_id, seed)),
         "--risk1c-sim-selector",
         "--risk1c-selector-modes",

@@ -41,6 +41,14 @@ RISK1B_REQUIRED_FIELDS = (
     "stop_condition",
     "confidence",
 )
+RISK1B_CANDIDATE_PROMPT_SEMANTICS = (
+    "same_immediate_goal_strategy_variants_first_action_chunk"
+)
+RISK1B_LEGACY_SCHEMA_NOTE = (
+    "The legacy JSON key `subgoals` is preserved for compatibility, but Risk1-B "
+    "records are alternative goal-conditioned candidate prompts / strategy variants "
+    "for the same immediate objective, not temporal subgoal-completion plan steps."
+)
 RISK1B_CANDIDATE_MODELS = (
     "Qwen/Qwen2.5-VL-7B-Instruct",
     "Qwen/Qwen2.5-VL-3B-Instruct",
@@ -686,8 +694,8 @@ def gate_risk1b_diversity_if_needed(metrics: DiversityMetrics, evidence: dict[st
                 **asdict(metrics),
                 "verdict": BLOCKED,
                 "rationale": (
-                    "Risk1-B did not use validated external VLM subgoal output plus actual policy-generated "
-                    "chunks; contract/json-invalid/fallback evidence cannot pass."
+                    "Risk1-B did not use validated external VLM alternative goal-conditioned prompt output "
+                    "plus actual policy-generated chunks; contract/json-invalid/fallback evidence cannot pass."
                 ),
                 "provenance": provenance,
             }
@@ -702,9 +710,9 @@ def gate_risk1b_diversity_if_needed(metrics: DiversityMetrics, evidence: dict[st
             **{
                 **asdict(metrics),
                 "rationale": (
-                    "Risk1-B external VLM subgoals produced actual policy-generated chunks with diversity "
-                    "comparable to or better than the accepted Risk1-A template portfolio. This is candidate-generation "
-                    "evidence only, not selector or benchmark success."
+                    "Risk1-B external VLM strategy variants produced actual policy-generated first action chunks "
+                    "with diversity comparable to or better than the accepted Risk1-A template portfolio. This is "
+                    "candidate-generation evidence only, not temporal subgoal completion, selector, or benchmark success."
                 ),
                 "provenance": "policy_generated",
             }
@@ -714,8 +722,8 @@ def gate_risk1b_diversity_if_needed(metrics: DiversityMetrics, evidence: dict[st
             **asdict(metrics),
             "verdict": WARN,
             "rationale": (
-                "Risk1-B external VLM subgoals produced actual policy-generated chunks, but diversity did not "
-                "match the accepted Risk1-A template portfolio reference. Keep Risk1-B at WARN."
+                "Risk1-B external VLM strategy variants produced actual policy-generated first action chunks, "
+                "but diversity did not match the accepted Risk1-A template portfolio reference. Keep Risk1-B at WARN."
             ),
             "provenance": "policy_generated",
         }
@@ -1448,7 +1456,8 @@ def sample_policy_vlm_subgoal_candidates(
     )
     if not validation["valid"]:
         metadata = {
-            "source": "risk1b_vlm_subgoals",
+            "source": "risk1b_vlm_strategy_variants",
+            "legacy_source": "risk1b_vlm_subgoals",
             "requested_candidates": config.num_candidates,
             "candidate_count": 0,
             "errors": validation["errors"],
@@ -1456,16 +1465,20 @@ def sample_policy_vlm_subgoal_candidates(
             "risk1b_vlm_subgoals": {
                 "enabled": True,
                 "active": False,
+                "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+                "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
                 "model": config.risk1b_model,
                 "generator_backend": config.risk1b_generator_backend,
                 "base_prompt": base_prompt,
                 "subgoals": subgoals,
+                "strategy_variants": subgoals,
+                "candidate_prompts": subgoals,
                 "validation": validation,
                 "provenance": "invalid_vlm_output",
                 "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
                 "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
             },
-            "limitation": "Risk1-B subgoal JSON failed schema validation; no policy chunks sampled.",
+            "limitation": "Risk1-B candidate-prompt JSON failed schema validation; no policy chunks sampled.",
         }
         return [], metadata
 
@@ -1511,13 +1524,17 @@ def sample_policy_vlm_subgoal_candidates(
                 privileged_success_proxy=simulate_mock_env(action_chunk)["success_proxy"],
                 is_policy_only=index == 0,
                 seed=seed,
-                selection_role="baseline_original_prompt" if index == 0 else "risk1b_vlm_subgoal_prompt",
+                selection_role="baseline_original_prompt" if index == 0 else "risk1b_vlm_strategy_variant_prompt",
                 sampling_metadata={
-                    "candidate_generation": "risk1b_vlm_subgoals",
+                    "candidate_generation": "risk1b_vlm_strategy_variants",
+                    "legacy_candidate_generation": "risk1b_vlm_subgoals",
+                    "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
                     "seed": seed,
                     "model": config.risk1b_model,
                     "generator_backend": config.risk1b_generator_backend,
                     "subgoal": subgoal,
+                    "strategy_variant": subgoal,
+                    "candidate_prompt": subgoal,
                     "strategy_axis": subgoal["strategy_axis"],
                     "prompt_text": prompt_observation.get("task", [""])[0] if isinstance(prompt_observation, dict) else "",
                     "prompt_index": index,
@@ -1531,7 +1548,7 @@ def sample_policy_vlm_subgoal_candidates(
             candidates.append(candidate)
             records.append(summarize_candidate(candidate))
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{candidate_id} risk1b subgoal candidate failed: {type(exc).__name__}: {str(exc)[:300]}")
+            errors.append(f"{candidate_id} risk1b strategy-variant candidate failed: {type(exc).__name__}: {str(exc)[:300]}")
     generator_provenance = validation["provenance"]
     policy_provenance = (
         "external_vlm_json_policy_generated"
@@ -1539,21 +1556,28 @@ def sample_policy_vlm_subgoal_candidates(
         else f"{generator_provenance}_policy_generated"
     )
     metadata = {
-        "source": "risk1b_vlm_subgoals",
+        "source": "risk1b_vlm_strategy_variants",
+        "legacy_source": "risk1b_vlm_subgoals",
         "requested_candidates": config.num_candidates,
         "candidate_count": len(candidates),
         "candidate_seeds": [config.seed + index for index in range(max(len(subgoals) - 1, 0))],
-        "candidate_sampling_api": "vlm_subgoal_prompt_portfolio_noise_free",
+        "candidate_sampling_api": "vlm_strategy_variant_prompt_portfolio_noise_free",
+        "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+        "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
         "errors": errors,
         "candidates": records,
         "risk1b_vlm_subgoals": {
             "enabled": True,
             "active": True,
+            "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+            "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
             "model": config.risk1b_model,
             "candidate_models": list(RISK1B_CANDIDATE_MODELS),
             "generator_backend": config.risk1b_generator_backend,
             "base_prompt": base_prompt,
             "subgoals": subgoals,
+            "strategy_variants": subgoals,
+            "candidate_prompts": subgoals,
             "validation": validation,
             "provenance": policy_provenance if candidates else "unavailable",
             "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
@@ -1634,18 +1658,30 @@ def build_risk1b_subgoal_portfolio(
         if not subgoals_json:
             return [], {
                 "valid": False,
-                "errors": ["--risk1b-subgoals-json is required when --risk1b-generator-backend=json"],
+                "errors": [
+                    "--risk1b-subgoals-json or --risk1b-candidate-prompts-json is required "
+                    "when --risk1b-generator-backend=json"
+                ],
                 "provenance": "missing_external_vlm_json",
+                "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
             }
         try:
             payload = json.loads(Path(subgoals_json).read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001
             return [], {
                 "valid": False,
-                "errors": [f"could not read VLM subgoal JSON: {type(exc).__name__}: {str(exc)[:200]}"],
+                "errors": [f"could not read VLM candidate-prompt JSON: {type(exc).__name__}: {str(exc)[:200]}"],
                 "provenance": "invalid_external_vlm_json",
+                "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
             }
-        records = payload.get("subgoals", payload) if isinstance(payload, dict) else payload
+        records = (
+            payload.get("candidate_prompts")
+            or payload.get("strategy_variants")
+            or payload.get("subgoals")
+            or payload
+            if isinstance(payload, dict)
+            else payload
+        )
         metadata = payload if isinstance(payload, dict) else {}
         normalized, errors = validate_risk1b_subgoal_records(records, limit=num_subgoals)
         normalized, baseline_repair = normalize_risk1b_baseline_subgoal(
@@ -1672,6 +1708,10 @@ def build_risk1b_subgoal_portfolio(
             "memory_mb": metadata.get("memory_mb"),
             "cost_usd": metadata.get("cost_usd"),
             "baseline_repair": baseline_repair,
+            "candidate_prompt_semantics": metadata.get(
+                "candidate_prompt_semantics", RISK1B_CANDIDATE_PROMPT_SEMANTICS
+            ),
+            "legacy_schema_note": metadata.get("legacy_schema_note", RISK1B_LEGACY_SCHEMA_NOTE),
         }
     if generator_backend != "contract":
         return [], {
@@ -1707,6 +1747,8 @@ def build_risk1b_subgoal_portfolio(
         "provenance": "contract_subgoal_template",
         "schema": list(RISK1B_REQUIRED_FIELDS),
         "model": model_name,
+        "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+        "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
         "latency_ms": None,
         "memory_mb": None,
         "cost_usd": None,
@@ -1745,22 +1787,25 @@ def normalize_risk1b_baseline_subgoal(
 def validate_risk1b_subgoal_records(records: Any, *, limit: int) -> tuple[list[dict[str, Any]], list[str]]:
     errors: list[str] = []
     if not isinstance(records, list):
-        return [], ["Risk1-B VLM output must be a list or a JSON object with a subgoals list"]
+        return [], [
+            "Risk1-B VLM output must be a list or a JSON object with candidate_prompts, "
+            "strategy_variants, or legacy subgoals list"
+        ]
     normalized: list[dict[str, Any]] = []
     for index, record in enumerate(records[:limit]):
         if not isinstance(record, dict):
-            errors.append(f"subgoal[{index}] must be an object")
+            errors.append(f"candidate_prompt[{index}] must be an object")
             continue
         if "subgoal" in record and isinstance(record.get("subgoal"), dict):
             record = record["subgoal"]
         missing = [field_name for field_name in RISK1B_REQUIRED_FIELDS if field_name not in record]
         if missing:
-            errors.append(f"subgoal[{index}] missing required fields: {', '.join(missing)}")
+            errors.append(f"candidate_prompt[{index}] missing required fields: {', '.join(missing)}")
             continue
         try:
             confidence = float(record["confidence"])
         except (TypeError, ValueError):
-            errors.append(f"subgoal[{index}] confidence must be numeric")
+            errors.append(f"candidate_prompt[{index}] confidence must be numeric")
             continue
         confidence = max(0.0, min(1.0, confidence))
         normalized.append(
@@ -1775,7 +1820,7 @@ def validate_risk1b_subgoal_records(records: Any, *, limit: int) -> tuple[list[d
             }
         )
     if len(normalized) < 2:
-        errors.append("Risk1-B requires at least two valid subgoals including baseline")
+        errors.append("Risk1-B requires at least two valid candidate prompts including baseline")
     return normalized, errors
 
 
@@ -1797,18 +1842,19 @@ def validate_risk1b_task_relation(records: list[dict[str, Any]], task_descriptio
         target_region_text = str(record.get("target_region_or_point", "")).lower()
         stop_condition = str(record.get("stop_condition", "")).lower()
         if not all(token in combined for token in manipulated_object.split()):
-            errors.append(f"subgoal[{index}] must preserve manipulated object: {manipulated_object}")
+            errors.append(f"candidate_prompt[{index}] must preserve manipulated object: {manipulated_object}")
         if not (
             all(token in target_region_text for token in target_region.split())
             or all(token in stop_condition for token in target_region.split())
             or all(token in combined for token in target_region.split())
         ):
-            errors.append(f"subgoal[{index}] must preserve target region/relation: {target_region}")
+            errors.append(f"candidate_prompt[{index}] must preserve target region/relation: {target_region}")
         if all(token in target_object_text for token in target_region.split()) and not all(
             token in target_object_text for token in manipulated_object.split()
         ):
             errors.append(
-                f"subgoal[{index}] targets destination as manipulated object; expected {manipulated_object} into {target_region}"
+                f"candidate_prompt[{index}] targets destination as manipulated object; "
+                f"expected {manipulated_object} into {target_region}"
             )
     return errors
 
@@ -4144,11 +4190,15 @@ def write_risk1b_vlm_subgoals_artifact(
         portfolio = {
             "enabled": config.risk1b_vlm_subgoals,
             "active": False,
+            "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+            "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
             "model": config.risk1b_model,
             "candidate_models": list(RISK1B_CANDIDATE_MODELS),
             "generator_backend": config.risk1b_generator_backend,
             "base_prompt": "mock/local contract prompt",
             "subgoals": subgoals,
+            "strategy_variants": subgoals,
+            "candidate_prompts": subgoals,
             "validation": validation,
             "provenance": "mock_contract" if config.backend == "mock" else validation.get("provenance", "unavailable"),
             "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
@@ -4158,16 +4208,28 @@ def write_risk1b_vlm_subgoals_artifact(
             "cost_usd": validation.get("cost_usd"),
         }
     diversity_selected = max(candidates, key=lambda item: item.privileged_success_proxy) if candidates else None
+    strategy_variants = (
+        portfolio.get("strategy_variants")
+        or portfolio.get("candidate_prompts")
+        or portfolio.get("subgoals", [])
+    )
     payload = {
-        "risk": "risk_1b_external_vlm_subgoal_generator",
+        "risk": "risk_1b_external_vlm_strategy_variant_generator",
+        "legacy_risk": "risk_1b_external_vlm_subgoal_generator",
         "enabled": config.risk1b_vlm_subgoals,
         "active": bool(portfolio.get("active")),
+        "candidate_prompt_semantics": portfolio.get(
+            "candidate_prompt_semantics", RISK1B_CANDIDATE_PROMPT_SEMANTICS
+        ),
+        "legacy_schema_note": portfolio.get("legacy_schema_note", RISK1B_LEGACY_SCHEMA_NOTE),
         "model": portfolio.get("model", config.risk1b_model),
         "candidate_models": portfolio.get("candidate_models", list(RISK1B_CANDIDATE_MODELS)),
         "generator_backend": portfolio.get("generator_backend", config.risk1b_generator_backend),
         "provenance": portfolio.get("provenance", "unavailable"),
         "validation": portfolio.get("validation", {}),
         "subgoals": portfolio.get("subgoals", []),
+        "strategy_variants": strategy_variants,
+        "candidate_prompts": strategy_variants,
         "latency_ms": portfolio.get("latency_ms"),
         "memory_mb": portfolio.get("memory_mb"),
         "cost_usd": portfolio.get("cost_usd"),
@@ -4189,8 +4251,10 @@ def write_risk1b_vlm_subgoals_artifact(
         ),
         "candidate_summaries": [summarize_candidate(candidate) for candidate in candidates],
         "boundary": (
-            "Risk1-B is candidate-generation evidence only. PASS requires validated external VLM subgoals plus "
-            "actual policy-generated chunks; selector and LIBERO success are evaluated separately."
+            "Risk1-B is first-action-chunk candidate-generation evidence only. PASS requires validated external "
+            "VLM alternative goal-conditioned prompts / strategy variants plus actual policy-generated chunks. "
+            "It is not temporal subgoal-completion evidence, and 15-step smoke pc_success must not be treated as "
+            "full-task benchmark success. Selector evidence and LIBERO success are evaluated separately."
         ),
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

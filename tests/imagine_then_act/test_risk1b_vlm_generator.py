@@ -48,8 +48,14 @@ class Risk1BVlmGeneratorTest(TestCase):
             self.assertTrue(Path(result["raw_output_path"]).exists())
             self.assertEqual(payload["generator_backend"], "mock")
             self.assertEqual(payload["provenance"], "mock_contract")
+            self.assertEqual(
+                payload["candidate_prompt_semantics"],
+                "same_immediate_goal_strategy_variants_first_action_chunk",
+            )
             self.assertTrue(payload["schema_validation"]["valid"])
             self.assertEqual(len(payload["subgoals"]), 5)
+            self.assertEqual(payload["strategy_variants"], payload["subgoals"])
+            self.assertEqual(payload["candidate_prompts"], payload["subgoals"])
             self.assertIn("risk1b_subgoals_qwen2_5_vl_7b_instruct_libero_goal_task6_seed1201.json", result["output_path"])
             self.assertIn("cannot count as Risk1-B PASS", payload["boundary"])
 

@@ -270,6 +270,20 @@ class RiskProbeTest(TestCase):
         self.assertEqual(risk1b_config.risk1b_subgoals_json, "subgoals.json")
         self.assertTrue(risk1b_config.risk1c_sim_selector)
         self.assertEqual(risk1b_config.risk1c_selector_modes, ("c0", "c2"))
+        parsed_risk1b_aliases = module.build_parser().parse_args(
+            [
+                "--preset",
+                "runpod-libero-smoke",
+                "--risk1b-vlm-strategy-variants",
+                "--risk1b-generator-backend",
+                "json",
+                "--risk1b-candidate-prompts-json",
+                "candidate_prompts.json",
+            ]
+        )
+        risk1b_alias_config = module.build_config(parsed_risk1b_aliases)
+        self.assertTrue(risk1b_alias_config.risk1b_vlm_subgoals)
+        self.assertEqual(risk1b_alias_config.risk1b_subgoals_json, "candidate_prompts.json")
 
     def test_fake_actual_adapter_helpers_record_proxy_only_evidence(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -1204,10 +1218,17 @@ class RiskProbeTest(TestCase):
                 numpy_module=None,
             )
 
-            self.assertEqual(metadata["source"], "risk1b_vlm_subgoals")
+            self.assertEqual(metadata["source"], "risk1b_vlm_strategy_variants")
+            self.assertEqual(metadata["legacy_source"], "risk1b_vlm_subgoals")
             self.assertEqual(metadata["risk1b_vlm_subgoals"]["provenance"], "external_vlm_json_policy_generated")
+            self.assertEqual(
+                metadata["risk1b_vlm_subgoals"]["candidate_prompt_semantics"],
+                "same_immediate_goal_strategy_variants_first_action_chunk",
+            )
+            self.assertEqual(metadata["risk1b_vlm_subgoals"]["strategy_variants"][1]["strategy_axis"], "object_centric_direction")
             self.assertEqual(len(candidates), 3)
-            self.assertEqual(candidates[1].sampling_metadata["candidate_generation"], "risk1b_vlm_subgoals")
+            self.assertEqual(candidates[1].sampling_metadata["candidate_generation"], "risk1b_vlm_strategy_variants")
+            self.assertEqual(candidates[1].sampling_metadata["legacy_candidate_generation"], "risk1b_vlm_subgoals")
             self.assertEqual(candidates[1].sampling_metadata["strategy_axis"], "object_centric_direction")
             self.assertIn("Strategy instruction:", candidates[1].sampling_metadata["prompt_text"])
 
@@ -1466,7 +1487,12 @@ class RiskProbeTest(TestCase):
             risk1b = json.loads(Path(payload["risk1b_vlm_subgoals"]).read_text(encoding="utf-8"))
             risk1c = json.loads(Path(payload["risk1c_sim_selector"]).read_text(encoding="utf-8"))
 
-            self.assertEqual(risk1b["risk"], "risk_1b_external_vlm_subgoal_generator")
+            self.assertEqual(risk1b["risk"], "risk_1b_external_vlm_strategy_variant_generator")
+            self.assertEqual(risk1b["legacy_risk"], "risk_1b_external_vlm_subgoal_generator")
+            self.assertEqual(
+                risk1b["candidate_prompt_semantics"],
+                "same_immediate_goal_strategy_variants_first_action_chunk",
+            )
             self.assertEqual(risk1b["provenance"], "mock_contract")
             self.assertEqual(risk1b["verdict"], BLOCKED)
             self.assertIn("c0_privileged_oracle", risk1c["modes"])

@@ -16,6 +16,21 @@ from scripts.run_imagine_then_act_risk1bc_difficulty_eval import (
 
 
 class Risk1BcDifficultyEvalTest(unittest.TestCase):
+    def test_default_scope_is_all_hard_rows_only(self) -> None:
+        manifest = load_manifest(Path("configs/eval/risk1bc_baseline_difficulty_manifest.json"))
+        args = build_parser().parse_args(
+            [
+                "--manifest",
+                "configs/eval/risk1bc_baseline_difficulty_manifest.json",
+                "--output-dir",
+                "/tmp/risk1bc_difficulty_test",
+            ]
+        )
+        config = build_config(args, manifest)
+
+        self.assertEqual(config.categories, ("baseline_fail_hard",))
+        self.assertGreaterEqual(len(selected_rows(manifest, config.categories)), 3)
+
     def test_manifest_filters_hard_rows_and_preserves_baseline_evidence(self) -> None:
         manifest = load_manifest(Path("configs/eval/risk1bc_baseline_difficulty_manifest.json"))
         rows = selected_rows(manifest, ("baseline_fail_hard",))
@@ -44,7 +59,7 @@ class Risk1BcDifficultyEvalTest(unittest.TestCase):
         self.assertFalse(plan["used_shell"])
         self.assertEqual(plan["baseline_category"], "baseline_fail_hard")
         self.assertEqual(plan["commands"]["context_capture"][2], "scripts/capture_risk1b_context.py")
-        self.assertIn("--risk1b-vlm-subgoals", plan["commands"]["risk1bc_probe"])
+        self.assertIn("--risk1b-vlm-strategy-variants", plan["commands"]["risk1bc_probe"])
         self.assertIn("--risk1c-sim-selector", plan["commands"]["risk1bc_probe"])
         self.assertIn(str(row["task_id"]), plan["commands"]["risk1bc_probe"])
         self.assertIn(str(row["seed"]), plan["commands"]["risk1bc_probe"])
