@@ -47,6 +47,9 @@ Rules:
 - Each non-baseline candidate must use a distinct strategy axis from this set
   when possible: object_centric_open_side, pre_contact_alignment,
   gripper_pose_precision, short_horizon_contact, collision_avoidant_approach.
+- For bowl/container placement tasks, prefer concrete mode-shift axes when
+  visible and task-preserving: high_clearance_over_rim, vertical_drop_centering,
+  near_side_entry, far_side_entry, rim_avoidance_arc, gentle_release_inside_bowl.
 - Do not vary only verbs such as put/place/move/transfer. Each non-baseline
   candidate must include a behaviorally distinct motion cue that a frozen
   SmolVLA executor can condition on, such as approach side, centering before
@@ -71,10 +74,14 @@ context_summary={context_summary}
 Task-grounding rules:
 - Treat task_goal as the authority over object roles.
 - Candidate 0 subgoal_text must preserve task_goal as closely as possible.
+- Candidate 0 strategy_axis must be exactly "baseline".
 - If task_goal says to put/place/move X in/on/to Y, X is the manipulated
   object and Y is the destination/target region. Do not invert those roles.
 - Do not choose a different object just because it appears first in state keys
   or is visually salient in the image.
+- For cream-cheese-to-bowl tasks, every candidate must keep cream cheese as
+  the manipulated object and bowl as the target, while making the motion cue
+  concrete enough to change the next action chunk.
 """
 
 

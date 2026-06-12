@@ -305,7 +305,9 @@ class Risk1BVlmGeneratorTest(TestCase):
         self.assertIn("object_centric_open_side", prompt)
         self.assertIn("pre_contact_alignment", prompt)
         self.assertIn("collision_avoidant_approach", prompt)
-        self.assertNotIn("Prefer grounded, visually actionable axes", prompt)
+        self.assertIn("high_clearance_over_rim", prompt)
+        self.assertIn("vertical_drop_centering", prompt)
+        self.assertIn("Candidate 0 strategy_axis must be exactly \"baseline\"", prompt)
 
     def test_generation_prompt_prefers_actual_context_task_goal(self) -> None:
         spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)
@@ -337,6 +339,7 @@ class Risk1BVlmGeneratorTest(TestCase):
         self.assertIn("task_goal=put the cream cheese in the bowl", prompt)
         self.assertIn("task_goal_source=context_json.task_description", prompt)
         self.assertIn("If task_goal says to put/place/move X in/on/to Y", prompt)
+        self.assertIn("cream cheese as", prompt)
         self.assertIn('"object_state_keys": ["akita_black_bowl_1_pos", "cream_cheese_1_pos"]', prompt)
         self.assertNotIn("robot0_joint_pos", prompt)
 

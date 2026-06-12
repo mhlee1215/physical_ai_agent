@@ -1095,6 +1095,49 @@ class RiskProbeTest(TestCase):
             self.assertEqual(len(subgoals), 2)
             self.assertEqual(subgoals[1]["strategy_axis"], "alignment")
 
+    def test_risk1b_json_portfolio_repairs_missing_baseline_anchor(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            payload_path = Path(tmpdir) / "vlm_subgoals.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "subgoals": [
+                            {
+                                "subgoal_text": "Lift the cream cheese high over the bowl rim.",
+                                "strategy_axis": "high_clearance_over_rim",
+                                "target_object": "cream_cheese_1",
+                                "target_region_or_point": "akita_black_bowl_1",
+                                "stop_condition": "cream cheese is in the bowl",
+                                "confidence": 0.8,
+                            },
+                            {
+                                "subgoal_text": "Center the cream cheese above the bowl before lowering.",
+                                "strategy_axis": "vertical_drop_centering",
+                                "target_object": "cream_cheese_1",
+                                "target_region_or_point": "akita_black_bowl_1",
+                                "stop_condition": "cream cheese is in the bowl",
+                                "confidence": 0.8,
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            subgoals, validation = build_risk1b_subgoal_portfolio(
+                base_prompt="put the cream cheese in the bowl",
+                num_subgoals=5,
+                model_name="Qwen/Qwen2.5-VL-7B-Instruct",
+                generator_backend="json",
+                subgoals_json=str(payload_path),
+            )
+
+            self.assertTrue(validation["valid"])
+            self.assertTrue(validation["baseline_repair"]["applied"])
+            self.assertEqual(subgoals[0]["strategy_axis"], "baseline")
+            self.assertEqual(subgoals[0]["subgoal_text"], "put the cream cheese in the bowl")
+            self.assertEqual(subgoals[1]["strategy_axis"], "high_clearance_over_rim")
+
     def test_risk1b_vlm_subgoal_sampling_records_schema_and_policy_metadata(self) -> None:
         with TemporaryDirectory() as tmpdir:
             payload_path = Path(tmpdir) / "vlm_subgoals.json"
@@ -1182,10 +1225,28 @@ class RiskProbeTest(TestCase):
         )
 
         self.assertIn("Strategy instruction:", prompt)
+        self.assertIn("Strategy-specific execution command:", prompt)
         self.assertIn("visible open side", prompt)
         self.assertIn("least obstructed side", prompt)
         self.assertIn("cream_cheese_1", prompt)
         self.assertIn("akita_black_bowl_1", prompt)
+
+    def test_risk1b_subgoal_prompt_adds_bowl_specific_motion_directives(self) -> None:
+        prompt = risk1b_subgoal_to_prompt(
+            "put the cream cheese in the bowl",
+            {
+                "subgoal_text": "Lift the cream cheese above the bowl rim before lowering.",
+                "strategy_axis": "high_clearance_over_rim",
+                "target_object": "cream_cheese_1",
+                "target_region_or_point": "akita_black_bowl_1",
+                "stop_condition": "cream_cheese_1_in_bowl",
+                "confidence": 0.8,
+            },
+        )
+
+        self.assertIn("higher than the rim", prompt)
+        self.assertIn("above the bowl center", prompt)
+        self.assertIn("Follow the strategy-specific motion cue", prompt)
 
     def test_task_relation_proxy_scores_observation_object_target_distance(self) -> None:
         near = compute_task_relation_proxy(

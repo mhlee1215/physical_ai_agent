@@ -1648,6 +1648,11 @@ def build_risk1b_subgoal_portfolio(
         records = payload.get("subgoals", payload) if isinstance(payload, dict) else payload
         metadata = payload if isinstance(payload, dict) else {}
         normalized, errors = validate_risk1b_subgoal_records(records, limit=num_subgoals)
+        normalized, baseline_repair = normalize_risk1b_baseline_subgoal(
+            normalized,
+            base_prompt=base_prompt,
+            limit=num_subgoals,
+        )
         generator_backend = str(metadata.get("generator_backend", "external_vlm_json"))
         generator_provenance = str(metadata.get("provenance", "external_vlm_json"))
         if generator_backend in {"mock", "fixture", "contract"} and generator_provenance == "external_vlm_json":
@@ -1666,6 +1671,7 @@ def build_risk1b_subgoal_portfolio(
             "latency_ms": metadata.get("latency_ms"),
             "memory_mb": metadata.get("memory_mb"),
             "cost_usd": metadata.get("cost_usd"),
+            "baseline_repair": baseline_repair,
         }
     if generator_backend != "contract":
         return [], {
@@ -1704,6 +1710,35 @@ def build_risk1b_subgoal_portfolio(
         "latency_ms": None,
         "memory_mb": None,
         "cost_usd": None,
+    }
+
+
+def normalize_risk1b_baseline_subgoal(
+    subgoals: list[dict[str, Any]],
+    *,
+    base_prompt: str,
+    limit: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not subgoals:
+        return subgoals, {"applied": False, "reason": "no_valid_subgoals"}
+    first = subgoals[0]
+    first_axis = clean_relation_phrase(str(first.get("strategy_axis", "")))
+    clean_base = " ".join(str(base_prompt or "").split()) or str(first.get("subgoal_text", "Complete the task."))
+    if first_axis == "baseline":
+        return subgoals[:limit], {"applied": False, "reason": "first_candidate_already_baseline"}
+    baseline = {
+        **first,
+        "subgoal_text": clean_base,
+        "strategy_axis": "baseline",
+        "stop_condition": first.get("stop_condition") or "original task success condition is reached",
+        "confidence": 1.0,
+        "rationale": "repo-normalized baseline anchor; external VLM did not put baseline first",
+    }
+    repaired = [baseline, *subgoals]
+    return repaired[:limit], {
+        "applied": True,
+        "reason": "first_candidate_was_not_baseline",
+        "original_first_strategy_axis": first.get("strategy_axis"),
     }
 
 
@@ -1805,13 +1840,22 @@ def risk1b_subgoal_to_prompt(base_prompt: str, subgoal: dict[str, Any]) -> str:
         str(subgoal.get("target_object", "")),
         str(subgoal.get("target_region_or_point", "")),
     )
+    if clean_relation_phrase(str(subgoal.get("strategy_axis", ""))) == "baseline":
+        return (
+            f"Task goal: {clean_base}. "
+            f"Execution prompt: {subgoal['subgoal_text']} "
+            f"Target object: {subgoal['target_object']}. "
+            f"Target region or point: {subgoal['target_region_or_point']}. "
+            f"Stop condition: {subgoal['stop_condition']}."
+        )
     return (
-        f"{clean_base} "
-        f"Execution prompt: {subgoal['subgoal_text']} "
+        f"Task goal remains: {clean_base}. "
+        f"Strategy-specific execution command: {subgoal['subgoal_text']} "
         f"Strategy instruction: {strategy_directive} "
         f"Target object: {subgoal['target_object']}. "
         f"Target region or point: {subgoal['target_region_or_point']}. "
-        f"Stop condition: {subgoal['stop_condition']}."
+        f"Stop condition: {subgoal['stop_condition']}. "
+        "Follow the strategy-specific motion cue for this action chunk while preserving the task goal."
     )
 
 
@@ -1839,6 +1883,24 @@ def risk1b_strategy_directive(strategy_axis: str, target_object: str, target_reg
         ),
         "collision avoidant approach": (
             f"Keep clearance from {region}'s rim and nearby objects; arc around obstacles before placing {obj}."
+        ),
+        "high clearance over rim": (
+            f"Lift {obj} higher than the rim of {region}, move above the bowl center, then lower toward the inside."
+        ),
+        "vertical drop centering": (
+            f"Center {obj} over the interior of {region} first, then make a mostly vertical downward placement motion."
+        ),
+        "near side entry": (
+            f"Approach {region} from the nearest visible side while holding {obj}; keep the motion low and direct toward the opening."
+        ),
+        "far side entry": (
+            f"Approach {region} from the far visible side while holding {obj}; bias the path laterally before entering the bowl."
+        ),
+        "rim avoidance arc": (
+            f"Move {obj} along a shallow arc around the rim of {region}, then enter through the clearest opening."
+        ),
+        "gentle release inside bowl": (
+            f"Slow the final motion with {obj} inside {region}; prioritize controlled release after the object crosses the rim."
         ),
     }
     return directives.get(axis, f"Use strategy axis '{strategy_axis}' while preserving {obj} into {region}.")
