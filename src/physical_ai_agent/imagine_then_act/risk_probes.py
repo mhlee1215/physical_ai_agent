@@ -3300,7 +3300,25 @@ def extract_success_proxy(info: Any, reward: Any, state_vector: list[float]) -> 
 
 
 def compute_task_relation_proxy(observation: Any, task_description: str | None) -> dict[str, Any]:
-    relation = parse_simple_manipulation_relation(" ".join(str(task_description or "").lower().split()))
+    task_text = " ".join(str(task_description or "").lower().split())
+    articulated_relation = parse_articulated_open_relation(task_text)
+    if articulated_relation is not None:
+        articulated_object, fixture = articulated_relation
+        return {
+            "available": False,
+            "score": None,
+            "source": "unavailable",
+            "reason": "articulated_open_relation_requires_handle_or_joint_proxy",
+            "relation_type": "articulated_open",
+            "articulated_object": articulated_object,
+            "fixture": fixture,
+            "required_proxy": "drawer_joint_progress_or_eef_to_handle_distance_proxy",
+            "claim_boundary": (
+                "Object-target distance is not a valid non-oracle progress proxy for drawer/open tasks. "
+                "Use drawer joint progress, handle pose, or EEF-to-handle distance when exposed by the env."
+            ),
+        }
+    relation = parse_simple_manipulation_relation(task_text)
     if relation is None:
         return {
             "available": False,
@@ -3363,6 +3381,21 @@ def compute_task_relation_proxy_with_env_fallback(
         "observation_source": raw_source,
         "primary_observation_proxy": proxy,
     }
+
+
+def parse_articulated_open_relation(task_description: str) -> tuple[str, str] | None:
+    task = " ".join(str(task_description or "").lower().split())
+    match = re.search(
+        r"\b(?:open|close)\s+(?:the\s+)?(?P<object>[^.]*?(?:drawer|door))\s+(?:of|in|on)\s+(?:the\s+)?(?P<fixture>[^.]+)$",
+        task,
+    )
+    if not match:
+        return None
+    articulated_object = clean_relation_phrase(match.group("object"))
+    fixture = clean_relation_phrase(match.group("fixture"))
+    if not articulated_object or not fixture:
+        return None
+    return articulated_object, fixture
 
 
 def extract_raw_env_observation_with_positions(env: Any) -> tuple[Any | None, str]:
@@ -3986,12 +4019,20 @@ def build_c1_non_oracle_proxy_scores(
         }
     if relation_scores:
         return relation_scores, "observation_object_target_distance_proxy", relation_details
-    fallback_scores = {
-        candidate.candidate_id: float(outcomes.get(candidate.candidate_id, {}).get("success_proxy", candidate.privileged_success_proxy))
-        for candidate in candidates
-    }
-    return fallback_scores, "success_proxy_or_privileged_proxy", {
+    unavailable_details: dict[str, Any] = {}
+    for candidate in candidates:
+        outcome = outcomes.get(candidate.candidate_id, {})
+        details = outcome.get("task_relation_proxy_details")
+        if isinstance(details, dict):
+            unavailable_details[candidate.candidate_id] = details
+    return {}, "observation_object_target_distance_proxy_unavailable", {
         "fallback_reason": "task_relation_proxy_unavailable",
+        "fallback_used": False,
+        "candidate_details": unavailable_details,
+        "claim_boundary": (
+            "C1 is unavailable without a non-oracle observation relation proxy. "
+            "Success, privileged, or reward proxies belong to C0/Risk5-style diagnostics, not C1."
+        ),
     }
 
 

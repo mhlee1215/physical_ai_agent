@@ -1226,6 +1226,21 @@ class RiskProbeTest(TestCase):
         self.assertEqual(proxy["observation_source"], "root._get_observations()")
         self.assertEqual(proxy["primary_observation_proxy"]["reason"], "object_or_target_position_unavailable")
 
+    def test_task_relation_proxy_rejects_drawer_open_distance_proxy(self) -> None:
+        proxy = compute_task_relation_proxy(
+            {
+                "robot0_eef_pos": [0.0, 0.0, 0.0],
+                "cream_cheese_1_pos": [0.2, 0.0, 0.0],
+                "akita_black_bowl_1_pos": [0.4, 0.0, 0.0],
+            },
+            "open the middle drawer of the cabinet",
+        )
+
+        self.assertFalse(proxy["available"])
+        self.assertEqual(proxy["reason"], "articulated_open_relation_requires_handle_or_joint_proxy")
+        self.assertEqual(proxy["required_proxy"], "drawer_joint_progress_or_eef_to_handle_distance_proxy")
+        self.assertIn("not a valid", proxy["claim_boundary"])
+
     def test_actual_rollout_closure_records_task_relation_proxy_without_name_error(self) -> None:
         previous_modules = {name: sys.modules.get(name) for name in ("lerobot", "lerobot.envs", "lerobot.utils", "lerobot.utils.constants", "torch")}
         lerobot_module = types.ModuleType("lerobot")
@@ -1414,6 +1429,60 @@ class RiskProbeTest(TestCase):
         self.assertEqual(c1["selected_candidate_id"], "candidate_01")
         self.assertTrue(c1["non_baseline_selection"])
         self.assertEqual(c1["plausibility_failures"], [])
+
+    def test_risk1c_c1_does_not_fallback_to_success_proxy_when_relation_proxy_unavailable(self) -> None:
+        config = RiskProbeConfig(
+            preset="local-dry-run",
+            backend="mock",
+            suite="libero_goal",
+            task_ids=(0,),
+            seed=1201,
+            num_candidates=2,
+            chunk_steps=2,
+            action_dim=3,
+            output_dir="/tmp/risk1c-test",
+            risk1c_sim_selector=True,
+        )
+        candidates = [
+            ActionChunkCandidate("candidate_00_policy_only", "policy", [[0.0, 0.0, 0.0]], 0.0, is_policy_only=True),
+            ActionChunkCandidate("candidate_01", "policy", [[0.1, 0.0, 0.0]], 0.0),
+        ]
+        unavailable = compute_task_relation_proxy({}, "open the middle drawer of the cabinet")
+        outcomes = {
+            "candidate_00_policy_only": {
+                "success_proxy": 0.1,
+                "task_relation_proxy": None,
+                "task_relation_proxy_details": unavailable,
+            },
+            "candidate_01": {
+                "success_proxy": 0.9,
+                "task_relation_proxy": None,
+                "task_relation_proxy_details": unavailable,
+            },
+        }
+        oracle = compute_actual_oracle_or_proxy_metrics(
+            candidates,
+            {"candidate_00_policy_only": {"success_proxy": 0.1}, "candidate_01": {"success_proxy": 0.9}},
+            {"privileged_state_available": False},
+        )
+
+        evidence = compute_risk1c_selector_evidence(
+            config=config,
+            candidates=candidates,
+            outcomes=outcomes,
+            oracle=oracle,
+            actual_evidence={},
+        )
+
+        c1 = evidence["modes"]["c1_non_oracle_proxy"]
+        self.assertFalse(c1["available"])
+        self.assertEqual(c1["verdict"], BLOCKED)
+        self.assertEqual(c1["score_source"], "observation_object_target_distance_proxy_unavailable")
+        self.assertEqual(c1["score_spread"], 0.0)
+        self.assertIsNone(c1["selected_candidate_id"])
+        self.assertFalse(c1["non_baseline_selection"])
+        self.assertFalse(c1["score_details"]["fallback_used"])
+        self.assertIn("candidate_01", c1["score_details"]["candidate_details"])
 
     def test_debug_noise_candidate_diversity_cannot_be_method_pass(self) -> None:
         with TemporaryDirectory() as tmpdir:
