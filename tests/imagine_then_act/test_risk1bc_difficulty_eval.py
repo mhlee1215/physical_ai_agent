@@ -40,6 +40,16 @@ class Risk1BcDifficultyEvalTest(unittest.TestCase):
         self.assertTrue(all(row["baseline_success"] is False for row in rows))
         self.assertIn("paths", rows[0]["evidence"])
 
+    def test_libero10_manifest_covers_all_long_horizon_tasks_once(self) -> None:
+        manifest = load_manifest(Path("configs/eval/risk1bc_libero10_hard_manifest.json"))
+        rows = selected_rows(manifest, ("libero_long_hard_all",))
+
+        self.assertEqual(len(rows), 10)
+        self.assertEqual({row["suite"] for row in rows}, {"libero_10"})
+        self.assertEqual([row["task_id"] for row in rows], list(range(10)))
+        self.assertEqual({row["seed"] for row in rows}, {1201})
+        self.assertTrue(all(row["baseline_success"] is None for row in rows))
+
     def test_row_plan_uses_argv_lists_and_records_baseline_category(self) -> None:
         manifest = load_manifest(Path("configs/eval/risk1bc_baseline_difficulty_manifest.json"))
         args = build_parser().parse_args(
@@ -66,6 +76,31 @@ class Risk1BcDifficultyEvalTest(unittest.TestCase):
         subgoals_path = plan["expected_artifacts"]["risk1b_subgoals_json"]
         self.assertIn("risk1b_subgoals_qwen2_5_vl_7b_instruct_libero_goal_task6_seed", subgoals_path)
         self.assertIn(subgoals_path, plan["commands"]["risk1bc_probe"])
+
+    def test_libero10_row_plan_uses_suite_and_generic_long_task_description(self) -> None:
+        manifest = load_manifest(Path("configs/eval/risk1bc_libero10_hard_manifest.json"))
+        args = build_parser().parse_args(
+            [
+                "--manifest",
+                "configs/eval/risk1bc_libero10_hard_manifest.json",
+                "--categories",
+                "libero_long_hard_all",
+                "--output-dir",
+                "/tmp/risk1bc_libero10_test",
+            ]
+        )
+        config = build_config(args, manifest)
+        row = selected_rows(manifest, ("libero_long_hard_all",))[0]
+        plan = build_row_plan(config, row)
+
+        self.assertEqual(plan["suite"], "libero_10")
+        self.assertIn("libero_10", plan["commands"]["context_capture"])
+        self.assertIn("libero_10", plan["commands"]["risk1bc_probe"])
+        self.assertIn(
+            "Complete the LIBERO long-horizon task from the current observation.",
+            plan["commands"]["vlm_generation"],
+        )
+        self.assertIn("risk1b_subgoals_qwen2_5_vl_7b_instruct_libero_10_task0_seed1201.json", plan["expected_artifacts"]["risk1b_subgoals_json"])
 
     def test_collect_row_result_keeps_env_success_separate_from_risk_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

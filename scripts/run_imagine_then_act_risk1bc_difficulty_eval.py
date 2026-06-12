@@ -215,6 +215,7 @@ def build_generation_argv(config: DifficultyEvalConfig, row: dict[str, Any], row
     task_id = int(row["task_id"])
     seed = int(row["seed"])
     contact_sheet, context_json = context_paths(row_dir, task_id, seed)
+    task_description = str(row.get("task_description") or "Complete the LIBERO task from the current observation.")
     return [
         config.vlm_python_bin,
         "-B",
@@ -232,7 +233,7 @@ def build_generation_argv(config: DifficultyEvalConfig, row: dict[str, Any], row
         "--num-subgoals",
         str(config.num_candidates),
         "--task-description",
-        "Complete the LIBERO goal task from the current observation.",
+        task_description,
         "--context-image",
         str(contact_sheet),
         "--context-json",
