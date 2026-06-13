@@ -1,22 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/sh
 set -eu
-
-cd "$(dirname "$0")/.."
-
-BUNDLED_PYTHON="/Users/minhaeng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3"
-PYTHON_BIN="${PHYSICAL_AI_PYTHON:-}"
-
-if [ -z "$PYTHON_BIN" ]; then
-  if [ -x "$BUNDLED_PYTHON" ]; then
-    PYTHON_BIN="$BUNDLED_PYTHON"
-  else
-    PYTHON_BIN="python3"
-  fi
-fi
-
-if [ ! -x ".venv/bin/python" ]; then
-  "$PYTHON_BIN" -m venv .venv
-fi
-
-.venv/bin/python -m pip install "so101-nexus-mujoco>=0.3.12,<0.4"
-
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+exec sh "$SCRIPT_DIR/install/local_install.sh" --checkpoint 07-13 "$@"

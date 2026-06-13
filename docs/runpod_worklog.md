@@ -2859,6 +2859,135 @@ sh /tmp/runpod_smolvla_metaworld_official_repro.sh
   `h1yxes6375ymbd`, `7pkhrhmb657w4c`, and `4pxof2vs44h9cb` all `EXITED`; no
   `RUNNING` Pods remained.
 
+### RunPod LIBERO/SmolVLA Environment Bootstrap Gate
+
+- Goal:
+  make the RunPod LIBERO/LeRobot/SmolVLA bootstrap path produce either a hard
+  import/CUDA PASS or a categorized non-zero bootstrap blocker before any Risk
+  2 diagnostic is launched.
+- Repo fix:
+  commit `d935932d` on branch
+  `codex/imagine-then-act-baseline-preserving-release` added
+  `scripts/runpod_prepare_libero_smolvla_env.sh`, strengthened
+  `scripts/runpod_check_libero_env.sh` with `BLOCKER_CATEGORY=...` failure
+  lines, and updated the harness spec to use the prepare wrapper as the
+  operational entrypoint.
+- Pod:
+  reused `h1yxes6375ymbd`, NVIDIA L4, `$0.39/hr`, image
+  `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`, network volume
+  `tchm4gxfvd`.
+- Volume path finding:
+  a clean worktree attempt under `/workspace/physical-ai/eval_worktrees` failed
+  before bootstrap because `git fetch` could not write loose objects:
+  `Disk quota exceeded`. This should be treated as a volume storage/quota
+  blocker for volume-profile setup on that Pod, not a LIBERO or torch failure.
+- Ephemeral fallback:
+  uploaded the committed snapshot to
+  `/root/physical-ai/physical_ai_agent_env_bootstrap_d935932d89c6ba52c5b5b05a30861dcb5baaad0e_h1yxes6375ymbd`
+  and ran
+  `RUNPOD_ENV_PROFILE=ephemeral RUNPOD_FORCE_REBUILD=1
+  sh scripts/runpod_prepare_libero_smolvla_env.sh`.
+- Hard gate result:
+  PASS. Published Python:
+  `/root/physical-ai/envs/lerobot_py312/bin/python`, Python `3.12.13`,
+  `torch 2.5.1+cu124`, CUDA `12.4`, `torch.cuda.is_available True`, GPU
+  `NVIDIA L4`; imports passed for `lerobot 0.5.2`, `libero 0.1.1`,
+  `robosuite 1.4.0`, `mujoco 3.3.2`, `av 17.1.0`, and `num2words 0.5.14`.
+- Caveat:
+  `pip check` still reports expected LeRobot metadata conflicts from the
+  deliberately pinned cu124 torch stack. The hard import/CUDA gate is the
+  readiness authority for this environment.
+- Local evidence:
+  `_workspace/runpod_results/env_bootstrap_d935932d89c6ba52c5b5b05a30861dcb5baaad0e_h1yxes6375ymbd/`
+- Stop confirmation:
+  Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
+  all accessible Pods `EXITED`; no `RUNNING` Pods remained.
+
+### RunPod LIBERO/SmolVLA Bootstrap Profiling
+
+- Goal:
+  quantify the wall-clock bottlenecks in the RunPod environment bootstrap path
+  with grep-able `[bootstrap-timer]` markers.
+- Repo fix:
+  commit `174f21b` adds timer markers to
+  `scripts/bootstrap_runpod_libero_smolvla_env.sh` and
+  `scripts/runpod_prepare_libero_smolvla_env.sh`. The markers log
+  `start/end/duration_sec` for apt, venv, pip setup, torch/cu124, LeRobot,
+  sim deps, auxiliary deps, LIBERO, LIBERO assets, and final import gates.
+- Pod:
+  restarted `h1yxes6375ymbd`, NVIDIA L4, `$0.39/hr`, image
+  `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`, network volume
+  `tchm4gxfvd`, SSH endpoint `213.173.105.29:30107`.
+- Cache finding:
+  after stop/start, `/root` was a fresh overlay, so the profiling run was a
+  cold ephemeral install. The preflight line saying warm cache was an incorrect
+  assumption; cache directories were absent before bootstrap.
+- Repo path:
+  because `/workspace` git writes had failed with `Disk quota exceeded`, the
+  committed snapshot was uploaded to `/root/...` by `git archive`. Snapshot
+  upload/check-out fallback took `11s`.
+- Top bottlenecks:
+  `torch_cu124_install=77s`, `pod_start_to_ssh_ready=39s`, and
+  `auxiliary_deps_install=22s` / `libero_install=22s` /
+  `libero_assets_download=22s`.
+- Stage durations:
+  `pod_start_to_ssh_ready=39s`, `repo_snapshot_upload_checkout=11s`,
+  `apt_update=3s`, `apt_install=12s`, `python_venv_create=2s`,
+  `pip_upgrade_setup=2s`, `torch_cu124_install=77s`,
+  `lerobot_editable_install=2s`, `base_runtime_deps_install=2s`,
+  `sim_runtime_deps_install=15s`, `auxiliary_deps_install=22s`,
+  `libero_install=22s`, `torch_cu124_repin=1s`,
+  `libero_assets_download=22s`, `final_import_gate=3s`,
+  `published_env_gate=3s`, `artifact_fetch=10s`,
+  `total_bootstrap=193s`, `prepare_total=199s`.
+- Asset/cache sizes:
+  LIBERO assets downloaded `586` files and occupied `407M` at
+  `/root/physical-ai/libero_assets`; HF cache was `2.4M`.
+- Hard gate result:
+  PASS. `/root/physical-ai/envs/lerobot_py312/bin/python`, Python `3.12.13`,
+  `torch 2.5.1+cu124`, CUDA `12.4`, CUDA available `True`, GPU `NVIDIA L4`;
+  imports passed for `lerobot 0.5.2`, `libero 0.1.1`, `robosuite 1.4.0`,
+  `mujoco 3.3.2`, `av 17.1.0`, and `num2words 0.5.14`.
+- Reduction ideas:
+  keep torch/cu124 wheels and LIBERO assets on a persistent volume with working
+  quota, or prebuild a Python 3.12/cu124 image. Keep the import gate split out
+  because it takes only about `3s`.
+- Local evidence:
+  `_workspace/runpod_results/env_bootstrap_profile_174f21bbe_h1yxes6375ymbd/`
+- Stop confirmation:
+  Pod `h1yxes6375ymbd` was stopped after artifact fetch. Final list check showed
+  all accessible Pods `EXITED`; no `RUNNING` Pods remained.
+
+### RunPod Ownership and Storage Policy Update
+
+- Operating rule change:
+  RunPod allocation, create, start, reuse, bootstrap/install ownership, stop, and
+  no-`RUNNING` confirmation now belong to the RunPod manager thread
+  `019eaf4d-4157-7f51-9099-561b7c3a9c1e`.
+- Env/bootstrap researcher scope:
+  continue env/bootstrap reproducibility research, profiling, script fixes, and
+  gate design, but request actual RunPod resource actions through the manager
+  and avoid competing for the same Pod.
+- Handoff sent:
+  the manager thread was told that no active RunPod process remained from the
+  env bootstrap work, last Pod `h1yxes6375ymbd` had been stopped, all accessible
+  Pods were `EXITED`, and latest evidence/commits were:
+  `d935932d`, `174f21b`, and `1c87112`.
+- Storage policy:
+  network volumes should keep only reusable Hugging Face cache, LIBERO assets,
+  wheel/pip cache, reusable published environments, and final artifacts.
+  Temporary clones, build directories, half-built venvs, and dirty worktrees
+  should stay on ephemeral `/tmp` or `/root` and be discarded after artifact
+  fetch.
+- Known blocker:
+  `/workspace` previously failed during git write-heavy work with
+  `Disk quota exceeded`; treat `/root` or `/tmp` as the preferred location for
+  clone/build/worktree steps until the attached volume quota/path is repaired.
+- Profiling report requirement:
+  future profiling reports must state the selected volume/cache policy, whether
+  caches were hits or misses, exactly which reusable files/directories were left
+  on the network volume, and which ephemeral paths were intentionally discarded.
+
 ### Imagine-Then-Act L4 Environment Recovery and Backend Run
 
 - User direction:

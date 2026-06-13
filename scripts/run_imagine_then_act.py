@@ -71,11 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--selector-strategy",
         "--ita-selector-strategy",
         dest="selector_strategy",
-        choices=("baseline_fallback", "debug_min_action_norm"),
+        choices=("baseline_fallback", "progress_proxy_or_baseline", "debug_min_action_norm"),
         default="baseline_fallback",
         help=(
-            "Candidate selector. baseline_fallback preserves policy-only behavior unless an explicit method "
-            "selector is added. --ita-selector-strategy is accepted as a backward-compatible alias."
+            "Candidate selector. baseline_fallback preserves policy-only behavior; "
+            "progress_proxy_or_baseline only switches when an observation progress proxy proves improvement. "
+            "--ita-selector-strategy is accepted as a backward-compatible alias."
         ),
     )
     parser.add_argument("--json", action="store_true")

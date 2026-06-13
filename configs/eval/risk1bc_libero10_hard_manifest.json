@@ -1,0 +1,201 @@
+{
+  "manifest_version": 1,
+  "name": "risk1bc_libero10_long_hard_all_tasks_v1",
+  "description": "Risk1-B/C alternative-goal diagnostic manifest for the full LIBERO long-horizon suite (`libero_10`). These rows cover all 10 task ids once at seed 1201. This is a hard/long task-scope manifest, not a claim that each row is a known policy-only baseline failure.",
+  "policy_path": "lerobot/smolvla_libero",
+  "policy_num_steps": 10,
+  "policy_n_action_steps": 15,
+  "suite": "libero_10",
+  "rows": [
+    {
+      "row_id": "libero_10_task0_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 0,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    },
+    {
+      "row_id": "libero_10_task1_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 1,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    },
+    {
+      "row_id": "libero_10_task2_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 2,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    },
+    {
+      "row_id": "libero_10_task3_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 3,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    },
+    {
+      "row_id": "libero_10_task4_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 4,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    },
+    {
+      "row_id": "libero_10_task5_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 5,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    },
+    {
+      "row_id": "libero_10_task6_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 6,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    },
+    {
+      "row_id": "libero_10_task7_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 7,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    },
+    {
+      "row_id": "libero_10_task8_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 8,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    },
+    {
+      "row_id": "libero_10_task9_seed1201_long_hard",
+      "suite": "libero_10",
+      "task_id": 9,
+      "seed": 1201,
+      "baseline_category": "libero_long_hard_all",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "task_description": "Complete the LIBERO long-horizon task from the current observation.",
+      "evidence": {
+        "provenance": "official_suite_scope_manifest",
+        "paths": [
+          "docs/smolvla_libero_baseline_report.md",
+          "docs/runpod_worklog.md"
+        ],
+        "notes": "LIBERO `libero_10` is the long-horizon hard suite scope. This row is included for full hard-task coverage; per-task policy-only baseline success is not asserted here."
+      },
+      "recommended_use": "libero_10_all_task_diagnostic"
+    }
+  ]
+}
