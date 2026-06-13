@@ -39,6 +39,7 @@ CANONICAL_POLICY_PATH = "lerobot/smolvla_libero"
 CANONICAL_TASK_SUITE = "libero_goal"
 BASELINE_CANDIDATE_ID = "candidate_00_policy_only"
 DEFAULT_SELECTOR_STRATEGY = "baseline_fallback"
+PROGRESS_PROXY_OR_BASELINE_SELECTOR = "progress_proxy_or_baseline"
 DEBUG_MIN_ACTION_NORM_SELECTOR = "debug_min_action_norm"
 EVAL_METHOD_POLICY_ONLY = "policy_only"
 EVAL_METHOD_ITA_BASELINE_FALLBACK = "ita_baseline_fallback"
@@ -137,8 +138,14 @@ def validate_run_config(config: RunConfig) -> list[str]:
         errors.append("policy-num-steps must be > 0 when set")
     if config.policy_n_action_steps is not None and config.policy_n_action_steps <= 0:
         errors.append("policy-n-action-steps must be > 0 when set")
-    if config.selector_strategy not in {DEFAULT_SELECTOR_STRATEGY, DEBUG_MIN_ACTION_NORM_SELECTOR}:
-        errors.append("selector-strategy must be baseline_fallback or debug_min_action_norm")
+    if config.selector_strategy not in {
+        DEFAULT_SELECTOR_STRATEGY,
+        PROGRESS_PROXY_OR_BASELINE_SELECTOR,
+        DEBUG_MIN_ACTION_NORM_SELECTOR,
+    }:
+        errors.append(
+            "selector-strategy must be baseline_fallback, progress_proxy_or_baseline, or debug_min_action_norm"
+        )
     if config.mode == "runpod-libero" and config.target != "runpod":
         errors.append("mode runpod-libero requires --target runpod")
     if config.target == "runpod" and config.mode == "smoke":
@@ -797,16 +804,22 @@ def select_candidate(
 ) -> SelectionDecision:
     candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates or []}
     baseline_available = BASELINE_CANDIDATE_ID in {item.candidate_id for item in judged_candidates}
-    if selector_strategy == DEFAULT_SELECTOR_STRATEGY and baseline_available:
+    if selector_strategy in {DEFAULT_SELECTOR_STRATEGY, PROGRESS_PROXY_OR_BASELINE_SELECTOR} and baseline_available:
         best = next(item for item in judged_candidates if item.candidate_id == BASELINE_CANDIDATE_ID)
+        rationale = (
+            "Selected policy-only baseline candidate because no non-debug method selector is configured. "
+            "This preserves baseline behavior for first acceptance."
+        )
+        if selector_strategy == PROGRESS_PROXY_OR_BASELINE_SELECTOR:
+            rationale = (
+                "Selected policy-only baseline candidate because no observation progress proxy proved "
+                "a non-baseline candidate improves over baseline."
+            )
         return SelectionDecision(
             candidate_id=best.candidate_id,
             score=best.score,
             rank=best.rank,
-            rationale=(
-                "Selected policy-only baseline candidate because no non-debug method selector is configured. "
-                "This preserves baseline behavior for first acceptance."
-            ),
+            rationale=rationale,
             selector_strategy=selector_strategy,
             confidence=1.0,
             fallback_used=True,
@@ -912,7 +925,9 @@ def evaluate_execution_readiness(config: RunConfig) -> tuple[str, list[str], lis
             "ITA candidate chunks are sampled from the real policy action path and the selected action is committed through env.step."
         )
         notes.append(
-            "Baseline-preserving selector defaults to candidate_00_policy_only; debug_min_action_norm is not a method selector."
+            "Baseline-preserving selector defaults to candidate_00_policy_only; "
+            "progress_proxy_or_baseline only switches when an observation progress proxy beats baseline; "
+            "debug_min_action_norm is not a method selector."
         )
         if config.eval_method == EVAL_METHOD_POLICY_ONLY:
             notes.append("Policy-only method runs the same backend without --ita-enable.")

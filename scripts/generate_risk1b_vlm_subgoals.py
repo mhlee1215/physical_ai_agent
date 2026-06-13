@@ -15,6 +15,8 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     RISK1B_CANDIDATE_MODELS,
     RISK1B_LEGACY_SCHEMA_NOTE,
     RISK1B_REQUIRED_FIELDS,
+    parse_simple_manipulation_relation,
+    parse_risk1b_manipulation_relations,
     validate_risk1b_task_relation,
     validate_risk1b_subgoal_records,
 )
@@ -25,8 +27,20 @@ PROMPT_TEMPLATE = """You are generating a strategy portfolio for a frozen SmolVL
 Return only valid JSON with this schema:
 {{
   "candidate_prompt_semantics": "same_immediate_goal_strategy_variants_first_action_chunk",
+  "locked_task_fields": {{
+    "original_task": "...",
+    "manipulated_object": "...",
+    "target_region": "...",
+    "relation": "..."
+  }},
   "subgoals": [
     {{
+      "locked_task_fields": {{
+        "original_task": "...",
+        "manipulated_object": "...",
+        "target_region": "...",
+        "relation": "..."
+      }},
       "subgoal_text": "...",
       "strategy_axis": "...",
       "target_object": "...",
@@ -47,9 +61,41 @@ Rules:
   steps in a plan.
 - Do NOT decompose the task over time. Do NOT output "pick up, then move, then
   place" as separate entries.
-- Candidate 0 must preserve the original task wording as the baseline.
-- Candidates 1..N must keep the same target object, same target relation, and
-  same stop condition as the baseline, while varying only the approach strategy.
+- The following LOCKED_TASK_FIELDS are immutable. Copy each value exactly into
+  the top-level locked_task_fields object and into every candidate's
+  locked_task_fields object:
+{locked_task_fields_json}
+- Candidate 0 must preserve locked_task_fields.original_task exactly as the
+  baseline subgoal_text.
+- Every candidate must keep locked_task_fields.manipulated_object as the
+  manipulated object and locked_task_fields.target_region as the destination or
+  relation target. Do not swap, omit, rename, abbreviate, or replace them.
+- Never command the robot to move, align, center, pick up, grasp, lift, slide,
+  push, pull, reposition, or bring locked_task_fields.target_region. The target
+  region is the destination, not the manipulated object.
+- If locked_task_fields.manipulated_object contains " and " or
+  locked_task_fields.relation contains ";", this is a multi-object task. Every
+  candidate must preserve the complete object group and every relation pair in
+  the same candidate. Do not split one object per candidate. Do not set
+  target_object to only one member of the group.
+- This means every candidate keeps the same target object, same target relation, and
+  same stop condition as the baseline while varying only the approach strategy.
+- Candidates 1..N may vary only strategy_axis, subgoal_text motion cue,
+  confidence, and rationale. The object, target region, relation, and stop
+  condition must stay task-equivalent to the locked fields.
+- Each candidate's target_object must be exactly
+  locked_task_fields.manipulated_object.
+- Each candidate's target_region_or_point must be exactly
+  locked_task_fields.target_region.
+- Each candidate's subgoal_text and stop_condition must mention all objects and
+  all destination relations encoded in locked_task_fields.relation. For example,
+  if the locked relation is "alphabet soup -> basket; tomato sauce -> basket",
+  every candidate must keep both alphabet soup and tomato sauce going to the
+  basket in that same candidate.
+- If locked_task_fields.relation includes an action clause such as
+  "turn on stove" or "close microwave", every candidate must preserve that
+  action clause in the same candidate. Do not drop non-placement success
+  conditions from long-horizon tasks.
 - Each non-baseline candidate must use a distinct strategy axis from this set
   when possible: object_centric_open_side, pre_contact_alignment,
   gripper_pose_precision, short_horizon_contact, collision_avoidant_approach.
@@ -75,10 +121,14 @@ task_id={task_id}
 seed={seed}
 task_goal={task_description}
 task_goal_source={task_goal_source}
+locked_task_fields={locked_task_fields_compact_json}
 context_summary={context_summary}
 
 Task-grounding rules:
 - Treat task_goal as the authority over object roles.
+- Treat locked_task_fields as the authority over output fields. If the image,
+  state keys, or your intuition conflicts with locked_task_fields, obey
+  locked_task_fields.
 - Candidate 0 subgoal_text must preserve task_goal as closely as possible.
 - Candidate 0 strategy_axis must be exactly "baseline".
 - If task_goal says to put/place/move X in/on/to Y, X is the manipulated
@@ -88,6 +138,12 @@ Task-grounding rules:
 - For cream-cheese-to-bowl tasks, every candidate must keep cream cheese as
   the manipulated object and bowl as the target, while making the motion cue
   concrete enough to change the next action chunk.
+- For multi-object basket tasks, every candidate must keep the full "put both
+  X and Y in the basket" objective; vary only the approach/order/alignment cue,
+  not which object is included.
+- For stove tasks, every candidate must preserve both parts when present:
+  turn on the stove and place the object on the stove.
+{required_action_prompt_rules}
 """
 
 
@@ -117,8 +173,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-output", default=None, help="Raw model output fixture for dependency-light local tests.")
     parser.add_argument("--output-dir", default="_workspace/runpod_results/ita_risk_probes")
     parser.add_argument("--output-path", default=None)
-    parser.add_argument("--max-new-tokens", type=int, default=768)
+    parser.add_argument("--max-new-tokens", type=int, default=1536)
     parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument(
+        "--repair-attempts",
+        type=int,
+        default=0,
+        help=(
+            "Retry invalid VLM outputs with a validation-error repair prompt before failing. "
+            "For transformers, the model is loaded once and reused across repair attempts."
+        ),
+    )
+    parser.add_argument(
+        "--fallback-on-validation-error",
+        choices=("none", "deterministic_locked_fields"),
+        default="none",
+        help=(
+            "If validation still fails after repair attempts, emit deterministic locked-field "
+            "strategy variants instead of stopping the row. Provenance records this fallback."
+        ),
+    )
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--torch-dtype", default="auto")
     parser.add_argument(
@@ -160,6 +234,7 @@ def is_actual_context(context_summary: dict[str, Any]) -> bool:
 def build_generation_prompt(args: argparse.Namespace, context_summary: dict[str, Any]) -> str:
     task_description, task_goal_source = effective_task_description(args, context_summary)
     compact_context = json.dumps(compact_context_for_prompt(context_summary), sort_keys=True) if context_summary else "none"
+    locked_task_fields = build_locked_task_fields(task_description)
     return PROMPT_TEMPLATE.format(
         num_subgoals=args.num_subgoals,
         suite=args.suite,
@@ -167,7 +242,125 @@ def build_generation_prompt(args: argparse.Namespace, context_summary: dict[str,
         seed=args.seed,
         task_description=task_description,
         task_goal_source=task_goal_source,
+        locked_task_fields_json=indent_json_for_prompt(locked_task_fields),
+        locked_task_fields_compact_json=json.dumps(locked_task_fields, sort_keys=True),
+        required_action_prompt_rules=build_required_action_prompt_rules(locked_task_fields),
         context_summary=compact_context,
+    )
+
+
+def build_locked_task_fields(task_description: str) -> dict[str, str]:
+    original_task = str(task_description).strip()
+    relations = parse_risk1b_manipulation_relations(original_task.lower())
+    if relations:
+        manipulated_object = dedupe_relation_parts(object_name for object_name, _target in relations)
+        target_region = dedupe_relation_parts(target for _object_name, target in relations)
+        relation = "; ".join(f"{object_name} -> {target}" for object_name, target in relations)
+    else:
+        relation = parse_simple_manipulation_relation(original_task.lower())
+        manipulated_object = relation[0] if relation else "copy original_task exactly"
+        target_region = relation[1] if relation else "copy original_task exactly"
+        relation = f"{manipulated_object} -> {target_region}" if relation else "unparsed: preserve original_task exactly"
+    if re.search(r"\band\s+close\s+it\b|\bclose\s+(?:the\s+)?microwave\b", original_task.lower()):
+        relation = f"{relation}; close microwave"
+    if re.search(r"\bturn\s+on\s+(?:the\s+)?stove\b|\bturn\s+(?:the\s+)?stove\s+on\b", original_task.lower()):
+        relation = f"{relation}; turn on stove"
+    return {
+        "original_task": original_task,
+        "manipulated_object": manipulated_object,
+        "target_region": target_region,
+        "relation": relation,
+    }
+
+
+def dedupe_relation_parts(parts: Any) -> str:
+    unique: list[str] = []
+    for part in parts:
+        cleaned = str(part).strip()
+        if cleaned and cleaned not in unique:
+            unique.append(cleaned)
+    return " and ".join(unique)
+
+
+def indent_json_for_prompt(payload: dict[str, str]) -> str:
+    return "\n".join(f"  {line}" for line in json.dumps(payload, indent=2, sort_keys=True).splitlines())
+
+
+def build_required_action_prompt_rules(locked_fields: dict[str, str]) -> str:
+    relation = str(locked_fields.get("relation", "")).lower()
+    manipulated_object = str(locked_fields.get("manipulated_object", "")).strip()
+    target_region = str(locked_fields.get("target_region", "")).strip()
+    rules: list[str] = []
+    relation_pairs = [
+        tuple(part.strip() for part in relation_part.split("->", 1))
+        for relation_part in str(locked_fields.get("relation", "")).split(";")
+        if "->" in relation_part
+    ]
+    if len(relation_pairs) > 1:
+        pair_text = "; ".join(f"{obj} -> {target}" for obj, target in relation_pairs)
+        natural_pairs = " AND ".join(f"{obj} to {target}" for obj, target in relation_pairs)
+        rules.extend(
+            [
+                f"- MULTI-RELATION LOCK: every candidate must preserve all relation pairs in the same candidate: {pair_text}.",
+                f"- Every candidate subgoal_text must include the complete combined objective: {natural_pairs}.",
+                "- Do not split relation pairs across candidates. A candidate that handles only one object-target pair is invalid.",
+                "- Every candidate target_object must be the full locked_task_fields.manipulated_object string, not a single object from the relation.",
+                "- Every candidate target_region_or_point must be the full locked_task_fields.target_region string, not a single destination from the relation.",
+            ]
+        )
+    if "turn on stove" in relation:
+        rules.extend(
+            [
+                "- STOVE ACTION LOCK: every candidate subgoal_text must include both turning on the stove and placing the "
+                f"{manipulated_object} on the {target_region}.",
+                "- Do not make candidate 0 only 'turn on the stove' and later candidates only 'place the object'. That is temporal decomposition and invalid.",
+                "- A valid candidate form is: 'Turn on the stove and [strategy cue] place the "
+                f"{manipulated_object} on the {target_region}.'",
+                "- Every stop_condition must include both 'stove is turned on' and '"
+                f"{manipulated_object} is on the {target_region}'.",
+            ]
+        )
+    if "close microwave" in relation:
+        rules.extend(
+            [
+                "- MICROWAVE ACTION LOCK: every candidate subgoal_text must include both placing the object in the microwave and closing the microwave.",
+                "- Do not make separate candidates for placing versus closing. That is temporal decomposition and invalid.",
+                "- Every stop_condition must include both the object in the microwave and the microwave closed.",
+            ]
+        )
+    return "\n".join(rules)
+
+
+def build_repair_prompt(
+    *,
+    base_prompt: str,
+    task_description: str,
+    validation_errors: list[str],
+    previous_output: str,
+) -> str:
+    locked_fields = build_locked_task_fields(task_description)
+    previous_excerpt = previous_output[:1200].strip()
+    return (
+        base_prompt
+        + "\n\nVALIDATION FAILED. Repair the JSON now.\n"
+        + "Return ONLY corrected JSON. Do not explain.\n"
+        + "You must preserve these LOCKED TASK FIELDS exactly:\n"
+        + json.dumps(locked_fields, indent=2, sort_keys=True)
+        + "\nValidation errors to fix:\n"
+        + json.dumps(validation_errors, indent=2, sort_keys=True)
+        + "\nPrevious output was invalid. Do not copy it if it split, omitted, "
+        + "renamed, or swapped any locked object/relation.\n"
+        + ("Previous invalid excerpt for reference only:\n" + previous_excerpt + "\n" if previous_excerpt else "")
+        + "\nRepair requirements:\n"
+        + "- Keep candidate 0 as locked_task_fields.original_task.\n"
+        + "- Every candidate must copy locked_task_fields exactly.\n"
+        + "- Every candidate target_object must exactly equal locked_task_fields.manipulated_object.\n"
+        + "- Every candidate target_region_or_point must exactly equal locked_task_fields.target_region.\n"
+        + "- If locked_task_fields.manipulated_object contains ' and ', every candidate must keep the entire object group; do not make one-object candidates.\n"
+        + "- If locked_task_fields.relation contains ';', every candidate subgoal_text and stop_condition must preserve every relation pair in that same candidate.\n"
+        + "- Do not tell the robot to move, align, center, pick up, grasp, lift, slide, push, pull, reposition, or bring locked_task_fields.target_region.\n"
+        + (build_required_action_prompt_rules(locked_fields) + "\n" if build_required_action_prompt_rules(locked_fields) else "")
+        + "- Vary only strategy_axis and motion cue. Do not introduce new objects. Do not swap object roles.\n"
     )
 
 
@@ -279,11 +472,15 @@ def generate_mock_output(args: argparse.Namespace) -> str:
 
 def generate_transformers_output(args: argparse.Namespace, prompt: str) -> str:
     components = resolve_transformers_components(args.model_id)
+    processor, model, image_module, torch = load_transformers_generator(args, components)
+    return generate_transformers_text(args, prompt, processor=processor, model=model, image_module=image_module, torch=torch)
+
+
+def load_transformers_generator(args: argparse.Namespace, components: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
     torch = components["torch"]
     image_module = components["pil_image"]
     processor_cls = components["processor_cls"]
     model_cls = components["model_cls"]
-
     processor = processor_cls.from_pretrained(args.model_id, trust_remote_code=True)
     model = model_cls.from_pretrained(
         args.model_id,
@@ -291,6 +488,18 @@ def generate_transformers_output(args: argparse.Namespace, prompt: str) -> str:
         torch_dtype=args.torch_dtype,
         trust_remote_code=True,
     )
+    return processor, model, image_module, torch
+
+
+def generate_transformers_text(
+    args: argparse.Namespace,
+    prompt: str,
+    *,
+    processor: Any,
+    model: Any,
+    image_module: Any,
+    torch: Any,
+) -> str:
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     if args.context_image:
         content.insert(0, {"type": "image", "image": image_module.open(args.context_image).convert("RGB")})
@@ -305,8 +514,58 @@ def generate_transformers_output(args: argparse.Namespace, prompt: str) -> str:
         inputs = inputs.to(model.device)
     with torch.inference_mode():
         outputs = model.generate(**inputs, max_new_tokens=args.max_new_tokens, temperature=args.temperature)
-    decoded = processor.batch_decode(outputs, skip_special_tokens=True)[0]
+    input_token_count = getattr(getattr(inputs, "input_ids", None), "shape", [0, 0])[-1]
+    try:
+        generated_outputs = outputs[:, input_token_count:]
+    except Exception:  # noqa: BLE001
+        generated_outputs = outputs
+    decoded = processor.batch_decode(generated_outputs, skip_special_tokens=True)[0]
     return decoded
+
+
+def deterministic_locked_field_output(args: argparse.Namespace, context_summary: dict[str, Any]) -> str:
+    task_description, _source = effective_task_description(args, context_summary)
+    locked_fields = build_locked_task_fields(task_description)
+    manipulated_object = locked_fields["manipulated_object"]
+    target_region = locked_fields["target_region"]
+    axes = [
+        ("baseline", task_description),
+        (
+            "pre_contact_alignment",
+            f"{task_description}; first align the gripper with {manipulated_object} before moving toward {target_region}.",
+        ),
+        (
+            "object_centric_open_side",
+            f"{task_description}; approach {manipulated_object} from the clearest visible side while keeping {target_region} as the destination.",
+        ),
+        (
+            "gripper_pose_precision",
+            f"{task_description}; use a precise gripper pose on {manipulated_object} before placing it at {target_region}.",
+        ),
+        (
+            "short_horizon_contact",
+            f"{task_description}; make the smallest useful contact with {manipulated_object} that advances it toward {target_region}.",
+        ),
+        (
+            "collision_avoidant_approach",
+            f"{task_description}; move {manipulated_object} toward {target_region} along a collision-avoidant path.",
+        ),
+    ]
+    records = []
+    for axis, text in axes[: args.num_subgoals]:
+        records.append(
+            {
+                "subgoal_text": text,
+                "strategy_axis": axis,
+                "locked_task_fields": locked_fields,
+                "target_object": manipulated_object,
+                "target_region_or_point": target_region,
+                "stop_condition": f"{manipulated_object} satisfies the original relation with {target_region}: {task_description}",
+                "confidence": 1.0 if axis == "baseline" else 0.55,
+                "rationale": "deterministic locked-field fallback; not external VLM generation",
+            }
+        )
+    return json.dumps({"locked_task_fields": locked_fields, "subgoals": records}, indent=2)
 
 
 def resolve_transformers_components(model_id: str | None = None) -> dict[str, Any]:
@@ -524,6 +783,8 @@ def build_output_payload(
     latency_ms: int,
     memory_mb: float | None,
     raw_output_path: Path,
+    generation_attempts: list[dict[str, Any]] | None = None,
+    fallback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     records = (
         parsed.get("candidate_prompts")
@@ -535,9 +796,13 @@ def build_output_payload(
     )
     subgoals, errors = validate_risk1b_subgoal_records(records, limit=args.num_subgoals)
     task_description, task_goal_source = effective_task_description(args, context_summary)
+    locked_task_fields = build_locked_task_fields(task_description)
     errors = [*errors, *validate_risk1b_task_relation(subgoals, task_description)]
     valid = not errors and len(subgoals) >= 2
-    provenance = "external_vlm_json" if args.backend == "transformers" else f"{args.backend}_contract"
+    if fallback:
+        provenance = "deterministic_locked_fields_fallback"
+    else:
+        provenance = "external_vlm_json" if args.backend == "transformers" else f"{args.backend}_contract"
     return {
         "model": args.model_id,
         "generator_backend": args.backend,
@@ -550,10 +815,12 @@ def build_output_payload(
             "seed": args.seed,
             "task_description": task_description,
             "task_goal_source": task_goal_source,
+            "locked_task_fields": locked_task_fields,
             "context_image": args.context_image,
             "context_json": args.context_json,
             "context_summary": context_summary,
         },
+        "locked_task_fields": locked_task_fields,
         "prompt_template": prompt,
         "raw_output_path": str(raw_output_path),
         "raw_output_preview": raw_output[:2000],
@@ -566,6 +833,8 @@ def build_output_payload(
             "required_fields": list(RISK1B_REQUIRED_FIELDS),
             "repair": parsed.get("_schema_repair") if isinstance(parsed, dict) else None,
         },
+        "generation_attempts": generation_attempts or [],
+        "fallback": fallback,
         "subgoals": subgoals,
         "strategy_variants": subgoals,
         "candidate_prompts": subgoals,
@@ -597,6 +866,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.num_subgoals < 2:
         print("config_error: --num-subgoals must be at least 2", file=sys.stderr)
         return 2
+    if args.repair_attempts < 0:
+        print("config_error: --repair-attempts must be >= 0", file=sys.stderr)
+        return 2
     context_summary = read_context_summary(args.context_json)
     prompt = build_generation_prompt(args, context_summary)
     if args.dependency_check_only:
@@ -620,30 +892,127 @@ def main(argv: list[str] | None = None) -> int:
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     raw_output_path = output_path.with_suffix(".raw.txt")
+    generation_attempts: list[dict[str, Any]] = []
+    fallback: dict[str, Any] | None = None
     start = time.perf_counter()
     try:
-        if args.backend == "mock":
-            raw_output = generate_mock_output(args)
-        elif args.backend == "fixture":
-            if not args.fixture_output:
-                print("config_error: --fixture-output is required for backend=fixture", file=sys.stderr)
-                return 2
-            raw_output = Path(args.fixture_output).read_text(encoding="utf-8")
+        if args.backend in {"mock", "fixture"}:
+            if args.backend == "mock":
+                raw_output = generate_mock_output(args)
+            else:
+                if not args.fixture_output:
+                    print("config_error: --fixture-output is required for backend=fixture", file=sys.stderr)
+                    return 2
+                raw_output = Path(args.fixture_output).read_text(encoding="utf-8")
+            raw_output_path.write_text(raw_output + "\n", encoding="utf-8")
+            parsed = extract_json_payload(raw_output)
+            payload = build_output_payload(
+                args=args,
+                prompt=prompt,
+                context_summary=context_summary,
+                raw_output=raw_output,
+                parsed=parsed,
+                latency_ms=int(round((time.perf_counter() - start) * 1000)),
+                memory_mb=current_memory_mb(),
+                raw_output_path=raw_output_path,
+                generation_attempts=generation_attempts,
+            )
         else:
-            raw_output = generate_transformers_output(args, prompt)
-        latency_ms = int(round((time.perf_counter() - start) * 1000))
-        raw_output_path.write_text(raw_output + "\n", encoding="utf-8")
-        parsed = extract_json_payload(raw_output)
-        payload = build_output_payload(
-            args=args,
-            prompt=prompt,
-            context_summary=context_summary,
-            raw_output=raw_output,
-            parsed=parsed,
-            latency_ms=latency_ms,
-            memory_mb=current_memory_mb(),
-            raw_output_path=raw_output_path,
-        )
+            components = resolve_transformers_components(args.model_id)
+            processor, model, image_module, torch = load_transformers_generator(args, components)
+            task_description, _task_goal_source = effective_task_description(args, context_summary)
+            current_prompt = prompt
+            payload = None
+            raw_output = ""
+            parsed: Any = None
+            for attempt_index in range(args.repair_attempts + 1):
+                attempt_started = time.perf_counter()
+                raw_output = generate_transformers_text(
+                    args,
+                    current_prompt,
+                    processor=processor,
+                    model=model,
+                    image_module=image_module,
+                    torch=torch,
+                )
+                attempt_raw_path = raw_output_path if attempt_index == 0 else output_path.with_suffix(f".repair{attempt_index}.raw.txt")
+                attempt_raw_path.write_text(raw_output + "\n", encoding="utf-8")
+                try:
+                    parsed = extract_json_payload(raw_output)
+                    payload = build_output_payload(
+                        args=args,
+                        prompt=current_prompt,
+                        context_summary=context_summary,
+                        raw_output=raw_output,
+                        parsed=parsed,
+                        latency_ms=int(round((time.perf_counter() - start) * 1000)),
+                        memory_mb=current_memory_mb(),
+                        raw_output_path=attempt_raw_path,
+                        generation_attempts=generation_attempts,
+                    )
+                    validation = payload["schema_validation"]
+                    generation_attempts.append(
+                        {
+                            "attempt": attempt_index,
+                            "kind": "initial" if attempt_index == 0 else "repair",
+                            "valid": bool(validation["valid"]),
+                            "errors": validation["errors"],
+                            "raw_output_path": str(attempt_raw_path),
+                            "elapsed_ms": int(round((time.perf_counter() - attempt_started) * 1000)),
+                        }
+                    )
+                    payload["generation_attempts"] = generation_attempts
+                    if validation["valid"]:
+                        break
+                    current_prompt = build_repair_prompt(
+                        base_prompt=prompt,
+                        task_description=task_description,
+                        validation_errors=validation["errors"],
+                        previous_output=raw_output,
+                    )
+                except Exception as attempt_exc:  # noqa: BLE001
+                    generation_attempts.append(
+                        {
+                            "attempt": attempt_index,
+                            "kind": "initial" if attempt_index == 0 else "repair",
+                            "valid": False,
+                            "errors": [f"{type(attempt_exc).__name__}: {str(attempt_exc)[:500]}"],
+                            "raw_output_path": str(attempt_raw_path),
+                            "elapsed_ms": int(round((time.perf_counter() - attempt_started) * 1000)),
+                        }
+                    )
+                    current_prompt = build_repair_prompt(
+                        base_prompt=prompt,
+                        task_description=task_description,
+                        validation_errors=generation_attempts[-1]["errors"],
+                        previous_output=raw_output,
+                    )
+            if payload is None or not payload["schema_validation"]["valid"]:
+                if args.fallback_on_validation_error == "deterministic_locked_fields":
+                    fallback = {
+                        "strategy": "deterministic_locked_fields",
+                        "reason": "validation_failed_after_repair_attempts",
+                        "attempt_count": len(generation_attempts),
+                        "last_errors": generation_attempts[-1]["errors"] if generation_attempts else [],
+                    }
+                    raw_output = deterministic_locked_field_output(args, context_summary)
+                    fallback_raw_path = output_path.with_suffix(".fallback.raw.txt")
+                    fallback_raw_path.write_text(raw_output + "\n", encoding="utf-8")
+                    parsed = extract_json_payload(raw_output)
+                    payload = build_output_payload(
+                        args=args,
+                        prompt=prompt,
+                        context_summary=context_summary,
+                        raw_output=raw_output,
+                        parsed=parsed,
+                        latency_ms=int(round((time.perf_counter() - start) * 1000)),
+                        memory_mb=current_memory_mb(),
+                        raw_output_path=fallback_raw_path,
+                        generation_attempts=generation_attempts,
+                        fallback=fallback,
+                    )
+                elif payload is None:
+                    raise ValueError("model output did not produce a valid payload")
     except Exception as exc:  # noqa: BLE001
         print(f"generation_error: {type(exc).__name__}: {str(exc)[:500]}", file=sys.stderr)
         return 2

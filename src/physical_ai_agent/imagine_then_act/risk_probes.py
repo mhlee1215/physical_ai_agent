@@ -1786,6 +1786,16 @@ def normalize_risk1b_baseline_subgoal(
 
 def validate_risk1b_subgoal_records(records: Any, *, limit: int) -> tuple[list[dict[str, Any]], list[str]]:
     errors: list[str] = []
+    if isinstance(records, dict):
+        records = records.get("candidate_prompts") or records.get("strategy_variants") or records.get("subgoals") or records
+    if (
+        isinstance(records, list)
+        and len(records) == 1
+        and isinstance(records[0], dict)
+        and any(key in records[0] for key in ("candidate_prompts", "strategy_variants", "subgoals"))
+    ):
+        wrapper = records[0]
+        records = wrapper.get("candidate_prompts") or wrapper.get("strategy_variants") or wrapper.get("subgoals") or records
     if not isinstance(records, list):
         return [], [
             "Risk1-B VLM output must be a list or a JSON object with candidate_prompts, "
@@ -1828,53 +1838,232 @@ def validate_risk1b_task_relation(records: list[dict[str, Any]], task_descriptio
     task = " ".join(str(task_description or "").lower().split())
     if not task:
         return []
-    relation = parse_simple_manipulation_relation(task)
-    if relation is None:
+    relations = parse_risk1b_manipulation_relations(task)
+    if not relations:
         return []
-    manipulated_object, target_region = relation
     errors: list[str] = []
     for index, record in enumerate(records):
         combined = " ".join(
             str(record.get(field_name, ""))
             for field_name in ("subgoal_text", "target_object", "target_region_or_point", "stop_condition")
         ).lower()
+        subgoal_text = str(record.get("subgoal_text", "")).lower()
         target_object_text = str(record.get("target_object", "")).lower()
         target_region_text = str(record.get("target_region_or_point", "")).lower()
         stop_condition = str(record.get("stop_condition", "")).lower()
-        if not all(token in combined for token in manipulated_object.split()):
-            errors.append(f"candidate_prompt[{index}] must preserve manipulated object: {manipulated_object}")
-        if not (
-            all(token in target_region_text for token in target_region.split())
-            or all(token in stop_condition for token in target_region.split())
-            or all(token in combined for token in target_region.split())
-        ):
-            errors.append(f"candidate_prompt[{index}] must preserve target region/relation: {target_region}")
-        if all(token in target_object_text for token in target_region.split()) and not all(
-            token in target_object_text for token in manipulated_object.split()
-        ):
-            errors.append(
-                f"candidate_prompt[{index}] targets destination as manipulated object; "
-                f"expected {manipulated_object} into {target_region}"
-            )
+        relation_prompt_text = f"{subgoal_text} {stop_condition}"
+        for manipulated_object, target_region in relations:
+            if not all(token in combined for token in manipulated_object.split()):
+                errors.append(f"candidate_prompt[{index}] must preserve manipulated object: {manipulated_object}")
+            if not all(token in relation_prompt_text for token in manipulated_object.split()):
+                errors.append(
+                    f"candidate_prompt[{index}] subgoal_text/stop_condition must preserve relation object: "
+                    f"{manipulated_object}"
+                )
+            if not (
+                all(token in target_region_text for token in target_region.split())
+                or all(token in stop_condition for token in target_region.split())
+                or all(token in combined for token in target_region.split())
+            ):
+                errors.append(f"candidate_prompt[{index}] must preserve target region/relation: {target_region}")
+            if not all(token in relation_prompt_text for token in target_region.split()):
+                errors.append(
+                    f"candidate_prompt[{index}] subgoal_text/stop_condition must preserve relation target: "
+                    f"{target_region}"
+                )
+            if all(token in target_object_text for token in target_region.split()) and not all(
+                token in target_object_text for token in manipulated_object.split()
+            ):
+                errors.append(
+                    f"candidate_prompt[{index}] targets destination as manipulated object; "
+                    f"expected {manipulated_object} into {target_region}"
+                )
+            if contains_destination_as_manipulated_object(subgoal_text, target_region):
+                errors.append(
+                    f"candidate_prompt[{index}] text manipulates destination/target region; "
+                    f"expected manipulating {manipulated_object} toward {target_region}"
+                )
+            if not describes_completed_relation(
+                relation_prompt_text,
+                manipulated_object=manipulated_object,
+                target_region=target_region,
+            ):
+                errors.append(
+                    f"candidate_prompt[{index}] must describe completed object-target relation, "
+                    f"not only an intermediate approach/alignment: {manipulated_object} -> {target_region}"
+                )
+        for action_name, required_tokens in parse_risk1b_required_task_actions(task):
+            if not all(token in combined for token in required_tokens):
+                errors.append(f"candidate_prompt[{index}] must preserve required task action: {action_name}")
     return errors
 
 
-def parse_simple_manipulation_relation(task_description: str) -> tuple[str, str] | None:
-    match = re.search(
-        r"\b(?:put|place|move)\s+(?:the\s+)?(?P<object>.+?)\s+(?:in|into|on|onto|to)\s+(?:the\s+)?(?P<target>.+)$",
-        task_description,
+def describes_completed_relation(text: str, *, manipulated_object: str, target_region: str) -> bool:
+    normalized_text = " ".join(str(text or "").lower().split())
+    if not normalized_text:
+        return False
+    if not all(token in normalized_text for token in manipulated_object.split()):
+        return False
+    if not all(token in normalized_text for token in target_region.split()):
+        return False
+    if describes_only_intermediate_relation(normalized_text, target_region=target_region):
+        return False
+    target_pattern = r"\s+(?:the\s+)?".join(re.escape(part) for part in target_region.split())
+    completion_patterns = (
+        rf"\b(?:put|place|placed|placing|move|moved|position|positioned|set|slide|slid|push|pushed)\b"
+        rf".*\b(?:in|into|on|onto|to|inside|within|right\s+of|left\s+of)\s+(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:is|are|be|been)\s+(?:in|inside|on|onto|within|to|right\s+of|left\s+of)\s+(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:in|inside|on|onto|within|right\s+of|left\s+of)\s+(?:the\s+)?{target_pattern}\b",
     )
-    if not match:
+    if any(re.search(pattern, normalized_text) for pattern in completion_patterns):
+        return True
+    return not describes_only_intermediate_relation(normalized_text, target_region=target_region)
+
+
+def describes_only_intermediate_relation(text: str, *, target_region: str) -> bool:
+    normalized_text = " ".join(str(text or "").lower().split())
+    target_pattern = r"\s+(?:the\s+)?".join(re.escape(part) for part in target_region.split())
+    incomplete_patterns = (
+        rf"\b(?:align|aligned|approach|approached|move|moved|bring|brought)\s+(?:[^.;]*?)"
+        rf"\b(?:toward|towards|near|close\s+to|with)\s+(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:close|near)\s+to\s+(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:ready|aligned|positioned)\s+(?:for|before)\s+(?:placement|placing|contact)\b",
+    )
+    completion_cues = (
+        rf"\b(?:put|place|placed|placing|set)\b.*\b(?:in|into|on|onto|inside|within|right\s+of|left\s+of)\s+"
+        rf"(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:is|are|be|been)\s+(?:in|inside|on|onto|within|right\s+of|left\s+of)\s+(?:the\s+)?{target_pattern}\b",
+    )
+    has_incomplete = any(re.search(pattern, normalized_text) for pattern in incomplete_patterns)
+    has_completion = any(re.search(pattern, normalized_text) for pattern in completion_cues)
+    return has_incomplete and not has_completion
+
+
+def contains_destination_as_manipulated_object(text: str, target_region: str) -> bool:
+    normalized_text = " ".join(str(text or "").lower().split())
+    normalized_target = re.sub(r"\b(?:a|an|the)\b", " ", str(target_region or "").lower())
+    normalized_target = " ".join(normalized_target.split())
+    if not normalized_text or not normalized_target:
+        return False
+    target_phrases = {normalized_target}
+    target_tokens = normalized_target.split()
+    if len(target_tokens) > 1:
+        target_phrases.add(" ".join(target_tokens[-2:]))
+        target_phrases.add(target_tokens[-1])
+    manipulation_verbs = (
+        "move",
+        "align",
+        "center",
+        "centre",
+        "pick up",
+        "grasp",
+        "grab",
+        "lift",
+        "slide",
+        "push",
+        "pull",
+        "reposition",
+        "bring",
+    )
+    for phrase in target_phrases:
+        if not phrase:
+            continue
+        phrase_pattern = r"\s+(?:the\s+)?".join(re.escape(part) for part in phrase.split())
+        for verb in manipulation_verbs:
+            if re.search(rf"\b{re.escape(verb)}\s+(?:the\s+)?{phrase_pattern}\b", normalized_text):
+                return True
+    return False
+
+
+def parse_risk1b_required_task_actions(task_description: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    task = " ".join(str(task_description or "").lower().split())
+    actions: list[tuple[str, tuple[str, ...]]] = []
+    if re.search(r"\bturn\s+on\s+(?:the\s+)?stove\b|\bturn\s+(?:the\s+)?stove\s+on\b", task):
+        actions.append(("turn on stove", ("turn", "on", "stove")))
+    if re.search(r"\band\s+close\s+it\b|\bclose\s+(?:the\s+)?microwave\b", task):
+        actions.append(("close microwave", ("close", "microwave")))
+    return tuple(actions)
+
+
+def parse_simple_manipulation_relation(task_description: str) -> tuple[str, str] | None:
+    relations = parse_risk1b_manipulation_relations(task_description)
+    if not relations:
         return None
-    manipulated_object = clean_relation_phrase(match.group("object"))
-    target_region = clean_relation_phrase(match.group("target"))
+    if len(relations) == 1:
+        return relations[0]
+    manipulated_object = dedupe_join_relation_parts(object_name for object_name, _target in relations)
+    target_region = dedupe_join_relation_parts(target for _object_name, target in relations)
     if not manipulated_object or not target_region:
         return None
     return manipulated_object, target_region
 
 
+def parse_risk1b_manipulation_relations(task_description: str) -> tuple[tuple[str, str], ...]:
+    task = " ".join(str(task_description or "").lower().split())
+    if not task:
+        return ()
+    relations: list[tuple[str, str]] = []
+    activated_object = parse_activated_reference_target(task)
+    pronoun_object = parse_manipulated_pronoun_antecedent(task)
+    for match in re.finditer(
+        r"\b(?:put|place|move)\s+(?:both\s+)?(?:the\s+)?(?P<object>.+?)\s+"
+        r"(?:in|into|on|onto|to)\s+(?:the\s+)?(?P<target>.+?)"
+        r"(?=\s+and\s+(?:put|place|move|open|close)\b|$)",
+        task,
+    ):
+        target_region = clean_relation_phrase(match.group("target"))
+        if target_region == "it" and activated_object:
+            target_region = activated_object
+        object_text = clean_relation_phrase(match.group("object"))
+        if object_text == "it" and pronoun_object:
+            object_parts = (pronoun_object,)
+        else:
+            object_parts = split_manipulated_object_group(match.group("object"), whole_match=match.group(0))
+        for manipulated_object in object_parts:
+            if manipulated_object and target_region:
+                relations.append((manipulated_object, target_region))
+    return tuple(relations)
+
+
+def parse_activated_reference_target(task_description: str) -> str | None:
+    match = re.search(r"\bturn\s+on\s+(?:the\s+)?(?P<object>.+?)\s+and\s+put\b", task_description)
+    if not match:
+        return None
+    return clean_relation_phrase(match.group("object")) or None
+
+
+def parse_manipulated_pronoun_antecedent(task_description: str) -> str | None:
+    match = re.search(
+        r"\bpick\s+up\s+(?:the\s+)?(?P<object>.+?)\s+and\s+(?:put|place|move)\s+it\b",
+        task_description,
+    )
+    if not match:
+        return None
+    return clean_relation_phrase(match.group("object")) or None
+
+
+def split_manipulated_object_group(raw_object: str, *, whole_match: str) -> tuple[str, ...]:
+    cleaned = clean_relation_phrase(raw_object)
+    if not cleaned:
+        return ()
+    if "both " not in f" {whole_match} ":
+        return (cleaned,)
+    parts = [clean_relation_phrase(part) for part in re.split(r"\s+and\s+", raw_object)]
+    parts = [part for part in parts if part]
+    return tuple(parts) if len(parts) >= 2 else (cleaned,)
+
+
+def dedupe_join_relation_parts(parts: Any) -> str:
+    unique: list[str] = []
+    for part in parts:
+        cleaned = clean_relation_phrase(str(part))
+        if cleaned and cleaned not in unique:
+            unique.append(cleaned)
+    return " and ".join(unique)
+
+
 def clean_relation_phrase(value: str) -> str:
-    value = re.sub(r"\b(?:a|an|the)\b", " ", value)
+    value = re.sub(r"\b(?:a|an|the|both)\b", " ", value)
     value = re.sub(r"[^a-z0-9_ ]+", " ", value)
     return " ".join(value.split())
 

@@ -101,11 +101,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--ita-selector-strategy",
-        choices=("baseline_fallback", "debug_min_action_norm", "first_nonbaseline"),
+        choices=(
+            "baseline_fallback",
+            "progress_proxy_or_baseline",
+            "debug_min_action_norm",
+        ),
         default="baseline_fallback",
         help=(
-            "baseline_fallback preserves policy-only chunks; first_nonbaseline is the "
-            "minimal Risk1-B/C full-rollout ablation; debug_min_action_norm is not a method selector."
+            "baseline_fallback preserves policy-only chunks; progress_proxy_or_baseline "
+            "selects a non-baseline chunk only when an observation progress proxy proves "
+            "improvement; debug_min_action_norm is debug-only and not a method selector."
         ),
     )
     args, lerobot_args = parser.parse_known_args()
@@ -223,6 +228,8 @@ def build_instrumented_rollout(
         ita_selector_confidence: float | None = None
         ita_selector_fallback_used = False
         ita_method_claim_ready = False
+        ita_selector_reason: str | None = None
+        ita_progress_proxy_available = False
 
         step = 0
         done = np.array([False] * env.num_envs)
@@ -275,6 +282,8 @@ def build_instrumented_rollout(
                 "selector_strategy": ita_selector_strategy,
                 "selector_confidence": None,
                 "selector_fallback_used": False,
+                "selector_reason": None,
+                "progress_proxy_available": False,
                 "method_claim_ready": False,
                 "limitation": None,
             }
@@ -293,6 +302,7 @@ def build_instrumented_rollout(
                     forced_candidate_id=ita_selected_candidate_id,
                     candidate_prompts_json=ita_candidate_prompts_json,
                     selector_strategy=ita_selector_strategy,
+                    semantic_state=semantic_state,
                 )
                 ita_action_queue = list(decision["selected_actions"])
                 ita_active_candidate_id = decision["selected_candidate_id"]
@@ -302,6 +312,8 @@ def build_instrumented_rollout(
                 ita_baseline_candidate_selected = bool(decision["baseline_candidate_selected"])
                 ita_selector_confidence = decision["selector_confidence"]
                 ita_selector_fallback_used = bool(decision["selector_fallback_used"])
+                ita_selector_reason = str(decision.get("selector_reason") or "")
+                ita_progress_proxy_available = bool(decision.get("progress_proxy_available"))
                 ita_method_claim_ready = bool(decision["method_claim_ready"])
                 ita_candidate_generation_done = True
                 ita_step_record.update(
@@ -316,6 +328,8 @@ def build_instrumented_rollout(
                         "selector_strategy": decision["selector_strategy"],
                         "selector_confidence": decision["selector_confidence"],
                         "selector_fallback_used": decision["selector_fallback_used"],
+                        "selector_reason": decision.get("selector_reason"),
+                        "progress_proxy_available": decision.get("progress_proxy_available"),
                         "method_claim_ready": decision["method_claim_ready"],
                         "limitation": decision["limitation"],
                     }
@@ -338,6 +352,8 @@ def build_instrumented_rollout(
                         "selector_strategy": ita_selector_strategy,
                         "selector_confidence": ita_selector_confidence,
                         "selector_fallback_used": ita_selector_fallback_used,
+                        "selector_reason": ita_selector_reason,
+                        "progress_proxy_available": ita_progress_proxy_available,
                         "method_claim_ready": ita_method_claim_ready,
                     }
                 )
@@ -548,6 +564,8 @@ def build_instrumented_rollout(
                         "selector_strategy": ita_selector_strategy,
                         "selector_confidence": ita_selector_confidence,
                         "selector_fallback_used": bool(ita_selector_fallback_used),
+                        "selector_reason": ita_selector_reason,
+                        "progress_proxy_available": ita_progress_proxy_available,
                         "method_claim_ready": ita_method_claim_ready,
                     },
                     sort_keys=True,
@@ -648,6 +666,7 @@ def build_ita_candidate_decision(
     forced_candidate_id: str | None = None,
     candidate_prompts_json: Path | None = None,
     selector_strategy: str = "baseline_fallback",
+    semantic_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     prompt_variants = load_ita_candidate_prompt_variants(candidate_prompts_json, limit=num_candidates)
     effective_num_candidates = max(num_candidates, len(prompt_variants))
@@ -673,10 +692,11 @@ def build_ita_candidate_decision(
             "selection_role": "policy_only_baseline",
         }
     )
+    attach_observation_progress_proxy(baseline_candidate, semantic_state)
     candidates.append(baseline_candidate)
     should_sample_nonbaseline = bool(forced_candidate_id and forced_candidate_id != "candidate_00_policy_only")
     should_sample_nonbaseline = should_sample_nonbaseline or selector_strategy == "debug_min_action_norm"
-    should_sample_nonbaseline = should_sample_nonbaseline or selector_strategy == "first_nonbaseline"
+    should_sample_nonbaseline = should_sample_nonbaseline or selector_strategy == "progress_proxy_or_baseline"
     should_sample_nonbaseline = should_sample_nonbaseline or bool(prompt_variants)
     if should_sample_nonbaseline:
         for index, seed in enumerate(seeds[:effective_num_candidates]):
@@ -708,13 +728,18 @@ def build_ita_candidate_decision(
                     "sampling_metadata": explicit_noise_metadata,
                 }
             )
+            attach_observation_progress_proxy(candidate, semantic_state)
             candidates.append(candidate)
-    selected = choose_ita_candidate(candidates, forced_candidate_id, selector_strategy=selector_strategy)
+    selected, selector_metadata = choose_ita_candidate_with_metadata(
+        candidates,
+        forced_candidate_id,
+        selector_strategy=selector_strategy,
+    )
     selected_actions = list(selected["actions"])
     baseline_candidate_selected = selected["candidate_id"] == "candidate_00_policy_only"
-    selector_fallback_used = selector_strategy == "baseline_fallback" and not forced_candidate_id
-    selector_confidence = 1.0 if (selector_strategy == "first_nonbaseline" and not baseline_candidate_selected) else 0.0
-    if baseline_candidate_selected and selector_fallback_used:
+    selector_fallback_used = baseline_candidate_selected and not forced_candidate_id
+    selector_confidence = 0.0
+    if baseline_candidate_selected and selector_strategy in {"baseline_fallback", "progress_proxy_or_baseline"}:
         selector_confidence = 1.0
     return {
         "candidate_generation_source": selected["source"],
@@ -726,6 +751,8 @@ def build_ita_candidate_decision(
                 "source": candidate["source"],
                 "action_shape": candidate["action_shape"],
                 "score": candidate["score"],
+                "progress_proxy_score": candidate.get("progress_proxy_score"),
+                "progress_proxy_details": candidate.get("progress_proxy_details"),
                 "is_baseline": bool(candidate.get("is_baseline", False)),
                 "selection_role": candidate.get("selection_role"),
                 "candidate_prompt": candidate.get("candidate_prompt"),
@@ -742,11 +769,11 @@ def build_ita_candidate_decision(
         "selector_strategy": selector_strategy,
         "selector_confidence": selector_confidence,
         "selector_fallback_used": selector_fallback_used,
-        "method_claim_ready": bool(
-            candidate_prompts_json
-            and selector_strategy == "first_nonbaseline"
-            and not baseline_candidate_selected
-        ),
+        "selector_reason": selector_metadata["reason"],
+        "progress_proxy_available": selector_metadata["progress_proxy_available"],
+        "baseline_progress_proxy_score": selector_metadata.get("baseline_progress_proxy_score"),
+        "selected_progress_proxy_score": selector_metadata.get("selected_progress_proxy_score"),
+        "method_claim_ready": False,
         "limitation": selected["limitation"],
         "candidate_prompts_json": str(candidate_prompts_json) if candidate_prompts_json else None,
     }
@@ -794,6 +821,69 @@ def sample_policy_candidate_chunk(
     }
 
 
+def attach_observation_progress_proxy(candidate: dict[str, Any], semantic_state: dict[str, Any] | None) -> None:
+    proxy = compute_observation_progress_proxy(candidate.get("actions") or [], semantic_state)
+    if proxy is None:
+        return
+    candidate["progress_proxy_score"] = proxy["score"]
+    candidate["progress_proxy_details"] = proxy
+
+
+def compute_observation_progress_proxy(
+    actions: list[Any],
+    semantic_state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not actions or not semantic_state:
+        return None
+    eef_pos = semantic_state.get("eef_pos")
+    target_pos = semantic_state.get("target_pos")
+    if not valid_vector3(eef_pos) or not valid_vector3(target_pos):
+        return None
+    first_xyz = first_action_xyz(actions[0])
+    if first_xyz is None:
+        return None
+    direction = [float(target_pos[index]) - float(eef_pos[index]) for index in range(3)]
+    direction_norm = vector_norm(direction)
+    action_norm = vector_norm(first_xyz)
+    if direction_norm <= 1e-9 or action_norm <= 1e-9:
+        return None
+    cosine = sum(first_xyz[index] * direction[index] for index in range(3)) / (action_norm * direction_norm)
+    # Map [-1, 1] to [0, 1]. This is only a first-chunk reach-progress proxy,
+    # not a success claim; candidate selection still falls back on ties.
+    score = max(0.0, min(1.0, (float(cosine) + 1.0) / 2.0))
+    return {
+        "score": round(score, 6),
+        "source": "observation_eef_to_target_direction_proxy",
+        "cosine_eef_to_target": round(float(cosine), 6),
+        "eef_to_target_dist": semantic_state.get("eef_to_target_dist"),
+        "target_object_key": semantic_state.get("target_object_key"),
+        "limitation": "First action xyz is treated as a local Cartesian direction proxy; not full success evidence.",
+    }
+
+
+def first_action_xyz(action: Any) -> list[float] | None:
+    if hasattr(action, "detach"):
+        action = action.detach()
+    if hasattr(action, "to"):
+        action = action.to("cpu")
+    if hasattr(action, "numpy"):
+        action = action.numpy()
+    if hasattr(action, "tolist"):
+        action = action.tolist()
+    values = _flatten_numeric(action)
+    if len(values) < 3:
+        return None
+    return [float(values[0]), float(values[1]), float(values[2])]
+
+
+def valid_vector3(value: Any) -> bool:
+    return isinstance(value, list) and len(value) == 3 and all(isinstance(item, (int, float)) for item in value)
+
+
+def vector_norm(values: list[float]) -> float:
+    return sum(float(value) ** 2 for value in values) ** 0.5
+
+
 def extract_env_action_sequence(
     *,
     raw_chunk: Any,
@@ -821,22 +911,129 @@ def choose_ita_candidate(
     forced_candidate_id: str | None = None,
     selector_strategy: str = "baseline_fallback",
 ) -> dict[str, Any]:
+    selected, _metadata = choose_ita_candidate_with_metadata(
+        candidates,
+        forced_candidate_id,
+        selector_strategy=selector_strategy,
+    )
+    return selected
+
+
+def choose_ita_candidate_with_metadata(
+    candidates: list[dict[str, Any]],
+    forced_candidate_id: str | None = None,
+    selector_strategy: str = "baseline_fallback",
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if not candidates:
         raise ValueError("ITA candidate generation produced no candidates")
+    if selector_strategy not in {"baseline_fallback", "progress_proxy_or_baseline", "debug_min_action_norm"}:
+        raise ValueError(f"unsupported ITA selector strategy: {selector_strategy}")
     if forced_candidate_id:
         for candidate in candidates:
             if candidate["candidate_id"] == forced_candidate_id:
-                return candidate
+                return candidate, {
+                    "reason": f"forced_candidate_id={forced_candidate_id}",
+                    "progress_proxy_available": numeric_progress_proxy_score(candidate) is not None,
+                    "baseline_progress_proxy_score": baseline_progress_proxy_score(candidates),
+                    "selected_progress_proxy_score": numeric_progress_proxy_score(candidate),
+                }
         raise ValueError(f"forced ITA candidate id not found: {forced_candidate_id}")
     if selector_strategy == "baseline_fallback":
         for candidate in candidates:
             if candidate["candidate_id"] == "candidate_00_policy_only":
-                return candidate
-    if selector_strategy == "first_nonbaseline":
-        for candidate in candidates:
-            if candidate["candidate_id"] != "candidate_00_policy_only":
-                return candidate
-    return min(candidates, key=lambda candidate: (candidate["score"], candidate["candidate_id"]))
+                return candidate, {
+                    "reason": "baseline_fallback selector preserves policy-only baseline",
+                    "progress_proxy_available": False,
+                    "baseline_progress_proxy_score": numeric_progress_proxy_score(candidate),
+                    "selected_progress_proxy_score": numeric_progress_proxy_score(candidate),
+                }
+    if selector_strategy == "progress_proxy_or_baseline":
+        return choose_progress_proxy_candidate_or_baseline(candidates)
+    selected = min(candidates, key=lambda candidate: (candidate["score"], candidate["candidate_id"]))
+    return selected, {
+        "reason": f"{selector_strategy} selected minimum debug action score",
+        "progress_proxy_available": numeric_progress_proxy_score(selected) is not None,
+        "baseline_progress_proxy_score": baseline_progress_proxy_score(candidates),
+        "selected_progress_proxy_score": numeric_progress_proxy_score(selected),
+    }
+
+
+def choose_progress_proxy_candidate_or_baseline(candidates: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    baseline = next(
+        (candidate for candidate in candidates if candidate["candidate_id"] == "candidate_00_policy_only"),
+        candidates[0],
+    )
+    baseline_score = numeric_progress_proxy_score(baseline)
+    scored: list[tuple[float, str, dict[str, Any]]] = []
+    for candidate in candidates:
+        score = numeric_progress_proxy_score(candidate)
+        if score is None:
+            continue
+        scored.append((score, str(candidate["candidate_id"]), candidate))
+    if not scored:
+        return baseline, {
+            "reason": "no observation progress proxy scores available; kept baseline",
+            "progress_proxy_available": False,
+            "baseline_progress_proxy_score": baseline_score,
+            "selected_progress_proxy_score": baseline_score,
+        }
+    best_score, _candidate_id, best = max(scored, key=lambda item: (item[0], item[1]))
+    if baseline_score is None:
+        # Without a baseline proxy, there is no evidence that switching improves
+        # the policy-only chunk. Keep the baseline-safe default.
+        return baseline, {
+            "reason": "non-baseline proxy score exists but baseline proxy is missing; kept baseline",
+            "progress_proxy_available": True,
+            "baseline_progress_proxy_score": baseline_score,
+            "selected_progress_proxy_score": baseline_score,
+        }
+    if best["candidate_id"] == baseline["candidate_id"]:
+        return baseline, {
+            "reason": "baseline has the best observation progress proxy score",
+            "progress_proxy_available": True,
+            "baseline_progress_proxy_score": baseline_score,
+            "selected_progress_proxy_score": baseline_score,
+        }
+    if best_score <= baseline_score:
+        return baseline, {
+            "reason": "best non-baseline progress proxy did not beat baseline; kept baseline",
+            "progress_proxy_available": True,
+            "baseline_progress_proxy_score": baseline_score,
+            "selected_progress_proxy_score": baseline_score,
+        }
+    return best, {
+        "reason": "selected non-baseline candidate because observation progress proxy beat baseline",
+        "progress_proxy_available": True,
+        "baseline_progress_proxy_score": baseline_score,
+        "selected_progress_proxy_score": best_score,
+    }
+
+
+def baseline_progress_proxy_score(candidates: list[dict[str, Any]]) -> float | None:
+    baseline = next(
+        (candidate for candidate in candidates if candidate["candidate_id"] == "candidate_00_policy_only"),
+        None,
+    )
+    return numeric_progress_proxy_score(baseline) if baseline is not None else None
+
+
+def numeric_progress_proxy_score(candidate: dict[str, Any]) -> float | None:
+    for key in (
+        "progress_proxy_score",
+        "observation_progress_proxy",
+        "task_relation_proxy",
+        "selector_score",
+    ):
+        value = candidate.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    details = candidate.get("score_details")
+    if isinstance(details, dict):
+        for key in ("progress_proxy_score", "task_relation_proxy", "object_target_distance_proxy"):
+            value = details.get(key)
+            if isinstance(value, (int, float)):
+                return float(value)
+    return None
 
 
 def score_ita_action_sequence(actions: list[Any]) -> float:

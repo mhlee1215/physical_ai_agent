@@ -36,6 +36,8 @@ class DifficultyEvalConfig:
     policy_path: str
     policy_num_steps: int
     policy_n_action_steps: int
+    risk1b_repair_attempts: int
+    risk1b_fallback_on_validation_error: str
     execute: bool
     json_output: bool
 
@@ -125,6 +127,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-path", default=None)
     parser.add_argument("--policy-num-steps", type=int, default=None)
     parser.add_argument("--policy-n-action-steps", type=int, default=None)
+    parser.add_argument(
+        "--risk1b-repair-attempts",
+        type=int,
+        default=2,
+        help="Retry invalid Qwen candidate-prompt JSON this many times before fallback/failure.",
+    )
+    parser.add_argument(
+        "--risk1b-fallback-on-validation-error",
+        choices=("none", "deterministic_locked_fields"),
+        default="none",
+        help=(
+            "Fallback policy when Qwen validation still fails. Paper-table Risk1-B Qwen runs must keep "
+            "this at none; deterministic_locked_fields is a diagnostic-only escape hatch."
+        ),
+    )
     parser.add_argument("--execute", action="store_true", help="Run the generated command chain instead of only writing the plan.")
     parser.add_argument("--json", action="store_true")
     return parser
@@ -135,6 +152,8 @@ def build_config(args: argparse.Namespace, manifest: dict[str, Any]) -> Difficul
         raise ValueError("num-candidates must be >= 2")
     if args.chunk_steps <= 0 or args.action_dim <= 0:
         raise ValueError("chunk-steps and action-dim must be > 0")
+    if args.risk1b_repair_attempts < 0:
+        raise ValueError("risk1b-repair-attempts must be >= 0")
     policy_path = args.policy_path or manifest.get("policy_path") or "lerobot/smolvla_libero"
     policy_num_steps = args.policy_num_steps if args.policy_num_steps is not None else int(manifest.get("policy_num_steps", 10))
     policy_n_action_steps = (
@@ -158,6 +177,8 @@ def build_config(args: argparse.Namespace, manifest: dict[str, Any]) -> Difficul
         policy_path=policy_path,
         policy_num_steps=policy_num_steps,
         policy_n_action_steps=policy_n_action_steps,
+        risk1b_repair_attempts=int(args.risk1b_repair_attempts),
+        risk1b_fallback_on_validation_error=str(args.risk1b_fallback_on_validation_error),
         execute=bool(args.execute),
         json_output=bool(args.json),
     )
@@ -240,6 +261,10 @@ def build_generation_argv(config: DifficultyEvalConfig, row: dict[str, Any], row
         str(context_json),
         "--output-dir",
         str(row_dir),
+        "--repair-attempts",
+        str(config.risk1b_repair_attempts),
+        "--fallback-on-validation-error",
+        config.risk1b_fallback_on_validation_error,
         "--json",
     ]
 
@@ -308,6 +333,14 @@ def build_row_plan(config: DifficultyEvalConfig, row: dict[str, Any]) -> dict[st
         "baseline_success": row.get("baseline_success"),
         "baseline_pc_success": row.get("baseline_pc_success"),
         "recommended_use": row.get("recommended_use"),
+        "generation_policy": {
+            "repair_attempts": config.risk1b_repair_attempts,
+            "fallback_on_validation_error": config.risk1b_fallback_on_validation_error,
+            "fallback_claim_boundary": (
+                "Any deterministic fallback row invalidates the external-Qwen Risk1-B paper-table run. "
+                "Tune the Qwen prompt/repair/parser until rows are Qwen-valid or Qwen-repaired."
+            ),
+        },
         "output_dir": str(row_dir),
         "used_shell": False,
         "entrypoints": {
