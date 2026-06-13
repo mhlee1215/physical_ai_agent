@@ -360,6 +360,9 @@ class Risk1BVlmGeneratorTest(TestCase):
         self.assertIn("varying only the approach strategy", prompt)
         self.assertIn("Do not vary only verbs", prompt)
         self.assertIn("behaviorally distinct motion cue", prompt)
+        self.assertIn("completed-goal command", prompt)
+        self.assertIn("Invalid forms include \"align X", prompt)
+        self.assertIn("Strategy-axis words such as pre_contact_alignment", prompt)
         self.assertIn("object_centric_open_side", prompt)
         self.assertIn("pre_contact_alignment", prompt)
         self.assertIn("collision_avoidant_approach", prompt)
@@ -602,6 +605,9 @@ class Risk1BVlmGeneratorTest(TestCase):
         self.assertIn('"target_region": "plate and right of plate"', repair_prompt)
         self.assertIn('"relation": "white mug -> plate; chocolate pudding -> right of plate"', repair_prompt)
         self.assertIn("Every candidate target_object must exactly equal", repair_prompt)
+        self.assertIn("Repair intermediate-only candidates", repair_prompt)
+        self.assertIn("replace 'align X with Y'", repair_prompt)
+        self.assertIn("final relation complete", repair_prompt)
 
     def test_prompt_and_repair_forbid_multi_object_candidate_splitting(self) -> None:
         spec = importlib.util.spec_from_file_location("risk1b_generator_for_test", SCRIPT)

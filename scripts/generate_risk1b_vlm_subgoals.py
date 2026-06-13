@@ -83,6 +83,19 @@ Rules:
 - Candidates 1..N may vary only strategy_axis, subgoal_text motion cue,
   confidence, and rationale. The object, target region, relation, and stop
   condition must stay task-equivalent to the locked fields.
+- Every candidate subgoal_text must be a completed-goal command, not an
+  intermediate motion command. Valid form: "place/put [all locked objects] on/in
+  [all locked targets] using [strategy cue]". Invalid forms include "align X
+  with Y", "approach X toward Y", "center X above Y", "make first contact with
+  Y", or "move X close to Y" because those describe only intermediate progress.
+- Every candidate stop_condition must describe the final task-complete state
+  from locked_task_fields.relation. It must not stop at aligned/approaching/
+  centered/close/first-contact states.
+- Strategy-axis words such as pre_contact_alignment, object_centric_open_side,
+  short_horizon_contact, and collision_avoidant_approach may appear only as a
+  motion cue inside a final placement command. Example: "place both moka pots on
+  the stove using a pre-contact alignment cue"; not "align both moka pots with
+  the stove".
 - Each candidate's target_object must be exactly
   locked_task_fields.manipulated_object.
 - Each candidate's target_region_or_point must be exactly
@@ -359,6 +372,9 @@ def build_repair_prompt(
         + "- If locked_task_fields.manipulated_object contains ' and ', every candidate must keep the entire object group; do not make one-object candidates.\n"
         + "- If locked_task_fields.relation contains ';', every candidate subgoal_text and stop_condition must preserve every relation pair in that same candidate.\n"
         + "- Do not tell the robot to move, align, center, pick up, grasp, lift, slide, push, pull, reposition, or bring locked_task_fields.target_region.\n"
+        + "- Repair intermediate-only candidates by rewriting them as final placement commands with the same strategy cue. For example, replace 'align X with Y' with 'place X on/in Y using pre-contact alignment'.\n"
+        + "- Every candidate subgoal_text must start from the completed locked task relation, such as 'put/place [all locked objects] on/in [all locked targets] ...'.\n"
+        + "- Every stop_condition must describe the final relation complete, not aligned, approaching, centered, close, or first-contact.\n"
         + (build_required_action_prompt_rules(locked_fields) + "\n" if build_required_action_prompt_rules(locked_fields) else "")
         + "- Vary only strategy_axis and motion cue. Do not introduce new objects. Do not swap object roles.\n"
     )
