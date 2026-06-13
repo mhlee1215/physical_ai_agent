@@ -128,12 +128,12 @@ aliases = [
     ("cream cheese box", "cream_cheese"),
     ("cream cheese", "cream_cheese"),
     ("butter", "butter"),
-    ("moka pot", "moka_pot"),
     ("moka pots", "moka_pot"),
+    ("moka pot", "moka_pot"),
     ("black bowl", "akita_black_bowl"),
-    ("white mug", "porcelain_mug"),
     ("yellow and white mug", "white_yellow_mug"),
     ("yellow white mug", "white_yellow_mug"),
+    ("white mug", "porcelain_mug"),
     ("book", "black_book"),
     ("chocolate pudding", "chocolate_pudding"),
 ]
@@ -141,13 +141,14 @@ aliases = [
 def exact_alias_score(alias: str) -> int:
     return 1 if re.search(r"(?<![a-z])" + re.escape(alias) + r"(?![a-z])", combined) else 0
 
-ranked: list[tuple[int, int, str, str]] = []
+ranked: list[tuple[int, int, int, str, str]] = []
 for alias_index, (alias, key_fragment) in enumerate(aliases):
     if not exact_alias_score(alias):
         continue
     for key in pos_keys:
         if key_fragment in key:
-            ranked.append((100 - alias_index, -len(key), alias, key))
+            instance_priority = 1 if key.endswith("_1_pos") else 0
+            ranked.append((100 - alias_index, instance_priority, -len(key), alias, key))
 
 if not ranked:
     # Last-resort lexical overlap, still constrained to non-robot object position keys.
@@ -156,7 +157,8 @@ if not ranked:
         key_words = set(key.replace("_1_pos", "").replace("_pos", "").split("_"))
         overlap = len(words & key_words)
         if overlap:
-            ranked.append((overlap, -len(key), "lexical_overlap", key))
+            instance_priority = 1 if key.endswith("_1_pos") else 0
+            ranked.append((overlap, instance_priority, -len(key), "lexical_overlap", key))
 
 if not ranked:
     print(json.dumps({
@@ -169,7 +171,7 @@ if not ranked:
     raise SystemExit(2)
 
 ranked.sort(reverse=True)
-_score, _len_key, matched_alias, target_key = ranked[0]
+_score, _instance_priority, _len_key, matched_alias, target_key = ranked[0]
 print(json.dumps({
     "ok": True,
     "target_object_key": target_key,
