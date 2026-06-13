@@ -46,6 +46,7 @@ for task in "${TASK_ARRAY[@]}"; do
   TASK_DIR="$OUT/libero_10_task${task}_seed1201"
   SRC_TASK_DIR="$GEN_ROOT/libero_10_task${task}_seed1201"
   JSON_PATH="$SRC_TASK_DIR/risk1b_subgoals_${MODEL_SLUG}_libero_10_task${task}_seed1201.json"
+  CONTEXT_JSON_PATH="$SRC_TASK_DIR/risk1b_context/context_task${task}_seed1201.json"
   TRACE_PATH="$TASK_DIR/benchmark_trace.jsonl"
   mkdir -p "$TASK_DIR"
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] task${task} start" | tee -a "$OUT/progress.log"
@@ -83,6 +84,122 @@ PY
     continue
   fi
 
+  "$PY" - "$CONTEXT_JSON_PATH" "$JSON_PATH" > "$TASK_DIR/semantic_proxy_keys.json" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+context_path = pathlib.Path(sys.argv[1])
+json_path = pathlib.Path(sys.argv[2])
+if not context_path.exists():
+    print(json.dumps({"ok": False, "reason": "missing_context_json", "path": str(context_path)}))
+    raise SystemExit(2)
+
+context = json.loads(context_path.read_text(encoding="utf-8"))
+payload = json.loads(json_path.read_text(encoding="utf-8"))
+observation_summary = context.get("observation_summary") or {}
+pos_keys = [
+    key
+    for key in observation_summary
+    if key.endswith("_pos")
+    and not key.startswith("robot0")
+    and "_to_robot0_eef_" not in key
+]
+task_text = " ".join(
+    str(part)
+    for part in (
+        context.get("task_description"),
+        payload.get("task_description"),
+        " ".join(context.get("task_descriptions") or []),
+    )
+    if part
+).lower()
+candidate_records = payload.get("candidate_prompts") or payload.get("strategy_variants") or payload.get("subgoals") or []
+candidate_text = " ".join(
+    " ".join(str(record.get(key, "")) for key in ("target_object", "target_region_or_point", "subgoal_text", "stop_condition"))
+    for record in candidate_records
+    if isinstance(record, dict)
+).lower()
+combined = f"{task_text} {candidate_text}"
+
+aliases = [
+    ("alphabet soup", "alphabet_soup"),
+    ("cream cheese box", "cream_cheese"),
+    ("cream cheese", "cream_cheese"),
+    ("butter", "butter"),
+    ("moka pot", "moka_pot"),
+    ("moka pots", "moka_pot"),
+    ("black bowl", "akita_black_bowl"),
+    ("white mug", "porcelain_mug"),
+    ("yellow and white mug", "white_yellow_mug"),
+    ("yellow white mug", "white_yellow_mug"),
+    ("book", "black_book"),
+    ("chocolate pudding", "chocolate_pudding"),
+]
+
+def exact_alias_score(alias: str) -> int:
+    return 1 if re.search(r"(?<![a-z])" + re.escape(alias) + r"(?![a-z])", combined) else 0
+
+ranked: list[tuple[int, int, str, str]] = []
+for alias_index, (alias, key_fragment) in enumerate(aliases):
+    if not exact_alias_score(alias):
+        continue
+    for key in pos_keys:
+        if key_fragment in key:
+            ranked.append((100 - alias_index, -len(key), alias, key))
+
+if not ranked:
+    # Last-resort lexical overlap, still constrained to non-robot object position keys.
+    words = {word for word in re.findall(r"[a-z0-9]+", combined) if len(word) >= 4}
+    for key in pos_keys:
+        key_words = set(key.replace("_1_pos", "").replace("_pos", "").split("_"))
+        overlap = len(words & key_words)
+        if overlap:
+            ranked.append((overlap, -len(key), "lexical_overlap", key))
+
+if not ranked:
+    print(json.dumps({
+        "ok": False,
+        "reason": "could_not_resolve_target_object_key",
+        "context_json": str(context_path),
+        "candidate_prompts_json": str(json_path),
+        "available_pos_keys": pos_keys,
+    }, indent=2, sort_keys=True))
+    raise SystemExit(2)
+
+ranked.sort(reverse=True)
+_score, _len_key, matched_alias, target_key = ranked[0]
+print(json.dumps({
+    "ok": True,
+    "target_object_key": target_key,
+    "receptacle_object_key": "",
+    "matched_alias": matched_alias,
+    "available_pos_keys": pos_keys,
+    "task_description": context.get("task_description"),
+}, indent=2, sort_keys=True))
+PY
+  proxy_status=$?
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] task${task} semantic_proxy_key_exit=${proxy_status}" | tee -a "$OUT/progress.log"
+  if [ "$proxy_status" -ne 0 ]; then
+    echo "task${task} semantic_proxy_key failed" > "$TASK_DIR/row_status.txt"
+    continue
+  fi
+  TARGET_OBJECT_KEY=$("$PY" - "$TASK_DIR/semantic_proxy_keys.json" <<'PY'
+import json
+import pathlib
+import sys
+print(json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["target_object_key"])
+PY
+)
+  RECEPTACLE_OBJECT_KEY=$("$PY" - "$TASK_DIR/semantic_proxy_keys.json" <<'PY'
+import json
+import pathlib
+import sys
+print(json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")).get("receptacle_object_key") or "__missing_receptacle_pos")
+PY
+)
+
   "$PY" -B scripts/run_libero_in_episode_smolvla_instrumented.py \
     --trace-path "$TRACE_PATH" \
     --trigger-mode semantic_no_progress \
@@ -90,6 +207,8 @@ PY
     --semantic-min-step 220 \
     --semantic-window 20 \
     --semantic-progress-threshold 0.002 \
+    --target-object-key "$TARGET_OBJECT_KEY" \
+    --receptacle-object-key "$RECEPTACLE_OBJECT_KEY" \
     --ita-enable \
     --ita-num-candidates 5 \
     --ita-candidate-seeds 1201,1202,1203,1204,1205 \
