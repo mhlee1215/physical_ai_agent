@@ -172,8 +172,10 @@ class SO101SmolVLAPipelineTest(TestCase):
 
         self.assertIn("--recovery-steps", constants)
         self.assertIn("--recovery-joint-std", constants)
+        self.assertIn("--reject-preclose-contact", constants)
         self.assertIn("recovery", constants)
         self.assertIn("recovery_or_off_nominal_states", constants)
+        self.assertIn("reject_preclose_contact", constants)
 
     def test_pickplace_exporter_uses_wrist_ego_student_camera_contract(self) -> None:
         source = Path("scripts/export_so101_pickplace_teacher_rollouts_lerobot.py").read_text(

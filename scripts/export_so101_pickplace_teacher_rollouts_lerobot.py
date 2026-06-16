@@ -87,6 +87,11 @@ def main() -> None:
     parser.add_argument("--side-approach-retreat", type=float, default=0.075)
     parser.add_argument("--min-success-frames", type=int, default=0)
     parser.add_argument("--max-success-dist", type=float, default=0.035)
+    parser.add_argument(
+        "--reject-preclose-contact",
+        action="store_true",
+        help="Reject otherwise successful episodes if a finger touches the object before the close phase.",
+    )
     parser.add_argument("--max-attempts", type=int, default=0, help="0 means episodes * 10.")
     parser.add_argument(
         "--grasp-filter",
@@ -130,6 +135,7 @@ def main() -> None:
         side_approach_retreat=args.side_approach_retreat,
         min_success_frames=args.min_success_frames,
         max_success_dist=args.max_success_dist,
+        reject_preclose_contact=args.reject_preclose_contact,
         max_attempts=args.max_attempts,
         grasp_filter=args.grasp_filter,
         sticky_grasp=args.allow_sticky_grasp,
@@ -164,6 +170,7 @@ def export_pickplace_teacher_rollouts(
     side_approach_retreat: float,
     min_success_frames: int,
     max_success_dist: float,
+    reject_preclose_contact: bool,
     max_attempts: int,
     grasp_filter: str,
     sticky_grasp: bool,
@@ -264,6 +271,7 @@ def export_pickplace_teacher_rollouts(
                 side_approach_retreat=side_approach_retreat,
                 min_success_frames=min_success_frames,
                 max_success_dist=max_success_dist,
+                reject_preclose_contact=reject_preclose_contact,
                 sticky_grasp=sticky_grasp,
                 include_camera3_duplicate=include_camera3_duplicate,
                 object_shape=shape,
@@ -335,6 +343,7 @@ def export_pickplace_teacher_rollouts(
             "side_approach_retreat": float(side_approach_retreat),
             "min_success_frames": int(min_success_frames),
             "max_success_dist": float(max_success_dist),
+            "reject_preclose_contact": bool(reject_preclose_contact),
         },
         "grasp_filter": str(grasp_filter),
         "object_shapes": [_object_shape_report(shape) for shape in shape_sequence],
@@ -673,6 +682,7 @@ def _write_pickplace_episode(
     side_approach_retreat: float,
     min_success_frames: int,
     max_success_dist: float,
+    reject_preclose_contact: bool,
     sticky_grasp: bool,
     include_camera3_duplicate: bool,
     object_shape: dict[str, Any],
@@ -891,7 +901,7 @@ def _write_pickplace_episode(
         raw_success
         and frames >= max(0, int(min_success_frames))
         and final_obj_to_target_dist <= float(max_success_dist)
-        and not preclose_contact
+        and (not preclose_contact or not bool(reject_preclose_contact))
     )
     return {
         "seed": seed,
@@ -904,6 +914,7 @@ def _write_pickplace_episode(
         "quality_thresholds": {
             "min_success_frames": int(min_success_frames),
             "max_success_dist": float(max_success_dist),
+            "reject_preclose_contact": bool(reject_preclose_contact),
         },
         "success_step": success_step,
         "search_steps": search_steps,
