@@ -9,7 +9,7 @@
   "episodes": 24,
   "expected_frames_per_episode": null,
   "expected_min_episodes": 24,
-  "frames": 5520,
+  "frames": 5547,
   "generator": "scripts/export_so101_pickplace_teacher_rollouts_lerobot.py",
   "image_shape": [
     3,

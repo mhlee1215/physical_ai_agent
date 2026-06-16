@@ -57,7 +57,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             source_episode_count=50,
             target_expansion_factor=2.0,
             min_frames_per_episode=220,
-            max_frames_per_episode=240,
+            max_frames_per_episode=246,
             includes_recovery_or_off_nominal_states=True,
             sticky_grasp_allowed=False,
         )
@@ -72,7 +72,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             source_episode_count=50,
             target_expansion_factor=2.0,
             min_frames_per_episode=220,
-            max_frames_per_episode=240,
+            max_frames_per_episode=246,
             includes_recovery_or_off_nominal_states=False,
             sticky_grasp_allowed=True,
         )
@@ -90,12 +90,12 @@ class SO101SmolVLAPipelineTest(TestCase):
             source_episode_count=50,
             target_expansion_factor=2.0,
             min_frames_per_episode=220,
-            max_frames_per_episode=240,
+            max_frames_per_episode=246,
             includes_recovery_or_off_nominal_states=True,
             sticky_grasp_allowed=False,
         )
         self.assertTrue(
-            any("expected at most 24000 from 240 max frames/episode" in error for error in too_long.validate())
+            any("expected at most 24600 from 246 max frames/episode" in error for error in too_long.validate())
         )
 
     def test_closed_loop_best_only_ignores_non_best_checkpoints(self) -> None:
