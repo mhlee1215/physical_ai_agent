@@ -200,7 +200,6 @@ def export_pickplace_teacher_rollouts(
     env = _make_pickplace_env()
     _install_cube_pose_alias(env)
     policy_renderers = _make_policy_renderers(env, config)
-    _add_top_down_policy_renderer(env, policy_renderers, config)
     teacher_renderers = _make_teacher_renderers(env, config)
     action_space_low = np.asarray(env.action_space.low, dtype=np.float32).copy()
     action_space_high = np.asarray(env.action_space.high, dtype=np.float32).copy()
@@ -346,25 +345,25 @@ def export_pickplace_teacher_rollouts(
         },
         "camera3_duplicate": {
             "enabled": bool(include_camera3_duplicate),
-            "source": "wrist_cam",
-            "reason": "lerobot/svla_so100_pickplace uses observation.images.top and observation.images.wrist; SmolVLA preprocessing maps top->camera1 and wrist->camera2. camera3 duplicates wrist only when a 3-camera base config is required.",
+            "source": "egocentric_cam",
+            "reason": "lerobot/smolvla_base expects camera1/camera2/camera3; duplicate keeps the student policy dataset limited to wrist+egocentric cameras.",
         },
         "feature_mapping": {
-            "observation.images.camera1": "top_down",
-            "observation.images.camera2": "wrist_cam",
-            **({"observation.images.camera3": "wrist_cam duplicate"} if include_camera3_duplicate else {}),
+            "observation.images.camera1": "wrist_cam",
+            "observation.images.camera2": "egocentric_cam",
+            **({"observation.images.camera3": "egocentric_cam duplicate"} if include_camera3_duplicate else {}),
             "observation.state": "SO101 qpos/control state",
             "action": "SO101 qpos target action",
             "task": TASK,
         },
         "official_camera_contract": {
-            "dataset": "lerobot/svla_so100_pickplace",
-            "dataset_features": ["observation.images.top", "observation.images.wrist"],
+            "dataset": "SO101 wrist+egocentric visual-student dataset aligned to lerobot/smolvla_base feature names",
+            "dataset_features": ["observation.images.wrist_cam", "observation.images.egocentric_cam"],
             "rename_map": {
-                "observation.images.top": "observation.images.camera1",
-                "observation.images.wrist": "observation.images.camera2",
+                "observation.images.wrist_cam": "observation.images.camera1",
+                "observation.images.egocentric_cam": "observation.images.camera2",
             },
-            "local_verification": "HF cached SmolVLA SO101 artifact policy_preprocessor records the same rename map.",
+            "local_verification": "Student inputs intentionally exclude top_down and scene_3d; teacher renderers may still use privileged cameras for data generation.",
         },
         "episodes": episode_summaries,
         "skipped": skipped,
@@ -1016,26 +1015,18 @@ def _make_pickplace_frame(
     action: np.ndarray,
     include_camera3_duplicate: bool,
 ) -> dict[str, Any]:
-    top = _render_camera(env, renderers["top_down"], "top_down")
     wrist = _render_camera(env, renderers["wrist_cam"], "wrist_cam")
+    ego = _render_camera(env, renderers["egocentric_cam"], "egocentric_cam")
     frame = {
-        "observation.images.camera1": top,
-        "observation.images.camera2": wrist,
+        "observation.images.camera1": wrist,
+        "observation.images.camera2": ego,
         "observation.state": _current_qpos(env).astype(np.float32),
         "action": np.asarray(action, dtype=np.float32),
         "task": TASK,
     }
     if include_camera3_duplicate:
-        frame["observation.images.camera3"] = wrist.copy()
+        frame["observation.images.camera3"] = ego.copy()
     return frame
-
-
-def _add_top_down_policy_renderer(env: Any, renderers: dict[str, Any], config: WristEgoServoConfig) -> None:
-    if "top_down" in renderers:
-        return
-    import mujoco
-
-    renderers["top_down"] = mujoco.Renderer(env.unwrapped.model, height=config.height, width=config.width)
 
 
 if __name__ == "__main__":

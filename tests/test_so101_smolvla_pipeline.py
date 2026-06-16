@@ -174,3 +174,33 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--recovery-joint-std", constants)
         self.assertIn("recovery", constants)
         self.assertIn("recovery_or_off_nominal_states", constants)
+
+    def test_pickplace_exporter_uses_wrist_ego_student_camera_contract(self) -> None:
+        source = Path("scripts/export_so101_pickplace_teacher_rollouts_lerobot.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+        constants = {
+            node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        frame_function = next(
+            node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_make_pickplace_frame"
+        )
+        frame_constants = {
+            node.value
+            for node in ast.walk(frame_function)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+
+        self.assertIn("wrist_cam", frame_constants)
+        self.assertIn("egocentric_cam", frame_constants)
+        self.assertNotIn("top_down", frame_constants)
+        self.assertIn("observation.images.camera1", frame_constants)
+        self.assertIn("observation.images.camera2", frame_constants)
+        self.assertIn("observation.images.camera3", frame_constants)
+        self.assertIn("observation.images.camera1", constants)
+        self.assertIn("observation.images.wrist_cam", constants)
+        self.assertIn("observation.images.egocentric_cam", constants)
+        self.assertIn("egocentric_cam duplicate", constants)
+        self.assertNotIn("observation.images.top", constants)
+        self.assertNotIn("wrist_cam duplicate", constants)
