@@ -207,13 +207,13 @@ def export_teacher_rollouts(
         },
         "camera3_duplicate": {
             "enabled": bool(include_camera3_duplicate),
-            "source": "egocentric_cam",
-            "reason": "lerobot/smolvla_base expects camera1/camera2/camera3; duplicate keeps runtime limited to wrist+egocentric cameras.",
+            "source": "wrist_cam",
+            "reason": "lerobot/smolvla_base expects camera2 to carry the eye-in-hand/wrist view; camera3 duplicates camera2 when requested.",
         },
         "feature_mapping": {
-            "observation.images.camera1": "wrist_cam",
-            "observation.images.camera2": "egocentric_cam",
-            **({"observation.images.camera3": "egocentric_cam duplicate"} if include_camera3_duplicate else {}),
+            "observation.images.camera1": "top_down",
+            "observation.images.camera2": "wrist_cam",
+            **({"observation.images.camera3": "wrist_cam duplicate"} if include_camera3_duplicate else {}),
             "observation.state": "SO101 qpos/control state",
             "action": "SO101 qpos target action",
             "task": TASK,
@@ -455,16 +455,16 @@ def _make_lerobot_frame(
     include_camera3_duplicate: bool,
 ) -> dict[str, Any]:
     wrist = _render_camera(env, renderers["wrist_cam"], "wrist_cam")
-    ego = _render_camera(env, renderers["egocentric_cam"], "egocentric_cam")
+    top = _render_camera(env, renderers["top_down"], "top_down")
     frame = {
-        "observation.images.camera1": wrist,
-        "observation.images.camera2": ego,
+        "observation.images.camera1": top,
+        "observation.images.camera2": wrist,
         "observation.state": _current_qpos(env).astype(np.float32),
         "action": np.asarray(action, dtype=np.float32),
         "task": TASK,
     }
     if include_camera3_duplicate:
-        frame["observation.images.camera3"] = ego.copy()
+        frame["observation.images.camera3"] = wrist.copy()
     return frame
 
 

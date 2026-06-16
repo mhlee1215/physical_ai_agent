@@ -31,9 +31,9 @@ class SmolVLASO101Contract:
     tokenizer_max_length: int = 48
     runtime_camera_mapping: dict[str, str] = field(
         default_factory=lambda: {
-            "observation.images.camera1": "wrist_cam",
-            "observation.images.camera2": "egocentric_cam",
-            "observation.images.camera3": "egocentric_cam_duplicate",
+            "observation.images.camera1": "top_down",
+            "observation.images.camera2": "wrist_cam",
+            "observation.images.camera3": "wrist_cam_duplicate",
         }
     )
 

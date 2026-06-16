@@ -1547,6 +1547,7 @@ def _make_policy_renderers(env: Any, config: WristEgoServoConfig) -> dict[str, A
     return {
         "wrist_cam": mujoco.Renderer(env.unwrapped.model, height=config.height, width=config.width),
         "egocentric_cam": mujoco.Renderer(env.unwrapped.model, height=config.height, width=config.width),
+        "top_down": mujoco.Renderer(env.unwrapped.model, height=config.height, width=config.width),
     }
 
 
