@@ -84,12 +84,12 @@ paper-facing concepts:
   recovery-aware train data, dataset manifest validation, and monitor-managed
   validation/closed-loop/overfit stopping.
 - RunPod experiment-data storage policy: past remote experiment results are not
-  required as the system of record. For all future RunPod data-generation,
-  training, evaluation, and closed-loop runs, download the dataset/result bundle
-  to the local repo at run completion, verify the local manifest or metrics,
-  then delete the completed remote RunPod artifact directory. Keep reusable
-  Python environments on the Pod's local disk when practical; use the network
-  volume only for active handoff/cache, not long-term experiment-data storage.
+  needed. Starting now, every new RunPod data-generation, training, evaluation,
+  and closed-loop run must end with a local download, local verification, and
+  remote deletion of the completed dataset/result/checkpoint artifact. The local
+  repo is the preservation point for experiment data. Keep reusable Python
+  environments on the Pod's local disk when practical; use the network volume
+  only for active handoff/cache, not long-term experiment-data storage.
 
 ### What We Have Learned
 

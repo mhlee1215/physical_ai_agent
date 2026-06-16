@@ -7,6 +7,9 @@
 - New collaborators should read `Summary.md` first for the current paper target, thread topology, RunPod volume state, and active blockers.
 - New conversations should use normal Codex collaboration by default. Enter postdoc/orchestrator mode only when the user says `포닥 모드로 전환해서 PM과 스레드들을 오케스트레이션해줘.` or `포닥 모드 켜줘.`
 - `리서치 모드` is a RunPod debugging override: preserve the live Pod by default and let RunPod Researcher and Tech Lead coordinate 1:1 while PM tracks progress/cost/ownership.
+- Any user-requested orchestration policy change must be persisted to repo docs in the same turn. Update `Summary.md` for current state and `docs/harness/physical-ai/team-spec.md` for durable role/routing rules; thread messages alone are not enough.
+- Top paper-result priority: produce experiment data for manuscript tables as quickly and efficiently as possible. Prioritize actual table-ready rows, metrics, and artifacts over repeated smoke diagnostics. Use only the minimal gates needed to unblock data-producing runs.
+- RunPod experiment-data lifecycle: past remote results are not needed. For every new RunPod experiment, download completed datasets/results/checkpoints locally, verify the local copy, then delete the remote artifact directory.
 - Use `docs/agentic_physical_ai_plan.md` for the full checkpoint plan and `docs/harness/physical-ai/team-spec.md` for checkpoint orchestration.
 
 ## Why

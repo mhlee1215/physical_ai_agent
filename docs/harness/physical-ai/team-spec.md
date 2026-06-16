@@ -204,14 +204,16 @@ policy is:
   `configs/so101/smolvla_pickplace_contact_train100_manifest.json`: doubled
   train episodes, 256x256 visual inputs, no sticky grasp, and recovery/off-
   nominal states to cover privileged-teacher versus visual-student drift.
-- RunPod experiment-data lifecycle is download-first and delete-after-fetch.
-  Completed teacher datasets, validation datasets, predecoded caches,
-  checkpoints, rollout videos, metrics, dashboard outputs, and other experiment
-  result bundles must be copied back to the local repo before they are treated
-  as preserved. After the local copy is verified with its manifest or metrics
-  summary, remove the remote RunPod artifact directory and stop the Pod unless
-  an active follow-up run is already in progress. Do not use the RunPod network
-  volume as the long-term source of truth for experiment data.
+- RunPod experiment-data lifecycle is download, verify, then delete. Past
+  remote experiment results are not required. For every new RunPod teacher
+  dataset, validation dataset, predecoded cache, checkpoint, rollout video,
+  metric file, dashboard output, and other experiment result bundle, copy the
+  completed artifact back to the local repo, verify the local copy with its
+  manifest or metrics summary, then remove the corresponding remote artifact
+  directory. Do not treat a RunPod artifact as preserved until the local
+  verification succeeds. Stop the Pod after cleanup unless an active follow-up
+  run is already in progress. Do not use the RunPod network volume as the
+  long-term source of truth for experiment data.
 - For SO101 runs under network-volume quota pressure, install Python
   environments, pip caches, and temporary build files on the Pod local disk
   such as `/opt/physical-ai`; keep only active dataset/result handoff
