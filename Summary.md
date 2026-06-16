@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-06-11
+Last updated: 2026-06-16
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -25,6 +25,12 @@ near-term paper target is RSS SemRob 2026.
 
 The working method is **Imagine-Then-Act**: an agentic wrapper around a frozen
 lightweight VLA policy.
+
+The immediate collaboration goal is to produce manuscript-table experiment data
+as quickly and efficiently as possible. Research and orchestration choices should
+favor real task rows, metrics, videos, summaries, and artifact bundles over
+additional infrastructure diagnostics unless those diagnostics are the shortest
+path to unblock a data-producing run.
 
 Paper-facing method framing:
 
@@ -51,162 +57,103 @@ paper-facing concepts:
 
 ## Current Evidence State
 
-### Completed or Stable
+### Active SO101 SmolVLA Fine-Tuning Lane
 
-- Native SmolVLA noise path was tested and reached actual inference, but
-  produced weak diversity. Treat as diagnostic baseline, not method evidence.
-- Template prompt portfolio produced meaningfully more diverse policy-generated
-  candidates than native noise. Treat as candidate-generation evidence, not
-  benchmark success.
-- Direct simulator snapshot/restore and scoped LeRobot episode-start checks
-  passed previously. Keep those as simulator-control evidence, not benchmark
-  success.
-- Qwen2.5-VL-7B model cache and model-load preflight passed on the new 60GB
-  RunPod volume.
-- A paper-ready overview figure has been generated and copied to
-  `papers/rss2026_semrob/figures/overview.png`.
-- Install surface has been simplified. The canonical install/check scripts are:
-  - `scripts/install/local_install.sh`
-  - `scripts/install/runpod_install.sh`
-  - `scripts/install/local_check.sh`
-  - `scripts/install/runpod_check.sh`
+- RunPod SO101 SmolVLA fine-tuning is being monitored through the training
+  dashboard and JSONL metrics under the active run directory.
+- Checkpoint retention policy for this lane is validation-best checkpoint plus
+  one latest checkpoint for crash recovery. Do not keep every checkpoint unless
+  the user explicitly asks for archival storage.
+- Supervised validation loss may run after checkpoint save on CPU. Closed-loop
+  evaluation is intentionally sparse: run it only when a checkpoint becomes the
+  new validation-best candidate, or for explicit manual checks, and avoid
+  overlapping full CUDA closed-loop rollouts with active GPU training.
+- Current observed best validation checkpoint is `001490` (`val_loss=0.083125`).
+  Checkpoint `002682` saved and validated but did not improve
+  (`val_loss=0.139522`), so training was stopped as likely overfitting.
+- Final current-best closed-loop evaluation
+  `final_best_001490_cuda_ep24_step160` completed on CUDA with
+  `success_rate=0.0`, `grasp_rate=0.041667`, over 24 episodes. The best
+  checkpoint was downloaded locally to
+  `_workspace/so101_smolvla_pure/runpod5_best_checkpoints/001490_pretrained_model`;
+  final rollout artifacts were downloaded to
+  `_workspace/so101_smolvla_pure/runpod5_final_evals/final_best_001490_cuda_ep24_step160`.
+- The next SO101 SmolVLA run must start from the checked pipeline contract in
+  `docs/so101_smolvla_training_pipeline.md`: 256x256 SmolVLA inputs,
+  512-padding preprocessing, sample-time CUDA/MPS augmentation, doubled
+  recovery-aware train data, dataset manifest validation, and monitor-managed
+  validation/closed-loop/overfit stopping.
 
-### Currently Blocked or Pending
+### What We Have Learned
 
-- The paper-facing Qwen2.5-VL-7B external subgoal generation chain has not yet
-  completed because actual LIBERO context capture is blocked by EGL render-device
-  permissions on the tested RunPod hosts.
-- SmolVLA candidate chunks from Qwen2.5-VL-7B-generated subgoals have not been
-  produced yet.
-- Simulation-based candidate selection over Qwen2.5-VL-7B candidates has not
-  run yet.
-- Benchmark/environment success for the full Imagine-Then-Act method has not
-  been demonstrated yet.
+- A plain frozen SmolVLA policy is not enough by itself for the paper story; it
+  gives us a useful baseline but weak candidate diversity.
+- Template-based strategy portfolios can create more diverse SmolVLA action
+  chunks. This supports the idea that language-conditioned variation can widen
+  the action space of a frozen policy.
+- External VLM-generated strategy variants are feasible, but still inconsistent:
+  some tasks produce usable variants and policy-generated chunks, while others
+  fail schema, grounding, or task-relation checks.
+- Simulation-based candidate selection is partially implemented, but current
+  selector evidence is still diagnostic. It is not yet strong enough to claim a
+  reliable selector improvement.
+- The system can now run paper-shaped diagnostic sweeps and produce comparison
+  tables, videos, summaries, and artifact bundles. The current evidence is
+  useful for deciding the next research direction, not yet for claiming benchmark
+  gains.
 
-Current blocker:
+### Current Claim Boundary
 
-- Category: `CONTEXT_CAPTURE_LIBERO_BLOCKED_EGL_DEVICE_PERMISSION`.
-- Symptom: the full `capture_risk1b_context.py --backend libero` path cannot
-  initialize EGL because the container cannot open `/dev/dri/renderD*`.
-- Important distinction: Qwen2.5-VL-7B readiness is an infrastructure PASS, but
-  the external-VLM experiment itself is still blocked before generation.
+- Do claim: we are testing whether external strategy generation plus frozen VLA
+  execution can produce a useful set of candidate first-action chunks.
+- Do claim: diagnostic runs show modest candidate diversity improvements on some
+  tasks.
+- Do not claim yet: benchmark success, deployment-ready rendering, reliable
+  selector improvement, or full-task improvement.
+- Do not describe internal blockers or management labels in the manuscript.
 
-Latest mitigation:
+### Current Research Direction
 
-- Tech Lead pushed `80af42561fa6084981ddb6ea2eba123da0cae86b`.
-- `scripts/preflight_risk1b_context_capture.py` now performs a cheap
-  `/dev/dri/renderD*` read/write gate before launching the full context-capture
-  path.
-- Manager must reject pods with inaccessible render nodes before handoff.
-- OSMesa is a limited plumbing fallback only; do not present it as benchmark or
-  deployable EGL evidence.
+- The top priority is fast, efficient production of experiment data that can
+  support or rule out paper-table claims.
+- Prioritize real experimental rows for the paper table: task coverage, candidate
+  validity, action-chunk diversity, selector behavior, and full-task or smoke
+  outcomes when available.
+- Stop spending research time on repeated environment or smoke diagnostics unless
+  they are the smallest necessary step before a real data-producing run.
+- Use the current shallow-rendering route as a diagnostic data-production lane.
+  Treat it as useful for research iteration, not as deployment or benchmark
+  renderer evidence.
+- Keep full EGL/deployment evidence separate. It can be revisited later, but it
+  is not the active path for generating the next paper table.
 
-## RunPod Infrastructure State
+## Collaboration Model
 
-- Current persistent RunPod volume:
-  - name: `physical_ai_volume_60`
-  - id: `otq1k142hf`
-  - size: 60GB
-  - datacenter: `EU-RO-1`
-  - mount: `/workspace`
-- Old 40GB volume was deleted:
-  - old name: `physical_ai_network_volume`
-  - old id: `w59nxx3o43`
-- Persistent paths on the new volume:
-  - canonical LIBERO/SmolVLA env:
-    `/workspace/physical-ai/envs/lerobot_py312`
-  - Risk1-B VLM env:
-    `/workspace/physical-ai/envs/risk1b_vlm_py312`
-  - LIBERO config:
-    `/workspace/physical-ai/libero_config/config.yaml`
-  - LIBERO assets:
-    `/workspace/physical-ai/libero_assets`
-  - Hugging Face/model cache:
-    `/workspace/physical-ai/hf_home`
-  - pip cache:
-    `/workspace/physical-ai/pip_cache`
-- Qwen2.5-VL-7B weights fit on the 60GB volume and model-load preflight has
-  passed once.
-- Default mode: RunPod pods must be stopped after artifact fetch or blocker. No
-  pod should be left running while ownership is unclear.
-- Research mode override: when the user says `리서치 모드` or `리서치 모드 들어간다`,
-  do not stop the active RunPod Pod by default. Preserve it so RunPod
-  Researcher and Tech Lead can debug 1:1 on the same environment. PM tracks
-  progress/cost/ownership and reports decision-relevant updates to the postdoc.
-  Stop only on explicit PM/user cleanup request, research-mode exit, or urgent
-  cost/security/safety risk.
+This summary is for collaborators who need research context, not operational
+details. Low-level orchestration rules, thread IDs, install commands, cloud
+volume paths, and RunPod lifecycle policy live in
+`docs/harness/physical-ai/team-spec.md`.
 
-## Thread Topology
+Working collaboration assumptions:
 
-New conversations should start as ordinary Codex collaboration. The
-postdoc/orchestrator workflow is activated only when the user explicitly says:
+- New conversations start as ordinary Codex collaboration unless the user
+  explicitly asks for postdoc/orchestrator mode.
+- The postdoc/orchestrator owns high-level research judgment, claim boundaries,
+  and user-facing synthesis.
+- PM owns coordination and concise status tracking.
+- Tech Lead owns code fixes and tests.
+- RunPod Manager owns cloud resource setup and handoff.
+- RunPod Researcher owns experiment execution and artifact-backed result reports.
+- Evaluation Results Manager classifies final evaluation packages before they
+  are used as paper evidence.
 
-- `포닥 모드로 전환해서 PM과 스레드들을 오케스트레이션해줘.`
-- `포닥 모드 켜줘.`
+Research mode means an active cloud experiment environment should be preserved
+for researcher/tech-lead debugging unless the user or PM explicitly requests
+cleanup or an urgent cost/security risk appears.
 
-After that trigger, the user mainly talks to the postdoc/orchestrator thread.
-The orchestrator should proactively delegate work to specialist threads when a
-task crosses role boundaries.
-
-Known thread roles:
-
-- Postdoc/orchestrator: this conversation. Owns high-level decisions, cold
-  judgment, PM steering, paper claim boundaries, and user-facing synthesis.
-- PM/watchdog: `019eaf36-bb40-7182-8c92-a40550455ca3`.
-  Owns checklists, owner tracking, nudge loops, worker report collection, and
-  final status boards. All specialist threads report task completion/blockers
-  to PM; PM reports closed or blocked tasks back to the postdoc.
-- Tech Lead: `019eab52-10fb-78f0-923d-678ab82cc70f`.
-  Owns repo-backed implementation, tests, harness/code patches, and diagnostics.
-  Reports commits, tests, and blockers to PM.
-- RunPod Manager: `019eaf4d-4157-7f51-9099-561b7c3a9c1e`.
-  Owns RunPod allocation, source staging, install/bootstrap, env gates, handoff,
-  stop, and no-RUNNING confirmation. Reports allocation/handoff/cleanup status
-  to PM.
-- RunPod Researcher: `019eab62-ca0b-7770-ad27-5d95f66ebd62`.
-  Runs approved experiments only after manager handoff, fetches artifacts, and
-  reports commands, artifacts, and verdicts to PM.
-- Evaluation Results Manager: `019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`.
-  Classifies paper-facing evaluation result packages as paper-ready,
-  diagnostic-only, or blocked and reports classifications to PM. This manager
-  is not a general inbox for RunPod allocation, install, cache, volume, or
-  cleanup status.
-- Paper-writing thread: `019e9e01-32c0-7641-92b7-0f6c23800122`.
-  Owns the manuscript draft and separate TODO/checklist. Reports completed
-  sections and unresolved TODOs to PM.
-- Related works thread: `019eaa3f-c52b-7d43-ae62-da4fa5532ec6`.
-  Supplies citation clusters and overlap analysis. Reports paper-ready synthesis
-  and overlap risks to PM.
-
-## Operating Rules
-
-- Do not run RunPod install/allocation from researcher threads. Researchers must
-  wait for a manager handoff.
-- In research mode, after a manager handoff, RunPod Researcher and Tech Lead may
-  coordinate directly on the live Pod. PM monitors and reports meaningful
-  updates; RunPod Manager does not stop the Pod unless explicitly asked or an
-  urgent risk appears.
-- RunPod Manager must use GitHub remote source staging only unless the user
-  separately approves local workspace upload.
-- RunPod Manager must use the new 60GB volume `otq1k142hf`.
-- RunPod Manager must stage the relevant pushed commit exactly and report the
-  source path plus `.source_commit`.
-- Install/check commands should use the canonical `scripts/install/*` entrypoints.
-- When RunPod capacity is the only blocker and the user/PM says to continue,
-  RunPod Manager remains the owner until a usable instance is secured or the
-  user/PM cancels. Retries run in repeated 10-attempt batches with 20-30 minute
-  sleep/backoff, no idle Pod while sleeping, and a PM report after each attempt
-  and batch. Capacity shortage is a polling state, not a terminal experiment
-  blocker.
-- Paper-facing evaluation result packages must be reported to PM and Evaluation
-  Results Manager by the RunPod Researcher or another result reviewer after
-  artifacts/metrics exist. Routine infra status goes to PM only.
-- Paper drafts must not contain internal management labels, blockers, TODOs, or
-  status-board language. TODOs belong in a separate checklist.
-- Mock, fixture, proxy-only, debug, OSMesa fallback, or plumbing evidence must
-  not be promoted to benchmark success.
-- Treat development logs and dated intermediate artifacts as legacy unless this
-  summary or the Evaluation Results Manager marks them current.
+Any future orchestration policy change must be recorded in repo docs, not only
+in chat. Use this file for collaborator-facing current state and
+`docs/harness/physical-ai/team-spec.md` for the detailed operating rules.
 
 ## Main vs Legacy
 
@@ -236,13 +183,14 @@ summary.
 
 ## Immediate Next Steps
 
-1. Continue searching for an EGL-capable RunPod host/runtime where
-   `scripts/preflight_risk1b_context_capture.py` passes.
-2. Only after that context-capture preflight passes, hand off to the Researcher
-   for the Qwen2.5-VL-7B subgoal generation -> SmolVLA candidate chunks ->
-   selector/probe chain.
-3. Keep Qwen2.5-VL-3B as a lighter fallback/baseline if 7B execution remains
-   impractical, but label it separately from 7B evidence.
+1. Continue the shallow-OSMesa paper-data lane: run actual manifest rows that
+   produce Qwen variants, SmolVLA action chunks, selector outputs, metrics, and
+   table-ready artifacts.
+2. Do not reopen COMMUNITY/EGL render-device hunting unless the user explicitly
+   asks for EGL/deployment evidence.
+3. If a run blocks, assign the concrete blocker to Tech Lead or RunPod Manager,
+   then resume data production after the fix; do not replace the experiment with
+   more smoke diagnostics.
 4. Paper writing should continue with conservative claims: describe the method
    clearly, use the overview figure, and avoid claiming final benchmark gains
    until the evaluation manager marks evidence paper-ready.

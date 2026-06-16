@@ -137,6 +137,74 @@ board with the classification before forwarding the result to paper-writing
 threads. If a result is still blocked or diagnostic-only, the PM may summarize
 it for context but must label it as non-paper-ready evidence.
 
+### Orchestration Policy Persistence
+
+When the user or postdoc changes orchestration policy, the change must be
+persisted in repo files in the same turn as any thread messages. Do not leave a
+new operating rule only in chat, a PM board, or a worker handoff.
+
+Required persistence targets:
+
+- `Summary.md`: current project state, active lane, abandoned lane, current
+  blockers, and immediate next steps.
+- `docs/harness/physical-ai/team-spec.md`: durable role/routing/lifecycle rules.
+- `AGENTS.md`: only short always-loaded triggers or repo-wide defaults.
+
+The postdoc should still notify PM and affected workers, but the file update is
+part of the orchestration change itself.
+
+### Paper-Table Data Priority
+
+Top-level objective: produce manuscript-table experiment data as quickly and
+efficiently as possible. All orchestration decisions should be judged against
+whether they accelerate actual data production for the paper.
+
+For paper-facing evaluation loops, progress is measured by actual table-ready
+data rows, metrics, and artifacts. Smoke checks, dependency checks, model-load
+checks, context-capture probes, and handoff gates are allowed only as minimal
+preconditions for a concrete data-producing run. They are not progress by
+themselves and must not replace the experiment.
+
+Current Risk1-B/C routing rule:
+
+- Active bypass lane: `SECURE` RunPod plus shallow `renderer_backend=osmesa` for
+  diagnostic/plumbing data production.
+- Paused lane: COMMUNITY/EGL `/dev/dri` render-device hunting. Do not re-enter it
+  unless the user explicitly asks for EGL/deployment evidence.
+- RunPod Manager performs allocation, source staging, minimal gates, and handoff.
+  It does not run the experiment.
+- RunPod Researcher runs Qwen generation, SmolVLA action-chunk generation,
+  selector/probe commands, artifact fetch, and result packaging.
+- Tech Lead fixes concrete code/data blockers only, then the loop returns to
+  data production.
+
+### SO101 SmolVLA Fine-Tuning Watch Policy
+
+For RunPod SO101 SmolVLA fine-tuning babysitting, checkpoint and evaluation
+policy is:
+
+- Keep only the validation-best checkpoint plus one latest checkpoint needed for
+  crash recovery. A pruner may delete older non-best checkpoints after each save.
+- Run supervised validation loss after checkpoint saves, preferably CPU-only so
+  the GPU training process can continue.
+- Do not run full closed-loop validation at every checkpoint. Closed-loop
+  rollouts are expensive and can slow or interrupt training; run them when a
+  checkpoint becomes the new validation-best checkpoint, or for an explicit user
+  request. Best-only closed-loop takes precedence over a coarse epoch interval.
+- If full closed-loop validation needs the GPU, pause or finish the training
+  step/checkpoint first, run the rollout, then resume from the latest checkpoint.
+- Smoke closed-loop runs may be recorded separately in the dashboard, but they
+  must be labeled as smoke and must not be treated as validation-set success.
+- Pipeline PRs that touch SO101 SmolVLA training, dataset generation,
+  augmentation, caching, validation, or closed-loop scheduling must run:
+  `PYTHONPATH=src python3 -B -m unittest tests.test_so101_smolvla_pipeline tests.test_lerobot_sampling_augmentation`.
+  Full RunPod retraining starts only after that targeted gate and the full
+  standard-library unit suite pass locally.
+- New train data should target the manifest in
+  `configs/so101/smolvla_pickplace_contact_train100_manifest.json`: doubled
+  train episodes, 256x256 visual inputs, no sticky grasp, and recovery/off-
+  nominal states to cover privileged-teacher versus visual-student drift.
+
 ## Default Multi-Thread Orchestration
 
 Default new conversations should behave like ordinary Codex collaboration, not
@@ -232,6 +300,19 @@ diagnostic. Paper-writing threads must not cite legacy logs directly as method
 claims.
 
 ## Phase Order
+
+## Local Terminal Policy
+
+For real SO-100 work on this Mac, avoid opening new Terminal windows unless the
+step is truly interactive or requires a macOS app-level permission boundary.
+Interactive hardware calibration is the canonical exception: launch the
+calibration script in a user-visible Terminal and record that the user/operator
+performs the physical calibration. For non-calibration work, prefer the current
+Codex command path for camera checks, metadata inspection, artifact processing,
+reports, tests, and non-interactive hardware helpers when permissions allow.
+If an external Terminal is required for macOS camera/TCC or MPS/runtime access,
+the command must write deterministic logs and artifacts under `_workspace/` and
+the final report must state why the external Terminal path was used.
 
 ### Phase 1: Select Checkpoint
 
@@ -496,8 +577,9 @@ Risk1 reclassification boundaries:
 - Keep Risk1 checkpoints dependency-light:
   - Risk1-A answers only whether template prompt portfolios expand the frozen
     SmolVLA candidate action space.
-  - Risk1-B answers only whether an external VLM subgoal generator can produce
-    grounded prompt portfolios that expand that action space.
+  - Risk1-B answers only whether an external VLM candidate-prompt / strategy
+    variant generator can produce grounded prompt portfolios that expand that
+    first-chunk action space.
   - Risk1-C answers whether a selector can choose a better or more plausible
     candidate from an already generated set.
   - Risk1-D answers whether candidate generation plus selection improves
@@ -507,17 +589,22 @@ Risk1 reclassification boundaries:
 - Do not upgrade Risk1-C/D from diversity alone; diversity is Risk1-A/B
   evidence unless a selection or benchmark-success gate also passes.
 
-Risk1-B tests external VLM-generated grounded subgoals against the accepted
-Risk1-A template reference. It is opt-in and should usually run as a separate
-commit/run from Risk1-C unless the goal is a combined artifact smoke. The VLM
-output must validate this JSON schema before it can drive frozen SmolVLA:
+Risk1-B tests external VLM-generated grounded candidate prompts / strategy
+variants against the accepted Risk1-A template reference. It is opt-in and
+should usually run as a separate commit/run from Risk1-C unless the goal is a
+combined artifact smoke. The VLM output uses the legacy `subgoals` schema key
+for backward compatibility, but those records are same-immediate-objective
+strategy variants, not temporal subgoal-completion plan steps. The output must
+validate this JSON schema before it can drive frozen SmolVLA:
 `subgoal_text`, `strategy_axis`, `target_object`, `target_region_or_point`,
 `stop_condition`, `confidence`, and optional `rationale`. Candidate models to
 try are `Qwen/Qwen2.5-VL-7B-Instruct`, `Qwen/Qwen2.5-VL-3B-Instruct`, and
-`google/gemma-3-4b-it`. Contract/mock subgoals and invalid JSON are not PASS
-evidence. Risk1-B PASS requires validated external-VLM subgoals plus actual
-policy-generated chunks with diversity comparable to or better than the Risk1-A
-template reference:
+`google/gemma-3-4b-it`. Contract/mock candidate prompts and invalid JSON are
+not PASS evidence. Risk1-B PASS requires validated external-VLM strategy
+variants plus actual policy-generated first action chunks with diversity
+comparable to or better than the Risk1-A template reference. A 15-step smoke
+`pc_success=0` is not a fair full-task failure criterion for Risk1-B/C; full
+benchmark success belongs to Risk1-D:
 
 Latest Risk1-B next-loop rule: the closed `99e88` shallow OSMesa run is a
 WARN baseline (`mean_normalized_pairwise_l2=0.066457`,
@@ -847,6 +934,35 @@ PYTHONPATH=src /workspace/physical-ai/envs/lerobot_py312/bin/python <experiment>
 
 Only rerun `scripts/install/runpod_install.sh --component libero-smolvla` when the hard gate
 fails or the requested source/env contract intentionally changes.
+
+RunPod gate tiering:
+
+- Extensive environment gates are reserved for first setup on a new network
+  volume, a rebuilt reusable env/cache, a changed install policy, a known
+  corruption/quota incident, or a concrete failure that points at env/cache
+  drift. Extensive gates may include full canonical/VLM install checks, Qwen
+  model-load readiness, and multi-task context capture coverage.
+- Routine Pod assignment on the current managed 60GB volume must use a minimal
+  handoff gate. The network-volume envs and caches are manager-owned reusable
+  assets, so do not repeatedly reinstall or fully revalidate them just because a
+  new Pod was allocated.
+- Minimal handoff gate for the current Risk1-B/C shallow OSMesa lane:
+  1. verify the exact source commit and `.source_commit`;
+  2. verify the canonical Python and VLM Python paths execute;
+  3. run a quick VLM import/cache/GPU sanity check, not a full Qwen 7B
+     model-load, unless the GPU class/cache/env changed or a previous failure
+     makes model-load relevant;
+  4. run one representative shallow OSMesa context capture smoke, normally
+     task 0 seed 1201 for the target suite;
+  5. hand off to Researcher for the actual manifest breadth. Do not pre-capture
+     every manifest row during handoff unless PM explicitly asks for that
+     coverage.
+- These minimal gates exist only to protect a data-producing run. They are not
+  evaluation progress, and Manager must not substitute repeated gate/smoke loops
+  for Researcher-owned experiment execution.
+- If a minimal gate fails, stop treating it as a generic handoff check and
+  classify the blocker. Escalate to the extensive gate only when the evidence
+  suggests env/cache/install drift rather than experiment-code behavior.
 
 If this script exits non-zero, report `env_bootstrap_blocked`, fetch the
 `env_prepare_*` log directory, stop the Pod when no active run remains, and do
@@ -1257,6 +1373,13 @@ Current lifecycle convention:
 - `sh scripts/checkpoint_18.sh`
 - `sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla`
 - `sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download --smolvla-action-steps 15 --show-inputs --fps 2 --max-steps 1`
+- `sh scripts/so101_interactive_sim.sh --dry-contract --output-dir _workspace/so101_interactive/contract_smoke`
+- `sh scripts/so101_interactive_sim.sh --gui --port 8766 --output-dir _workspace/so101_interactive/gui`
+- `sh scripts/so101_interactive_sim.sh --output-dir _workspace/so101_interactive/scripted_smoke --command observe --command 'nudge shoulder_pan 0.1' --command 'action [0,0,0,0,0,0]'`
+- `PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_smoke.py --env-id MuJoCoPickLift-v1 --camera-name wrist_cam --width 128 --height 128 --steps 4`
+- `PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_policy_smoke.py --env-id MuJoCoPickLift-v1 --camera-name wrist_cam --width 64 --height 64 --rollout-steps 4`
+- `PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_rl.py --env-id MuJoCoReach-v1 --camera-name wrist_cam --width 64 --height 64 --updates 80 --rollout-steps 32 --output-dir _workspace/so101_visual_rl/train_reach`
+- `PYTHONPATH=src .venv/bin/python -B -m physical_ai_agent.sim.so101_live_viewer --env-id MuJoCoReach-v1 --policy visual-rl --visual-policy-checkpoint _workspace/so101_visual_rl/train_reach/so101_visual_rl_policy.pt --visual-policy-camera wrist_cam --browser-only --input-port 8766 --fps 12`
 - `sh scripts/checkpoint_20.sh`
 - `sh scripts/checkpoint_21.sh`
 - `sh scripts/checkpoint_22.sh`
