@@ -114,6 +114,8 @@ for package, module in [
     ("mujoco", "mujoco"),
     ("av", "av"),
     ("num2words", "num2words"),
+    ("so101-nexus-mujoco", "so101_nexus_mujoco"),
+    ("so101-nexus-core", "so101_nexus_core"),
 ]:
     try:
         loaded[module] = importlib.import_module(module)
@@ -128,6 +130,10 @@ if errors:
         categories.append(category)
         print(f"IMPORT_FAIL {module}: {type(exc).__name__}: {exc}", file=sys.stderr)
     fail(categories[0], "required imports failed")
+
+av_module = loaded.get("av")
+if av_module is not None and not hasattr(av_module, "option"):
+    fail("pyav_version_mismatch", "PyAV must expose av.option for LeRobot pyav_utils; use av>=16,<17")
 
 torch = loaded["torch"]
 torchvision = loaded["torchvision"]

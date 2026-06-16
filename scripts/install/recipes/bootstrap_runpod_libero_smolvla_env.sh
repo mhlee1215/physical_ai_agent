@@ -160,10 +160,14 @@ install_lerobot_and_runtime_deps() {
   timed_run auxiliary_deps_install "$PY312_VENV/bin/python" -m pip install \
     --constraint "$WORK_ROOT/torch-cu124-constraints.txt" \
     huggingface_hub draccus safetensors datasets transformers accelerate \
-    imageio imageio-ffmpeg opencv-python-headless pyyaml einops num2words av
+    imageio imageio-ffmpeg opencv-python-headless pyyaml einops num2words \
+    "av>=16,<17"
   timed_run libero_install "$PY312_VENV/bin/python" -m pip install \
     --constraint "$WORK_ROOT/torch-cu124-constraints.txt" \
     "$LIBERO_SPEC"
+  timed_run so101_nexus_install "$PY312_VENV/bin/python" -m pip install \
+    --constraint "$WORK_ROOT/torch-cu124-constraints.txt" \
+    "so101-nexus-mujoco>=0.3.12,<0.4" "av>=16,<17"
   # Re-pin torch family after dependency installs as a guard against resolver drift.
   timed_run torch_cu124_repin "$PY312_VENV/bin/python" -m pip install \
     --index-url "$TORCH_INDEX_URL" \
