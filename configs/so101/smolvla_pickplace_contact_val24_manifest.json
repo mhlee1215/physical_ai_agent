@@ -1,0 +1,31 @@
+{
+  "action_dim": 6,
+  "camera_keys": [
+    "observation.images.camera1",
+    "observation.images.camera2",
+    "observation.images.camera3"
+  ],
+  "dataset_id": "physical-ai-agent/so101-pickplace-contact-val24-256-recovery",
+  "episodes": 24,
+  "expected_frames_per_episode": null,
+  "expected_min_episodes": 24,
+  "frames": 5547,
+  "generator": "scripts/export_so101_pickplace_teacher_rollouts_lerobot.py",
+  "image_shape": [
+    3,
+    256,
+    256
+  ],
+  "includes_recovery_or_off_nominal_states": true,
+  "max_frames_per_episode": 240,
+  "min_frames_per_episode": 220,
+  "notes": "Fixed validation dataset for SO101 SmolVLA pick-place. Use the same fast teacher timing and wrist+egocentric student camera contract as train100, but keep this split seed-stable and separate from training.",
+  "source_episode_count": 24,
+  "split": "validation",
+  "state_dim": 6,
+  "sticky_grasp_allowed": false,
+  "student_observation_contract": "visual_policy_inputs_only",
+  "target_expansion_factor": 1.0,
+  "teacher_uses_privileged_state": true,
+  "validation_errors": []
+}

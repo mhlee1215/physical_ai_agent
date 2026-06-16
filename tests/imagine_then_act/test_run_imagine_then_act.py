@@ -798,6 +798,133 @@ class ImagineThenActTest(TestCase):
         self.assertEqual(decision["selected_actions"][0].tolist(), [[1.0, 2.0, 3.0]])
         self.assertEqual(decision["selected_actions"][1].tolist(), [[4.0, 5.0, 6.0]])
 
+    def test_first_nonbaseline_selector_is_removed_from_cli(self) -> None:
+        script = ROOT / "scripts" / "run_libero_in_episode_smolvla_instrumented.py"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--trace-path",
+                "/tmp/trace.jsonl",
+                "--ita-selector-strategy",
+                "first_nonbaseline",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("invalid choice", completed.stderr)
+
+    def test_progress_proxy_selector_requires_nonbaseline_to_beat_baseline(self) -> None:
+        module = _load_instrumented_module()
+        candidates = [
+            {"candidate_id": "candidate_00_policy_only", "progress_proxy_score": 0.5},
+            {"candidate_id": "candidate_01", "progress_proxy_score": 0.5},
+            {"candidate_id": "candidate_02", "progress_proxy_score": 0.49},
+        ]
+        selected = module.choose_ita_candidate(candidates, selector_strategy="progress_proxy_or_baseline")
+        self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
+
+        selected, metadata = module.choose_ita_candidate_with_metadata(
+            candidates,
+            selector_strategy="progress_proxy_or_baseline",
+        )
+        self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
+        self.assertTrue(metadata["progress_proxy_available"])
+        self.assertIn("did not beat baseline", metadata["reason"])
+
+        candidates[2]["progress_proxy_score"] = 0.75
+        selected, metadata = module.choose_ita_candidate_with_metadata(
+            candidates,
+            selector_strategy="progress_proxy_or_baseline",
+        )
+        self.assertEqual(selected["candidate_id"], "candidate_02")
+        self.assertEqual(metadata["baseline_progress_proxy_score"], 0.5)
+        self.assertEqual(metadata["selected_progress_proxy_score"], 0.75)
+        self.assertIn("beat baseline", metadata["reason"])
+
+    def test_progress_proxy_selector_falls_back_without_baseline_proxy(self) -> None:
+        module = _load_instrumented_module()
+        candidates = [
+            {"candidate_id": "candidate_00_policy_only"},
+            {"candidate_id": "candidate_01", "progress_proxy_score": 0.9},
+        ]
+        selected = module.choose_ita_candidate(candidates, selector_strategy="progress_proxy_or_baseline")
+        self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
+
+        selected, metadata = module.choose_ita_candidate_with_metadata(
+            candidates,
+            selector_strategy="progress_proxy_or_baseline",
+        )
+        self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
+        self.assertTrue(metadata["progress_proxy_available"])
+        self.assertIn("baseline proxy is missing", metadata["reason"])
+
+    def test_unknown_selector_strategy_is_rejected_in_internal_helper(self) -> None:
+        module = _load_instrumented_module()
+        candidates = [{"candidate_id": "candidate_00_policy_only"}]
+
+        with self.assertRaises(ValueError):
+            module.choose_ita_candidate(candidates, selector_strategy="first_nonbaseline")
+
+    def test_candidate_decision_attaches_observation_progress_proxy_when_semantic_state_exists(self) -> None:
+        module = _load_instrumented_module()
+        policy = _SequentialChunkPolicy(
+            [
+                [[[0.0, -1.0, 0.0]]],
+                [[[1.0, 0.0, 0.0]]],
+            ]
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            prompts_path = Path(tmpdir) / "candidate_prompts.json"
+            prompts_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_prompts": [
+                            {
+                                "candidate_prompt": "Put the cream cheese in the bowl using a direct reach.",
+                                "strategy_axis": "direct_reach",
+                                "target_object": "cream_cheese_1",
+                                "target_region_or_point": "akita_black_bowl_1",
+                                "stop_condition": "cream cheese is in the bowl",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            decision = module.build_ita_candidate_decision(
+                policy=policy,
+                observation={"state": _FakeTensor([[0.0]]), "task": ["put the cream cheese in the bowl"]},
+                postprocessor=lambda action: action,
+                env_postprocessor=lambda transition: transition,
+                action_key="action",
+                torch_module=_FakeTorch,
+                numpy_module=_FakeNumpy,
+                candidate_seeds=[1201],
+                num_candidates=1,
+                commit_steps=1,
+                candidate_prompts_json=prompts_path,
+                selector_strategy="progress_proxy_or_baseline",
+                semantic_state={
+                    "eef_pos": [0.0, 0.0, 0.0],
+                    "target_pos": [1.0, 0.0, 0.0],
+                    "eef_to_target_dist": 1.0,
+                    "target_object_key": "cream_cheese_1_pos",
+                },
+            )
+
+        self.assertEqual(decision["selected_candidate_id"], "candidate_01")
+        self.assertFalse(decision["baseline_candidate_selected"])
+        self.assertTrue(decision["progress_proxy_available"])
+        self.assertIn("beat baseline", decision["selector_reason"])
+        self.assertEqual(decision["baseline_progress_proxy_score"], 0.5)
+        self.assertEqual(decision["selected_progress_proxy_score"], 1.0)
+
     def test_chunk_extraction_applies_postprocessors_for_batch1_chunk2_actiondim7(self) -> None:
         module = _load_instrumented_module()
         raw_chunk = [
@@ -1012,13 +1139,29 @@ class _FixedChunkPolicy:
         self.chunk = chunk
         self.reset_count = 0
         self.predict_count = 0
+        self.observed_tasks: list[object] = []
 
     def reset(self) -> None:
         self.reset_count += 1
 
     def predict_action_chunk(self, _observation: object) -> _FakeTensor:
         self.predict_count += 1
+        if isinstance(_observation, dict):
+            self.observed_tasks.append(json.loads(json.dumps(_observation.get("task"))))
         return _FakeTensor(json.loads(json.dumps(self.chunk)))
+
+
+class _SequentialChunkPolicy(_FixedChunkPolicy):
+    def __init__(self, chunks: list[list[list[list[float]]]]) -> None:
+        super().__init__(chunks[0])
+        self.chunks = chunks
+
+    def predict_action_chunk(self, _observation: object) -> _FakeTensor:
+        self.predict_count += 1
+        if isinstance(_observation, dict):
+            self.observed_tasks.append(json.loads(json.dumps(_observation.get("task"))))
+        index = min(self.predict_count - 1, len(self.chunks) - 1)
+        return _FakeTensor(json.loads(json.dumps(self.chunks[index])))
 
 
 class _FakeEnv:

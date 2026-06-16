@@ -22,6 +22,11 @@ __pycache__/
 *.pyd
 .Python
 .venv/
+.venv
+.venv-*/
+.venv-mps/
+.venv-mps-nightly/
+.venv-xvla-mps-py312/
 venv/
 env/
 .mypy_cache/

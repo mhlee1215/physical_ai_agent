@@ -55,6 +55,7 @@ DEFAULT_SO101_ENV_IDS = (
 POLICY_CAMERA_NAMES = SIM_POLICY_CAMERA_NAMES
 DEBUG_CAMERA_NAMES = SIM_DEBUG_CAMERA_NAMES
 DEFAULT_VIRTUAL_CAMERA_NAMES = ("egocentric_cam", "top_down")
+EGOCENTRIC_IMAGE_ROTATION_DEGREES = 90
 
 
 def inspect_so101_camera_specs(env_ids: tuple[str, ...] = DEFAULT_SO101_ENV_IDS) -> list[SO101CameraSpec]:
@@ -127,7 +128,7 @@ def capture_so101_inputs(
             for camera_name, renderer in renderers.items():
                 camera = _make_camera(env, camera_name)
                 renderer.update_scene(env.unwrapped.data, camera=camera)
-                pixels = renderer.render()
+                pixels = postprocess_camera_frame(camera_name, renderer.render())
                 camera_path = frames_dir / f"step_{step:03d}_{camera_name}.png"
                 _write_image(pixels, camera_path)
                 camera_frames[camera_name] = str(camera_path)
@@ -237,9 +238,9 @@ def _make_camera(env: Any, camera_name: str) -> Any:
     camera.type = mujoco.mjtCamera.mjCAMERA_FREE
     if camera_name == "egocentric_cam":
         camera.lookat[:] = _egocentric_lookat(env)
-        camera.distance = 0.45
-        camera.azimuth = 45
-        camera.elevation = -22
+        camera.distance = 0.85
+        camera.azimuth = 270
+        camera.elevation = -58
     else:
         camera.lookat[:] = _top_down_lookat(env)
         camera.distance = 0.65
@@ -249,14 +250,19 @@ def _make_camera(env: Any, camera_name: str) -> Any:
 
 
 def _egocentric_lookat(env: Any) -> list[float]:
-    model = env.unwrapped.model
-    data = env.unwrapped.data
-    names = {model.body(index).name: index for index in range(model.nbody)}
-    candidates = [names[name] for name in ("target", "cube", "gripper") if name in names]
-    if candidates:
-        points = [data.xpos[index] for index in candidates]
-        return [float(sum(point[axis] for point in points) / len(points)) for axis in range(3)]
-    return [0.18, -0.30, 0.12]
+    return [0.18, 0.0, 0.035]
+
+
+def postprocess_camera_frame(camera_name: str, pixels: Any) -> Any:
+    if camera_name != "egocentric_cam" or EGOCENTRIC_IMAGE_ROTATION_DEGREES == 0:
+        return pixels
+
+    import numpy as np
+
+    quarter_turns = (EGOCENTRIC_IMAGE_ROTATION_DEGREES // 90) % 4
+    if quarter_turns == 0:
+        return pixels
+    return np.rot90(pixels, k=-quarter_turns).copy()
 
 
 def _top_down_lookat(env: Any) -> list[float]:

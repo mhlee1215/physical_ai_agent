@@ -1,0 +1,34 @@
+{
+  "name": "pick_place",
+  "description": "SO101 pick-and-place dataset with camera1=top_down and camera2=wrist_cam.",
+  "task": "pick_and_place",
+  "train_dataset": {
+    "repo_id": "physical-ai-agent/so101-pick-place-train50-top-wrist-256",
+    "root": "_workspace/so101_lerobot/pick_place_train50_top_wrist_256_seed99000",
+    "split": "train"
+  },
+  "validation_dataset": {
+    "repo_id": "physical-ai-agent/so101-pick-place-val24-top-wrist-256",
+    "root": "_workspace/so101_lerobot/pick_place_val24_top_wrist_256_seed102000",
+    "split": "validation"
+  },
+  "camera_contract": {
+    "observation.images.camera1": "top_down",
+    "observation.images.camera2": "wrist_cam",
+    "observation.images.camera3": "wrist_cam duplicate"
+  },
+  "tensorboard": {
+    "log_input_images_every_n_steps": 10,
+    "log_input_metadata_every_n_steps": 10
+  },
+  "augmentation": {
+    "state_jitter_std": 0.0,
+    "state_jitter_arm_only": true,
+    "state_dropout_prob": 0.0,
+    "state_dropout_keep_gripper": true,
+    "action_dropout_prob": 0.0,
+    "image_camera_dropout_prob": 0.0,
+    "image_patch_dropout_prob": 0.0,
+    "gpu_image_augmentation": false
+  }
+}

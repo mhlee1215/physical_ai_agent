@@ -1,0 +1,106 @@
+# SO101 SmolVLA Training Pipeline
+
+This page records the checked training contract for SO101 SmolVLA fine-tuning.
+It exists so PRs can test the pipeline before launching another expensive
+RunPod run.
+
+## Model Contract
+
+- Base checkpoint: `lerobot/smolvla_base`
+- Visual inputs: `observation.images.camera1`, `camera2`, `camera3`
+- Image tensor shape: `[3, 256, 256]`
+- SmolVLA preprocessing resize target: `[512, 512]`
+- State input: `observation.state`, shape `[6]`
+- Action output: `action`, shape `[6]`
+- Training chunk: `chunk_size=50`, `n_action_steps=50`
+- Rollout default: `policy_n_action_steps=15`, `policy_num_steps=10`
+
+The enforceable contract lives in
+`src/physical_ai_agent/so101_smolvla_pipeline.py`.
+
+## Augmentation And Cache
+
+Training should use `scripts/lerobot_train_so101_sampling_aug.py`, not a bare
+`lerobot-train` command. The wrapper keeps the LeRobot train path intact while
+adding SO101 sample-time controls:
+
+- predecoded image cache via `--so101-image-cache-dir`;
+- GPU/MPS-side image augmentation via `--so101-gpu-image-augmentation`;
+- image color, sharpness, affine jitter;
+- camera-level image dropout with `--so101-image-camera-dropout-prob`;
+- patch image dropout with `--so101-image-patch-dropout-prob`;
+- motor-state jitter with `--so101-state-jitter-std`;
+- motor-state dropout with `--so101-state-dropout-prob`;
+- optional action dropout with `--so101-action-dropout-prob`.
+
+Image augmentation should run after the batch is moved to CUDA/MPS whenever
+possible. CPU-side decoding should be avoided during repeated epochs by using
+the predecoded image cache.
+
+## Dataset Expansion
+
+The next train split target is a doubled dataset:
+
+```text
+configs/so101/smolvla_pickplace_contact_train100_manifest.json
+```
+
+The manifest requires:
+
+- at least `100` train episodes from the previous `50` episode base;
+- `[3, 256, 256]` image inputs;
+- 6D state/action;
+- no sticky grasp;
+- recovery/off-nominal frames, because the teacher is privileged and the student
+  is a visual policy.
+
+Use `scripts/so101_dataset_manifest.py validate <manifest>` in CI and after
+dataset generation. Use `from-export-report` to turn an exporter report into a
+validated manifest.
+
+## Teacher/Student Gap
+
+The pick-place teacher can use privileged simulator state to generate stable
+actions. The student only sees SmolVLA runtime inputs. New datasets therefore
+must include recovery/off-nominal states, enabled by:
+
+```bash
+scripts/export_so101_pickplace_teacher_rollouts_lerobot.py \
+  --recovery-steps <N> \
+  --recovery-joint-std <STD>
+```
+
+Default `--recovery-steps=0` preserves legacy exports. New train data should
+turn it on.
+
+## Evaluation Schedule
+
+Use `scripts/monitor_so101_training_dashboard.py` for validation and closed-loop
+scheduling. Important flags:
+
+- `--closed-loop-policy best_only`
+- `--closed-loop-policy periodic`
+- `--closed-loop-policy best_or_periodic`
+- `--stop-training-on-overfit`
+- `--overfit-patience-checkpoints`
+- `--overfit-min-delta`
+
+For active training, supervised validation can run CPU-only after checkpoints.
+Full CUDA closed-loop should run only for new validation-best checkpoints or a
+manual final evaluation.
+
+## Required Tests
+
+Before opening or updating a PR for this pipeline:
+
+```bash
+PYTHONPATH=src python3 -B -m unittest \
+  tests.test_so101_smolvla_pipeline \
+  tests.test_lerobot_sampling_augmentation
+```
+
+Before launching RunPod training, run the full suite:
+
+```bash
+PYTHONPATH=src python3 -B -m unittest discover -s tests
+```

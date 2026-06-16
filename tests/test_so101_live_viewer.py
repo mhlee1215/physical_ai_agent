@@ -14,12 +14,20 @@ class SO101LiveViewerTest(TestCase):
                 "--max-steps",
                 "2",
                 "--policy",
-                "smolvla",
+                "visual-rl",
                 "--allow-download",
                 "--smolvla-action-steps",
                 "15",
                 "--smolvla-worker-python",
                 ".venv/bin/python",
+                "--visual-policy-checkpoint",
+                "_workspace/test_policy.pt",
+                "--visual-policy-camera",
+                "egocentric_cam",
+                "--visual-reach-checkpoint",
+                "_workspace/test_delta.pt",
+                "--visual-reach-camera",
+                "top_down",
                 "--browser-only",
                 "--show-inputs",
                 "--input-width",
@@ -34,10 +42,14 @@ class SO101LiveViewerTest(TestCase):
         self.assertEqual(args.env_id, "MuJoCoReach-v1")
         self.assertEqual(args.fps, 12)
         self.assertEqual(args.max_steps, 2)
-        self.assertEqual(args.policy, "smolvla")
+        self.assertEqual(args.policy, "visual-rl")
         self.assertTrue(args.allow_download)
         self.assertEqual(args.smolvla_action_steps, 15)
         self.assertEqual(args.smolvla_worker_python, ".venv/bin/python")
+        self.assertEqual(args.visual_policy_checkpoint, "_workspace/test_policy.pt")
+        self.assertEqual(args.visual_policy_camera, "egocentric_cam")
+        self.assertEqual(args.visual_reach_checkpoint, "_workspace/test_delta.pt")
+        self.assertEqual(args.visual_reach_camera, "top_down")
         self.assertTrue(args.browser_only)
         self.assertTrue(args.show_inputs)
         self.assertEqual(args.input_width, 160)
@@ -53,6 +65,16 @@ class SO101LiveViewerTest(TestCase):
         self.assertFalse(config.allow_download)
         self.assertEqual(config.smolvla_action_steps, 15)
         self.assertEqual(config.smolvla_worker_python, "")
+        self.assertEqual(
+            config.visual_policy_checkpoint,
+            "_workspace/so101_visual_rl/train/so101_visual_rl_policy.pt",
+        )
+        self.assertEqual(config.visual_policy_camera, "wrist_cam")
+        self.assertEqual(
+            config.visual_reach_checkpoint,
+            "_workspace/so101_visual_rl/reach_delta/so101_visual_reach_delta.pt",
+        )
+        self.assertEqual(config.visual_reach_camera, "top_down")
         self.assertFalse(config.browser_only)
         self.assertFalse(config.show_inputs)
         self.assertEqual(config.input_width, 320)

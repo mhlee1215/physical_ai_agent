@@ -1,0 +1,4723 @@
+from __future__ import annotations
+
+import copy
+import contextlib
+import html
+import inspect
+import json
+import math
+import os
+import random
+import re
+import signal
+import sys
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from physical_ai_agent.imagine_then_act.libero_config import ensure_noninteractive_libero_config
+
+
+PASS = "PASS"
+WARN = "WARN"
+FAIL = "FAIL"
+BLOCKED = "BLOCKED"
+RISK1A_NATIVE_NOISE_REFERENCE = {
+    "mean_normalized_pairwise_l2": 0.048124,
+    "mean_pairwise_cosine_distance": 0.001218,
+}
+RISK1A_MIN_RELATIVE_GAIN = 1.25
+RISK1A_TEMPLATE_REFERENCE = {
+    "mean_normalized_pairwise_l2": 0.226331,
+    "mean_pairwise_cosine_distance": 0.030063,
+    "min_pairwise_l2": 0.568536,
+}
+RISK1B_REQUIRED_FIELDS = (
+    "subgoal_text",
+    "strategy_axis",
+    "target_object",
+    "target_region_or_point",
+    "stop_condition",
+    "confidence",
+)
+RISK1B_CANDIDATE_PROMPT_SEMANTICS = (
+    "same_immediate_goal_strategy_variants_first_action_chunk"
+)
+RISK1B_LEGACY_SCHEMA_NOTE = (
+    "The legacy JSON key `subgoals` is preserved for compatibility, but Risk1-B "
+    "records are alternative goal-conditioned candidate prompts / strategy variants "
+    "for the same immediate objective, not temporal subgoal-completion plan steps."
+)
+RISK1B_CANDIDATE_MODELS = (
+    "Qwen/Qwen2.5-VL-7B-Instruct",
+    "Qwen/Qwen2.5-VL-3B-Instruct",
+    "google/gemma-3-4b-it",
+)
+
+
+@dataclass(frozen=True)
+class RiskProbeConfig:
+    preset: str
+    backend: str
+    suite: str
+    task_ids: tuple[int, ...]
+    seed: int
+    num_candidates: int
+    chunk_steps: int
+    action_dim: int
+    output_dir: str
+    policy_path: str = "lerobot/smolvla_libero"
+    camera_mapping: str = '{"agentview_image":"camera1","robot0_eye_in_hand_image":"camera2"}'
+    policy_num_steps: int = 10
+    policy_n_action_steps: int = 15
+    actual_max_steps: int = 15
+    actual_timeout_sec: int = 0
+    image_frequency: int = 1
+    direct_libero_double_sim: bool = False
+    direct_camera_name: str = "agentview"
+    direct_image_width: int = 128
+    direct_image_height: int = 128
+    renderer_backend: str = "egl"
+    debug_candidate_noise_scale: float = 0.0
+    risk1a_prompt_portfolio: bool = False
+    risk1a_ambiguity: bool = False
+    risk1b_vlm_subgoals: bool = False
+    risk1b_generator_backend: str = "contract"
+    risk1b_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    risk1b_subgoals_json: str | None = None
+    risk1c_sim_selector: bool = False
+    risk1c_selector_modes: tuple[str, ...] = ("c0", "c1", "c2")
+    diversity_warn_threshold: float = 0.05
+    diversity_fail_threshold: float = 0.001
+    clone_state_l2_threshold: float = 1e-9
+    clone_image_mse_threshold: float = 1e-9
+
+
+@dataclass(frozen=True)
+class ActionChunkCandidate:
+    candidate_id: str
+    source: str
+    action_chunk: list[list[float]]
+    privileged_success_proxy: float
+    is_policy_only: bool = False
+    seed: int | None = None
+    selection_role: str | None = None
+    sampling_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DiversityMetrics:
+    verdict: str
+    min_pairwise_l2: float
+    mean_pairwise_l2: float
+    max_pairwise_l2: float
+    endpoint_spread_l2: float
+    mean_per_dim_variance: float
+    gripper_command_variance: float
+    candidate_count: int
+    rationale: str
+    min_pairwise_cosine_distance: float = 0.0
+    mean_pairwise_cosine_distance: float = 0.0
+    min_normalized_pairwise_l2: float = 0.0
+    mean_normalized_pairwise_l2: float = 0.0
+    mean_per_step_variance: float = 0.0
+    max_per_step_variance: float = 0.0
+    selected_vs_policy_l2: float = 0.0
+    selected_vs_policy_cosine_distance: float = 0.0
+    provenance: str = "mock"
+
+
+@dataclass(frozen=True)
+class CloneFidelityMetrics:
+    verdict: str
+    state_l2: float
+    image_mse: float
+    image_mae: float
+    success_proxy_delta: float
+    deterministic_replay_mismatch: bool
+    rationale: str
+
+
+@dataclass(frozen=True)
+class OracleUpperBoundMetrics:
+    verdict: str
+    policy_only_score: float
+    random_chunk_score: float
+    oracle_selector_score: float
+    selected_candidate_id: str
+    oracle_beats_policy: bool
+    oracle_beats_random: bool
+    rationale: str
+    evidence_class: str = "mock_oracle"
+    privileged_oracle_available: bool = False
+    upper_bound_testable: bool = True
+
+
+@dataclass(frozen=True)
+class RiskProbeReport:
+    status: str
+    preset: str
+    backend: str
+    suite: str
+    task_ids: list[int]
+    seed: int
+    risk_verdicts: dict[str, str]
+    diversity: DiversityMetrics
+    clone_fidelity: CloneFidelityMetrics
+    oracle_upper_bound: OracleUpperBoundMetrics
+    candidates: list[dict[str, Any]]
+    artifacts: dict[str, str]
+    blockers: list[str]
+    actual_evidence: dict[str, Any]
+
+
+def run_risk_probes(config: RiskProbeConfig) -> RiskProbeReport:
+    output_dir = Path(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_probe_progress(output_dir, "start", {"backend": config.backend, "preset": config.preset})
+    candidates = generate_mock_candidates(config)
+    write_probe_progress(output_dir, "candidates_generated", {"candidate_count": len(candidates)})
+    outcomes = {candidate.candidate_id: simulate_mock_env(candidate.action_chunk) for candidate in candidates}
+    visual_candidates = candidates
+    report_candidates = candidates
+    diversity = compute_diversity_metrics(config, candidates)
+    clone_fidelity = compute_clone_fidelity_metrics(config, candidates[-1])
+    oracle_upper_bound = compute_oracle_upper_bound_metrics(candidates, outcomes)
+    blockers: list[str] = []
+    actual_evidence: dict[str, Any] = {"mode": "mock", "available": False}
+    if config.backend == "direct-libero":
+        write_probe_progress(output_dir, "direct_libero_probe_start")
+        actual_evidence = run_direct_libero_double_sim_probe(config, candidates, output_dir)
+        write_probe_progress(output_dir, "direct_libero_probe_end", {"available": actual_evidence.get("available")})
+        blockers.extend(actual_evidence.get("blockers", []))
+        diversity = mark_diversity_as_synthetic_contract(diversity)
+        if actual_evidence.get("outcomes"):
+            outcomes = actual_evidence["outcomes"]
+            evaluated_ids = set(outcomes)
+            visual_candidates = [candidate for candidate in candidates if candidate.candidate_id in evaluated_ids]
+        if actual_evidence.get("introspection"):
+            oracle_introspection = actual_evidence["introspection"]
+        else:
+            oracle_introspection = {"privileged_state_available": False}
+        if actual_evidence.get("clone_fidelity"):
+            clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
+        oracle_upper_bound = compute_actual_oracle_or_proxy_metrics(visual_candidates or candidates, outcomes, oracle_introspection)
+        if actual_evidence.get("available") is False:
+            diversity = mark_diversity_as_actual_unavailable(diversity, actual_evidence)
+            oracle_upper_bound = mark_oracle_as_actual_unavailable(oracle_upper_bound, actual_evidence)
+    elif config.backend != "mock":
+        write_probe_progress(output_dir, "libero_actual_adapter_start", {"timeout_sec": config.actual_timeout_sec})
+        actual_evidence = run_libero_actual_adapter(config, candidates, output_dir)
+        write_probe_progress(output_dir, "libero_actual_adapter_end", {"available": actual_evidence.get("available")})
+        blockers.extend(actual_evidence.get("blockers", []))
+        diversity = mark_diversity_as_synthetic_contract(diversity)
+        actual_candidates = candidates_from_evidence(actual_evidence.get("action_candidates"))
+        if actual_candidates:
+            report_candidates = actual_candidates
+            diversity = compute_diversity_metrics(config, actual_candidates)
+            diversity = gate_risk1a_diversity_if_needed(diversity, actual_evidence)
+            diversity = gate_risk1b_diversity_if_needed(diversity, actual_evidence)
+        if actual_evidence.get("candidate_generation", {}).get("source") == "synthetic_fallback":
+            diversity = mark_diversity_as_policy_sampling_unavailable(diversity, actual_evidence)
+        if actual_evidence.get("outcomes"):
+            outcomes = actual_evidence["outcomes"]
+            evaluated_ids = set(outcomes)
+            visual_candidates = [candidate for candidate in report_candidates if candidate.candidate_id in evaluated_ids]
+        if actual_evidence.get("clone_fidelity"):
+            clone_fidelity = CloneFidelityMetrics(**actual_evidence["clone_fidelity"])
+        if actual_evidence.get("oracle_upper_bound"):
+            oracle_upper_bound = OracleUpperBoundMetrics(**actual_evidence["oracle_upper_bound"])
+        direct_evidence = actual_evidence.get("direct_libero_double_sim", {})
+        if isinstance(direct_evidence, dict) and direct_evidence.get("oracle_upper_bound"):
+            oracle_upper_bound = OracleUpperBoundMetrics(**direct_evidence["oracle_upper_bound"])
+        if actual_evidence.get("available") is False:
+            diversity = mark_diversity_as_actual_unavailable(diversity, actual_evidence)
+            oracle_upper_bound = mark_oracle_as_actual_unavailable(oracle_upper_bound, actual_evidence)
+    if outcomes and (config.backend == "mock" or actual_evidence.get("outcomes")):
+        actual_evidence.setdefault("outcome_diversity", compute_outcome_diversity_metrics(outcomes))
+    artifacts = write_visual_artifacts(output_dir, visual_candidates, outcomes, diversity, clone_fidelity, oracle_upper_bound)
+    write_probe_progress(output_dir, "visual_artifacts_written", {"artifact_count": len(artifacts)})
+    artifacts["progress"] = str(output_dir / "risk_probe_progress.jsonl")
+    if actual_evidence.get("artifact_path"):
+        key = "direct_libero_double_sim_evidence" if config.backend == "direct-libero" else "libero_adapter_evidence"
+        artifacts[key] = actual_evidence["artifact_path"]
+    direct_evidence = actual_evidence.get("direct_libero_double_sim", {})
+    if isinstance(direct_evidence, dict) and direct_evidence.get("artifact_path"):
+        artifacts["direct_libero_double_sim_evidence"] = direct_evidence["artifact_path"]
+    if config.risk1a_prompt_portfolio:
+        artifacts["risk1a_prompt_portfolio"] = write_risk1a_prompt_portfolio_artifact(
+            output_dir=output_dir,
+            config=config,
+            evidence=actual_evidence,
+            diversity=diversity,
+            candidates=report_candidates,
+        )
+    if config.risk1b_vlm_subgoals:
+        artifacts["risk1b_vlm_subgoals"] = write_risk1b_vlm_subgoals_artifact(
+            output_dir=output_dir,
+            config=config,
+            evidence=actual_evidence,
+            diversity=diversity,
+            candidates=report_candidates,
+        )
+    if config.risk1c_sim_selector:
+        selector_evidence = compute_risk1c_selector_evidence(
+            config=config,
+            candidates=report_candidates,
+            outcomes=outcomes,
+            oracle=oracle_upper_bound,
+            actual_evidence=actual_evidence,
+        )
+        actual_evidence["risk1c_sim_selector"] = selector_evidence
+        artifacts["risk1c_sim_selector"] = write_risk1c_sim_selector_artifact(
+            output_dir=output_dir,
+            selector_evidence=selector_evidence,
+        )
+    risk_verdicts = {
+        "risk_1_candidate_diversity": diversity.verdict,
+        "risk_2_clone_fidelity": clone_fidelity.verdict if clone_fidelity.verdict != PASS or not blockers else PASS,
+        "risk_5_oracle_selector_upper_bound": oracle_upper_bound.verdict if oracle_upper_bound.verdict != PASS or not blockers else PASS,
+    }
+    if blockers:
+        if clone_fidelity.verdict == PASS:
+            risk_verdicts["risk_2_clone_fidelity"] = BLOCKED
+        if oracle_upper_bound.verdict == PASS:
+            risk_verdicts["risk_5_oracle_selector_upper_bound"] = BLOCKED
+    status = aggregate_status(risk_verdicts.values())
+    report = RiskProbeReport(
+        status=status,
+        preset=config.preset,
+        backend=config.backend,
+        suite=config.suite,
+        task_ids=list(config.task_ids),
+        seed=config.seed,
+        risk_verdicts=risk_verdicts,
+        diversity=diversity,
+        clone_fidelity=clone_fidelity,
+        oracle_upper_bound=oracle_upper_bound,
+        candidates=[
+            {
+                "candidate_id": candidate.candidate_id,
+                "source": candidate.source,
+                "privileged_success_proxy": candidate.privileged_success_proxy,
+                "is_policy_only": candidate.is_policy_only,
+                "seed": candidate.seed,
+                "selection_role": candidate.selection_role,
+                "sampling_metadata": candidate.sampling_metadata,
+                "action_shape": [len(candidate.action_chunk), len(candidate.action_chunk[0]) if candidate.action_chunk else 0],
+                "action_l2_norm": round(vector_norm(flatten_chunk(candidate.action_chunk)), 8),
+                "action_chunk": candidate.action_chunk,
+                "outcome": outcomes.get(candidate.candidate_id),
+                "evaluated_in_actual_adapter": candidate.candidate_id in outcomes if config.backend != "mock" else True,
+            }
+            for candidate in report_candidates
+        ],
+        artifacts=artifacts,
+        blockers=blockers,
+        actual_evidence=actual_evidence,
+    )
+    write_report_bundle(output_dir, config, report)
+    write_probe_progress(output_dir, "summary_written", {"status": status})
+    return report
+
+
+def write_probe_progress(output_dir: Path, phase: str, payload: dict[str, Any] | None = None) -> None:
+    event = {
+        "timestamp_unix": round(time.time(), 3),
+        "phase": phase,
+        "payload": payload or {},
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "risk_probe_progress.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True) + "\n")
+    print(f"[risk-probe] phase={phase} payload={json.dumps(event['payload'], sort_keys=True)}", file=sys.stderr, flush=True)
+
+
+class RiskProbeTimeoutError(TimeoutError):
+    pass
+
+
+@contextlib.contextmanager
+def risk_probe_timeout(seconds: int, phase: str):
+    if seconds <= 0 or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handle_timeout(_signum, _frame):  # noqa: ANN001
+        raise RiskProbeTimeoutError(f"{phase} exceeded timeout_sec={seconds}")
+
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+def aggregate_status(verdicts: Any) -> str:
+    verdict_set = set(verdicts)
+    if FAIL in verdict_set:
+        return FAIL
+    if BLOCKED in verdict_set:
+        return BLOCKED
+    if WARN in verdict_set:
+        return WARN
+    return PASS
+
+
+def generate_mock_candidates(config: RiskProbeConfig) -> list[ActionChunkCandidate]:
+    rng = random.Random(config.seed)
+    candidates: list[ActionChunkCandidate] = []
+    policy_chunk = [[0.04 for _dim in range(config.action_dim)] for _step in range(config.chunk_steps)]
+    candidates.append(
+        ActionChunkCandidate(
+            candidate_id="candidate_00_policy_only",
+            source="mock_policy_only",
+            action_chunk=policy_chunk,
+            privileged_success_proxy=simulate_mock_env(policy_chunk)["success_proxy"],
+            is_policy_only=True,
+            selection_role="policy_only_baseline",
+            sampling_metadata={"candidate_generation": "mock", "seed": None},
+        )
+    )
+    for index in range(1, config.num_candidates):
+        if index == config.num_candidates - 1:
+            chunk = [[0.0 for _dim in range(config.action_dim)] for _step in range(config.chunk_steps)]
+            for step in range(config.chunk_steps):
+                chunk[step][0] = round(1.2 / config.chunk_steps, 4)
+                if config.action_dim > 1:
+                    chunk[step][1] = round(0.8 / config.chunk_steps, 4)
+                if config.action_dim > 2:
+                    chunk[step][2] = round(0.5 / config.chunk_steps, 4)
+                chunk[step][-1] = 0.35
+            source = "mock_oracle_good_chunk"
+        else:
+            chunk = [
+                [round(rng.uniform(-0.2, 0.2), 4) for _dim in range(config.action_dim)]
+                for _step in range(config.chunk_steps)
+            ]
+            source = "mock_seeded_random_chunk"
+        candidates.append(
+            ActionChunkCandidate(
+                candidate_id=f"candidate_{index:02d}",
+                source=source,
+                action_chunk=chunk,
+                privileged_success_proxy=simulate_mock_env(chunk)["success_proxy"],
+                seed=config.seed + index,
+                sampling_metadata={"candidate_generation": "mock", "seed": config.seed + index},
+            )
+        )
+    return candidates
+
+
+def flatten_chunk(chunk: list[list[float]]) -> list[float]:
+    return [value for row in chunk for value in row]
+
+
+def l2(values_a: list[float], values_b: list[float]) -> float:
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(values_a, values_b)))
+
+
+def vector_norm(values: list[float]) -> float:
+    return math.sqrt(sum(value * value for value in values))
+
+
+def cosine_distance(values_a: list[float], values_b: list[float]) -> float:
+    denom = vector_norm(values_a) * vector_norm(values_b)
+    if denom <= 1e-12:
+        return 0.0 if vector_norm(values_a) <= 1e-12 and vector_norm(values_b) <= 1e-12 else 1.0
+    cosine = sum(a * b for a, b in zip(values_a, values_b)) / denom
+    return max(0.0, min(2.0, 1.0 - cosine))
+
+
+def normalized_l2(values_a: list[float], values_b: list[float]) -> float:
+    denom = max(vector_norm(values_a), vector_norm(values_b), 1e-12)
+    return l2(values_a, values_b) / denom
+
+
+def mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def variance(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    avg = mean(values)
+    return sum((value - avg) ** 2 for value in values) / len(values)
+
+
+def compute_diversity_metrics(config: RiskProbeConfig, candidates: list[ActionChunkCandidate]) -> DiversityMetrics:
+    flat_chunks = [flatten_chunk(candidate.action_chunk) for candidate in candidates]
+    pairwise = []
+    pairwise_cosine = []
+    pairwise_normalized = []
+    for left in range(len(flat_chunks)):
+        for right in range(left + 1, len(flat_chunks)):
+            pairwise.append(l2(flat_chunks[left], flat_chunks[right]))
+            pairwise_cosine.append(cosine_distance(flat_chunks[left], flat_chunks[right]))
+            pairwise_normalized.append(normalized_l2(flat_chunks[left], flat_chunks[right]))
+    endpoints = [candidate.action_chunk[-1] for candidate in candidates]
+    endpoint_distances = []
+    for left in range(len(endpoints)):
+        for right in range(left + 1, len(endpoints)):
+            endpoint_distances.append(l2(endpoints[left], endpoints[right]))
+    per_dim_variances = []
+    for dim in range(config.action_dim):
+        dim_values = [row[dim] for candidate in candidates for row in candidate.action_chunk]
+        per_dim_variances.append(variance(dim_values))
+    per_step_variances = []
+    max_steps = max((len(candidate.action_chunk) for candidate in candidates), default=0)
+    for step in range(max_steps):
+        step_values = [
+            value
+            for candidate in candidates
+            if step < len(candidate.action_chunk)
+            for value in candidate.action_chunk[step]
+        ]
+        per_step_variances.append(variance(step_values))
+    gripper_values = [row[-1] for candidate in candidates for row in candidate.action_chunk]
+    min_pairwise = min(pairwise) if pairwise else 0.0
+    mean_variance = mean(per_dim_variances)
+    policy_candidate = next((candidate for candidate in candidates if candidate.is_policy_only), None)
+    selected_candidate = max(candidates, key=lambda item: item.privileged_success_proxy) if candidates else None
+    selected_vs_policy_l2 = 0.0
+    selected_vs_policy_cosine = 0.0
+    if policy_candidate is not None and selected_candidate is not None:
+        policy_flat = flatten_chunk(policy_candidate.action_chunk)
+        selected_flat = flatten_chunk(selected_candidate.action_chunk)
+        selected_vs_policy_l2 = l2(policy_flat, selected_flat)
+        selected_vs_policy_cosine = cosine_distance(policy_flat, selected_flat)
+    sources = [candidate.source for candidate in candidates]
+    has_debug_noise = any("debug_noise" in source for source in sources)
+    has_policy_generated = any(
+        ("policy" in source or "smolvla" in source.lower())
+        and "mock" not in source
+        and "synthetic" not in source
+        for source in sources
+    )
+    has_synthetic = any("mock" in source or "synthetic" in source for source in sources)
+    provenance = "policy_generated" if has_policy_generated and not has_synthetic else "synthetic_or_mixed"
+    if min_pairwise <= config.diversity_fail_threshold:
+        verdict = FAIL
+        rationale = "Candidate chunks are identical or nearly identical."
+    elif min_pairwise <= config.diversity_warn_threshold or mean_variance <= config.diversity_fail_threshold:
+        verdict = WARN
+        rationale = "Candidate chunks have limited spread; increase sampling diversity before method claims."
+    else:
+        verdict = PASS
+        rationale = "Candidate chunks show non-trivial action spread under the configured probe thresholds."
+    if has_debug_noise and verdict == PASS:
+        verdict = WARN
+        rationale = "debug_noise candidate diversity is useful for plumbing only; do not claim actual SmolVLA diversity from it."
+    if has_synthetic and has_policy_generated and verdict == PASS:
+        verdict = WARN
+        rationale = "mixed policy/synthetic candidate diversity is not an actual SmolVLA diversity pass."
+    if has_policy_generated and not has_synthetic and verdict == FAIL:
+        verdict = WARN
+        rationale = (
+            "Actual policy-generated candidate chunks were identical or nearly identical; "
+            "treat this as deterministic SmolVLA sampling or seed-handling limitation, not a method pass."
+        )
+    return DiversityMetrics(
+        verdict=verdict,
+        min_pairwise_l2=round(min_pairwise, 6),
+        mean_pairwise_l2=round(mean(pairwise), 6),
+        max_pairwise_l2=round(max(pairwise) if pairwise else 0.0, 6),
+        endpoint_spread_l2=round(max(endpoint_distances) if endpoint_distances else 0.0, 6),
+        mean_per_dim_variance=round(mean_variance, 6),
+        gripper_command_variance=round(variance(gripper_values), 6),
+        candidate_count=len(candidates),
+        rationale=rationale,
+        min_pairwise_cosine_distance=round(min(pairwise_cosine) if pairwise_cosine else 0.0, 6),
+        mean_pairwise_cosine_distance=round(mean(pairwise_cosine), 6),
+        min_normalized_pairwise_l2=round(min(pairwise_normalized) if pairwise_normalized else 0.0, 6),
+        mean_normalized_pairwise_l2=round(mean(pairwise_normalized), 6),
+        mean_per_step_variance=round(mean(per_step_variances), 6),
+        max_per_step_variance=round(max(per_step_variances) if per_step_variances else 0.0, 6),
+        selected_vs_policy_l2=round(selected_vs_policy_l2, 6),
+        selected_vs_policy_cosine_distance=round(selected_vs_policy_cosine, 6),
+        provenance=provenance,
+    )
+
+
+def mark_diversity_as_synthetic_contract(metrics: DiversityMetrics) -> DiversityMetrics:
+    return DiversityMetrics(
+        verdict=WARN,
+        min_pairwise_l2=metrics.min_pairwise_l2,
+        mean_pairwise_l2=metrics.mean_pairwise_l2,
+        max_pairwise_l2=metrics.max_pairwise_l2,
+        endpoint_spread_l2=metrics.endpoint_spread_l2,
+        mean_per_dim_variance=metrics.mean_per_dim_variance,
+        gripper_command_variance=metrics.gripper_command_variance,
+        candidate_count=metrics.candidate_count,
+        rationale=(
+            "synthetic candidate diversity smoke only: runpod-libero actual adapter applies configured candidates, "
+            "but does not yet prove SmolVLA policy-generated candidate chunk diversity."
+        ),
+        min_pairwise_cosine_distance=metrics.min_pairwise_cosine_distance,
+        mean_pairwise_cosine_distance=metrics.mean_pairwise_cosine_distance,
+        min_normalized_pairwise_l2=metrics.min_normalized_pairwise_l2,
+        mean_normalized_pairwise_l2=metrics.mean_normalized_pairwise_l2,
+        mean_per_step_variance=metrics.mean_per_step_variance,
+        max_per_step_variance=metrics.max_per_step_variance,
+        selected_vs_policy_l2=metrics.selected_vs_policy_l2,
+        selected_vs_policy_cosine_distance=metrics.selected_vs_policy_cosine_distance,
+        provenance="synthetic_contract",
+    )
+
+
+def mark_diversity_as_actual_unavailable(metrics: DiversityMetrics, evidence: dict[str, Any]) -> DiversityMetrics:
+    category = evidence.get("blocker_category", "actual_adapter_unavailable")
+    reason = evidence.get("risk1_actual_unavailable_reason") or first_blocker(evidence)
+    return DiversityMetrics(
+        verdict=WARN,
+        min_pairwise_l2=metrics.min_pairwise_l2,
+        mean_pairwise_l2=metrics.mean_pairwise_l2,
+        max_pairwise_l2=metrics.max_pairwise_l2,
+        endpoint_spread_l2=metrics.endpoint_spread_l2,
+        mean_per_dim_variance=metrics.mean_per_dim_variance,
+        gripper_command_variance=metrics.gripper_command_variance,
+        candidate_count=metrics.candidate_count,
+        rationale=(
+            f"actual policy-generated candidate diversity unavailable ({category}): {reason} "
+            "Risk1 cannot pass without SmolVLA/LeRobot-generated action chunk evidence."
+        ),
+        min_pairwise_cosine_distance=metrics.min_pairwise_cosine_distance,
+        mean_pairwise_cosine_distance=metrics.mean_pairwise_cosine_distance,
+        min_normalized_pairwise_l2=metrics.min_normalized_pairwise_l2,
+        mean_normalized_pairwise_l2=metrics.mean_normalized_pairwise_l2,
+        mean_per_step_variance=metrics.mean_per_step_variance,
+        max_per_step_variance=metrics.max_per_step_variance,
+        selected_vs_policy_l2=metrics.selected_vs_policy_l2,
+        selected_vs_policy_cosine_distance=metrics.selected_vs_policy_cosine_distance,
+        provenance="actual_unavailable",
+    )
+
+
+def mark_diversity_as_policy_sampling_unavailable(metrics: DiversityMetrics, evidence: dict[str, Any]) -> DiversityMetrics:
+    generation = evidence.get("candidate_generation", {}) if isinstance(evidence.get("candidate_generation"), dict) else {}
+    errors = generation.get("errors") if isinstance(generation.get("errors"), list) else []
+    reason = errors[0] if errors else generation.get("fallback_reason", "policy candidate sampling produced no usable candidates")
+    return DiversityMetrics(
+        verdict=WARN,
+        min_pairwise_l2=metrics.min_pairwise_l2,
+        mean_pairwise_l2=metrics.mean_pairwise_l2,
+        max_pairwise_l2=metrics.max_pairwise_l2,
+        endpoint_spread_l2=metrics.endpoint_spread_l2,
+        mean_per_dim_variance=metrics.mean_per_dim_variance,
+        gripper_command_variance=metrics.gripper_command_variance,
+        candidate_count=metrics.candidate_count,
+        rationale=(
+            f"actual LIBERO rollout ran, but SmolVLA/LeRobot policy candidate sampling fell back to synthetic chunks: {reason}. "
+            "Risk1 cannot pass until candidate_action_chunks.json contains actual policy-generated chunks."
+        ),
+        min_pairwise_cosine_distance=metrics.min_pairwise_cosine_distance,
+        mean_pairwise_cosine_distance=metrics.mean_pairwise_cosine_distance,
+        min_normalized_pairwise_l2=metrics.min_normalized_pairwise_l2,
+        mean_normalized_pairwise_l2=metrics.mean_normalized_pairwise_l2,
+        mean_per_step_variance=metrics.mean_per_step_variance,
+        max_per_step_variance=metrics.max_per_step_variance,
+        selected_vs_policy_l2=metrics.selected_vs_policy_l2,
+        selected_vs_policy_cosine_distance=metrics.selected_vs_policy_cosine_distance,
+        provenance="policy_sampling_unavailable",
+    )
+
+
+def gate_risk1a_diversity_if_needed(metrics: DiversityMetrics, evidence: dict[str, Any]) -> DiversityMetrics:
+    portfolio = evidence.get("risk1a_prompt_portfolio")
+    if not isinstance(portfolio, dict) or not portfolio.get("enabled"):
+        return metrics
+    if not portfolio.get("active"):
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "verdict": WARN,
+                "rationale": (
+                    "Risk1-A prompt portfolio was enabled but ambiguity was not requested/detected, so the "
+                    "baseline single-prompt path was preserved. This is not a Risk1-A diversity pass."
+                ),
+            }
+        )
+    if portfolio.get("provenance") != "policy_generated":
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "verdict": BLOCKED,
+                "rationale": "Risk1-A prompt portfolio did not produce actual policy-generated chunks; mock/fallback cannot pass.",
+                "provenance": "risk1a_unavailable",
+            }
+        )
+    min_mean_norm = RISK1A_NATIVE_NOISE_REFERENCE["mean_normalized_pairwise_l2"] * RISK1A_MIN_RELATIVE_GAIN
+    min_cosine = RISK1A_NATIVE_NOISE_REFERENCE["mean_pairwise_cosine_distance"] * RISK1A_MIN_RELATIVE_GAIN
+    beats_native = (
+        metrics.mean_normalized_pairwise_l2 > min_mean_norm
+        and metrics.mean_pairwise_cosine_distance > min_cosine
+        and metrics.selected_vs_policy_l2 > 0.0
+    )
+    if metrics.verdict == PASS and beats_native:
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "rationale": (
+                    "Risk1-A prompt portfolio produced actual policy-generated chunks with diversity above the "
+                    "native-noise reference gate. This is a Risk1-A candidate-diversity pass, not final benchmark success."
+                ),
+                "provenance": "policy_generated",
+            }
+        )
+    return DiversityMetrics(
+        **{
+            **asdict(metrics),
+            "verdict": WARN,
+            "rationale": (
+                "Risk1-A prompt portfolio ran through actual policy generation, but chunk diversity did not clear "
+                f"the conservative native-noise gate: mean_normalized_pairwise_l2>{min_mean_norm:.6f}, "
+                f"mean_pairwise_cosine_distance>{min_cosine:.6f}, and selected_vs_policy_l2>0 required. "
+                "Risk1-A remains WARN."
+            ),
+            "provenance": "policy_generated",
+        }
+    )
+
+
+def gate_risk1b_diversity_if_needed(metrics: DiversityMetrics, evidence: dict[str, Any]) -> DiversityMetrics:
+    portfolio = evidence.get("risk1b_vlm_subgoals")
+    if not isinstance(portfolio, dict) or not portfolio.get("enabled"):
+        return metrics
+    provenance = str(portfolio.get("provenance", "unavailable"))
+    if provenance not in {"external_vlm_json_policy_generated", "external_vlm_model_policy_generated"}:
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "verdict": BLOCKED,
+                "rationale": (
+                    "Risk1-B did not use validated external VLM alternative goal-conditioned prompt output "
+                    "plus actual policy-generated chunks; contract/json-invalid/fallback evidence cannot pass."
+                ),
+                "provenance": provenance,
+            }
+        )
+    beats_risk1a = (
+        metrics.mean_normalized_pairwise_l2 >= RISK1A_TEMPLATE_REFERENCE["mean_normalized_pairwise_l2"]
+        and metrics.mean_pairwise_cosine_distance >= RISK1A_TEMPLATE_REFERENCE["mean_pairwise_cosine_distance"]
+        and metrics.min_pairwise_l2 >= RISK1A_TEMPLATE_REFERENCE["min_pairwise_l2"]
+    )
+    if metrics.verdict == PASS and beats_risk1a:
+        return DiversityMetrics(
+            **{
+                **asdict(metrics),
+                "rationale": (
+                    "Risk1-B external VLM strategy variants produced actual policy-generated first action chunks "
+                    "with diversity comparable to or better than the accepted Risk1-A template portfolio. This is "
+                    "candidate-generation evidence only, not temporal subgoal completion, selector, or benchmark success."
+                ),
+                "provenance": "policy_generated",
+            }
+        )
+    return DiversityMetrics(
+        **{
+            **asdict(metrics),
+            "verdict": WARN,
+            "rationale": (
+                "Risk1-B external VLM strategy variants produced actual policy-generated first action chunks, "
+                "but diversity did not match the accepted Risk1-A template portfolio reference. Keep Risk1-B at WARN."
+            ),
+            "provenance": "policy_generated",
+        }
+    )
+
+
+def mark_oracle_as_actual_unavailable(metrics: OracleUpperBoundMetrics, evidence: dict[str, Any]) -> OracleUpperBoundMetrics:
+    category = evidence.get("blocker_category", "actual_adapter_unavailable")
+    reason = evidence.get("risk5_actual_unavailable_reason") or first_blocker(evidence)
+    return OracleUpperBoundMetrics(
+        verdict=BLOCKED,
+        policy_only_score=metrics.policy_only_score,
+        random_chunk_score=metrics.random_chunk_score,
+        oracle_selector_score=metrics.oracle_selector_score,
+        selected_candidate_id=metrics.selected_candidate_id,
+        oracle_beats_policy=metrics.oracle_beats_policy,
+        oracle_beats_random=metrics.oracle_beats_random,
+        rationale=(
+            f"actual privileged oracle evidence unavailable ({category}): {reason} "
+            "Risk5 cannot pass from proxy or mock scores."
+        ),
+        evidence_class="unavailable",
+        privileged_oracle_available=False,
+        upper_bound_testable=False,
+    )
+
+
+def first_blocker(evidence: dict[str, Any]) -> str:
+    blockers = evidence.get("blockers")
+    if isinstance(blockers, list) and blockers:
+        return str(blockers[0])
+    exception = evidence.get("exception")
+    if isinstance(exception, dict):
+        return f"{exception.get('type', 'Exception')}: {exception.get('message', '')}"
+    return "actual adapter did not produce evidence"
+
+
+def summarize_candidate(candidate: ActionChunkCandidate) -> dict[str, Any]:
+    flat = flatten_chunk(candidate.action_chunk)
+    return {
+        "candidate_id": candidate.candidate_id,
+        "source": candidate.source,
+        "is_policy_only": candidate.is_policy_only,
+        "seed": candidate.seed,
+        "selection_role": candidate.selection_role,
+        "sampling_metadata": candidate.sampling_metadata,
+        "action_shape": [len(candidate.action_chunk), len(candidate.action_chunk[0]) if candidate.action_chunk else 0],
+        "action_l2_norm": round(vector_norm(flat), 8),
+        "endpoint_action": candidate.action_chunk[-1] if candidate.action_chunk else [],
+        "privileged_success_proxy": candidate.privileged_success_proxy,
+        "action_chunk": candidate.action_chunk,
+    }
+
+
+def candidates_from_evidence(payload: Any) -> list[ActionChunkCandidate]:
+    if not isinstance(payload, list):
+        return []
+    candidates: list[ActionChunkCandidate] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        action_chunk = item.get("action_chunk")
+        if not isinstance(action_chunk, list) or not action_chunk:
+            continue
+        candidates.append(
+            ActionChunkCandidate(
+                candidate_id=str(item.get("candidate_id", f"candidate_{len(candidates):02d}")),
+                source=str(item.get("source", "unknown")),
+                action_chunk=[
+                    [float(value) for value in row]
+                    for row in action_chunk
+                    if isinstance(row, list)
+                ],
+                privileged_success_proxy=float(item.get("privileged_success_proxy", 0.0)),
+                is_policy_only=bool(item.get("is_policy_only", False)),
+                seed=item.get("seed"),
+                selection_role=item.get("selection_role"),
+                sampling_metadata=item.get("sampling_metadata") if isinstance(item.get("sampling_metadata"), dict) else {},
+            )
+        )
+    return candidates
+
+
+def compute_outcome_diversity_metrics(outcomes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    state_vectors = {
+        candidate_id: numeric_vector(outcome.get("state"), limit=128)
+        for candidate_id, outcome in outcomes.items()
+    }
+    image_vectors = {
+        candidate_id: numeric_vector(outcome.get("image"), limit=4096)
+        for candidate_id, outcome in outcomes.items()
+    }
+    success_values = [
+        float(outcome.get("success_proxy", 0.0))
+        for outcome in outcomes.values()
+    ]
+    state_distances: list[float] = []
+    image_mses: list[float] = []
+    candidate_ids = list(outcomes)
+    for left in range(len(candidate_ids)):
+        for right in range(left + 1, len(candidate_ids)):
+            left_id = candidate_ids[left]
+            right_id = candidate_ids[right]
+            if state_vectors[left_id] and state_vectors[right_id]:
+                state_distances.append(l2(state_vectors[left_id], state_vectors[right_id]))
+            if image_vectors[left_id] and image_vectors[right_id]:
+                image_mse, _image_mae = image_errors_from_vectors(image_vectors[left_id], image_vectors[right_id])
+                image_mses.append(image_mse)
+    return {
+        "candidate_count": len(outcomes),
+        "max_state_l2": round(max(state_distances) if state_distances else 0.0, 8),
+        "mean_state_l2": round(mean(state_distances), 8),
+        "max_image_mse": round(max(image_mses) if image_mses else 0.0, 8),
+        "mean_image_mse": round(mean(image_mses), 8),
+        "success_proxy_range": round((max(success_values) - min(success_values)) if success_values else 0.0, 8),
+    }
+
+
+def simulate_mock_env(action_chunk: list[list[float]]) -> dict[str, Any]:
+    state = [0.0, 0.0, 0.0]
+    for row in action_chunk:
+        for index in range(min(3, len(row))):
+            state[index] += row[index]
+    target = [1.2, 0.8, 0.5]
+    distance = l2(state, target)
+    success_proxy = max(0.0, 1.0 - distance / 2.0)
+    image = render_mock_image_matrix(state)
+    return {
+        "state": state,
+        "success_proxy": success_proxy,
+        "image": image,
+    }
+
+
+def render_mock_image_matrix(state: list[float], size: int = 16) -> list[list[int]]:
+    center_x = max(0, min(size - 1, int(round(size / 2 + state[0] * 3))))
+    center_y = max(0, min(size - 1, int(round(size / 2 - state[1] * 3))))
+    image: list[list[int]] = []
+    for y in range(size):
+        row = []
+        for x in range(size):
+            distance = math.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
+            value = max(0, int(255 - distance * 55))
+            row.append(value)
+        image.append(row)
+    return image
+
+
+def compute_clone_fidelity_metrics(config: RiskProbeConfig, candidate: ActionChunkCandidate) -> CloneFidelityMetrics:
+    committed = simulate_mock_env(candidate.action_chunk)
+    clone = simulate_mock_env(json.loads(json.dumps(candidate.action_chunk)))
+    state_l2 = l2(committed["state"], clone["state"])
+    image_mse, image_mae = image_errors(committed["image"], clone["image"])
+    success_delta = abs(committed["success_proxy"] - clone["success_proxy"])
+    mismatch = (
+        state_l2 > config.clone_state_l2_threshold
+        or image_mse > config.clone_image_mse_threshold
+        or success_delta > config.clone_state_l2_threshold
+    )
+    verdict = FAIL if mismatch else PASS
+    rationale = (
+        "Clone and committed deterministic mock rollout matched."
+        if verdict == PASS
+        else "Clone and committed deterministic mock rollout diverged."
+    )
+    return CloneFidelityMetrics(
+        verdict=verdict,
+        state_l2=round(state_l2, 12),
+        image_mse=round(image_mse, 12),
+        image_mae=round(image_mae, 12),
+        success_proxy_delta=round(success_delta, 12),
+        deterministic_replay_mismatch=mismatch,
+        rationale=rationale,
+    )
+
+
+def image_errors(image_a: list[list[int]], image_b: list[list[int]]) -> tuple[float, float]:
+    diffs = []
+    for row_a, row_b in zip(image_a, image_b):
+        for value_a, value_b in zip(row_a, row_b):
+            diffs.append(float(value_a - value_b))
+    mse = mean([diff * diff for diff in diffs])
+    mae = mean([abs(diff) for diff in diffs])
+    return mse, mae
+
+
+def compute_oracle_upper_bound_metrics(
+    candidates: list[ActionChunkCandidate],
+    outcomes: dict[str, dict[str, Any]],
+) -> OracleUpperBoundMetrics:
+    policy = next(candidate for candidate in candidates if candidate.is_policy_only)
+    random_candidates = [candidate for candidate in candidates if not candidate.is_policy_only and "random" in candidate.source]
+    random_best = max(random_candidates, key=lambda item: outcomes[item.candidate_id]["success_proxy"]) if random_candidates else policy
+    oracle = max(candidates, key=lambda item: outcomes[item.candidate_id]["success_proxy"])
+    policy_score = outcomes[policy.candidate_id]["success_proxy"]
+    random_score = outcomes[random_best.candidate_id]["success_proxy"]
+    oracle_score = outcomes[oracle.candidate_id]["success_proxy"]
+    beats_policy = oracle_score > policy_score
+    beats_random = oracle_score >= random_score
+    verdict = PASS if beats_policy and beats_random else WARN
+    rationale = (
+        "Privileged oracle selector finds an upper-bound candidate in the mock fixture."
+        if verdict == PASS
+        else "Oracle selector did not improve over baseline/random in the mock fixture."
+    )
+    return OracleUpperBoundMetrics(
+        verdict=verdict,
+        policy_only_score=round(policy_score, 6),
+        random_chunk_score=round(random_score, 6),
+        oracle_selector_score=round(oracle_score, 6),
+        selected_candidate_id=oracle.candidate_id,
+        oracle_beats_policy=beats_policy,
+        oracle_beats_random=beats_random,
+        rationale=rationale,
+        evidence_class="mock_oracle",
+        privileged_oracle_available=True,
+        upper_bound_testable=True,
+    )
+
+
+def run_libero_actual_adapter(
+    config: RiskProbeConfig,
+    candidates: list[ActionChunkCandidate],
+    output_dir: Path,
+) -> dict[str, Any]:
+    evidence_path = output_dir / "libero_adapter_evidence.json"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    write_probe_progress(output_dir, "libero_actual_adapter_import_compat_start")
+    import_compat = apply_torch_transformers_import_compatibility_patch()
+    lerobot_eval = None
+    try:
+        with risk_probe_timeout(config.actual_timeout_sec, "libero_actual_adapter"):
+            with renderer_env(config.renderer_backend):
+                write_probe_progress(output_dir, "libero_actual_adapter_import_start", renderer_env_snapshot(config))
+                ensure_noninteractive_libero_config()
+                from lerobot.scripts import lerobot_eval as imported_lerobot_eval
+
+                lerobot_eval = imported_lerobot_eval
+                write_probe_progress(output_dir, "libero_actual_adapter_import_done", renderer_env_snapshot(config))
+    except Exception as exc:  # noqa: BLE001 - import guard keeps local tests dependency-free.
+        is_timeout = isinstance(exc, RiskProbeTimeoutError)
+        failure = classify_actual_adapter_failure(exc, config)
+        evidence = {
+            "mode": "libero_actual_adapter",
+            "available": False,
+            "blockers": [
+                (
+                    "LIBERO actual adapter timed out before env rollout: "
+                    if is_timeout
+                    else (
+                        "LIBERO actual adapter blocked before env rollout: could not prepare non-interactive LIBERO config "
+                        "or import lerobot.scripts.lerobot_eval "
+                    )
+                )
+                + f"({type(exc).__name__}: {str(exc)[:300]}). Run inside the prepared RunPod LeRobot/LIBERO environment."
+            ],
+            "import_error": {"type": type(exc).__name__, "message": str(exc)[:500]},
+            "blocker_category": failure["category"],
+            "blocker_hint": failure["hint"],
+            "renderer_backend": config.renderer_backend,
+            "renderer_env": renderer_env_snapshot(config),
+            "actual_candidate_evidence_available": False,
+            "risk1_actual_unavailable_reason": failure["risk1_reason"],
+            "risk5_actual_unavailable_reason": failure["risk5_reason"],
+            "import_compat": import_compat,
+            "timeout_sec": config.actual_timeout_sec,
+        }
+        evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        evidence["artifact_path"] = str(evidence_path)
+        return evidence
+
+    old_argv = sys.argv[:]
+    old_rollout = getattr(lerobot_eval, "rollout", None)
+    try:
+        with risk_probe_timeout(config.actual_timeout_sec, "libero_actual_adapter_eval"):
+            with renderer_env(config.renderer_backend):
+                write_probe_progress(output_dir, "libero_actual_adapter_rollout_patch_start", renderer_env_snapshot(config))
+                lerobot_eval.rollout = build_libero_risk_probe_rollout(
+                    config=config,
+                    evidence_path=evidence_path,
+                    candidates=candidates,
+                    seed=config.seed,
+                    max_steps=config.actual_max_steps,
+                )
+                sys.argv = ["lerobot-eval", *build_lerobot_eval_argv(config, output_dir)]
+                write_probe_progress(
+                    output_dir,
+                    "libero_actual_adapter_eval_main_start",
+                    {"argv": sys.argv[1:], **renderer_env_snapshot(config)},
+                )
+                lerobot_eval.main()
+                write_probe_progress(output_dir, "libero_actual_adapter_eval_main_end", renderer_env_snapshot(config))
+    except Exception as exc:  # noqa: BLE001 - adapter should report actionable failure.
+        is_timeout = isinstance(exc, RiskProbeTimeoutError)
+        failure = classify_actual_adapter_failure(exc, config)
+        blocker = (
+            "LIBERO actual adapter timed out during env/model rollout: "
+            if is_timeout
+            else "LIBERO actual adapter failed during env rollout: "
+        )
+        evidence = {
+            "mode": "libero_actual_adapter",
+            "available": False,
+            "blockers": [
+                blocker + f"{type(exc).__name__}: {str(exc)[:500]}"
+            ],
+            "exception": {"type": type(exc).__name__, "message": str(exc)[:1000]},
+            "argv": sys.argv[1:],
+            "blocker_category": failure["category"],
+            "blocker_hint": failure["hint"],
+            "renderer_backend": config.renderer_backend,
+            "renderer_env": renderer_env_snapshot(config),
+            "actual_candidate_evidence_available": False,
+            "risk1_actual_unavailable_reason": failure["risk1_reason"],
+            "risk5_actual_unavailable_reason": failure["risk5_reason"],
+            "import_compat": import_compat,
+            "timeout_sec": config.actual_timeout_sec,
+        }
+        evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    finally:
+        sys.argv = old_argv
+        if old_rollout is not None:
+            lerobot_eval.rollout = old_rollout
+    if evidence_path.exists():
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    else:
+        evidence = {
+            "mode": "libero_actual_adapter",
+            "available": False,
+            "blockers": ["LIBERO actual adapter did not produce evidence JSON."],
+        }
+        evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["artifact_path"] = str(evidence_path)
+    return evidence
+
+
+def apply_torch_transformers_import_compatibility_patch() -> dict[str, Any]:
+    """Patch narrow torch/Transformers import drift seen on RunPod cu124.
+
+    LeRobot 0.5.2 currently imports Transformers 5.x utilities, while the
+    known-good RunPod driver path keeps torch at 2.5.1+cu124. Transformers 5.x
+    probes ``torch.float8_e8m0fnu`` during lazy AutoProcessor imports; torch
+    2.5 exposes other float8 dtypes but not that newer alias. The risk probe
+    only needs import/runtime plumbing here, so provide the alias before
+    importing LeRobot instead of upgrading torch into the CUDA 13 failure path.
+    """
+
+    try:
+        import torch  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001 - optional dependency on local tests.
+        return {
+            "torch_imported": False,
+            "patched": False,
+            "patch": "torch.float8_e8m0fnu",
+            "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
+    if hasattr(torch, "float8_e8m0fnu"):
+        return {
+            "torch_imported": True,
+            "patched": False,
+            "patch": "torch.float8_e8m0fnu",
+            "reason": "already_present",
+            "torch_version": getattr(torch, "__version__", "unknown"),
+        }
+    if hasattr(torch, "float8_e5m2"):
+        setattr(torch, "float8_e8m0fnu", getattr(torch, "float8_e5m2"))
+        return {
+            "torch_imported": True,
+            "patched": True,
+            "patch": "torch.float8_e8m0fnu",
+            "source_attr": "torch.float8_e5m2",
+            "torch_version": getattr(torch, "__version__", "unknown"),
+        }
+    return {
+        "torch_imported": True,
+        "patched": False,
+        "patch": "torch.float8_e8m0fnu",
+        "reason": "source_attr_missing",
+        "torch_version": getattr(torch, "__version__", "unknown"),
+    }
+
+
+@contextlib.contextmanager
+def renderer_env(renderer_backend: str):
+    keys = ("MUJOCO_GL", "PYOPENGL_PLATFORM")
+    previous = {key: os.environ.get(key) for key in keys}
+    backend = renderer_backend.lower()
+    if backend == "egl":
+        os.environ["MUJOCO_GL"] = "egl"
+        os.environ["PYOPENGL_PLATFORM"] = "egl"
+    elif backend == "osmesa":
+        os.environ["MUJOCO_GL"] = "osmesa"
+        os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def renderer_env_snapshot(config: RiskProbeConfig) -> dict[str, Any]:
+    return {
+        "renderer_backend": config.renderer_backend,
+        "MUJOCO_GL": os.environ.get("MUJOCO_GL"),
+        "PYOPENGL_PLATFORM": os.environ.get("PYOPENGL_PLATFORM"),
+        "EGL_VISIBLE_DEVICES": os.environ.get("EGL_VISIBLE_DEVICES"),
+        "MUJOCO_EGL_DEVICE_ID": os.environ.get("MUJOCO_EGL_DEVICE_ID"),
+    }
+
+
+def classify_actual_adapter_failure(exc: Exception, config: RiskProbeConfig) -> dict[str, str]:
+    message = str(exc)
+    lowered = message.lower()
+    if "platform_device" in lowered or "egl device display" in lowered:
+        category = "libero_egl_l4_blocked"
+        hint = (
+            "EGL context creation failed before actual SmolVLA candidate rollout. "
+            "Prefer RTX 4090 / RTX 4000 Ada / A5000-A6000 class GPUs with working EGL, "
+            "or rerun smoke with --renderer-backend osmesa as a limited CPU-render fallback."
+        )
+    elif "permission denied" in lowered and "/dev/dri" in lowered:
+        category = "egl_dri_permission_denied"
+        hint = "Container cannot open /dev/dri render/card devices; use a Pod/runtime with EGL device access."
+    elif config.renderer_backend == "osmesa" and ("osmesa" in lowered or "opengl" in lowered):
+        category = "osmesa_runtime_missing"
+        hint = "OSMesa fallback requested but runtime libraries appear missing; install libosmesa6/libopengl0 or use EGL-capable GPU."
+    else:
+        category = "libero_actual_rollout_failed"
+        hint = "Actual LIBERO rollout failed before risk-probe evidence; inspect run.log and libero_adapter_evidence.json."
+    reason = f"{type(exc).__name__}: {message[:500]}"
+    return {
+        "category": category,
+        "hint": hint,
+        "risk1_reason": reason,
+        "risk5_reason": reason,
+    }
+
+
+def build_lerobot_eval_argv(config: RiskProbeConfig, output_dir: Path) -> list[str]:
+    task_id = config.task_ids[0] if config.task_ids else 0
+    return [
+        f"--output_dir={output_dir / 'libero_eval_logs'}",
+        f"--policy.path={config.policy_path}",
+        "--env.type=libero",
+        f"--env.task={config.suite}",
+        f"--env.task_ids=[{task_id}]",
+        f"--env.camera_name_mapping={config.camera_mapping}",
+        "--eval.n_episodes=1",
+        "--eval.batch_size=1",
+        "--eval.use_async_envs=false",
+        "--env.max_parallel_tasks=1",
+        "--policy.empty_cameras=0",
+        f"--seed={config.seed}",
+        f"--policy.num_steps={config.policy_num_steps}",
+        f"--policy.n_action_steps={config.policy_n_action_steps}",
+    ]
+
+
+def sample_policy_action_candidates(
+    *,
+    policy: Any,
+    observation: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    config: RiskProbeConfig,
+    torch_module: Any = None,
+    numpy_module: Any = None,
+) -> tuple[list[ActionChunkCandidate], dict[str, Any]]:
+    seeds = [config.seed + index for index in range(max(config.num_candidates - 1, 0))]
+    candidates: list[ActionChunkCandidate] = []
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index in range(config.num_candidates):
+        candidate_id = "candidate_00_policy_only" if index == 0 else f"candidate_{index:02d}"
+        seed = None if index == 0 else seeds[index - 1]
+        explicit_noise = None
+        explicit_noise_metadata: dict[str, Any] = {
+            "explicit_noise_requested": seed is not None,
+            "explicit_noise_used": False,
+        }
+        if seed is not None:
+            set_policy_sampling_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+            explicit_noise, explicit_noise_metadata = build_policy_explicit_noise(
+                policy=policy,
+                observation=observation,
+                torch_module=torch_module,
+            )
+            if hasattr(policy, "reset"):
+                try:
+                    policy.reset()
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{candidate_id} policy.reset failed: {type(exc).__name__}: {str(exc)[:200]}")
+        try:
+            raw_chunk, source, limitation = capture_policy_raw_action_chunk(
+                policy=policy,
+                observation=observation,
+                torch_module=torch_module,
+                explicit_noise=explicit_noise,
+            )
+            action_chunk = raw_policy_chunk_to_action_chunk(
+                raw_chunk=raw_chunk,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=action_key,
+                config=config,
+            )
+            source_label = source
+            if seed is not None and config.debug_candidate_noise_scale > 0.0:
+                action_chunk = add_debug_candidate_noise(action_chunk, seed, config.debug_candidate_noise_scale)
+                source_label = f"{source_label}+debug_noise"
+                limitation = (
+                    (limitation + " " if limitation else "")
+                    + "debug_candidate_noise_scale was applied; this is plumbing evidence, not SmolVLA diversity."
+                )
+            if not action_chunk:
+                raise ValueError("policy action chunk was empty after postprocessing")
+            candidate = ActionChunkCandidate(
+                candidate_id=candidate_id,
+                source=source_label,
+                action_chunk=action_chunk,
+                privileged_success_proxy=simulate_mock_env(action_chunk)["success_proxy"],
+                is_policy_only=index == 0,
+                seed=seed,
+                selection_role="policy_only_baseline" if index == 0 else "policy_seeded_sample",
+                sampling_metadata={
+                    "candidate_generation": "policy",
+                    "seed": seed,
+                    "raw_chunk_shape": shape_list(raw_chunk),
+                    "raw_chunk_preview": truncate_nested(to_plain_value(raw_chunk), max_items=256),
+                    **explicit_noise_metadata,
+                    "action_shape": [len(action_chunk), len(action_chunk[0]) if action_chunk else 0],
+                    "limitation": limitation,
+                },
+            )
+            candidates.append(candidate)
+            records.append(summarize_candidate(candidate))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{candidate_id} policy candidate sampling failed: {type(exc).__name__}: {str(exc)[:300]}")
+    metadata = {
+        "source": "policy",
+        "requested_candidates": config.num_candidates,
+        "candidate_count": len(candidates),
+        "candidate_seeds": seeds,
+        "debug_candidate_noise_scale": config.debug_candidate_noise_scale,
+        "candidate_sampling_api": "predict_action_chunk(noise=...)" if any(
+            candidate.sampling_metadata.get("explicit_noise_used") for candidate in candidates
+        ) else "global_seed_or_deterministic",
+        "errors": errors,
+        "candidates": records,
+        "limitation": (
+            "Policy path exposed only one-step actions for some candidates; chunk_steps may be smaller than requested."
+            if any(
+                candidate.sampling_metadata.get("limitation")
+                for candidate in candidates
+            )
+            else None
+        ),
+    }
+    return candidates, metadata
+
+
+def sample_policy_prompt_portfolio_candidates(
+    *,
+    policy: Any,
+    raw_observation: Any,
+    env: Any,
+    env_preprocessor: Any,
+    preprocessor: Any,
+    preprocess_observation_fn: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    config: RiskProbeConfig,
+    torch_module: Any = None,
+    numpy_module: Any = None,
+) -> tuple[list[ActionChunkCandidate], dict[str, Any]]:
+    base_observation, base_metadata = prepare_lerobot_policy_observation(
+        observation=raw_observation,
+        env=env,
+        env_preprocessor=env_preprocessor,
+        preprocessor=preprocessor,
+        preprocess_observation_fn=preprocess_observation_fn,
+    )
+    base_prompt = str(base_metadata.get("task_text") or "")
+    prompts = build_risk1a_prompt_portfolio(
+        base_prompt=base_prompt,
+        num_prompts=config.num_candidates,
+        enabled=config.risk1a_prompt_portfolio,
+        ambiguity_requested=config.risk1a_ambiguity,
+    )
+    if len(prompts) <= 1:
+        candidates, metadata = sample_policy_action_candidates(
+            policy=policy,
+            observation=base_observation,
+            postprocessor=postprocessor,
+            env_postprocessor=env_postprocessor,
+            action_key=action_key,
+            config=config,
+            torch_module=torch_module,
+            numpy_module=numpy_module,
+        )
+        metadata["risk1a_prompt_portfolio"] = {
+            "enabled": config.risk1a_prompt_portfolio,
+            "active": False,
+            "reason": "ambiguity_not_requested_or_single_prompt",
+            "prompts": prompts,
+            "base_prompt": base_prompt,
+            "provenance": "single_prompt_baseline",
+        }
+        return candidates[:1], metadata
+
+    candidates: list[ActionChunkCandidate] = []
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, prompt in enumerate(prompts):
+        candidate_id = "candidate_00_policy_only" if index == 0 else f"candidate_{index:02d}"
+        seed = None if index == 0 else config.seed + index - 1
+        if seed is not None:
+            set_policy_sampling_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+        if hasattr(policy, "reset"):
+            try:
+                policy.reset()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{candidate_id} policy.reset failed: {type(exc).__name__}: {str(exc)[:200]}")
+        try:
+            prompt_observation, prompt_metadata = prepare_lerobot_policy_observation(
+                observation=raw_observation,
+                env=env,
+                env_preprocessor=env_preprocessor,
+                preprocessor=preprocessor,
+                preprocess_observation_fn=preprocess_observation_fn,
+                task_override=prompt["prompt"],
+            )
+            raw_chunk, source, limitation = capture_policy_raw_action_chunk(
+                policy=policy,
+                observation=prompt_observation,
+                torch_module=torch_module,
+                explicit_noise=None,
+            )
+            action_chunk = raw_policy_chunk_to_action_chunk(
+                raw_chunk=raw_chunk,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=action_key,
+                config=config,
+            )
+            candidate = ActionChunkCandidate(
+                candidate_id=candidate_id,
+                source=f"{source}+risk1a_prompt_portfolio",
+                action_chunk=action_chunk,
+                privileged_success_proxy=simulate_mock_env(action_chunk)["success_proxy"],
+                is_policy_only=index == 0,
+                seed=seed,
+                selection_role="baseline_original_prompt" if index == 0 else "risk1a_strategy_prompt",
+                sampling_metadata={
+                    "candidate_generation": "risk1a_prompt_portfolio",
+                    "seed": seed,
+                    "prompt_strategy": prompt["strategy"],
+                    "prompt_axis": prompt["axis"],
+                    "prompt_text": prompt["prompt"],
+                    "prompt_index": index,
+                    "task_source": prompt_metadata.get("task_source"),
+                    "raw_chunk_shape": shape_list(raw_chunk),
+                    "raw_chunk_preview": truncate_nested(to_plain_value(raw_chunk), max_items=256),
+                    "action_shape": [len(action_chunk), len(action_chunk[0]) if action_chunk else 0],
+                    "limitation": limitation,
+                },
+            )
+            candidates.append(candidate)
+            records.append(summarize_candidate(candidate))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{candidate_id} risk1a prompt candidate failed: {type(exc).__name__}: {str(exc)[:300]}")
+    metadata = {
+        "source": "risk1a_prompt_portfolio",
+        "requested_candidates": config.num_candidates,
+        "candidate_count": len(candidates),
+        "candidate_seeds": [config.seed + index for index in range(max(len(prompts) - 1, 0))],
+        "candidate_sampling_api": "prompt_portfolio_noise_free",
+        "errors": errors,
+        "candidates": records,
+        "risk1a_prompt_portfolio": {
+            "enabled": True,
+            "active": True,
+            "ambiguity_requested": config.risk1a_ambiguity,
+            "base_prompt": base_prompt,
+            "prompts": prompts,
+            "provenance": "policy_generated" if candidates else "unavailable",
+            "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+            "min_relative_gain": RISK1A_MIN_RELATIVE_GAIN,
+        },
+        "limitation": None,
+    }
+    return candidates, metadata
+
+
+def sample_policy_vlm_subgoal_candidates(
+    *,
+    policy: Any,
+    raw_observation: Any,
+    env: Any,
+    env_preprocessor: Any,
+    preprocessor: Any,
+    preprocess_observation_fn: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    config: RiskProbeConfig,
+    torch_module: Any = None,
+    numpy_module: Any = None,
+) -> tuple[list[ActionChunkCandidate], dict[str, Any]]:
+    _base_observation, base_metadata = prepare_lerobot_policy_observation(
+        observation=raw_observation,
+        env=env,
+        env_preprocessor=env_preprocessor,
+        preprocessor=preprocessor,
+        preprocess_observation_fn=preprocess_observation_fn,
+    )
+    base_prompt = str(base_metadata.get("task_text") or "")
+    subgoals, validation = build_risk1b_subgoal_portfolio(
+        base_prompt=base_prompt,
+        num_subgoals=config.num_candidates,
+        model_name=config.risk1b_model,
+        generator_backend=config.risk1b_generator_backend,
+        subgoals_json=config.risk1b_subgoals_json,
+    )
+    if not validation["valid"]:
+        metadata = {
+            "source": "risk1b_vlm_strategy_variants",
+            "legacy_source": "risk1b_vlm_subgoals",
+            "requested_candidates": config.num_candidates,
+            "candidate_count": 0,
+            "errors": validation["errors"],
+            "candidates": [],
+            "risk1b_vlm_subgoals": {
+                "enabled": True,
+                "active": False,
+                "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+                "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
+                "model": config.risk1b_model,
+                "generator_backend": config.risk1b_generator_backend,
+                "base_prompt": base_prompt,
+                "subgoals": subgoals,
+                "strategy_variants": subgoals,
+                "candidate_prompts": subgoals,
+                "validation": validation,
+                "provenance": "invalid_vlm_output",
+                "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+                "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
+            },
+            "limitation": "Risk1-B candidate-prompt JSON failed schema validation; no policy chunks sampled.",
+        }
+        return [], metadata
+
+    candidates: list[ActionChunkCandidate] = []
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, subgoal in enumerate(subgoals):
+        candidate_id = "candidate_00_policy_only" if index == 0 else f"candidate_{index:02d}"
+        seed = None if index == 0 else config.seed + index - 1
+        if seed is not None:
+            set_policy_sampling_seed(seed, numpy_module=numpy_module, torch_module=torch_module)
+        if hasattr(policy, "reset"):
+            try:
+                policy.reset()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{candidate_id} policy.reset failed: {type(exc).__name__}: {str(exc)[:200]}")
+        try:
+            prompt_observation, prompt_metadata = prepare_lerobot_policy_observation(
+                observation=raw_observation,
+                env=env,
+                env_preprocessor=env_preprocessor,
+                preprocessor=preprocessor,
+                preprocess_observation_fn=preprocess_observation_fn,
+                task_override=risk1b_subgoal_to_prompt(base_prompt, subgoal),
+            )
+            raw_chunk, source, limitation = capture_policy_raw_action_chunk(
+                policy=policy,
+                observation=prompt_observation,
+                torch_module=torch_module,
+                explicit_noise=None,
+            )
+            action_chunk = raw_policy_chunk_to_action_chunk(
+                raw_chunk=raw_chunk,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=action_key,
+                config=config,
+            )
+            candidate = ActionChunkCandidate(
+                candidate_id=candidate_id,
+                source=f"{source}+risk1b_vlm_subgoals",
+                action_chunk=action_chunk,
+                privileged_success_proxy=simulate_mock_env(action_chunk)["success_proxy"],
+                is_policy_only=index == 0,
+                seed=seed,
+                selection_role="baseline_original_prompt" if index == 0 else "risk1b_vlm_strategy_variant_prompt",
+                sampling_metadata={
+                    "candidate_generation": "risk1b_vlm_strategy_variants",
+                    "legacy_candidate_generation": "risk1b_vlm_subgoals",
+                    "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+                    "seed": seed,
+                    "model": config.risk1b_model,
+                    "generator_backend": config.risk1b_generator_backend,
+                    "subgoal": subgoal,
+                    "strategy_variant": subgoal,
+                    "candidate_prompt": subgoal,
+                    "strategy_axis": subgoal["strategy_axis"],
+                    "prompt_text": prompt_observation.get("task", [""])[0] if isinstance(prompt_observation, dict) else "",
+                    "prompt_index": index,
+                    "task_source": prompt_metadata.get("task_source"),
+                    "raw_chunk_shape": shape_list(raw_chunk),
+                    "raw_chunk_preview": truncate_nested(to_plain_value(raw_chunk), max_items=256),
+                    "action_shape": [len(action_chunk), len(action_chunk[0]) if action_chunk else 0],
+                    "limitation": limitation,
+                },
+            )
+            candidates.append(candidate)
+            records.append(summarize_candidate(candidate))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{candidate_id} risk1b strategy-variant candidate failed: {type(exc).__name__}: {str(exc)[:300]}")
+    generator_provenance = validation["provenance"]
+    policy_provenance = (
+        "external_vlm_json_policy_generated"
+        if generator_provenance == "external_vlm_json"
+        else f"{generator_provenance}_policy_generated"
+    )
+    metadata = {
+        "source": "risk1b_vlm_strategy_variants",
+        "legacy_source": "risk1b_vlm_subgoals",
+        "requested_candidates": config.num_candidates,
+        "candidate_count": len(candidates),
+        "candidate_seeds": [config.seed + index for index in range(max(len(subgoals) - 1, 0))],
+        "candidate_sampling_api": "vlm_strategy_variant_prompt_portfolio_noise_free",
+        "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+        "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
+        "errors": errors,
+        "candidates": records,
+        "risk1b_vlm_subgoals": {
+            "enabled": True,
+            "active": True,
+            "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+            "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
+            "model": config.risk1b_model,
+            "candidate_models": list(RISK1B_CANDIDATE_MODELS),
+            "generator_backend": config.risk1b_generator_backend,
+            "base_prompt": base_prompt,
+            "subgoals": subgoals,
+            "strategy_variants": subgoals,
+            "candidate_prompts": subgoals,
+            "validation": validation,
+            "provenance": policy_provenance if candidates else "unavailable",
+            "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+            "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
+            "latency_ms": validation.get("latency_ms"),
+            "memory_mb": validation.get("memory_mb"),
+            "cost_usd": validation.get("cost_usd"),
+        },
+        "limitation": None,
+    }
+    return candidates, metadata
+
+
+def build_risk1a_prompt_portfolio(
+    *,
+    base_prompt: str,
+    num_prompts: int,
+    enabled: bool,
+    ambiguity_requested: bool,
+) -> list[dict[str, str]]:
+    clean_base = " ".join(str(base_prompt or "").split()) or "Complete the LIBERO task."
+    prompts = [
+        {
+            "strategy": "baseline_original_prompt",
+            "axis": "baseline",
+            "prompt": clean_base,
+        }
+    ]
+    if not enabled or not ambiguity_requested:
+        return prompts[: max(1, min(num_prompts, 1))]
+    strategy_specs = [
+        (
+            "direct_approach",
+            "direct_path",
+            "Use a direct approach to complete the same task without adding extra intermediate goals.",
+        ),
+        (
+            "conservative_alignment_before_contact",
+            "alignment_before_contact",
+            "First align the gripper conservatively with the object before making contact, then continue the same task.",
+        ),
+        (
+            "object_relative_open_side",
+            "object_centric_direction",
+            "Approach from the object-relative open side when it is visible, preserving the same target and task goal.",
+        ),
+        (
+            "precise_gripper_alignment_before_closing",
+            "gripper_alignment",
+            "Prioritize precise gripper pose alignment before closing or pushing, while preserving the same task goal.",
+        ),
+        (
+            "short_horizon_contact_first",
+            "contact_first",
+            "Choose a short-horizon first contact that improves the same task objective before committing further.",
+        ),
+    ]
+    for strategy, axis, suffix in strategy_specs[: max(0, num_prompts - 1)]:
+        prompts.append(
+            {
+                "strategy": strategy,
+                "axis": axis,
+                "prompt": f"{clean_base} {suffix}",
+            }
+        )
+    return prompts
+
+
+def build_risk1b_subgoal_portfolio(
+    *,
+    base_prompt: str,
+    num_subgoals: int,
+    model_name: str,
+    generator_backend: str,
+    subgoals_json: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if generator_backend == "json":
+        if not subgoals_json:
+            return [], {
+                "valid": False,
+                "errors": [
+                    "--risk1b-subgoals-json or --risk1b-candidate-prompts-json is required "
+                    "when --risk1b-generator-backend=json"
+                ],
+                "provenance": "missing_external_vlm_json",
+                "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+            }
+        try:
+            payload = json.loads(Path(subgoals_json).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            return [], {
+                "valid": False,
+                "errors": [f"could not read VLM candidate-prompt JSON: {type(exc).__name__}: {str(exc)[:200]}"],
+                "provenance": "invalid_external_vlm_json",
+                "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+            }
+        records = (
+            payload.get("candidate_prompts")
+            or payload.get("strategy_variants")
+            or payload.get("subgoals")
+            or payload
+            if isinstance(payload, dict)
+            else payload
+        )
+        metadata = payload if isinstance(payload, dict) else {}
+        normalized, errors = validate_risk1b_subgoal_records(records, limit=num_subgoals)
+        normalized, baseline_repair = normalize_risk1b_baseline_subgoal(
+            normalized,
+            base_prompt=base_prompt,
+            limit=num_subgoals,
+        )
+        generator_backend = str(metadata.get("generator_backend", "external_vlm_json"))
+        generator_provenance = str(metadata.get("provenance", "external_vlm_json"))
+        if generator_backend in {"mock", "fixture", "contract"} and generator_provenance == "external_vlm_json":
+            generator_provenance = f"{generator_backend}_contract"
+        return normalized, {
+            "valid": not errors and len(normalized) >= 2,
+            "errors": errors,
+            "provenance": generator_provenance,
+            "schema": list(RISK1B_REQUIRED_FIELDS),
+            "model": metadata.get("model", model_name),
+            "generator_backend": generator_backend,
+            "source_context": metadata.get("source_context") or metadata.get("input_context"),
+            "prompt_template": metadata.get("prompt_template"),
+            "raw_output_path": metadata.get("raw_output_path"),
+            "schema_validation": metadata.get("schema_validation"),
+            "latency_ms": metadata.get("latency_ms"),
+            "memory_mb": metadata.get("memory_mb"),
+            "cost_usd": metadata.get("cost_usd"),
+            "baseline_repair": baseline_repair,
+            "candidate_prompt_semantics": metadata.get(
+                "candidate_prompt_semantics", RISK1B_CANDIDATE_PROMPT_SEMANTICS
+            ),
+            "legacy_schema_note": metadata.get("legacy_schema_note", RISK1B_LEGACY_SCHEMA_NOTE),
+        }
+    if generator_backend != "contract":
+        return [], {
+            "valid": False,
+            "errors": [f"unsupported Risk1-B generator backend: {generator_backend}"],
+            "provenance": "unsupported_generator_backend",
+        }
+    clean_base = " ".join(str(base_prompt or "").split()) or "Complete the LIBERO task."
+    axes = [
+        ("baseline", "the task target", "the visible goal region", "complete the original instruction"),
+        ("object_centric_grounding", "the main manipulated object", "object-relative reachable side", "object is aligned for manipulation"),
+        ("contact_ordering", "the first contact surface", "near-contact waypoint", "first stable contact is achieved"),
+        ("gripper_pose_alignment", "the gripper and object", "pre-grasp alignment region", "gripper pose is aligned before closing"),
+        ("short_horizon_recovery", "the nearest recoverable subgoal", "local correction region", "next short-horizon progress is visible"),
+    ]
+    records = []
+    for index, (axis, target_object, region, stop_condition) in enumerate(axes[: max(1, num_subgoals)]):
+        subgoal_text = clean_base if index == 0 else f"{clean_base} Focus on {axis.replace('_', ' ')} while preserving the same task."
+        records.append(
+            {
+                "subgoal_text": subgoal_text,
+                "strategy_axis": axis,
+                "target_object": target_object,
+                "target_region_or_point": region,
+                "stop_condition": stop_condition,
+                "confidence": 0.5 if index else 1.0,
+                "rationale": "contract-only placeholder; replace with external VLM JSON before candidate-generation claims",
+            }
+        )
+    return records, {
+        "valid": True,
+        "errors": [],
+        "provenance": "contract_subgoal_template",
+        "schema": list(RISK1B_REQUIRED_FIELDS),
+        "model": model_name,
+        "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+        "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
+        "latency_ms": None,
+        "memory_mb": None,
+        "cost_usd": None,
+    }
+
+
+def normalize_risk1b_baseline_subgoal(
+    subgoals: list[dict[str, Any]],
+    *,
+    base_prompt: str,
+    limit: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not subgoals:
+        return subgoals, {"applied": False, "reason": "no_valid_subgoals"}
+    first = subgoals[0]
+    first_axis = clean_relation_phrase(str(first.get("strategy_axis", "")))
+    clean_base = " ".join(str(base_prompt or "").split()) or str(first.get("subgoal_text", "Complete the task."))
+    if first_axis == "baseline":
+        return subgoals[:limit], {"applied": False, "reason": "first_candidate_already_baseline"}
+    baseline = {
+        **first,
+        "subgoal_text": clean_base,
+        "strategy_axis": "baseline",
+        "stop_condition": first.get("stop_condition") or "original task success condition is reached",
+        "confidence": 1.0,
+        "rationale": "repo-normalized baseline anchor; external VLM did not put baseline first",
+    }
+    repaired = [baseline, *subgoals]
+    return repaired[:limit], {
+        "applied": True,
+        "reason": "first_candidate_was_not_baseline",
+        "original_first_strategy_axis": first.get("strategy_axis"),
+    }
+
+
+def validate_risk1b_subgoal_records(records: Any, *, limit: int) -> tuple[list[dict[str, Any]], list[str]]:
+    errors: list[str] = []
+    if isinstance(records, dict):
+        records = records.get("candidate_prompts") or records.get("strategy_variants") or records.get("subgoals") or records
+    if (
+        isinstance(records, list)
+        and len(records) == 1
+        and isinstance(records[0], dict)
+        and any(key in records[0] for key in ("candidate_prompts", "strategy_variants", "subgoals"))
+    ):
+        wrapper = records[0]
+        records = wrapper.get("candidate_prompts") or wrapper.get("strategy_variants") or wrapper.get("subgoals") or records
+    if not isinstance(records, list):
+        return [], [
+            "Risk1-B VLM output must be a list or a JSON object with candidate_prompts, "
+            "strategy_variants, or legacy subgoals list"
+        ]
+    normalized: list[dict[str, Any]] = []
+    for index, record in enumerate(records[:limit]):
+        if not isinstance(record, dict):
+            errors.append(f"candidate_prompt[{index}] must be an object")
+            continue
+        if "subgoal" in record and isinstance(record.get("subgoal"), dict):
+            record = record["subgoal"]
+        missing = [field_name for field_name in RISK1B_REQUIRED_FIELDS if field_name not in record]
+        if missing:
+            errors.append(f"candidate_prompt[{index}] missing required fields: {', '.join(missing)}")
+            continue
+        try:
+            confidence = float(record["confidence"])
+        except (TypeError, ValueError):
+            errors.append(f"candidate_prompt[{index}] confidence must be numeric")
+            continue
+        confidence = max(0.0, min(1.0, confidence))
+        normalized.append(
+            {
+                "subgoal_text": str(record["subgoal_text"]),
+                "strategy_axis": str(record["strategy_axis"]),
+                "target_object": str(record["target_object"]),
+                "target_region_or_point": str(record["target_region_or_point"]),
+                "stop_condition": str(record["stop_condition"]),
+                "confidence": round(confidence, 6),
+                "rationale": str(record.get("rationale", "")),
+            }
+        )
+    if len(normalized) < 2:
+        errors.append("Risk1-B requires at least two valid candidate prompts including baseline")
+    return normalized, errors
+
+
+def validate_risk1b_task_relation(records: list[dict[str, Any]], task_description: str) -> list[str]:
+    task = " ".join(str(task_description or "").lower().split())
+    if not task:
+        return []
+    relations = parse_risk1b_manipulation_relations(task)
+    if not relations:
+        return []
+    errors: list[str] = []
+    for index, record in enumerate(records):
+        combined = " ".join(
+            str(record.get(field_name, ""))
+            for field_name in ("subgoal_text", "target_object", "target_region_or_point", "stop_condition")
+        ).lower()
+        subgoal_text = str(record.get("subgoal_text", "")).lower()
+        target_object_text = str(record.get("target_object", "")).lower()
+        target_region_text = str(record.get("target_region_or_point", "")).lower()
+        stop_condition = str(record.get("stop_condition", "")).lower()
+        relation_prompt_text = f"{subgoal_text} {stop_condition}"
+        for manipulated_object, target_region in relations:
+            if not all(token in combined for token in manipulated_object.split()):
+                errors.append(f"candidate_prompt[{index}] must preserve manipulated object: {manipulated_object}")
+            if not all(token in relation_prompt_text for token in manipulated_object.split()):
+                errors.append(
+                    f"candidate_prompt[{index}] subgoal_text/stop_condition must preserve relation object: "
+                    f"{manipulated_object}"
+                )
+            if not (
+                all(token in target_region_text for token in target_region.split())
+                or all(token in stop_condition for token in target_region.split())
+                or all(token in combined for token in target_region.split())
+            ):
+                errors.append(f"candidate_prompt[{index}] must preserve target region/relation: {target_region}")
+            if not all(token in relation_prompt_text for token in target_region.split()):
+                errors.append(
+                    f"candidate_prompt[{index}] subgoal_text/stop_condition must preserve relation target: "
+                    f"{target_region}"
+                )
+            if all(token in target_object_text for token in target_region.split()) and not all(
+                token in target_object_text for token in manipulated_object.split()
+            ):
+                errors.append(
+                    f"candidate_prompt[{index}] targets destination as manipulated object; "
+                    f"expected {manipulated_object} into {target_region}"
+                )
+            if contains_destination_as_manipulated_object(subgoal_text, target_region):
+                errors.append(
+                    f"candidate_prompt[{index}] text manipulates destination/target region; "
+                    f"expected manipulating {manipulated_object} toward {target_region}"
+                )
+            if not describes_completed_relation(
+                relation_prompt_text,
+                manipulated_object=manipulated_object,
+                target_region=target_region,
+            ):
+                errors.append(
+                    f"candidate_prompt[{index}] must describe completed object-target relation, "
+                    f"not only an intermediate approach/alignment: {manipulated_object} -> {target_region}"
+                )
+        for action_name, required_tokens in parse_risk1b_required_task_actions(task):
+            if not all(token in combined for token in required_tokens):
+                errors.append(f"candidate_prompt[{index}] must preserve required task action: {action_name}")
+    return errors
+
+
+def describes_completed_relation(text: str, *, manipulated_object: str, target_region: str) -> bool:
+    normalized_text = " ".join(str(text or "").lower().split())
+    if not normalized_text:
+        return False
+    if not all(token in normalized_text for token in manipulated_object.split()):
+        return False
+    if not all(token in normalized_text for token in target_region.split()):
+        return False
+    if describes_only_intermediate_relation(normalized_text, target_region=target_region):
+        return False
+    target_pattern = r"\s+(?:the\s+)?".join(re.escape(part) for part in target_region.split())
+    completion_patterns = (
+        rf"\b(?:put|place|placed|placing|move|moved|position|positioned|set|slide|slid|push|pushed)\b"
+        rf".*\b(?:in|into|on|onto|to|inside|within|right\s+of|left\s+of)\s+(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:is|are|be|been)\s+(?:in|inside|on|onto|within|to|right\s+of|left\s+of)\s+(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:in|inside|on|onto|within|right\s+of|left\s+of)\s+(?:the\s+)?{target_pattern}\b",
+    )
+    if any(re.search(pattern, normalized_text) for pattern in completion_patterns):
+        return True
+    return not describes_only_intermediate_relation(normalized_text, target_region=target_region)
+
+
+def describes_only_intermediate_relation(text: str, *, target_region: str) -> bool:
+    normalized_text = " ".join(str(text or "").lower().split())
+    target_pattern = r"\s+(?:the\s+)?".join(re.escape(part) for part in target_region.split())
+    incomplete_patterns = (
+        rf"\b(?:align|aligned|approach|approached|move|moved|bring|brought)\s+(?:[^.;]*?)"
+        rf"\b(?:toward|towards|near|close\s+to|with)\s+(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:close|near)\s+to\s+(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:ready|aligned|positioned)\s+(?:for|before)\s+(?:placement|placing|contact)\b",
+    )
+    completion_cues = (
+        rf"\b(?:put|place|placed|placing|set)\b.*\b(?:in|into|on|onto|inside|within|right\s+of|left\s+of)\s+"
+        rf"(?:the\s+)?{target_pattern}\b",
+        rf"\b(?:is|are|be|been)\s+(?:in|inside|on|onto|within|right\s+of|left\s+of)\s+(?:the\s+)?{target_pattern}\b",
+    )
+    has_incomplete = any(re.search(pattern, normalized_text) for pattern in incomplete_patterns)
+    has_completion = any(re.search(pattern, normalized_text) for pattern in completion_cues)
+    return has_incomplete and not has_completion
+
+
+def contains_destination_as_manipulated_object(text: str, target_region: str) -> bool:
+    normalized_text = " ".join(str(text or "").lower().split())
+    normalized_target = re.sub(r"\b(?:a|an|the)\b", " ", str(target_region or "").lower())
+    normalized_target = " ".join(normalized_target.split())
+    if not normalized_text or not normalized_target:
+        return False
+    target_phrases = {normalized_target}
+    target_tokens = normalized_target.split()
+    if len(target_tokens) > 1:
+        target_phrases.add(" ".join(target_tokens[-2:]))
+        target_phrases.add(target_tokens[-1])
+    manipulation_verbs = (
+        "move",
+        "align",
+        "center",
+        "centre",
+        "pick up",
+        "grasp",
+        "grab",
+        "lift",
+        "slide",
+        "push",
+        "pull",
+        "reposition",
+        "bring",
+    )
+    for phrase in target_phrases:
+        if not phrase:
+            continue
+        phrase_pattern = r"\s+(?:the\s+)?".join(re.escape(part) for part in phrase.split())
+        for verb in manipulation_verbs:
+            if re.search(rf"\b{re.escape(verb)}\s+(?:the\s+)?{phrase_pattern}\b", normalized_text):
+                return True
+    return False
+
+
+def parse_risk1b_required_task_actions(task_description: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    task = " ".join(str(task_description or "").lower().split())
+    actions: list[tuple[str, tuple[str, ...]]] = []
+    if re.search(r"\bturn\s+on\s+(?:the\s+)?stove\b|\bturn\s+(?:the\s+)?stove\s+on\b", task):
+        actions.append(("turn on stove", ("turn", "on", "stove")))
+    if re.search(r"\band\s+close\s+it\b|\bclose\s+(?:the\s+)?microwave\b", task):
+        actions.append(("close microwave", ("close", "microwave")))
+    return tuple(actions)
+
+
+def parse_simple_manipulation_relation(task_description: str) -> tuple[str, str] | None:
+    relations = parse_risk1b_manipulation_relations(task_description)
+    if not relations:
+        return None
+    if len(relations) == 1:
+        return relations[0]
+    manipulated_object = dedupe_join_relation_parts(object_name for object_name, _target in relations)
+    target_region = dedupe_join_relation_parts(target for _object_name, target in relations)
+    if not manipulated_object or not target_region:
+        return None
+    return manipulated_object, target_region
+
+
+def parse_risk1b_manipulation_relations(task_description: str) -> tuple[tuple[str, str], ...]:
+    task = " ".join(str(task_description or "").lower().split())
+    if not task:
+        return ()
+    relations: list[tuple[str, str]] = []
+    activated_object = parse_activated_reference_target(task)
+    pronoun_object = parse_manipulated_pronoun_antecedent(task)
+    for match in re.finditer(
+        r"\b(?:put|place|move)\s+(?:both\s+)?(?:the\s+)?(?P<object>.+?)\s+"
+        r"(?:in|into|on|onto|to)\s+(?:the\s+)?(?P<target>.+?)"
+        r"(?=\s+and\s+(?:put|place|move|open|close)\b|$)",
+        task,
+    ):
+        target_region = clean_relation_phrase(match.group("target"))
+        if target_region == "it" and activated_object:
+            target_region = activated_object
+        object_text = clean_relation_phrase(match.group("object"))
+        if object_text == "it" and pronoun_object:
+            object_parts = (pronoun_object,)
+        else:
+            object_parts = split_manipulated_object_group(match.group("object"), whole_match=match.group(0))
+        for manipulated_object in object_parts:
+            if manipulated_object and target_region:
+                relations.append((manipulated_object, target_region))
+    return tuple(relations)
+
+
+def parse_activated_reference_target(task_description: str) -> str | None:
+    match = re.search(r"\bturn\s+on\s+(?:the\s+)?(?P<object>.+?)\s+and\s+put\b", task_description)
+    if not match:
+        return None
+    return clean_relation_phrase(match.group("object")) or None
+
+
+def parse_manipulated_pronoun_antecedent(task_description: str) -> str | None:
+    match = re.search(
+        r"\bpick\s+up\s+(?:the\s+)?(?P<object>.+?)\s+and\s+(?:put|place|move)\s+it\b",
+        task_description,
+    )
+    if not match:
+        return None
+    return clean_relation_phrase(match.group("object")) or None
+
+
+def split_manipulated_object_group(raw_object: str, *, whole_match: str) -> tuple[str, ...]:
+    cleaned = clean_relation_phrase(raw_object)
+    if not cleaned:
+        return ()
+    if "both " not in f" {whole_match} ":
+        return (cleaned,)
+    parts = [clean_relation_phrase(part) for part in re.split(r"\s+and\s+", raw_object)]
+    parts = [part for part in parts if part]
+    return tuple(parts) if len(parts) >= 2 else (cleaned,)
+
+
+def dedupe_join_relation_parts(parts: Any) -> str:
+    unique: list[str] = []
+    for part in parts:
+        cleaned = clean_relation_phrase(str(part))
+        if cleaned and cleaned not in unique:
+            unique.append(cleaned)
+    return " and ".join(unique)
+
+
+def clean_relation_phrase(value: str) -> str:
+    value = re.sub(r"\b(?:a|an|the|both)\b", " ", value)
+    value = re.sub(r"[^a-z0-9_ ]+", " ", value)
+    return " ".join(value.split())
+
+
+def risk1b_subgoal_to_prompt(base_prompt: str, subgoal: dict[str, Any]) -> str:
+    clean_base = " ".join(str(base_prompt or "").split()) or "Complete the LIBERO task."
+    strategy_directive = risk1b_strategy_directive(
+        str(subgoal.get("strategy_axis", "")),
+        str(subgoal.get("target_object", "")),
+        str(subgoal.get("target_region_or_point", "")),
+    )
+    if clean_relation_phrase(str(subgoal.get("strategy_axis", ""))) == "baseline":
+        return (
+            f"Task goal: {clean_base}. "
+            f"Execution prompt: {subgoal['subgoal_text']} "
+            f"Target object: {subgoal['target_object']}. "
+            f"Target region or point: {subgoal['target_region_or_point']}. "
+            f"Stop condition: {subgoal['stop_condition']}."
+        )
+    return (
+        f"Task goal remains: {clean_base}. "
+        f"Strategy-specific execution command: {subgoal['subgoal_text']} "
+        f"Strategy instruction: {strategy_directive} "
+        f"Target object: {subgoal['target_object']}. "
+        f"Target region or point: {subgoal['target_region_or_point']}. "
+        f"Stop condition: {subgoal['stop_condition']}. "
+        "Follow the strategy-specific motion cue for this action chunk while preserving the task goal."
+    )
+
+
+def risk1b_strategy_directive(strategy_axis: str, target_object: str, target_region: str) -> str:
+    axis = clean_relation_phrase(strategy_axis.replace("_", " "))
+    obj = target_object or "the manipulated object"
+    region = target_region or "the target region"
+    directives = {
+        "baseline": f"Use the original task wording and move {obj} into {region} without extra constraints.",
+        "object centric open side": (
+            f"Approach {obj} from the visible open side of {region}; bias the first motion laterally toward "
+            "the least obstructed side before moving inward."
+        ),
+        "pre contact alignment": (
+            f"Before contact, align the gripper and {obj} with the center of {region}; prefer a slower "
+            "centering motion before lifting or pushing."
+        ),
+        "gripper pose precision": (
+            f"Prioritize wrist and gripper orientation around {obj}; reduce sideways drift and make a precise "
+            f"placement motion toward {region}."
+        ),
+        "short horizon contact": (
+            f"Choose the nearest useful first contact on {obj}; make a short corrective motion that visibly "
+            f"reduces the distance to {region}."
+        ),
+        "collision avoidant approach": (
+            f"Keep clearance from {region}'s rim and nearby objects; arc around obstacles before placing {obj}."
+        ),
+        "high clearance over rim": (
+            f"Lift {obj} higher than the rim of {region}, move above the bowl center, then lower toward the inside."
+        ),
+        "vertical drop centering": (
+            f"Center {obj} over the interior of {region} first, then make a mostly vertical downward placement motion."
+        ),
+        "near side entry": (
+            f"Approach {region} from the nearest visible side while holding {obj}; keep the motion low and direct toward the opening."
+        ),
+        "far side entry": (
+            f"Approach {region} from the far visible side while holding {obj}; bias the path laterally before entering the bowl."
+        ),
+        "rim avoidance arc": (
+            f"Move {obj} along a shallow arc around the rim of {region}, then enter through the clearest opening."
+        ),
+        "gentle release inside bowl": (
+            f"Slow the final motion with {obj} inside {region}; prioritize controlled release after the object crosses the rim."
+        ),
+    }
+    return directives.get(axis, f"Use strategy axis '{strategy_axis}' while preserving {obj} into {region}.")
+
+
+def prepare_lerobot_policy_observation(
+    *,
+    observation: Any,
+    env: Any,
+    env_preprocessor: Any,
+    preprocessor: Any,
+    preprocess_observation_fn: Any,
+    task_override: str | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    metadata: dict[str, Any] = {"steps": []}
+    processed = preprocess_observation_fn(observation) if callable(preprocess_observation_fn) else observation
+    metadata["steps"].append("preprocess_observation")
+    if task_override is not None:
+        processed["task"] = [task_override] * int(getattr(env, "num_envs", 1))
+        metadata["task_source"] = "risk1a_prompt_override"
+    else:
+        try:
+            processed["task"] = list(env.call("task_description"))
+            metadata["task_source"] = "task_description"
+        except Exception:  # noqa: BLE001
+            try:
+                processed["task"] = list(env.call("task"))
+                metadata["task_source"] = "task"
+            except Exception as exc:  # noqa: BLE001
+                processed["task"] = [""] * int(getattr(env, "num_envs", 1))
+                metadata["task_source"] = f"fallback_empty_task:{type(exc).__name__}"
+    metadata["task_text"] = processed.get("task", [""])[0] if isinstance(processed, dict) else ""
+    processed = env_preprocessor(processed) if callable(env_preprocessor) else processed
+    metadata["steps"].append("env_preprocessor")
+    processed = preprocessor(processed) if callable(preprocessor) else processed
+    metadata["steps"].append("policy_preprocessor")
+    metadata["keys"] = sorted(str(key) for key in processed.keys()) if isinstance(processed, dict) else [type(processed).__name__]
+    return processed, metadata
+
+
+def capture_policy_raw_action_chunk(
+    *,
+    policy: Any,
+    observation: Any,
+    torch_module: Any = None,
+    explicit_noise: Any = None,
+) -> tuple[Any, str, str | None]:
+    context = torch_module.inference_mode() if torch_module is not None and hasattr(torch_module, "inference_mode") else contextlib.nullcontext()
+    with context:
+        if hasattr(policy, "predict_action_chunk"):
+            accepts_noise = callable_accepts_keyword(policy.predict_action_chunk, "noise")
+            if explicit_noise is not None and accepts_noise:
+                raw_chunk = policy.predict_action_chunk(clone_observation(observation), noise=explicit_noise)
+                return raw_chunk, f"{getattr(policy, 'name', 'policy')}.predict_action_chunk", None
+            raw_chunk = policy.predict_action_chunk(clone_observation(observation))
+            limitation = None
+            if explicit_noise is not None and not accepts_noise:
+                limitation = "Policy predict_action_chunk does not expose a noise keyword; candidate seed only set global RNG."
+            return raw_chunk, f"{getattr(policy, 'name', 'policy')}.predict_action_chunk", limitation
+        raw_action = policy.select_action(clone_observation(observation))
+        return (
+            raw_action,
+            f"{getattr(policy, 'name', 'policy')}.select_action",
+            "Policy does not expose predict_action_chunk; sampled one-step action candidates.",
+        )
+
+
+def callable_accepts_keyword(function: Any, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return True
+    if keyword in signature.parameters:
+        return True
+    return any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+
+
+def build_policy_explicit_noise(*, policy: Any, observation: Any, torch_module: Any = None) -> tuple[Any, dict[str, Any]]:
+    metadata: dict[str, Any] = {
+        "explicit_noise_requested": True,
+        "explicit_noise_used": False,
+    }
+    predict_action_chunk = getattr(policy, "predict_action_chunk", None)
+    if not callable(predict_action_chunk):
+        metadata["explicit_noise_reason"] = "predict_action_chunk_unavailable"
+        return None, metadata
+    if not callable_accepts_keyword(predict_action_chunk, "noise"):
+        metadata["explicit_noise_reason"] = "predict_action_chunk_noise_keyword_unavailable"
+        return None, metadata
+    if torch_module is None or not hasattr(torch_module, "normal"):
+        metadata["explicit_noise_reason"] = "torch_normal_unavailable"
+        return None, metadata
+    shape = infer_policy_noise_shape(policy, observation)
+    if not shape:
+        metadata["explicit_noise_reason"] = "noise_shape_unavailable"
+        return None, metadata
+    device = infer_tensor_device(observation) or infer_policy_device(policy)
+    kwargs: dict[str, Any] = {
+        "mean": 0.0,
+        "std": 1.0,
+        "size": tuple(shape),
+    }
+    dtype = getattr(torch_module, "float32", None)
+    if dtype is not None:
+        kwargs["dtype"] = dtype
+    if device is not None:
+        kwargs["device"] = device
+    try:
+        noise = torch_module.normal(**kwargs)
+    except TypeError:
+        kwargs.pop("dtype", None)
+        kwargs.pop("device", None)
+        noise = torch_module.normal(**kwargs)
+    metadata.update(
+        {
+            "explicit_noise_used": True,
+            "explicit_noise_source": "torch.normal",
+            "explicit_noise_shape": shape_list(noise) or list(shape),
+        }
+    )
+    return noise, metadata
+
+
+def infer_policy_noise_shape(policy: Any, observation: Any) -> tuple[int, int, int] | None:
+    config = getattr(policy, "config", None)
+    chunk_size = getattr(config, "chunk_size", None)
+    max_action_dim = getattr(config, "max_action_dim", None)
+    if chunk_size is None or max_action_dim is None:
+        return None
+    batch_size = infer_batch_size(observation)
+    return (batch_size, int(chunk_size), int(max_action_dim))
+
+
+def infer_batch_size(observation: Any) -> int:
+    if isinstance(observation, dict):
+        for value in observation.values():
+            shape = getattr(value, "shape", None)
+            if shape is not None and len(list(shape)) >= 1:
+                return int(list(shape)[0])
+    return 1
+
+
+def infer_tensor_device(value: Any) -> Any:
+    if isinstance(value, dict):
+        for item in value.values():
+            device = getattr(item, "device", None)
+            if device is not None:
+                return device
+    return getattr(value, "device", None)
+
+
+def infer_policy_device(policy: Any) -> Any:
+    try:
+        parameter = next(policy.parameters())
+    except Exception:  # noqa: BLE001
+        return None
+    return getattr(parameter, "device", None)
+
+
+def raw_policy_chunk_to_action_chunk(
+    *,
+    raw_chunk: Any,
+    postprocessor: Any,
+    env_postprocessor: Any,
+    action_key: str,
+    config: RiskProbeConfig,
+) -> list[list[float]]:
+    steps = min(config.chunk_steps, raw_policy_chunk_steps(raw_chunk))
+    action_chunk: list[list[float]] = []
+    for step in range(max(steps, 1)):
+        raw_step = select_raw_policy_step(raw_chunk, step)
+        processed = postprocessor(raw_step) if callable(postprocessor) else raw_step
+        transition = {action_key: processed}
+        if callable(env_postprocessor):
+            transition = env_postprocessor(transition)
+        action_values = numeric_vector(transition.get(action_key), limit=config.action_dim)
+        if not action_values:
+            action_values = numeric_vector(processed, limit=config.action_dim)
+        if len(action_values) < config.action_dim:
+            action_values = [*action_values, *([0.0] * (config.action_dim - len(action_values)))]
+        action_chunk.append([round(float(value), 8) for value in action_values[: config.action_dim]])
+    return action_chunk
+
+
+def raw_policy_chunk_steps(raw_chunk: Any) -> int:
+    shape = getattr(raw_chunk, "shape", None)
+    if shape is not None:
+        shape_values = list(shape)
+        if len(shape_values) >= 3:
+            return int(shape_values[1])
+        return 1
+    value = to_plain_value(raw_chunk)
+    if (
+        isinstance(value, list)
+        and value
+        and isinstance(value[0], list)
+        and value[0]
+        and isinstance(value[0][0], list)
+    ):
+        return len(value[0])
+    if isinstance(value, list) and value and isinstance(value[0], list) and all(isinstance(item, (int, float, bool)) for item in value[0]):
+        return len(value)
+    return 1
+
+
+def select_raw_policy_step(raw_chunk: Any, step: int) -> Any:
+    shape = getattr(raw_chunk, "shape", None)
+    if shape is not None and len(list(shape)) >= 3:
+        return raw_chunk[:, step, :]
+    value = to_plain_value(raw_chunk)
+    if (
+        isinstance(value, list)
+        and value
+        and isinstance(value[0], list)
+        and value[0]
+        and isinstance(value[0][0], list)
+    ):
+        return [value[0][step]]
+    if isinstance(value, list) and value and isinstance(value[0], list) and step < len(value):
+        return [value[step]]
+    return raw_chunk
+
+
+def add_debug_candidate_noise(action_chunk: list[list[float]], seed: int, scale: float) -> list[list[float]]:
+    rng = random.Random(seed)
+    return [
+        [round(value + rng.uniform(-scale, scale), 8) for value in row]
+        for row in action_chunk
+    ]
+
+
+def set_policy_sampling_seed(seed: int, *, numpy_module: Any = None, torch_module: Any = None) -> None:
+    random.seed(seed)
+    if numpy_module is not None and hasattr(numpy_module, "random") and hasattr(numpy_module.random, "seed"):
+        numpy_module.random.seed(seed)
+    if torch_module is not None and hasattr(torch_module, "manual_seed"):
+        torch_module.manual_seed(seed)
+    cuda = getattr(torch_module, "cuda", None)
+    if cuda is not None and hasattr(cuda, "manual_seed_all"):
+        try:
+            cuda.manual_seed_all(seed)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def clone_observation(observation: Any) -> Any:
+    try:
+        return copy.deepcopy(observation)
+    except Exception:  # noqa: BLE001
+        return observation
+
+
+def to_plain_value(value: Any) -> Any:
+    if hasattr(value, "detach"):
+        try:
+            value = value.detach()
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(value, "cpu"):
+        try:
+            value = value.cpu()
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(value, "numpy"):
+        try:
+            value = value.numpy()
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:  # noqa: BLE001
+            pass
+    return value
+
+
+def truncate_nested(value: Any, *, max_items: int) -> Any:
+    remaining = {"count": max_items}
+
+    def visit(item: Any) -> Any:
+        if remaining["count"] <= 0:
+            return "...truncated..."
+        if isinstance(item, list):
+            output = []
+            for child in item:
+                if remaining["count"] <= 0:
+                    output.append("...truncated...")
+                    break
+                output.append(visit(child))
+            return output
+        if isinstance(item, tuple):
+            return visit(list(item))
+        remaining["count"] -= 1
+        if isinstance(item, float):
+            return round(item, 8)
+        return item
+
+    return visit(value)
+
+
+def shape_list(value: Any) -> list[int]:
+    shape = getattr(value, "shape", None)
+    if shape is not None:
+        return [int(item) for item in list(shape)]
+    plain = to_plain_value(value)
+    result: list[int] = []
+    while isinstance(plain, list):
+        result.append(len(plain))
+        plain = plain[0] if plain else []
+    return result
+
+
+def run_direct_libero_double_sim_probe(
+    config: RiskProbeConfig,
+    candidates: list[ActionChunkCandidate],
+    output_dir: Path,
+) -> dict[str, Any]:
+    evidence_path = output_dir / "direct_libero_double_sim_evidence.json"
+    try:
+        import numpy as np
+    except Exception as exc:  # noqa: BLE001 - local tests must not require LIBERO.
+        evidence = {
+            "enabled": True,
+            "available": False,
+            "blockers": [
+                "direct LIBERO double-sim blocked before env creation: "
+                f"{type(exc).__name__}: {str(exc)[:400]}"
+            ],
+        }
+        evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        evidence["artifact_path"] = str(evidence_path)
+        return evidence
+
+    try:
+        with renderer_env(config.renderer_backend):
+            active_renderer_env = renderer_env_snapshot(config)
+            direct_setup = make_direct_libero_env(config)
+            env = direct_setup["env"]
+            task_id = direct_setup["task_id"]
+            env.seed(config.seed + task_id * 1000)
+            init_states = direct_setup["bench"].get_task_init_states(task_id)
+            init_state = init_states[0] if len(init_states) > 0 else None
+            evidence = run_direct_env_snapshot_replay(
+                env=env,
+                init_state=init_state,
+                candidates=candidates,
+                output_dir=output_dir,
+                camera_name=config.direct_camera_name,
+                max_steps=config.actual_max_steps,
+                np_module=np,
+                task_description=str(getattr(direct_setup["task"], "language", "") or ""),
+            )
+        evidence.update(
+            {
+                "enabled": True,
+                "available": True,
+                "renderer_backend": config.renderer_backend,
+                "renderer_env": active_renderer_env,
+                "suite": config.suite,
+                "task_id": task_id,
+                "task_name": getattr(direct_setup["task"], "name", f"task_{task_id}"),
+                "bddl_file": str(direct_setup["bddl_file"]),
+                "sync_scope": "episode_start_init_state_only",
+                "mid_episode_sync": "future_work",
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - evidence should guide the RunPod rerun.
+        failure = classify_actual_adapter_failure(exc, config)
+        evidence = {
+            "enabled": True,
+            "available": False,
+            "blockers": [
+                "direct LIBERO double-sim failed during env rollout: "
+                f"{type(exc).__name__}: {str(exc)[:500]}"
+            ],
+            "blocker_category": failure["category"],
+            "blocker_hint": failure["hint"],
+            "renderer_backend": config.renderer_backend,
+            "renderer_env": renderer_env_snapshot(config),
+            "exception": {"type": type(exc).__name__, "message": str(exc)[:1000]},
+        }
+    evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["artifact_path"] = str(evidence_path)
+    return evidence
+
+
+def make_direct_libero_env(config: RiskProbeConfig) -> dict[str, Any]:
+    ensure_noninteractive_libero_config()
+    from libero.libero import benchmark, get_libero_path
+    from libero.libero.envs import OffScreenRenderEnv
+
+    benchmark_dict = benchmark.get_benchmark_dict()
+    bench = benchmark_dict[config.suite]()
+    task_id = config.task_ids[0] if config.task_ids else 0
+    task = bench.get_task(task_id)
+    bddl_file = Path(str(task.bddl_file))
+    if not bddl_file.is_absolute():
+        bddl_root = Path(get_libero_path("bddl_files"))
+        direct = bddl_root / bddl_file
+        if direct.exists():
+            bddl_file = direct
+        else:
+            matches = sorted(bddl_root.rglob(bddl_file.name))
+            if not matches:
+                raise FileNotFoundError(f"Could not resolve LIBERO BDDL file: {bddl_file}")
+            bddl_file = matches[0]
+    env = OffScreenRenderEnv(
+        bddl_file_name=str(bddl_file),
+        camera_heights=config.direct_image_height,
+        camera_widths=config.direct_image_width,
+    )
+    return {"env": env, "bench": bench, "task": task, "task_id": task_id, "bddl_file": bddl_file}
+
+
+def diagnose_direct_libero_sim_tree(config: RiskProbeConfig, output_dir: Path) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    evidence_path = output_dir / "direct_libero_sim_tree_diagnosis.json"
+    try:
+        direct_setup = make_direct_libero_env(config)
+        env = direct_setup["env"]
+        env.seed(config.seed + direct_setup["task_id"] * 1000)
+        init_states = direct_setup["bench"].get_task_init_states(direct_setup["task_id"])
+        init_state = init_states[0] if len(init_states) > 0 else None
+        reset_direct_env_to_init_state(env, init_state)
+        handle = find_sim_clone_handle(env)
+        snapshot = capture_sim_state(handle)
+        restore = restore_sim_state(handle, snapshot)
+        nodes = traverse_env_object_graph(env, max_depth=8, max_nodes=360)
+        handles = [
+            handle_candidate
+            for node in nodes
+            for handle_candidate in [build_sim_handle(node)]
+            if handle_candidate is not None
+        ]
+        handle_summaries = [
+            summarize_sim_handle(handle_candidate)
+            for handle_candidate in sorted(handles, key=score_sim_handle, reverse=True)
+        ]
+        evidence = {
+            "status": "PASS" if restore.get("restored") else "BLOCKED",
+            "suite": config.suite,
+            "task_id": direct_setup["task_id"],
+            "task_name": getattr(direct_setup["task"], "name", f"task_{direct_setup['task_id']}"),
+            "bddl_file": str(direct_setup["bddl_file"]),
+            "selected_handle": summarize_sim_handle(handle) if handle else None,
+            "snapshot": {key: value for key, value in snapshot.items() if key != "state"},
+            "restore": restore,
+            "handle_candidates": handle_summaries,
+            "object_tree": summarize_object_tree(nodes),
+        }
+    except Exception as exc:  # noqa: BLE001 - diagnosis must return actionable JSON.
+        evidence = {
+            "status": "BLOCKED",
+            "blockers": [f"direct LIBERO sim-tree diagnosis failed: {type(exc).__name__}: {str(exc)[:500]}"],
+            "exception": {"type": type(exc).__name__, "message": str(exc)[:1000]},
+        }
+    evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["artifact_path"] = str(evidence_path)
+    return evidence
+
+
+def summarize_sim_handle(handle: dict[str, Any] | None) -> dict[str, Any] | None:
+    if handle is None:
+        return None
+    sim = handle["sim"]
+    data = getattr(sim, "data", None)
+    model = getattr(sim, "model", None)
+    return {
+        "path": handle["path"],
+        "type": object_type_name(sim),
+        "strategy": handle.get("strategy"),
+        "score": list(score_sim_handle(handle)),
+        "has_data": hasattr(sim, "data"),
+        "has_model": hasattr(sim, "model"),
+        "has_get_state": has_callable(sim, "get_state"),
+        "has_set_state": has_callable(sim, "set_state"),
+        "has_forward": has_callable(sim, "forward"),
+        "has_qpos": hasattr(data, "qpos") if data is not None else False,
+        "has_qvel": hasattr(data, "qvel") if data is not None else False,
+        "model_type": object_type_name(model) if model is not None else None,
+        "data_type": object_type_name(data) if data is not None else None,
+    }
+
+
+def summarize_object_tree(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": node["path"],
+            "type": object_type_name(node["object"]),
+            "has_sim": hasattr(node["object"], "sim"),
+            "has_env": hasattr(node["object"], "env"),
+            "has__env": hasattr(node["object"], "_env"),
+            "has_data": hasattr(node["object"], "data"),
+            "has_model": hasattr(node["object"], "model"),
+            "has_get_state": has_callable(node["object"], "get_state"),
+            "has_set_state": has_callable(node["object"], "set_state"),
+            "has_forward": has_callable(node["object"], "forward"),
+        }
+        for node in nodes[:160]
+    ]
+
+
+def run_direct_env_snapshot_replay(
+    *,
+    env: Any,
+    init_state: Any,
+    candidates: list[ActionChunkCandidate],
+    output_dir: Path,
+    camera_name: str,
+    max_steps: int,
+    np_module: Any,
+    task_description: str | None = None,
+) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    selected = select_actual_probe_candidates(candidates)
+    introspection = inspect_actual_env(env)
+    candidate_results: dict[str, dict[str, Any]] = {}
+    image_artifacts: dict[str, str] = {}
+    for candidate in selected:
+        start_observation = reset_direct_env_to_init_state(env, init_state)
+        handles = find_sim_clone_handles(env)
+        snapshot_records = [
+            {
+                "handle": handle,
+                "handle_summary": summarize_sim_handle(handle),
+                "snapshot": capture_sim_state(handle),
+            }
+            for handle in handles
+        ]
+        committed = apply_candidate_to_direct_env(
+            env,
+            candidate,
+            max_steps,
+            np_module,
+            initial_observation=start_observation,
+            task_description=task_description,
+        )
+        restore_result = {"restored": False, "reason": "sim_handle_unavailable"}
+        selected_handle_summary = None
+        restore_attempts = []
+        for record in snapshot_records:
+            restore_result = restore_sim_state(record["handle"], record["snapshot"])
+            attempt = {
+                "handle": record["handle_summary"],
+                "snapshot": {key: value for key, value in record["snapshot"].items() if key != "state"},
+                "restore": restore_result,
+            }
+            restore_attempts.append(attempt)
+            if restore_result.get("restored"):
+                selected_handle_summary = record["handle_summary"]
+                break
+        replay_start_observation = start_observation if restore_result["restored"] else reset_direct_env_to_init_state(env, init_state)
+        replay = apply_candidate_to_direct_env(
+            env,
+            candidate,
+            max_steps,
+            np_module,
+            initial_observation=replay_start_observation,
+            task_description=task_description,
+        )
+        state_l2 = l2(committed["state_vector"], replay["state_vector"]) if committed["state_vector"] and replay["state_vector"] else 0.0
+        image_mse, image_mae = image_errors_from_vectors(committed["image_vector"], replay["image_vector"])
+        artifact_path = write_future_image_artifact(output_dir, candidate.candidate_id, committed)
+        image_artifacts[candidate.candidate_id] = str(artifact_path)
+        candidate_results[candidate.candidate_id] = {
+            "committed": committed,
+            "replay": replay,
+            "snapshot_restore": restore_result,
+            "selected_handle": selected_handle_summary,
+            "handle_candidates": [record["handle_summary"] for record in snapshot_records],
+            "restore_attempts": restore_attempts,
+            "state_l2": round(state_l2, 12),
+            "image_mse": round(image_mse, 12),
+            "image_mae": round(image_mae, 12),
+            "future_image_artifact": str(artifact_path),
+            "camera_name": camera_name,
+        }
+
+    chosen = selected[-1]
+    chosen_record = candidate_results[chosen.candidate_id]
+    snapshot_restored = bool(chosen_record["snapshot_restore"].get("restored"))
+    state_available = bool(chosen_record["committed"]["state_vector"] and chosen_record["replay"]["state_vector"])
+    image_available = bool(chosen_record["committed"]["image_vector"] and chosen_record["replay"]["image_vector"])
+    final_state_match = chosen_record["state_l2"] == 0.0
+    final_image_match = chosen_record["image_mse"] == 0.0
+    image_exists = Path(chosen_record["future_image_artifact"]).exists()
+    verdict = PASS if snapshot_restored and state_available and image_available and final_state_match and final_image_match and image_exists else BLOCKED
+    rationale = (
+        "episode-start double-sim PASS: direct LIBERO env used sim snapshot restore and replayed the same action chunk with matching state/image. "
+        "This does not prove mid-episode LeRobot env synchronization."
+        if verdict == PASS
+        else "direct LIBERO double-sim could not prove snapshot-restore replay with matching state/image."
+    )
+    outcomes = {
+        candidate_id: {
+            "success_proxy": record["committed"]["success_proxy"],
+            "task_relation_proxy": record["committed"].get("task_relation_proxy"),
+            "task_relation_proxy_source": record["committed"].get("task_relation_proxy_source"),
+            "task_relation_proxy_details": record["committed"].get("task_relation_proxy_details"),
+            "state": record["committed"]["state_vector"][:3],
+            "image": vector_to_image_matrix(record["committed"]["image_vector"]),
+        }
+        for candidate_id, record in candidate_results.items()
+    }
+    clone_metrics = CloneFidelityMetrics(
+        verdict=verdict,
+        state_l2=chosen_record["state_l2"],
+        image_mse=chosen_record["image_mse"],
+        image_mae=chosen_record["image_mae"],
+        success_proxy_delta=abs(chosen_record["committed"]["success_proxy"] - chosen_record["replay"]["success_proxy"]),
+        deterministic_replay_mismatch=not (final_state_match and final_image_match),
+        rationale=rationale,
+    )
+    oracle_metrics = compute_actual_oracle_or_proxy_metrics(selected, outcomes, introspection)
+    return {
+        "available": True,
+        "blockers": [] if verdict == PASS else [rationale],
+        "candidate_results": candidate_results,
+        "outcomes": outcomes,
+        "image_artifacts": image_artifacts,
+        "introspection": introspection,
+        "oracle_mode": "privileged" if introspection.get("privileged_state_available") else "proxy_only",
+        "outcome_diversity": compute_outcome_diversity_metrics(outcomes),
+        "clone_restore_evidence": {
+            "selected_candidate_id": chosen.candidate_id,
+            "snapshot_restored": snapshot_restored,
+            "snapshot_source": chosen_record["snapshot_restore"].get("path", "unavailable"),
+            "snapshot_strategy": chosen_record["snapshot_restore"].get("strategy"),
+            "selected_handle": chosen_record.get("selected_handle"),
+            "handle_candidates": chosen_record.get("handle_candidates", []),
+            "restore_attempts": chosen_record.get("restore_attempts", []),
+            "restore_error": chosen_record["snapshot_restore"].get("reason"),
+            "forward_called": chosen_record["snapshot_restore"].get("forward_called"),
+            "forward_succeeded": chosen_record["snapshot_restore"].get("forward_succeeded"),
+            "forward_error": chosen_record["snapshot_restore"].get("forward_error"),
+            "future_image_artifact": chosen_record["future_image_artifact"],
+            "state_available": state_available,
+            "image_available": image_available,
+        },
+        "clone_fidelity": asdict(clone_metrics),
+        "oracle_upper_bound": asdict(oracle_metrics),
+        "sync_scope": "episode_start_init_state_only",
+        "mid_episode_sync": "future_work",
+    }
+
+
+def reset_direct_env_to_init_state(env: Any, init_state: Any) -> Any:
+    observation = env.reset()
+    if init_state is not None and hasattr(env, "set_init_state"):
+        observation = env.set_init_state(init_state)
+    return observation
+
+
+def apply_candidate_to_direct_env(
+    env: Any,
+    candidate: ActionChunkCandidate,
+    max_steps: int,
+    np_module: Any,
+    *,
+    initial_observation: Any,
+    task_description: str | None = None,
+) -> dict[str, Any]:
+    observation = initial_observation
+    info: Any = {}
+    reward: Any = 0.0
+    done: Any = False
+    for row in candidate.action_chunk[:max_steps]:
+        action = np_module.asarray(row, dtype=getattr(np_module, "float32", None))
+        result = env.step(action)
+        if len(result) == 5:
+            observation, reward, terminated, truncated, info = result
+            done = is_done(terminated) or is_done(truncated)
+        else:
+            observation, reward, done, info = result
+            done = is_done(done)
+        if done:
+            break
+    state_vector, state_source = extract_state_vector(env, observation, info)
+    image_vector, image_source = extract_image_vector(observation)
+    rgb_image_matrix, rgb_image_source = extract_rgb_image_matrix(observation)
+    success_proxy, success_source = extract_success_proxy(info, reward, state_vector)
+    task_proxy = compute_task_relation_proxy_with_env_fallback(observation, task_description, env)
+    privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
+    privileged_success = extract_privileged_success_proxy(env)
+    return {
+        "candidate_id": candidate.candidate_id,
+        "state_vector": state_vector,
+        "state_source": state_source,
+        "privileged_state_vector": privileged_state_vector[:64],
+        "privileged_state_source": privileged_state_source,
+        "image_vector": image_vector,
+        "image_source": image_source,
+        "rgb_image_matrix": rgb_image_matrix,
+        "rgb_image_source": rgb_image_source,
+        "success_proxy": success_proxy,
+        "success_proxy_source": success_source,
+        "task_relation_proxy": task_proxy["score"],
+        "task_relation_proxy_source": task_proxy["source"],
+        "task_relation_proxy_details": task_proxy,
+        "privileged_success_proxy": privileged_success[0],
+        "privileged_success_proxy_source": privileged_success[1],
+        "done": bool(done),
+        "info_summary": summarize_value(info),
+    }
+
+
+def build_libero_risk_probe_rollout(
+    *,
+    config: RiskProbeConfig,
+    evidence_path: Path,
+    candidates: list[ActionChunkCandidate],
+    seed: int,
+    max_steps: int,
+):
+    def rollout(
+        env,
+        policy,
+        env_preprocessor,
+        env_postprocessor,
+        preprocessor,
+        postprocessor,
+        seeds=None,
+        return_observations=False,
+        render_callback=None,
+    ) -> dict:
+        del return_observations
+        import numpy as np
+        import torch
+
+        from lerobot.envs import preprocess_observation
+        from lerobot.utils.constants import ACTION
+
+        if hasattr(policy, "reset"):
+            policy.reset()
+        rollout_seed = seeds if seeds is not None else [seed]
+        introspection = inspect_actual_env(env)
+        clone_handle = find_sim_clone_handle(env)
+        sampling_observation, _sampling_info = env.reset(seed=rollout_seed)
+        policy_sampling_observation, observation_preprocess_metadata = prepare_lerobot_policy_observation(
+            observation=sampling_observation,
+            env=env,
+            env_preprocessor=env_preprocessor,
+            preprocessor=preprocessor,
+            preprocess_observation_fn=preprocess_observation,
+        )
+        if config.risk1b_vlm_subgoals:
+            policy_candidates, candidate_generation = sample_policy_vlm_subgoal_candidates(
+                policy=policy,
+                raw_observation=sampling_observation,
+                env=env,
+                env_preprocessor=env_preprocessor,
+                preprocessor=preprocessor,
+                preprocess_observation_fn=preprocess_observation,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=ACTION,
+                config=config,
+                torch_module=torch,
+                numpy_module=np,
+            )
+        elif config.risk1a_prompt_portfolio:
+            policy_candidates, candidate_generation = sample_policy_prompt_portfolio_candidates(
+                policy=policy,
+                raw_observation=sampling_observation,
+                env=env,
+                env_preprocessor=env_preprocessor,
+                preprocessor=preprocessor,
+                preprocess_observation_fn=preprocess_observation,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=ACTION,
+                config=config,
+                torch_module=torch,
+                numpy_module=np,
+            )
+        else:
+            policy_candidates, candidate_generation = sample_policy_action_candidates(
+                policy=policy,
+                observation=policy_sampling_observation,
+                postprocessor=postprocessor,
+                env_postprocessor=env_postprocessor,
+                action_key=ACTION,
+                config=config,
+                torch_module=torch,
+                numpy_module=np,
+            )
+        candidate_generation["observation_preprocess"] = observation_preprocess_metadata
+        if policy_candidates:
+            active_candidates = policy_candidates
+            action_candidate_payload = [summarize_candidate(candidate) for candidate in active_candidates]
+            fallback_candidate_payload: list[dict[str, Any]] = []
+        else:
+            active_candidates = candidates
+            action_candidate_payload = []
+            fallback_candidate_payload = [summarize_candidate(candidate) for candidate in candidates]
+            candidate_generation = {
+                **candidate_generation,
+                "source": "synthetic_fallback",
+                "fallback_reason": "policy candidate sampling produced no usable candidates",
+            }
+        if hasattr(policy, "reset"):
+            try:
+                policy.reset()
+            except Exception as exc:  # noqa: BLE001
+                candidate_generation.setdefault("errors", []).append(
+                    f"post-sampling policy.reset failed: {type(exc).__name__}: {str(exc)[:200]}"
+                )
+        selected = select_actual_probe_candidates(active_candidates)
+        candidate_results: dict[str, dict[str, Any]] = {}
+        for candidate in selected:
+            start_observation, start_info = env.reset(seed=rollout_seed)
+            start_state = capture_sim_state(clone_handle)
+            committed = apply_candidate_to_env(
+                env,
+                candidate,
+                rollout_seed,
+                max_steps,
+                np,
+                reset_before=False,
+                initial_observation=start_observation,
+                initial_info=start_info,
+                task_description=str(observation_preprocess_metadata.get("task_text") or ""),
+            )
+            restore_result = restore_sim_state(clone_handle, start_state)
+            clone = apply_candidate_to_env(
+                env,
+                candidate,
+                rollout_seed,
+                max_steps,
+                np,
+                reset_before=not restore_result["restored"],
+                initial_observation=start_observation if restore_result["restored"] else None,
+                initial_info=start_info if restore_result["restored"] else None,
+                task_description=str(observation_preprocess_metadata.get("task_text") or ""),
+            )
+            state_l2 = l2(committed["state_vector"], clone["state_vector"]) if committed["state_vector"] and clone["state_vector"] else 0.0
+            image_mse, image_mae = image_errors_from_vectors(committed["image_vector"], clone["image_vector"])
+            success_delta = abs(committed["success_proxy"] - clone["success_proxy"])
+            candidate_results[candidate.candidate_id] = {
+                "committed": committed,
+                "clone_or_imagination": clone,
+                "snapshot_restore": restore_result,
+                "state_l2": round(state_l2, 12),
+                "image_mse": round(image_mse, 12),
+                "image_mae": round(image_mae, 12),
+                "success_proxy_delta": round(success_delta, 12),
+            }
+            if render_callback is not None:
+                try:
+                    render_callback(env)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        clone_candidate = selected[-1]
+        clone_record = candidate_results[clone_candidate.candidate_id]
+        exact_clone_available = bool(introspection.get("exact_state_clone_available"))
+        restored_exact_state = bool(clone_record["snapshot_restore"].get("restored"))
+        clone_verdict = (
+            PASS
+            if exact_clone_available
+            and restored_exact_state
+            and clone_record["state_l2"] == 0.0
+            and clone_record["image_mse"] == 0.0
+            else BLOCKED
+        )
+        clone_rationale = (
+            "Actual LIBERO exact state clone/replay matched for the selected candidate."
+            if clone_verdict == PASS
+            else (
+                "Actual LIBERO exact simulator state clone API was not restored for the selected candidate; "
+                "deterministic seed replay evidence was recorded but is not a clone-fidelity pass."
+            )
+        )
+        clone_restore_evidence = {
+            "selected_candidate_id": clone_candidate.candidate_id,
+            "snapshot_restored": restored_exact_state,
+            "snapshot_source": clone_record["snapshot_restore"].get("path", "unavailable"),
+            "restore_error": clone_record["snapshot_restore"].get("reason"),
+        }
+        outcomes = {
+            candidate_id: {
+                "success_proxy": record["committed"]["success_proxy"],
+                "task_relation_proxy": record["committed"].get("task_relation_proxy"),
+                "task_relation_proxy_source": record["committed"].get("task_relation_proxy_source"),
+                "task_relation_proxy_details": record["committed"].get("task_relation_proxy_details"),
+                "state": record["committed"]["state_vector"][:3],
+                "image": vector_to_image_matrix(record["committed"]["image_vector"]),
+            }
+            for candidate_id, record in candidate_results.items()
+        }
+        oracle_metrics = compute_actual_oracle_or_proxy_metrics(selected, outcomes, introspection)
+        direct_double_sim = (
+            run_direct_libero_double_sim_probe(config, selected, evidence_path.parent)
+            if config.direct_libero_double_sim
+            else {"enabled": False}
+        )
+        if direct_double_sim.get("clone_fidelity"):
+            direct_clone = CloneFidelityMetrics(**direct_double_sim["clone_fidelity"])
+            if direct_clone.verdict == PASS:
+                clone_verdict = PASS
+                clone_record = {
+                    **clone_record,
+                    "state_l2": direct_clone.state_l2,
+                    "image_mse": direct_clone.image_mse,
+                    "image_mae": direct_clone.image_mae,
+                    "success_proxy_delta": direct_clone.success_proxy_delta,
+                }
+                clone_rationale = direct_clone.rationale
+                clone_restore_evidence = direct_double_sim.get("clone_restore_evidence", clone_restore_evidence)
+        evidence = {
+            "mode": "libero_actual_adapter",
+            "available": True,
+            "blockers": [] if clone_verdict == PASS else [clone_rationale],
+            "introspection": introspection,
+            "candidate_generation": candidate_generation,
+            "action_candidates": action_candidate_payload,
+            "fallback_candidates": fallback_candidate_payload,
+            "candidate_results": candidate_results,
+            "outcomes": outcomes,
+            "outcome_diversity": compute_outcome_diversity_metrics(outcomes),
+            "clone_restore_evidence": clone_restore_evidence,
+            "direct_libero_double_sim": direct_double_sim,
+            "clone_fidelity": asdict(
+                CloneFidelityMetrics(
+                    verdict=clone_verdict,
+                    state_l2=clone_record["state_l2"],
+                    image_mse=clone_record["image_mse"],
+                    image_mae=clone_record["image_mae"],
+                    success_proxy_delta=clone_record["success_proxy_delta"],
+                    deterministic_replay_mismatch=bool(
+                        clone_record["state_l2"] > 0.0 or clone_record["image_mse"] > 0.0
+                    ),
+                    rationale=clone_rationale,
+                )
+            ),
+            "oracle_upper_bound": asdict(oracle_metrics),
+            "oracle_mode": "privileged" if introspection.get("privileged_state_available") else "proxy_only",
+            "risk1a_prompt_portfolio": candidate_generation.get("risk1a_prompt_portfolio", {"enabled": False}),
+            "risk1b_vlm_subgoals": candidate_generation.get("risk1b_vlm_subgoals", {"enabled": False}),
+        }
+        evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        reward = np.zeros((getattr(env, "num_envs", 1),), dtype=np.float32)
+        success = np.zeros((getattr(env, "num_envs", 1),), dtype=bool)
+        done = np.ones((getattr(env, "num_envs", 1),), dtype=bool)
+        action_dim = len(active_candidates[0].action_chunk[0]) if active_candidates and active_candidates[0].action_chunk else 1
+        action = np.zeros((getattr(env, "num_envs", 1), 1, action_dim), dtype=np.float32)
+        return {
+            ACTION: torch.from_numpy(action),
+            "reward": torch.from_numpy(np.expand_dims(reward, axis=1)),
+            "success": torch.from_numpy(np.expand_dims(success, axis=1)),
+            "done": torch.from_numpy(np.expand_dims(done, axis=1)),
+        }
+
+    return rollout
+
+
+def select_actual_probe_candidates(candidates: list[ActionChunkCandidate]) -> list[ActionChunkCandidate]:
+    policy = [candidate for candidate in candidates if candidate.is_policy_only][:1]
+    random_candidates = [candidate for candidate in candidates if "random" in candidate.source][:1]
+    non_policy_comparison = [candidate for candidate in candidates if not candidate.is_policy_only][:1]
+    oracle = [max(candidates, key=lambda item: item.privileged_success_proxy)]
+    result: list[ActionChunkCandidate] = []
+    for candidate in [*policy, *(random_candidates or non_policy_comparison), *oracle]:
+        if candidate.candidate_id not in {item.candidate_id for item in result}:
+            result.append(candidate)
+    return result or candidates[:1]
+
+
+def apply_candidate_to_env(
+    env: Any,
+    candidate: ActionChunkCandidate,
+    seed_value: Any,
+    max_steps: int,
+    np_module: Any,
+    *,
+    reset_before: bool = True,
+    initial_observation: Any = None,
+    initial_info: Any = None,
+    task_description: str | None = None,
+) -> dict[str, Any]:
+    if reset_before:
+        observation, reset_info = env.reset(seed=seed_value)
+        info: Any = reset_info
+    else:
+        observation = initial_observation
+        info = initial_info if initial_info is not None else {}
+    reward: Any = 0.0
+    terminated: Any = False
+    truncated: Any = False
+    for row in candidate.action_chunk[:max_steps]:
+        action = np_module.asarray([row], dtype=getattr(np_module, "float32", None))
+        observation, reward, terminated, truncated, info = env.step(action)
+        if is_done(terminated) or is_done(truncated):
+            break
+    state_vector, state_source = extract_state_vector(env, observation, info)
+    image_vector, image_source = extract_image_vector(observation)
+    success_proxy, success_source = extract_success_proxy(info, reward, state_vector)
+    task_proxy = compute_task_relation_proxy_with_env_fallback(observation, task_description, env)
+    privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
+    privileged_success = extract_privileged_success_proxy(env)
+    if privileged_success[1] != "unavailable" and success_source == "state_norm_proxy":
+        success_proxy, success_source = privileged_success
+    return {
+        "candidate_id": candidate.candidate_id,
+        "state_vector": state_vector,
+        "state_source": state_source,
+        "privileged_state_vector": privileged_state_vector[:64],
+        "privileged_state_source": privileged_state_source,
+        "image_vector": image_vector,
+        "image_source": image_source,
+        "success_proxy": success_proxy,
+        "success_proxy_source": success_source,
+        "task_relation_proxy": task_proxy["score"],
+        "task_relation_proxy_source": task_proxy["source"],
+        "task_relation_proxy_details": task_proxy,
+        "privileged_success_proxy": privileged_success[0],
+        "privileged_success_proxy_source": privileged_success[1],
+        "info_summary": summarize_value(info),
+    }
+
+
+def is_done(value: Any) -> bool:
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, list):
+        return any(bool(item) for item in value)
+    return bool(value)
+
+
+def inspect_actual_env(env: Any) -> dict[str, Any]:
+    call_probe = {}
+    for name in ("get_sim_state", "get_state", "get_object_state", "set_sim_state", "set_state", "task_description"):
+        try:
+            call_probe[name] = summarize_value(env.call(name))
+        except Exception as exc:  # noqa: BLE001
+            call_probe[name] = {"error": type(exc).__name__, "message": str(exc)[:300]}
+    attr_names = sorted(name for name in dir(env) if any(part in name.lower() for part in ("sim", "state", "env", "object")))[:150]
+    internal = inspect_internal_sim(env)
+    privileged_state_vector, privileged_state_source = extract_privileged_state_vector(env)
+    privileged_success = extract_privileged_success_proxy(env)
+    exact_clone_available = bool(
+        (internal.get("sim_get_state_available") and internal.get("sim_set_state_available"))
+        or internal.get("sim_strategy") == "qpos_qvel"
+    )
+    call_privileged_available = any(
+        not isinstance(call_probe.get(name), dict) or "error" not in call_probe.get(name, {})
+        for name in ("get_sim_state", "get_state", "get_object_state")
+    )
+    privileged_state_available = bool(
+        exact_clone_available
+        or call_privileged_available
+        or privileged_state_vector
+        or privileged_success[1] != "unavailable"
+    )
+    return {
+        "env_type": f"{type(env).__module__}.{type(env).__name__}",
+        "num_envs": getattr(env, "num_envs", None),
+        "call_probe": call_probe,
+        "interesting_attrs": attr_names,
+        "internal_sim": internal,
+        "exact_state_clone_available": exact_clone_available,
+        "privileged_state_available": privileged_state_available,
+        "privileged_state_source": privileged_state_source,
+        "privileged_state_preview": privileged_state_vector[:24],
+        "privileged_success_proxy_source": privileged_success[1],
+        "privileged_success_proxy": privileged_success[0],
+    }
+
+
+def inspect_internal_sim(env: Any) -> dict[str, Any]:
+    nodes = traverse_env_object_graph(env)
+    sim_candidates = [
+        build_sim_handle(node)
+        for node in nodes
+        if build_sim_handle(node) is not None
+    ]
+    sim_candidates = [candidate for candidate in sim_candidates if candidate is not None]
+    interesting = [
+        {
+            "path": node["path"],
+            "type": object_type_name(node["object"]),
+            "has_sim": hasattr(node["object"], "sim"),
+            "has_data": hasattr(node["object"], "data"),
+            "has_model": hasattr(node["object"], "model"),
+            "has_get_state": has_callable(node["object"], "get_state"),
+            "has_set_state": has_callable(node["object"], "set_state"),
+            "has_check_success": has_callable(node["object"], "check_success") or has_callable(node["object"], "_check_success"),
+            "has_reward": has_callable(node["object"], "reward"),
+        }
+        for node in nodes[:80]
+    ]
+    if not sim_candidates:
+        return {
+            "root_type": object_type_name(env),
+            "visited_count": len(nodes),
+            "sim_get_state_available": False,
+            "sim_set_state_available": False,
+            "candidate_paths": interesting,
+        }
+    handle = sorted(sim_candidates, key=score_sim_handle, reverse=True)[0]
+    sim = handle["sim"]
+    return {
+        "root_type": object_type_name(env),
+        "visited_count": len(nodes),
+        "sim_path": handle["path"],
+        "sim_type": object_type_name(sim),
+        "sim_strategy": handle["strategy"],
+        "sim_get_state_available": has_callable(sim, "get_state"),
+        "sim_set_state_available": has_callable(sim, "set_state"),
+        "sim_forward_available": has_callable(sim, "forward"),
+        "sim_data_available": hasattr(sim, "data"),
+        "sim_model_available": hasattr(sim, "model"),
+        "candidate_paths": interesting,
+    }
+
+
+def traverse_env_object_graph(root: Any, *, max_depth: int = 7, max_nodes: int = 240) -> list[dict[str, Any]]:
+    relation_names = (
+        "envs",
+        "_env",
+        "env",
+        "unwrapped",
+        "gym",
+        "venv",
+        "sim",
+        "model",
+        "data",
+        "task",
+        "robots",
+        "robot",
+        "arena",
+        "objects",
+        "object",
+        "obj",
+    )
+    queue: list[tuple[str, Any, int]] = [("root", root, 0)]
+    seen: set[int] = set()
+    nodes: list[dict[str, Any]] = []
+    while queue and len(nodes) < max_nodes:
+        path, value, depth = queue.pop(0)
+        if value is None:
+            continue
+        obj_id = id(value)
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+        nodes.append({"path": path, "object": value})
+        if depth >= max_depth or is_scalar_like(value):
+            continue
+        for child_path, child in iter_known_children(value, relation_names):
+            queue.append((f"{path}.{child_path}", child, depth + 1))
+    return nodes
+
+
+def iter_known_children(value: Any, relation_names: tuple[str, ...]) -> list[tuple[str, Any]]:
+    children: list[tuple[str, Any]] = []
+    for name in relation_names:
+        try:
+            child = getattr(value, name)
+        except Exception:  # noqa: BLE001
+            continue
+        children.append((name, child))
+    if isinstance(value, dict):
+        for key, child in list(value.items())[:30]:
+            if any(token in str(key).lower() for token in ("env", "sim", "state", "object", "robot", "task")):
+                children.append((f"[{key!r}]", child))
+    if isinstance(value, (list, tuple)):
+        for index, child in enumerate(value[:16]):
+            children.append((f"[{index}]", child))
+    return children
+
+
+def is_scalar_like(value: Any) -> bool:
+    return isinstance(value, (str, bytes, int, float, bool))
+
+
+def has_callable(value: Any, name: str) -> bool:
+    try:
+        attr = getattr(value, name)
+    except Exception:  # noqa: BLE001
+        return False
+    return callable(attr)
+
+
+def object_type_name(value: Any) -> str:
+    return f"{type(value).__module__}.{type(value).__name__}"
+
+
+def find_sim_clone_handle(env: Any) -> dict[str, Any] | None:
+    handles = find_sim_clone_handles(env)
+    return handles[0] if handles else None
+
+
+def find_sim_clone_handles(env: Any) -> list[dict[str, Any]]:
+    handles = [
+        handle
+        for node in traverse_env_object_graph(env)
+        for handle in [build_sim_handle(node)]
+        if handle is not None
+    ]
+    return sorted(handles, key=score_sim_handle, reverse=True)
+
+
+def build_sim_handle(node: dict[str, Any]) -> dict[str, Any] | None:
+    sim = node["object"]
+    get_set_available = has_callable(sim, "get_state") and has_callable(sim, "set_state")
+    qpos_available = has_qpos_qvel_state(sim)
+    if not get_set_available and not qpos_available:
+        return None
+    strategy = "get_set_state" if get_set_available else "qpos_qvel"
+    return {
+        "path": node["path"],
+        "sim": sim,
+        "strategy": strategy,
+        "has_data": hasattr(sim, "data"),
+        "has_model": hasattr(sim, "model"),
+        "has_forward": has_callable(sim, "forward"),
+        "has_get_state": get_set_available,
+        "has_qpos_qvel": qpos_available,
+    }
+
+
+def score_sim_handle(handle: dict[str, Any]) -> tuple[int, int, int, int, int, int, str]:
+    path = str(handle["path"])
+    # Raw robosuite / MuJoCo handles with model+data are preferred over shallow
+    # wrapper-level root.sim handles. RunPod evidence showed root.sim can expose
+    # get_state/set_state while failing restore because it lacks .data.
+    has_data = int(bool(handle.get("has_data")))
+    has_model = int(bool(handle.get("has_model")))
+    nested_env = int(".env" in path or "._env" in path or ".unwrapped" in path)
+    not_root_sim = int(path != "root.sim")
+    qpos = int(bool(handle.get("has_qpos_qvel")))
+    get_set = int(bool(handle.get("has_get_state")))
+    return (has_data + has_model, nested_env, not_root_sim, qpos, get_set, -len(path), path)
+
+
+def has_qpos_qvel_state(sim: Any) -> bool:
+    try:
+        data = getattr(sim, "data")
+    except Exception:  # noqa: BLE001
+        return False
+    return hasattr(data, "qpos") and hasattr(data, "qvel")
+
+
+def capture_sim_state(handle: dict[str, Any] | None) -> dict[str, Any]:
+    if not handle:
+        return {"captured": False, "reason": "sim_handle_unavailable"}
+    sim = handle["sim"]
+    try:
+        if handle.get("strategy") == "qpos_qvel":
+            data = sim.data
+            state = {
+                "qpos": copy.deepcopy(convert_array_like(data.qpos)),
+                "qvel": copy.deepcopy(convert_array_like(data.qvel)),
+            }
+        else:
+            state = sim.get_state()
+        return {
+            "captured": True,
+            "path": handle["path"],
+            "strategy": handle.get("strategy", "get_set_state"),
+            "state": copy.deepcopy(state),
+            "state_summary": summarize_value(state),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"captured": False, "path": handle["path"], "reason": f"{type(exc).__name__}: {str(exc)[:300]}"}
+
+
+def restore_sim_state(handle: dict[str, Any] | None, snapshot: dict[str, Any]) -> dict[str, Any]:
+    if not handle:
+        return {"restored": False, "reason": "sim_handle_unavailable"}
+    if not snapshot.get("captured"):
+        return {"restored": False, "path": handle["path"], "reason": snapshot.get("reason", "snapshot_not_captured")}
+    sim = handle["sim"]
+    try:
+        strategy = snapshot.get("strategy") or handle.get("strategy") or "get_set_state"
+        if strategy == "qpos_qvel":
+            assign_array_like(sim.data.qpos, snapshot["state"]["qpos"])
+            assign_array_like(sim.data.qvel, snapshot["state"]["qvel"])
+        else:
+            sim.set_state(snapshot["state"])
+        forward_result = safe_sim_forward(sim)
+        return {
+            "restored": True,
+            "path": handle["path"],
+            "strategy": strategy,
+            "forward_called": forward_result["called"],
+            "forward_succeeded": forward_result["succeeded"],
+            "forward_error": forward_result.get("error"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"restored": False, "path": handle["path"], "reason": f"{type(exc).__name__}: {str(exc)[:300]}"}
+
+
+def convert_array_like(value: Any) -> Any:
+    if hasattr(value, "copy"):
+        try:
+            value = value.copy()
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(value, (list, tuple)):
+        return [convert_array_like(item) for item in value]
+    return value
+
+
+def assign_array_like(target: Any, source: Any) -> None:
+    if hasattr(target, "__setitem__"):
+        try:
+            target[...] = source
+            return
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            target[:] = source
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(target, list):
+        target[:] = list(source)
+        return
+    raise TypeError(f"cannot assign simulator state into {type(target).__name__}")
+
+
+def safe_sim_forward(sim: Any) -> dict[str, Any]:
+    if not has_callable(sim, "forward"):
+        return {"called": False, "succeeded": False, "error": None}
+    try:
+        sim.forward()
+    except Exception as exc:  # noqa: BLE001
+        return {"called": True, "succeeded": False, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+    return {"called": True, "succeeded": True, "error": None}
+
+
+def extract_state_vector(env: Any, observation: Any, info: Any) -> tuple[list[float], str]:
+    for name in ("get_sim_state", "get_state", "get_object_state"):
+        try:
+            value = env.call(name)
+            vector = numeric_vector(value, limit=256)
+            if vector:
+                return vector, f"env.call({name})"
+        except Exception:  # noqa: BLE001
+            continue
+    privileged_vector, privileged_source = extract_privileged_state_vector(env)
+    if privileged_vector:
+        return privileged_vector, privileged_source
+    vector = numeric_vector(info, limit=256)
+    if vector:
+        return vector, "info_numeric"
+    vector = numeric_vector(observation, limit=256, skip_image_like=True)
+    return vector, "observation_numeric" if vector else "unavailable"
+
+
+def extract_image_vector(observation: Any) -> tuple[list[float], str]:
+    if isinstance(observation, dict):
+        for key, value in observation.items():
+            if "image" in str(key).lower():
+                vector = numeric_vector(value, limit=4096)
+                if vector:
+                    return vector, str(key)
+    vector = numeric_vector(observation, limit=4096)
+    return vector, "observation_any" if vector else "unavailable"
+
+
+def extract_rgb_image_matrix(observation: Any) -> tuple[list[list[list[int]]], str]:
+    if not isinstance(observation, dict):
+        return [], "unavailable"
+    for key, value in observation.items():
+        if "image" not in str(key).lower():
+            continue
+        matrix = rgb_matrix_from_value(value)
+        if matrix:
+            return matrix, str(key)
+    return [], "unavailable"
+
+
+def rgb_matrix_from_value(value: Any, *, max_size: int = 128) -> list[list[list[int]]]:
+    if hasattr(value, "tolist"):
+        try:
+            value = value.tolist()
+        except Exception:  # noqa: BLE001
+            pass
+    while (
+        isinstance(value, list)
+        and len(value) == 1
+        and isinstance(value[0], list)
+        and value[0]
+        and isinstance(value[0][0], list)
+        and value[0][0]
+        and isinstance(value[0][0][0], list)
+    ):
+        value = value[0]
+    if not isinstance(value, list) or not value:
+        return []
+    rows: list[list[list[int]]] = []
+    for row in value[:max_size]:
+        if not isinstance(row, list):
+            return []
+        pixels: list[list[int]] = []
+        for pixel in row[:max_size]:
+            if not isinstance(pixel, list):
+                return []
+            channels = numeric_vector(pixel, limit=4)
+            if len(channels) < 3:
+                return []
+            if max(channels[:3]) <= 1.0:
+                channels = [channel * 255.0 for channel in channels]
+            pixels.append([max(0, min(255, int(round(channel)))) for channel in channels[:3]])
+        if pixels:
+            rows.append(pixels)
+    return rows
+
+
+def write_future_image_artifact(output_dir: Path, candidate_id: str, committed: dict[str, Any]) -> Path:
+    rgb_matrix = committed.get("rgb_image_matrix") or []
+    if rgb_matrix:
+        artifact_path = output_dir / f"direct_future_{candidate_id}.ppm"
+        write_ppm_image(artifact_path, rgb_matrix)
+        return artifact_path
+    artifact_path = output_dir / f"direct_future_{candidate_id}.svg"
+    artifact_path.write_text(
+        render_image_matrix_svg(
+            vector_to_image_matrix(committed["image_vector"]),
+            f"direct future {candidate_id}",
+        ),
+        encoding="utf-8",
+    )
+    return artifact_path
+
+
+def write_ppm_image(path: Path, rgb_matrix: list[list[list[int]]]) -> None:
+    height = len(rgb_matrix)
+    width = len(rgb_matrix[0]) if height else 0
+    header = f"P3\n{width} {height}\n255\n"
+    rows = []
+    for row in rgb_matrix:
+        rows.append(" ".join(f"{pixel[0]} {pixel[1]} {pixel[2]}" for pixel in row))
+    path.write_text(header + "\n".join(rows) + "\n", encoding="ascii")
+
+
+def extract_success_proxy(info: Any, reward: Any, state_vector: list[float]) -> tuple[float, str]:
+    for key in ("is_success", "success", "task_success"):
+        value = find_key(info, key)
+        if value is not None:
+            numbers = numeric_vector(value, limit=10)
+            if numbers:
+                return max(0.0, min(1.0, max(numbers))), f"info.{key}"
+    privileged_score, privileged_source = extract_privileged_success_proxy_from_value(info)
+    if privileged_source != "unavailable":
+        return privileged_score, f"info.{privileged_source}"
+    reward_values = numeric_vector(reward, limit=10)
+    if reward_values:
+        return max(0.0, min(1.0, max(reward_values))), "reward_clamped"
+    if state_vector:
+        return max(0.0, min(1.0, 1.0 / (1.0 + math.sqrt(sum(value * value for value in state_vector[:8]))))), "state_norm_proxy"
+    return 0.0, "unavailable"
+
+
+def compute_task_relation_proxy(observation: Any, task_description: str | None) -> dict[str, Any]:
+    task_text = " ".join(str(task_description or "").lower().split())
+    articulated_relation = parse_articulated_open_relation(task_text)
+    if articulated_relation is not None:
+        action, articulated_object, fixture = articulated_relation
+        articulated_proxy = compute_articulated_open_proxy(
+            observation=observation,
+            action=action,
+            articulated_object=articulated_object,
+            fixture=fixture,
+        )
+        if articulated_proxy.get("available"):
+            return articulated_proxy
+        return {
+            "available": False,
+            "score": None,
+            "source": "unavailable",
+            "reason": "articulated_open_relation_requires_handle_or_joint_proxy",
+            "relation_type": "articulated_open",
+            "action": action,
+            "articulated_object": articulated_object,
+            "fixture": fixture,
+            "required_proxy": "drawer_joint_progress_or_eef_to_handle_distance_proxy",
+            "claim_boundary": (
+                "Object-target distance is not a valid non-oracle progress proxy for drawer/open tasks. "
+                "Use drawer joint progress, handle pose, or EEF-to-handle distance when exposed by the env."
+            ),
+        }
+    relation = parse_simple_manipulation_relation(task_text)
+    if relation is None:
+        return {
+            "available": False,
+            "score": None,
+            "source": "unavailable",
+            "reason": "task_relation_unparsed",
+        }
+    manipulated_object, target_region = relation
+    object_pos = find_observation_position(observation, manipulated_object)
+    target_pos = find_observation_position(observation, target_region)
+    if object_pos is None or target_pos is None:
+        return {
+            "available": False,
+            "score": None,
+            "source": "unavailable",
+            "reason": "object_or_target_position_unavailable",
+            "manipulated_object": manipulated_object,
+            "target_region": target_region,
+            "object_position_found": object_pos is not None,
+            "target_position_found": target_pos is not None,
+        }
+    distance = l2(object_pos[:3], target_pos[:3])
+    score = 1.0 / (1.0 + distance)
+    return {
+        "available": True,
+        "score": round(score, 8),
+        "source": "observation_object_target_distance_proxy",
+        "distance_l2": round(distance, 8),
+        "manipulated_object": manipulated_object,
+        "target_region": target_region,
+        "object_position": [round(value, 8) for value in object_pos[:3]],
+        "target_position": [round(value, 8) for value in target_pos[:3]],
+        "claim_boundary": (
+            "Non-oracle observation-state proxy for candidate ranking only; "
+            "not benchmark success and not privileged oracle evidence."
+        ),
+    }
+
+
+def compute_task_relation_proxy_with_env_fallback(
+    observation: Any,
+    task_description: str | None,
+    env: Any,
+) -> dict[str, Any]:
+    proxy = compute_task_relation_proxy(observation, task_description)
+    if proxy.get("available"):
+        return proxy
+    raw_observation, raw_source = extract_raw_env_observation_with_positions(env)
+    if raw_observation is None:
+        return proxy
+    raw_proxy = compute_task_relation_proxy(raw_observation, task_description)
+    if not raw_proxy.get("available"):
+        return {
+            **proxy,
+            "raw_observation_source": raw_source,
+            "raw_observation_proxy": raw_proxy,
+        }
+    return {
+        **raw_proxy,
+        "observation_source": raw_source,
+        "primary_observation_proxy": proxy,
+    }
+
+
+def compute_articulated_open_proxy(
+    *,
+    observation: Any,
+    action: str,
+    articulated_object: str,
+    fixture: str,
+) -> dict[str, Any]:
+    joint_value, joint_key = find_articulated_joint_progress(observation, articulated_object, fixture)
+    if joint_value is not None:
+        score = joint_value if action == "open" else -joint_value
+        return {
+            "available": True,
+            "score": round(float(score), 8),
+            "source": "observation_articulated_drawer_joint_progress_proxy",
+            "relation_type": "articulated_open",
+            "progress_stage": "completion_proxy",
+            "action": action,
+            "articulated_object": articulated_object,
+            "fixture": fixture,
+            "joint_progress": round(float(joint_value), 8),
+            "joint_progress_key": joint_key,
+            "evidence_used": "drawer_joint_progress",
+            "claim_boundary": (
+                "Non-oracle articulated-state proxy for candidate ranking only; "
+                "not benchmark success and not privileged oracle evidence."
+            ),
+        }
+    handle_pos, handle_key = find_articulated_handle_position(observation, articulated_object, fixture)
+    initial_handle_pos, initial_handle_key = find_initial_articulated_handle_position(observation, articulated_object, fixture)
+    if handle_pos is not None and initial_handle_pos is not None:
+        displacement = l2(handle_pos[:3], initial_handle_pos[:3])
+        score = displacement if action == "open" else -displacement
+        return {
+            "available": True,
+            "score": round(float(score), 8),
+            "source": "observation_articulated_handle_displacement_proxy",
+            "relation_type": "articulated_open",
+            "progress_stage": "completion_proxy",
+            "action": action,
+            "articulated_object": articulated_object,
+            "fixture": fixture,
+            "handle_position": [round(value, 8) for value in handle_pos[:3]],
+            "initial_handle_position": [round(value, 8) for value in initial_handle_pos[:3]],
+            "handle_position_key": handle_key,
+            "initial_handle_position_key": initial_handle_key,
+            "handle_displacement_l2": round(float(displacement), 8),
+            "evidence_used": "handle_pose_displacement",
+            "claim_boundary": (
+                "Non-oracle articulated handle displacement proxy for candidate ranking only; "
+                "not benchmark success and not privileged oracle evidence."
+            ),
+        }
+    eef_pos = find_eef_position(observation)
+    if handle_pos is not None and eef_pos is not None:
+        distance = l2(eef_pos[:3], handle_pos[:3])
+        return {
+            "available": True,
+            "score": round(1.0 / (1.0 + distance), 8),
+            "source": "observation_articulated_eef_to_handle_approach_proxy",
+            "relation_type": "articulated_open",
+            "progress_stage": "approach_only",
+            "action": action,
+            "articulated_object": articulated_object,
+            "fixture": fixture,
+            "eef_position": [round(value, 8) for value in eef_pos[:3]],
+            "handle_position": [round(value, 8) for value in handle_pos[:3]],
+            "handle_position_key": handle_key,
+            "eef_to_handle_distance_l2": round(float(distance), 8),
+            "evidence_used": "eef_to_handle_distance",
+            "claim_boundary": (
+                "Approach-only non-oracle proxy for candidate ranking; it can indicate movement toward a handle, "
+                "but does not prove drawer opening, benchmark success, or privileged oracle progress."
+            ),
+        }
+    return {
+        "available": False,
+        "score": None,
+        "source": "unavailable",
+        "reason": "articulated_open_relation_requires_handle_or_joint_proxy",
+        "relation_type": "articulated_open",
+        "action": action,
+        "articulated_object": articulated_object,
+        "fixture": fixture,
+        "joint_progress_found": False,
+        "handle_position_found": handle_pos is not None,
+        "eef_position_found": eef_pos is not None,
+        "required_proxy": "drawer_joint_progress_or_handle_pose_or_eef_to_handle_distance_proxy",
+    }
+
+
+def parse_articulated_open_relation(task_description: str) -> tuple[str, str, str] | None:
+    task = " ".join(str(task_description or "").lower().split())
+    match = re.search(
+        r"\b(?P<action>open|close)\s+(?:the\s+)?(?P<object>[^.]*?(?:drawer|door))\s+(?:of|in|on)\s+(?:the\s+)?(?P<fixture>[^.]+)$",
+        task,
+    )
+    if not match:
+        return None
+    action = match.group("action")
+    articulated_object = clean_relation_phrase(match.group("object"))
+    fixture = clean_relation_phrase(match.group("fixture"))
+    if not articulated_object or not fixture:
+        return None
+    return action, articulated_object, fixture
+
+
+def find_articulated_joint_progress(observation: Any, articulated_object: str, fixture: str) -> tuple[float | None, str | None]:
+    if not isinstance(observation, dict):
+        return None, None
+    object_tokens = set(tokenize_relation_phrase(articulated_object))
+    fixture_tokens = set(tokenize_relation_phrase(fixture))
+    best_key: str | None = None
+    best_score = -1
+    best_value: float | None = None
+    for key, value in observation.items():
+        key_text = str(key).lower()
+        key_tokens = set(tokenize_relation_phrase(key_text.replace("_", " ")))
+        if not key_tokens.intersection(object_tokens) and not key_tokens.intersection(fixture_tokens):
+            continue
+        if not any(token in key_text for token in ("joint", "qpos", "open_amount", "open_progress", "drawer_pos")):
+            continue
+        if "qvel" in key_text or "velocity" in key_text:
+            continue
+        values = numeric_vector(value, limit=1)
+        if not values:
+            continue
+        score = len(key_tokens.intersection(object_tokens)) * 10 + len(key_tokens.intersection(fixture_tokens))
+        if "drawer" in key_text:
+            score += 5
+        if "open" in key_text:
+            score += 3
+        if score > best_score:
+            best_key = str(key)
+            best_score = score
+            best_value = values[0]
+    return best_value, best_key
+
+
+def find_articulated_handle_position(observation: Any, articulated_object: str, fixture: str) -> tuple[list[float] | None, str | None]:
+    return find_articulated_position_key(
+        observation=observation,
+        articulated_object=articulated_object,
+        fixture=fixture,
+        required_tokens={"handle"},
+        preferred_tokens={"drawer", "door"},
+        disallowed_tokens={"initial", "start", "rest", "closed"},
+    )
+
+
+def find_initial_articulated_handle_position(observation: Any, articulated_object: str, fixture: str) -> tuple[list[float] | None, str | None]:
+    return find_articulated_position_key(
+        observation=observation,
+        articulated_object=articulated_object,
+        fixture=fixture,
+        required_tokens={"handle"},
+        preferred_tokens={"initial", "start", "rest", "closed"},
+        disallowed_tokens=set(),
+        required_any_tokens={"initial", "start", "rest", "closed"},
+    )
+
+
+def find_articulated_position_key(
+    *,
+    observation: Any,
+    articulated_object: str,
+    fixture: str,
+    required_tokens: set[str],
+    preferred_tokens: set[str],
+    disallowed_tokens: set[str],
+    required_any_tokens: set[str] | None = None,
+) -> tuple[list[float] | None, str | None]:
+    if not isinstance(observation, dict):
+        return None, None
+    object_tokens = set(tokenize_relation_phrase(articulated_object))
+    fixture_tokens = set(tokenize_relation_phrase(fixture))
+    best_key: str | None = None
+    best_score = -1
+    best_values: list[float] | None = None
+    for key, value in observation.items():
+        key_text = str(key).lower()
+        if not key_text.endswith("_pos"):
+            continue
+        key_tokens = set(tokenize_relation_phrase(key_text.replace("_pos", "").replace("_", " ")))
+        if not required_tokens.issubset(key_tokens):
+            continue
+        if required_any_tokens and not key_tokens.intersection(required_any_tokens):
+            continue
+        if key_tokens.intersection(disallowed_tokens):
+            continue
+        if not key_tokens.intersection(object_tokens) and not key_tokens.intersection(fixture_tokens):
+            continue
+        values = numeric_vector(value, limit=3)
+        if len(values) < 3:
+            continue
+        score = (
+            len(key_tokens.intersection(object_tokens)) * 10
+            + len(key_tokens.intersection(fixture_tokens)) * 4
+            + len(key_tokens.intersection(preferred_tokens)) * 6
+            - len(key_tokens)
+        )
+        if score > best_score:
+            best_key = str(key)
+            best_score = score
+            best_values = values[:3]
+    return best_values, best_key
+
+
+def find_eef_position(observation: Any) -> list[float] | None:
+    if not isinstance(observation, dict):
+        return None
+    for key in ("robot0_eef_pos", "eef_pos", "end_effector_pos", "gripper_pos"):
+        if key in observation:
+            values = numeric_vector(observation[key], limit=3)
+            if len(values) >= 3:
+                return values[:3]
+    for key, value in observation.items():
+        key_text = str(key).lower()
+        if key_text.endswith("_pos") and ("eef" in key_text or "end_effector" in key_text):
+            values = numeric_vector(value, limit=3)
+            if len(values) >= 3:
+                return values[:3]
+    return None
+
+
+def extract_raw_env_observation_with_positions(env: Any) -> tuple[Any | None, str]:
+    getter_names = ("_get_observations", "_get_observation", "get_observation", "get_observations")
+    for node in traverse_env_object_graph(env):
+        value = node["object"]
+        for name in getter_names:
+            if not has_callable(value, name):
+                continue
+            try:
+                observation = getattr(value, name)()
+            except Exception:  # noqa: BLE001
+                continue
+            if observation_contains_position_keys(observation):
+                return observation, f"{node['path']}.{name}()"
+    return None, "unavailable"
+
+
+def observation_contains_position_keys(observation: Any) -> bool:
+    if not isinstance(observation, dict):
+        return False
+    return any(str(key).lower().endswith("_pos") and numeric_vector(value, limit=3) for key, value in observation.items())
+
+
+def find_observation_position(observation: Any, phrase: str) -> list[float] | None:
+    if not isinstance(observation, dict):
+        return None
+    phrase_tokens = tokenize_relation_phrase(phrase)
+    best_key: str | None = None
+    best_score = -1
+    best_values: list[float] | None = None
+    for key, value in observation.items():
+        key_text = str(key).lower()
+        if not key_text.endswith("_pos") or "_to_robot" in key_text:
+            continue
+        key_tokens = tokenize_relation_phrase(key_text.replace("_pos", ""))
+        if not phrase_tokens or not set(phrase_tokens).issubset(set(key_tokens)):
+            continue
+        values = numeric_vector(value, limit=3)
+        if len(values) < 3:
+            continue
+        score = len(set(phrase_tokens).intersection(set(key_tokens))) * 10 - len(key_tokens)
+        if score > best_score:
+            best_key = key_text
+            best_score = score
+            best_values = values[:3]
+    return best_values if best_key is not None else None
+
+
+def tokenize_relation_phrase(value: str) -> list[str]:
+    cleaned = clean_relation_phrase(str(value).replace("_", " "))
+    stopwords = {"in", "into", "on", "onto", "to", "inside", "region", "point"}
+    return [token for token in cleaned.split() if token and token not in stopwords]
+
+
+def extract_privileged_state_vector(env: Any) -> tuple[list[float], str]:
+    for node in traverse_env_object_graph(env):
+        value = node["object"]
+        sim_vector = extract_sim_data_vector(value)
+        if sim_vector:
+            return sim_vector, f"{node['path']}.sim_data_pose"
+        attr_vector = extract_privileged_attrs_vector(value)
+        if attr_vector:
+            return attr_vector, f"{node['path']}.privileged_attrs"
+    return [], "unavailable"
+
+
+def extract_sim_data_vector(value: Any) -> list[float]:
+    try:
+        data = getattr(value, "data")
+    except Exception:  # noqa: BLE001
+        return []
+    vectors: list[float] = []
+    for name in ("body_xpos", "site_xpos", "geom_xpos", "qpos", "qvel"):
+        try:
+            vectors.extend(numeric_vector(getattr(data, name), limit=128))
+        except Exception:  # noqa: BLE001
+            continue
+        if len(vectors) >= 256:
+            break
+    return vectors[:256]
+
+
+def extract_privileged_attrs_vector(value: Any) -> list[float]:
+    vectors: list[float] = []
+    for name in dir(value):
+        lowered = name.lower()
+        if not any(token in lowered for token in ("target", "goal", "object", "obj", "site", "body")):
+            continue
+        if name.startswith("__"):
+            continue
+        try:
+            attr = getattr(value, name)
+        except Exception:  # noqa: BLE001
+            continue
+        if callable(attr):
+            continue
+        vectors.extend(numeric_vector(attr, limit=64))
+        if len(vectors) >= 256:
+            break
+    return vectors[:256]
+
+
+def extract_privileged_success_proxy(env: Any) -> tuple[float, str]:
+    for node in traverse_env_object_graph(env):
+        value = node["object"]
+        for name in ("check_success", "_check_success", "is_success", "_is_success"):
+            if not has_callable(value, name):
+                continue
+            try:
+                score, source = extract_privileged_success_proxy_from_value(getattr(value, name)())
+                if source != "unavailable":
+                    return score, f"{node['path']}.{name}"
+            except Exception:  # noqa: BLE001
+                continue
+        if has_callable(value, "reward"):
+            try:
+                reward = value.reward()
+                numbers = numeric_vector(reward, limit=10)
+                if numbers:
+                    return max(0.0, min(1.0, max(numbers))), f"{node['path']}.reward"
+            except Exception:  # noqa: BLE001
+                continue
+    return 0.0, "unavailable"
+
+
+def extract_privileged_success_proxy_from_value(value: Any) -> tuple[float, str]:
+    for key in ("is_success", "success", "task_success", "check_success"):
+        found = find_key(value, key)
+        if found is None:
+            continue
+        numbers = numeric_vector(found, limit=10)
+        if numbers:
+            return max(0.0, min(1.0, max(numbers))), key
+    numbers = numeric_vector(value, limit=10)
+    if numbers:
+        return max(0.0, min(1.0, max(numbers))), "numeric"
+    return 0.0, "unavailable"
+
+
+def find_key(value: Any, wanted: str) -> Any:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key) == wanted:
+                return item
+            found = find_key(item, wanted)
+            if found is not None:
+                return found
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found = find_key(item, wanted)
+            if found is not None:
+                return found
+    return None
+
+
+def summarize_value(value: Any, depth: int = 0) -> Any:
+    if depth > 3:
+        return repr(value)[:300]
+    if hasattr(value, "tolist"):
+        try:
+            value = value.tolist()
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(value, dict):
+        return {str(key): summarize_value(item, depth + 1) for key, item in list(value.items())[:50]}
+    if isinstance(value, (list, tuple)):
+        return [summarize_value(item, depth + 1) for item in list(value)[:50]]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return {"type": type(value).__name__, "module": type(value).__module__, "repr": repr(value)[:300]}
+
+
+def numeric_vector(value: Any, limit: int, skip_image_like: bool = False) -> list[float]:
+    result: list[float] = []
+
+    def visit(item: Any, path: str = "") -> None:
+        if len(result) >= limit:
+            return
+        if hasattr(item, "detach"):
+            try:
+                item = item.detach()
+            except Exception:  # noqa: BLE001
+                pass
+        if hasattr(item, "cpu"):
+            try:
+                item = item.cpu()
+            except Exception:  # noqa: BLE001
+                pass
+        if hasattr(item, "tolist"):
+            try:
+                item = item.tolist()
+            except Exception:  # noqa: BLE001
+                pass
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if skip_image_like and "image" in str(key).lower():
+                    continue
+                visit(child, f"{path}.{key}")
+            return
+        if isinstance(item, (list, tuple)):
+            for child in item:
+                visit(child, path)
+            return
+        if isinstance(item, bool):
+            result.append(float(item))
+        elif isinstance(item, (int, float)):
+            result.append(float(item))
+
+    visit(value)
+    return result[:limit]
+
+
+def image_errors_from_vectors(vector_a: list[float], vector_b: list[float]) -> tuple[float, float]:
+    if not vector_a or not vector_b:
+        return 0.0, 0.0
+    size = min(len(vector_a), len(vector_b))
+    diffs = [vector_a[index] - vector_b[index] for index in range(size)]
+    return mean([diff * diff for diff in diffs]), mean([abs(diff) for diff in diffs])
+
+
+def vector_to_image_matrix(vector: list[float], size: int = 16) -> list[list[int]]:
+    if not vector:
+        return [[0 for _x in range(size)] for _y in range(size)]
+    values = vector[: size * size]
+    min_value = min(values)
+    max_value = max(values)
+    span = max(max_value - min_value, 1e-9)
+    padded = values + [0.0] * (size * size - len(values))
+    return [
+        [int(255 * ((padded[y * size + x] - min_value) / span)) for x in range(size)]
+        for y in range(size)
+    ]
+
+
+def render_image_matrix_svg(matrix: list[list[int]], title: str) -> str:
+    cell = 8
+    height_cells = len(matrix)
+    width_cells = len(matrix[0]) if matrix else 1
+    rows = [f"<text x='8' y='18' font-size='13'>{html.escape(title)}</text>"]
+    for y, row in enumerate(matrix):
+        for x, value in enumerate(row):
+            color = max(0, min(255, int(value)))
+            rows.append(
+                f'<rect x="{8 + x * cell}" y="{28 + y * cell}" width="{cell}" height="{cell}" '
+                f'fill="rgb({color},{color},{color})"/>'
+            )
+    return svg_document(16 + width_cells * cell, 38 + height_cells * cell, "".join(rows))
+
+
+def compute_actual_oracle_or_proxy_metrics(
+    candidates: list[ActionChunkCandidate],
+    outcomes: dict[str, dict[str, Any]],
+    introspection: dict[str, Any],
+) -> OracleUpperBoundMetrics:
+    evaluated_candidates = [candidate for candidate in candidates if candidate.candidate_id in outcomes]
+    policy_candidates = [candidate for candidate in evaluated_candidates if candidate.is_policy_only]
+    alternative_candidates = [candidate for candidate in evaluated_candidates if not candidate.is_policy_only]
+    if not evaluated_candidates or not policy_candidates:
+        policy_score = random_score = oracle_score = 0.0
+        selected_candidate_id = "unavailable"
+        oracle_beats_policy = oracle_beats_random = False
+    else:
+        metrics = compute_oracle_upper_bound_metrics(evaluated_candidates, outcomes)
+        policy_score = metrics.policy_only_score
+        random_score = metrics.random_chunk_score
+        oracle_score = metrics.oracle_selector_score
+        selected_candidate_id = metrics.selected_candidate_id
+        oracle_beats_policy = metrics.oracle_beats_policy
+        oracle_beats_random = metrics.oracle_beats_random
+    if not introspection.get("privileged_state_available"):
+        return OracleUpperBoundMetrics(
+            verdict=WARN,
+            policy_only_score=policy_score,
+            random_chunk_score=random_score,
+            oracle_selector_score=oracle_score,
+            selected_candidate_id=selected_candidate_id,
+            oracle_beats_policy=oracle_beats_policy,
+            oracle_beats_random=oracle_beats_random,
+            rationale=(
+                "proxy_only: privileged oracle state was unavailable, so candidates were ranked by available env info/obs proxy only. "
+                "This is not benchmark success."
+            ),
+            evidence_class="proxy_only",
+            privileged_oracle_available=False,
+            upper_bound_testable=False,
+        )
+    score_values = [float(outcomes[candidate.candidate_id].get("success_proxy", 0.0)) for candidate in evaluated_candidates]
+    score_spread = (max(score_values) - min(score_values)) if score_values else 0.0
+    if not policy_candidates or not alternative_candidates:
+        return OracleUpperBoundMetrics(
+            verdict=WARN,
+            policy_only_score=policy_score,
+            random_chunk_score=random_score,
+            oracle_selector_score=oracle_score,
+            selected_candidate_id=selected_candidate_id,
+            oracle_beats_policy=False,
+            oracle_beats_random=False,
+            rationale=(
+                "privileged_oracle_available_but_upper_bound_not_testable: direct LIBERO exposed privileged "
+                "state/success evidence, but fewer than one policy candidate plus one alternative candidate were "
+                "evaluated. Risk5 remains WARN; this is not benchmark success."
+            ),
+            evidence_class="privileged_oracle_available",
+            privileged_oracle_available=True,
+            upper_bound_testable=False,
+        )
+    if score_spread <= 1e-12:
+        return OracleUpperBoundMetrics(
+            verdict=WARN,
+            policy_only_score=policy_score,
+            random_chunk_score=random_score,
+            oracle_selector_score=oracle_score,
+            selected_candidate_id=selected_candidate_id,
+            oracle_beats_policy=False,
+            oracle_beats_random=oracle_beats_random,
+            rationale=(
+                "privileged_oracle_available_but_no_score_spread: privileged direct state/success evidence was "
+                "available, but evaluated candidates had identical privileged/proxy scores, so no oracle "
+                "upper-bound ranking was demonstrated. Risk5 remains WARN."
+            ),
+            evidence_class="privileged_oracle_available",
+            privileged_oracle_available=True,
+            upper_bound_testable=False,
+        )
+    return OracleUpperBoundMetrics(
+        verdict=metrics.verdict,
+        policy_only_score=metrics.policy_only_score,
+        random_chunk_score=metrics.random_chunk_score,
+        oracle_selector_score=metrics.oracle_selector_score,
+        selected_candidate_id=metrics.selected_candidate_id,
+        oracle_beats_policy=metrics.oracle_beats_policy,
+        oracle_beats_random=metrics.oracle_beats_random,
+        rationale="oracle_available: privileged env state/proxy was available for upper-bound candidate ranking; this is not benchmark success.",
+        evidence_class="privileged_oracle_available",
+        privileged_oracle_available=True,
+        upper_bound_testable=True,
+    )
+
+
+def write_visual_artifacts(
+    output_dir: Path,
+    candidates: list[ActionChunkCandidate],
+    outcomes: dict[str, dict[str, Any]],
+    diversity: DiversityMetrics,
+    clone_fidelity: CloneFidelityMetrics,
+    oracle: OracleUpperBoundMetrics,
+) -> dict[str, str]:
+    artifacts = {
+        "candidate_action_heatmap": str(output_dir / "candidate_action_heatmap.svg"),
+        "candidate_action_chunks": str(output_dir / "candidate_action_chunks.json"),
+        "oracle_scores": str(output_dir / "oracle_scores.svg"),
+        "clone_image_diff": str(output_dir / "clone_image_diff.svg"),
+        "html_report": str(output_dir / "risk_probe_report.html"),
+        "summary": str(output_dir / "summary.json"),
+        "events": str(output_dir / "events.jsonl"),
+    }
+    (output_dir / "candidate_action_heatmap.svg").write_text(render_action_heatmap_svg(candidates), encoding="utf-8")
+    (output_dir / "oracle_scores.svg").write_text(render_score_bar_svg(candidates, outcomes, oracle), encoding="utf-8")
+    (output_dir / "clone_image_diff.svg").write_text(render_clone_diff_svg(clone_fidelity), encoding="utf-8")
+    return artifacts
+
+
+def write_report_bundle(output_dir: Path, config: RiskProbeConfig, report: RiskProbeReport) -> None:
+    summary_path = output_dir / "summary.json"
+    events_path = output_dir / "events.jsonl"
+    html_path = output_dir / "risk_probe_report.html"
+    candidate_chunks_path = output_dir / "candidate_action_chunks.json"
+    candidate_chunks_path.write_text(
+        json.dumps(
+            {
+                "risk": "risk_1_candidate_diversity",
+                "verdict": report.diversity.verdict,
+                "rationale": report.diversity.rationale,
+                "metrics": asdict(report.diversity),
+                "candidates": report.candidates,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary_path.write_text(json.dumps(asdict(report), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    events = [
+        {"event": "config", "payload": asdict(config)},
+        {"event": "risk_1_candidate_diversity", "payload": asdict(report.diversity)},
+        {"event": "risk_1_candidate_action_chunks", "payload": {"artifact": str(candidate_chunks_path)}},
+        {"event": "risk_2_clone_fidelity", "payload": asdict(report.clone_fidelity)},
+        {"event": "risk_5_oracle_selector_upper_bound", "payload": asdict(report.oracle_upper_bound)},
+        {"event": "actual_evidence", "payload": report.actual_evidence},
+        {"event": "summary", "payload": {"status": report.status, "risk_verdicts": report.risk_verdicts}},
+    ]
+    with events_path.open("w", encoding="utf-8") as handle:
+        for event in events:
+            handle.write(json.dumps(event, sort_keys=True) + "\n")
+    html_path.write_text(render_html_report(report), encoding="utf-8")
+
+
+def write_risk1a_prompt_portfolio_artifact(
+    *,
+    output_dir: Path,
+    config: RiskProbeConfig,
+    evidence: dict[str, Any],
+    diversity: DiversityMetrics,
+    candidates: list[ActionChunkCandidate],
+) -> str:
+    path = output_dir / "risk1a_prompt_portfolio.json"
+    portfolio = evidence.get("risk1a_prompt_portfolio")
+    if not isinstance(portfolio, dict):
+        portfolio = {
+            "enabled": config.risk1a_prompt_portfolio,
+            "active": False,
+            "ambiguity_requested": config.risk1a_ambiguity,
+            "base_prompt": "mock/local contract prompt",
+            "prompts": build_risk1a_prompt_portfolio(
+                base_prompt="mock/local contract prompt",
+                num_prompts=config.num_candidates,
+                enabled=config.risk1a_prompt_portfolio,
+                ambiguity_requested=config.risk1a_ambiguity,
+            ),
+            "provenance": "mock_contract" if config.backend == "mock" else "unavailable",
+            "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+            "min_relative_gain": RISK1A_MIN_RELATIVE_GAIN,
+        }
+    payload = {
+        "risk": "risk_1a_prompt_portfolio",
+        "enabled": config.risk1a_prompt_portfolio,
+        "active": bool(portfolio.get("active")),
+        "ambiguity_requested": config.risk1a_ambiguity,
+        "verdict": diversity.verdict if portfolio.get("active") else WARN,
+        "rationale": diversity.rationale if portfolio.get("active") else "Risk1-A was not active; baseline remains single-prompt.",
+        "provenance": portfolio.get("provenance", "unavailable"),
+        "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+        "min_relative_gain": RISK1A_MIN_RELATIVE_GAIN,
+        "prompts": portfolio.get("prompts", []),
+        "candidate_count": len(candidates),
+        "metrics": asdict(diversity),
+        "candidate_summaries": [summarize_candidate(candidate) for candidate in candidates],
+        "boundary": "not Risk1 final PASS; final success remains benchmark/environment success only",
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def write_risk1b_vlm_subgoals_artifact(
+    *,
+    output_dir: Path,
+    config: RiskProbeConfig,
+    evidence: dict[str, Any],
+    diversity: DiversityMetrics,
+    candidates: list[ActionChunkCandidate],
+) -> str:
+    path = output_dir / "risk1b_vlm_subgoals.json"
+    portfolio = evidence.get("risk1b_vlm_subgoals")
+    if not isinstance(portfolio, dict):
+        subgoals, validation = build_risk1b_subgoal_portfolio(
+            base_prompt="mock/local contract prompt",
+            num_subgoals=config.num_candidates,
+            model_name=config.risk1b_model,
+            generator_backend=config.risk1b_generator_backend,
+            subgoals_json=config.risk1b_subgoals_json,
+        )
+        portfolio = {
+            "enabled": config.risk1b_vlm_subgoals,
+            "active": False,
+            "candidate_prompt_semantics": RISK1B_CANDIDATE_PROMPT_SEMANTICS,
+            "legacy_schema_note": RISK1B_LEGACY_SCHEMA_NOTE,
+            "model": config.risk1b_model,
+            "candidate_models": list(RISK1B_CANDIDATE_MODELS),
+            "generator_backend": config.risk1b_generator_backend,
+            "base_prompt": "mock/local contract prompt",
+            "subgoals": subgoals,
+            "strategy_variants": subgoals,
+            "candidate_prompts": subgoals,
+            "validation": validation,
+            "provenance": "mock_contract" if config.backend == "mock" else validation.get("provenance", "unavailable"),
+            "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+            "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
+            "latency_ms": validation.get("latency_ms"),
+            "memory_mb": validation.get("memory_mb"),
+            "cost_usd": validation.get("cost_usd"),
+        }
+    diversity_selected = max(candidates, key=lambda item: item.privileged_success_proxy) if candidates else None
+    strategy_variants = (
+        portfolio.get("strategy_variants")
+        or portfolio.get("candidate_prompts")
+        or portfolio.get("subgoals", [])
+    )
+    payload = {
+        "risk": "risk_1b_external_vlm_strategy_variant_generator",
+        "legacy_risk": "risk_1b_external_vlm_subgoal_generator",
+        "enabled": config.risk1b_vlm_subgoals,
+        "active": bool(portfolio.get("active")),
+        "candidate_prompt_semantics": portfolio.get(
+            "candidate_prompt_semantics", RISK1B_CANDIDATE_PROMPT_SEMANTICS
+        ),
+        "legacy_schema_note": portfolio.get("legacy_schema_note", RISK1B_LEGACY_SCHEMA_NOTE),
+        "model": portfolio.get("model", config.risk1b_model),
+        "candidate_models": portfolio.get("candidate_models", list(RISK1B_CANDIDATE_MODELS)),
+        "generator_backend": portfolio.get("generator_backend", config.risk1b_generator_backend),
+        "provenance": portfolio.get("provenance", "unavailable"),
+        "validation": portfolio.get("validation", {}),
+        "subgoals": portfolio.get("subgoals", []),
+        "strategy_variants": strategy_variants,
+        "candidate_prompts": strategy_variants,
+        "latency_ms": portfolio.get("latency_ms"),
+        "memory_mb": portfolio.get("memory_mb"),
+        "cost_usd": portfolio.get("cost_usd"),
+        "verdict": diversity.verdict if portfolio.get("active") else BLOCKED,
+        "rationale": (
+            diversity.rationale
+            if portfolio.get("active")
+            else "Risk1-B was not active in this run; local/mock/contract evidence cannot pass."
+        ),
+        "native_noise_reference": RISK1A_NATIVE_NOISE_REFERENCE,
+        "risk1a_template_reference": RISK1A_TEMPLATE_REFERENCE,
+        "candidate_count": len(candidates),
+        "metrics": asdict(diversity),
+        "diversity_selected_candidate_id": diversity_selected.candidate_id if diversity_selected else None,
+        "selected_vs_policy_l2_semantics": (
+            "metrics.selected_vs_policy_l2 belongs to the Risk1-B diversity/proxy-selected candidate, "
+            "not the Risk1-C simulator selector. Use risk1c_sim_selector.json for C1 selected_candidate_id "
+            "and C1 selected_vs_policy_l2."
+        ),
+        "candidate_summaries": [summarize_candidate(candidate) for candidate in candidates],
+        "boundary": (
+            "Risk1-B is first-action-chunk candidate-generation evidence only. PASS requires validated external "
+            "VLM alternative goal-conditioned prompts / strategy variants plus actual policy-generated chunks. "
+            "It is not temporal subgoal-completion evidence, and 15-step smoke pc_success must not be treated as "
+            "full-task benchmark success. Selector evidence and LIBERO success are evaluated separately."
+        ),
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def compute_risk1c_selector_evidence(
+    *,
+    config: RiskProbeConfig,
+    candidates: list[ActionChunkCandidate],
+    outcomes: dict[str, dict[str, Any]],
+    oracle: OracleUpperBoundMetrics,
+    actual_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    policy = next((candidate for candidate in candidates if candidate.is_policy_only), candidates[0] if candidates else None)
+    policy_id = policy.candidate_id if policy else None
+    outcome_scores = {
+        candidate.candidate_id: float(outcomes.get(candidate.candidate_id, {}).get("success_proxy", candidate.privileged_success_proxy))
+        for candidate in candidates
+    }
+    score_values = list(outcome_scores.values())
+    score_spread = round((max(score_values) - min(score_values)) if score_values else 0.0, 8)
+    c1_scores, c1_source, c1_details = build_c1_non_oracle_proxy_scores(candidates, outcomes)
+    c1_score_values = list(c1_scores.values())
+    c1_score_spread = round((max(c1_score_values) - min(c1_score_values)) if c1_score_values else 0.0, 8)
+    modes: dict[str, Any] = {}
+    if "c0" in config.risk1c_selector_modes:
+        modes["c0_privileged_oracle"] = {
+            "selector_class": "C0",
+            "available": bool(oracle.privileged_oracle_available and oracle.upper_bound_testable),
+            "verdict": PASS if oracle.verdict == PASS and oracle.privileged_oracle_available and oracle.upper_bound_testable else WARN,
+            "selected_candidate_id": oracle.selected_candidate_id,
+            "score_spread": score_spread,
+            "selected_vs_policy_l2": selected_vs_policy_distance(candidates, oracle.selected_candidate_id),
+            "non_baseline_selection": bool(policy_id and oracle.selected_candidate_id != policy_id),
+            "oracle_beats_policy": oracle.oracle_beats_policy,
+            "oracle_beats_random": oracle.oracle_beats_random,
+            "claim_boundary": "privileged upper-bound only; not deployable selector or benchmark success",
+            "rationale": oracle.rationale,
+        }
+    if "c1" in config.risk1c_selector_modes:
+        selected_id = max(c1_scores, key=c1_scores.get) if c1_scores else None
+        non_baseline = bool(policy_id and selected_id and selected_id != policy_id)
+        modes["c1_non_oracle_proxy"] = {
+            "selector_class": "C1",
+            "available": bool(c1_scores),
+            "verdict": WARN if c1_scores else BLOCKED,
+            "selected_candidate_id": selected_id,
+            "score_spread": c1_score_spread,
+            "score_source": c1_source,
+            "scores": c1_scores,
+            "score_details": c1_details,
+            "selected_vs_policy_l2": selected_vs_policy_distance(candidates, selected_id),
+            "non_baseline_selection": non_baseline,
+            "plausibility_failures": [] if c1_score_spread > 0 else ["proxy scores have no spread"],
+            "claim_boundary": (
+                "non-oracle proxy selector; observation object-target distance is candidate-ranking evidence only, "
+                "not benchmark success or privileged oracle evidence"
+            ),
+        }
+    if "c2" in config.risk1c_selector_modes:
+        selected = min(candidates, key=lambda candidate: vector_norm(flatten_chunk(candidate.action_chunk))) if candidates else None
+        selected_id = selected.candidate_id if selected else None
+        modes["c2_action_only_debug"] = {
+            "selector_class": "C2",
+            "available": bool(candidates),
+            "verdict": WARN,
+            "selected_candidate_id": selected_id,
+            "score_spread": score_spread,
+            "selected_vs_policy_l2": selected_vs_policy_distance(candidates, selected_id),
+            "non_baseline_selection": bool(policy_id and selected_id and selected_id != policy_id),
+            "claim_boundary": "action-only sanity selector, debug baseline only",
+        }
+    return {
+        "risk": "risk_1c_simulator_based_candidate_selection",
+        "enabled": config.risk1c_sim_selector,
+        "candidate_count": len(candidates),
+        "policy_candidate_id": policy_id,
+        "outcome_score_source": "success_proxy_or_privileged_proxy",
+        "c1_score_source": c1_source,
+        "score_spread": score_spread,
+        "modes": modes,
+        "boundary": (
+            "Risk1-C tests whether a selector can identify a better chunk from an existing candidate set. "
+            "C0 is privileged/oracle upper-bound, C1 is non-oracle proxy if available, and C2 is action-only debug."
+        ),
+    }
+
+
+def build_c1_non_oracle_proxy_scores(
+    candidates: list[ActionChunkCandidate],
+    outcomes: dict[str, dict[str, Any]],
+) -> tuple[dict[str, float], str, dict[str, Any]]:
+    relation_scores: dict[str, float] = {}
+    relation_details: dict[str, Any] = {}
+    relation_sources: set[str] = set()
+    for candidate in candidates:
+        outcome = outcomes.get(candidate.candidate_id, {})
+        score = outcome.get("task_relation_proxy")
+        if score is None:
+            continue
+        try:
+            relation_scores[candidate.candidate_id] = float(score)
+        except (TypeError, ValueError):
+            continue
+        source = str(outcome.get("task_relation_proxy_source") or "observation_object_target_distance_proxy")
+        relation_sources.add(source)
+        relation_details[candidate.candidate_id] = {
+            "task_relation_proxy": score,
+            "task_relation_proxy_source": source,
+            "task_relation_proxy_details": outcome.get("task_relation_proxy_details"),
+        }
+    if relation_scores:
+        if len(relation_sources) == 1:
+            source = next(iter(relation_sources))
+        else:
+            source = "observation_relation_proxy_mixed"
+        return relation_scores, source, relation_details
+    unavailable_details: dict[str, Any] = {}
+    for candidate in candidates:
+        outcome = outcomes.get(candidate.candidate_id, {})
+        details = outcome.get("task_relation_proxy_details")
+        if isinstance(details, dict):
+            unavailable_details[candidate.candidate_id] = details
+    return {}, "observation_object_target_distance_proxy_unavailable", {
+        "fallback_reason": "task_relation_proxy_unavailable",
+        "fallback_used": False,
+        "candidate_details": unavailable_details,
+        "claim_boundary": (
+            "C1 is unavailable without a non-oracle observation relation proxy. "
+            "Success, privileged, or reward proxies belong to C0/Risk5-style diagnostics, not C1."
+        ),
+    }
+
+
+def selected_vs_policy_distance(candidates: list[ActionChunkCandidate], selected_candidate_id: str | None) -> float:
+    policy = next((candidate for candidate in candidates if candidate.is_policy_only), None)
+    selected = next((candidate for candidate in candidates if candidate.candidate_id == selected_candidate_id), None)
+    if policy is None or selected is None:
+        return 0.0
+    return round(l2(flatten_chunk(policy.action_chunk), flatten_chunk(selected.action_chunk)), 6)
+
+
+def write_risk1c_sim_selector_artifact(*, output_dir: Path, selector_evidence: dict[str, Any]) -> str:
+    path = output_dir / "risk1c_sim_selector.json"
+    path.write_text(json.dumps(selector_evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def render_action_heatmap_svg(candidates: list[ActionChunkCandidate]) -> str:
+    cell = 14
+    label_width = 155
+    rows = []
+    max_steps = max(len(candidate.action_chunk) for candidate in candidates)
+    action_dim = len(candidates[0].action_chunk[0]) if candidates and candidates[0].action_chunk else 1
+    width = label_width + max_steps * action_dim * cell + 20
+    height = 30 + len(candidates) * cell + 20
+    for row_index, candidate in enumerate(candidates):
+        y = 30 + row_index * cell
+        rows.append(f'<text x="8" y="{y + 11}" font-size="10">{html.escape(candidate.candidate_id)}</text>')
+        for step, action in enumerate(candidate.action_chunk):
+            for dim, value in enumerate(action):
+                x = label_width + (step * action_dim + dim) * cell
+                color = value_to_color(value)
+                rows.append(f'<rect x="{x}" y="{y}" width="{cell}" height="{cell}" fill="{color}"/>')
+    return svg_document(width, height, "<text x='8' y='18' font-size='13'>Candidate action heatmap</text>" + "".join(rows))
+
+
+def value_to_color(value: float) -> str:
+    clamped = max(-0.35, min(0.35, value))
+    if clamped >= 0:
+        red = 255
+        green = int(255 * (1 - clamped / 0.35))
+        blue = green
+    else:
+        blue = 255
+        red = int(255 * (1 + clamped / 0.35))
+        green = red
+    return f"rgb({red},{green},{blue})"
+
+
+def render_score_bar_svg(
+    candidates: list[ActionChunkCandidate],
+    outcomes: dict[str, dict[str, Any]],
+    oracle: OracleUpperBoundMetrics,
+) -> str:
+    width = 560
+    height = 35 + len(candidates) * 32
+    rows = ["<text x='8' y='18' font-size='13'>Privileged success proxy by candidate</text>"]
+    for index, candidate in enumerate(candidates):
+        score = float(outcomes[candidate.candidate_id]["success_proxy"])
+        y = 34 + index * 32
+        bar_width = int(score * 320)
+        fill = "#277da1" if candidate.candidate_id != oracle.selected_candidate_id else "#43aa8b"
+        rows.append(f'<text x="8" y="{y + 15}" font-size="10">{html.escape(candidate.candidate_id)}</text>')
+        rows.append(f'<rect x="160" y="{y}" width="{bar_width}" height="18" fill="{fill}"/>')
+        rows.append(f'<text x="{170 + bar_width}" y="{y + 14}" font-size="10">{score:.3f}</text>')
+    return svg_document(width, height, "".join(rows))
+
+
+def render_clone_diff_svg(clone_fidelity: CloneFidelityMetrics) -> str:
+    width = 420
+    height = 90
+    color = "#43aa8b" if clone_fidelity.verdict == PASS else "#f94144"
+    body = (
+        "<text x='8' y='18' font-size='13'>Clone-vs-commit diff</text>"
+        f"<rect x='8' y='34' width='36' height='36' fill='{color}'/>"
+        f"<text x='58' y='50' font-size='11'>state_l2={clone_fidelity.state_l2}</text>"
+        f"<text x='58' y='66' font-size='11'>image_mse={clone_fidelity.image_mse}, image_mae={clone_fidelity.image_mae}</text>"
+    )
+    return svg_document(width, height, body)
+
+
+def svg_document(width: int, height: int, body: str) -> str:
+    return (
+        f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' "
+        f"viewBox='0 0 {width} {height}'>{body}</svg>\n"
+    )
+
+
+def render_html_report(report: RiskProbeReport) -> str:
+    artifact = {key: Path(value).name for key, value in report.artifacts.items()}
+    risk_rows = "\n".join(
+        f"<tr><th>{html.escape(name)}</th><td class='{html.escape(verdict.lower())}'>{html.escape(verdict)}</td></tr>"
+        for name, verdict in report.risk_verdicts.items()
+    )
+    blockers = "".join(f"<li>{html.escape(blocker)}</li>" for blocker in report.blockers) or "<li>None</li>"
+    actual_link = ""
+    if "libero_adapter_evidence" in artifact:
+        actual_link = (
+            "<h2>Actual Adapter Evidence</h2>"
+            f"<p><a href=\"{html.escape(artifact['libero_adapter_evidence'])}\">libero_adapter_evidence.json</a></p>"
+        )
+    if "direct_libero_double_sim_evidence" in artifact:
+        actual_link += (
+            "<h2>Direct LIBERO Double-Sim Evidence</h2>"
+            f"<p><a href=\"{html.escape(artifact['direct_libero_double_sim_evidence'])}\">direct_libero_double_sim_evidence.json</a></p>"
+        )
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Imagine-Then-Act Risk Probe Report</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; margin: 24px; color: #1f2933; }}
+    table {{ border-collapse: collapse; margin: 16px 0; }}
+    th, td {{ border: 1px solid #ccd5df; padding: 8px 10px; text-align: left; }}
+    .pass {{ color: #157347; font-weight: 700; }}
+    .warn {{ color: #9a6700; font-weight: 700; }}
+    .fail {{ color: #b42318; font-weight: 700; }}
+    .blocked {{ color: #6f42c1; font-weight: 700; }}
+    img {{ display: block; margin: 12px 0 24px; max-width: 100%; border: 1px solid #d8dee6; }}
+    code {{ background: #f4f6f8; padding: 2px 4px; }}
+  </style>
+</head>
+<body>
+  <h1>Imagine-Then-Act Risk Probe Report</h1>
+  <p>Status: <strong class="{html.escape(report.status.lower())}">{html.escape(report.status)}</strong></p>
+  <p>Preset: <code>{html.escape(report.preset)}</code>, backend: <code>{html.escape(report.backend)}</code>, seed: <code>{report.seed}</code></p>
+  <h2>Risk Verdicts</h2>
+  <table>{risk_rows}</table>
+  <h2>Risk 1 Candidate Diversity</h2>
+  <p>{html.escape(report.diversity.rationale)}</p>
+  <p><a href="{html.escape(artifact['candidate_action_chunks'])}">candidate_action_chunks.json</a></p>
+  <img src="{html.escape(artifact['candidate_action_heatmap'])}" alt="candidate action heatmap">
+  <h2>Risk 2 Clone Fidelity</h2>
+  <p>{html.escape(report.clone_fidelity.rationale)}</p>
+  <img src="{html.escape(artifact['clone_image_diff'])}" alt="clone versus commit image diff">
+  <h2>Risk 5 Oracle Selector Upper-Bound</h2>
+  <p>{html.escape(report.oracle_upper_bound.rationale)}</p>
+  <img src="{html.escape(artifact['oracle_scores'])}" alt="oracle selector candidate scores">
+  <h2>Blockers</h2>
+  <ul>{blockers}</ul>
+  {actual_link}
+</body>
+</html>
+"""

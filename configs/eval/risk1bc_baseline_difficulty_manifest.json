@@ -1,0 +1,102 @@
+{
+  "manifest_version": 1,
+  "name": "risk1bc_baseline_difficulty_split_v1",
+  "description": "Seed/task manifest for Risk1-B/C next-loop runs split by baseline difficulty. Rows use existing repo evidence only; unknown rows stay explicit controls for classification, not fabricated successes.",
+  "policy_path": "lerobot/smolvla_libero",
+  "policy_num_steps": 10,
+  "policy_n_action_steps": 15,
+  "suite": "libero_goal",
+  "rows": [
+    {
+      "row_id": "libero_goal_task6_seed1200_hard_fail",
+      "suite": "libero_goal",
+      "task_id": 6,
+      "seed": 1200,
+      "baseline_category": "baseline_fail_hard",
+      "baseline_success": false,
+      "baseline_pc_success": 0.0,
+      "evidence": {
+        "provenance": "repo_doc_and_fetched_eval_info",
+        "paths": [
+          "docs/research/smolvla_baseline.md",
+          "docs/runpod_worklog.md",
+          "_workspace/runpod_results/in_episode_20260607/libero_goal_task6_multiseed_20260607T051546/baseline_seed1200/eval_logs/eval_info.json"
+        ],
+        "notes": "Frozen focused baseline task6 seed1200 is documented as policy-only failure at 300 steps."
+      },
+      "recommended_use": "hard_set"
+    },
+    {
+      "row_id": "libero_goal_task6_seed1201_hard_fail",
+      "suite": "libero_goal",
+      "task_id": 6,
+      "seed": 1201,
+      "baseline_category": "baseline_fail_hard",
+      "baseline_success": false,
+      "baseline_pc_success": 0.0,
+      "evidence": {
+        "provenance": "repo_doc_and_fetched_eval_info",
+        "paths": [
+          "docs/research/smolvla_baseline.md",
+          "docs/runpod_worklog.md",
+          "_workspace/runpod_results/in_episode_20260607/libero_goal_task6_multiseed_20260607T051546/baseline_seed1201/eval_logs/eval_info.json"
+        ],
+        "notes": "RunPod worklog records baseline 0/3 for task6 seeds 1200,1201,1202 in the placement macro multi-seed check."
+      },
+      "recommended_use": "hard_set"
+    },
+    {
+      "row_id": "libero_goal_task6_seed1202_hard_fail",
+      "suite": "libero_goal",
+      "task_id": 6,
+      "seed": 1202,
+      "baseline_category": "baseline_fail_hard",
+      "baseline_success": false,
+      "baseline_pc_success": 0.0,
+      "evidence": {
+        "provenance": "repo_doc_and_fetched_eval_info",
+        "paths": [
+          "docs/research/smolvla_baseline.md",
+          "docs/runpod_worklog.md",
+          "_workspace/runpod_results/in_episode_20260607/libero_goal_task6_multiseed_20260607T051546/baseline_seed1202/eval_logs/eval_info.json"
+        ],
+        "notes": "RunPod worklog records baseline 0/3 for task6 seeds 1200,1201,1202 in the placement macro multi-seed check."
+      },
+      "recommended_use": "hard_set"
+    },
+    {
+      "row_id": "libero_goal_breadth_seed1201_suite_control",
+      "suite": "libero_goal",
+      "task_id": null,
+      "seed": 1201,
+      "baseline_category": "baseline_pass_easy_control_pool",
+      "baseline_success": null,
+      "baseline_pc_success": 74.0,
+      "evidence": {
+        "provenance": "repo_doc_suite_level",
+        "paths": [
+          "docs/research/smolvla_baseline.md"
+        ],
+        "notes": "50-episode direct policy-only breadth result is 37/50 = 74.0%; this row is a control pool pointer, not a per-task success label."
+      },
+      "recommended_use": "control_pool_expand_before_claim"
+    },
+    {
+      "row_id": "libero_goal_task0_seed1201_uncertain_control_probe",
+      "suite": "libero_goal",
+      "task_id": 0,
+      "seed": 1201,
+      "baseline_category": "ambiguous_uncertain",
+      "baseline_success": null,
+      "baseline_pc_success": null,
+      "evidence": {
+        "provenance": "needs_policy_only_confirmation",
+        "paths": [
+          "docs/research/smolvla_baseline.md"
+        ],
+        "notes": "Use as a small control candidate only after policy-only baseline evidence is generated for this exact task/seed."
+      },
+      "recommended_use": "baseline_first"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "action_dim": 6,
+  "camera_keys": [
+    "observation.images.camera1",
+    "observation.images.camera2",
+    "observation.images.camera3"
+  ],
+  "dataset_id": "physical-ai-agent/so101-pickplace-contact-train100-256-recovery",
+  "episodes": 100,
+  "expected_min_episodes": 100,
+  "frames": 23041,
+  "generator": "scripts/export_so101_pickplace_teacher_rollouts_lerobot.py",
+  "image_shape": [
+    3,
+    256,
+    256
+  ],
+  "includes_recovery_or_off_nominal_states": true,
+  "max_frames_per_episode": 246,
+  "min_frames_per_episode": 220,
+  "notes": "Target doubled train dataset for the next SmolVLA run. Recovery/off-nominal states are required because the teacher is privileged but the student is visual. Teacher timing is the fast recipe: recovery=8, approach=28, settle=4, close=30, lift=48, transport=72, lower=42, release and settle-after-release may terminate after task success. One accepted RunPod train episode reached 246 frames, so the committed range intentionally allows that outlier.",
+  "source_episode_count": 50,
+  "split": "train",
+  "state_dim": 6,
+  "sticky_grasp_allowed": false,
+  "student_observation_contract": "visual_policy_inputs_only",
+  "target_expansion_factor": 2.0,
+  "teacher_uses_privileged_state": true,
+  "validation_errors": []
+}

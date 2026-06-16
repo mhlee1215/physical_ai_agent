@@ -4,6 +4,12 @@
 
 - This repo builds a Mac-local agentic physical AI evaluation stack.
 - The first stack target is MuJoCo + LIBERO + LeRobot, with ACT/SmolVLA policies wrapped by planner, verifier, retry, and replan logic.
+- New collaborators should read `Summary.md` first for the current paper target, thread topology, RunPod volume state, and active blockers.
+- New conversations should use normal Codex collaboration by default. Enter postdoc/orchestrator mode only when the user says `포닥 모드로 전환해서 PM과 스레드들을 오케스트레이션해줘.` or `포닥 모드 켜줘.`
+- `리서치 모드` is a RunPod debugging override: preserve the live Pod by default and let RunPod Researcher and Tech Lead coordinate 1:1 while PM tracks progress/cost/ownership.
+- Any user-requested orchestration policy change must be persisted to repo docs in the same turn. Update `Summary.md` for current state and `docs/harness/physical-ai/team-spec.md` for durable role/routing rules; thread messages alone are not enough.
+- Top paper-result priority: produce experiment data for manuscript tables as quickly and efficiently as possible. Prioritize actual table-ready rows, metrics, and artifacts over repeated smoke diagnostics. Use only the minimal gates needed to unblock data-producing runs.
+- RunPod experiment-data lifecycle: past remote results are not needed. For every new RunPod experiment, download completed datasets/results/checkpoints locally, verify the local copy, then delete the remote artifact directory.
 - Use `docs/agentic_physical_ai_plan.md` for the full checkpoint plan and `docs/harness/physical-ai/team-spec.md` for checkpoint orchestration.
 
 ## Why
@@ -14,7 +20,7 @@
 ## How
 
 - Bootstrap checkpoint 01 local sim dependency:
-  `sh scripts/bootstrap_checkpoint_01.sh`
+  `sh scripts/install/local_install.sh --checkpoint 01`
 - Lightweight checkpoint 01 smoke:
   `sh scripts/checkpoint_01.sh`
 - Mac-local checkpoint 01 simulation gate:
@@ -30,7 +36,7 @@
 - Checkpoint 05-06 policy adapter and SmolVLA probe:
   `sh scripts/checkpoint_05_06.sh`
 - Bootstrap CP05-06 SmolVLA dependencies:
-  `sh scripts/bootstrap_checkpoint_05_06.sh`
+  `sh scripts/install/local_install.sh --checkpoint 05-06`
 - Checkpoint 14-15 3D render and real SmolVLA rollout:
   `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`
 - Live SO101 MuJoCo viewer:

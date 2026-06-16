@@ -22,10 +22,313 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 | --- | --- | --- | --- |
 | Orchestrator | Select the next checkpoint and enforce validation | `.agents/skills/physical-ai-orchestrator/SKILL.md` | final response or `_workspace/*` |
 | Real SO-100 Agentic SmolVLA Specialist | Preserve real hardware camera routing, SmolVLA execution gates, observer evidence, and agentic-loop semantics | `.agents/skills/real-so100-agentic-smolvla/SKILL.md` | `_workspace/real_so100/*`, `docs/real_so100_*` |
+| Evaluation Results Manager | Classify paper-facing evaluation result packages as paper-ready, diagnostic-only, or blocked | n/a | result ledger summaries from researcher/reviewer packages |
 | Implementer | Add code, config, and tests for the checkpoint | n/a | repo files |
 | Verifier | Run required commands and report pass/fail/blockers | n/a | command evidence |
 
+## Thread Reporting Protocol
+
+Long-running multi-thread work must not end silently. Every owner thread must
+report state transitions to the PM thread before it stops working or waits for
+another owner. The postdoc/orchestrator is the user-facing synthesis layer, not
+the direct inbox for every worker. Except when the postdoc directly asks a
+worker a one-off question, specialist threads report completion, blockers,
+handoffs, and cleanup status to PM. PM then reports to the postdoc whenever the
+task completes, becomes blocked, changes owner, or needs a user decision.
+
+Required reports:
+
+- `COMPLETE`: include changed files, commit hash when applicable, tests run,
+  artifact paths, exact command lines, and the next owner/action.
+- `BLOCKED`: include blocker category, owner, exact evidence path or log
+  excerpt, what was tried, and the smallest next action needed to unblock.
+- `WAITING_FOR_HANDOFF`: include which thread owns the next step, the expected
+  handoff contents, and whether any RunPod Pod is still running.
+- `IDLE_WITH_REASON`: use only when no work can proceed; include the dependency
+  and who was notified.
+
+### Research Mode
+
+The user may explicitly enter research mode by saying `리서치 모드` or
+`리서치 모드 들어간다`. Research mode is an override for exploratory
+RunPod debugging loops, not the default lifecycle policy.
+
+When research mode is active:
+
+- RunPod Pods must not be stopped by default after handoff, result fetch, or a
+  temporary stall. Preserve the live Pod so the RunPod Researcher and Tech Lead
+  can debug 1:1 on the same environment.
+- RunPod Researcher and Tech Lead may coordinate directly about commands,
+  artifacts, stack traces, code fixes, and rerun strategy. They still report
+  meaningful state changes to PM, but PM does not need to proxy every technical
+  exchange.
+- PM remains the user-facing coordination hub: PM tracks owner, Pod id, hourly
+  cost, current phase, artifact roots, and whether research mode is still
+  active. PM sends the postdoc only decision-relevant updates.
+- RunPod Manager must not stop a research-mode Pod unless PM/user explicitly
+  requests cleanup, the user exits research mode, or there is an urgent
+  cost/security/safety risk. If cleanup is requested, Manager must still fetch
+  or preserve known artifact paths when possible before stop.
+- Evaluation Results Manager routing is unchanged. It receives only final
+  artifact-backed evaluation result packages, not research-mode chat,
+  allocation logs, setup logs, or intermediate debugging notes.
+
+When research mode is not active, the normal no-idle-billing cleanup policy
+below applies.
+
+The PM thread must keep one current checkbox board per active objective with:
+current owner, blocker, last report time, next action, artifact root, and Pod
+status when cloud work is involved. While an objective is active, the PM should
+nudge the current owner after 10-15 minutes without a concrete progress report.
+PM must not silently absorb worker reports. When all subtasks close, when a
+blocker stops progress, or when a task is paused, PM must send a final rollup to
+the postdoc with the verdict, artifacts, cleanup state, and next decision.
+
+RunPod-specific reporting is stricter: allocation/start, env-ready handoff,
+researcher run completion, artifact fetch, stop request, and no-`RUNNING`
+confirmation are all separate reportable transitions. Outside research mode,
+no Pod should remain running while ownership is unclear.
+
+When RunPod allocation is the active blocker and the user has asked to keep
+going, the RunPod Manager remains the active owner until a usable instance is
+secured or the user/PM explicitly cancels the objective. Capacity shortage is a
+polling state, not a terminal experiment blocker. Default retry policy: run
+allocation attempts in batches of up to 10, sleep/backoff 20-30 minutes between
+attempts, and perform immediate no-`RUNNING` cleanup after each failed attempt.
+If a 10-attempt batch is exhausted with capacity-only failures, the manager must
+report the batch summary to PM and continue the next 10-attempt polling batch
+unless PM/user cancels, changes policy, credentials are missing, or a
+non-capacity blocker is reached. Each retry batch must preserve the active
+source, volume, GPU policy, and hard gates. The manager should report
+`ALLOCATION_RETRY` progress to PM after each attempt. This retry loop must not
+keep an idle Pod running while sleeping.
+
+Paper-facing evaluation results have an additional route, but the Evaluation
+Results Manager is not a general status inbox. Only the thread that actually
+ran or reviewed an evaluation result should report to the Evaluation Results
+Manager thread (`019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`). In the normal RunPod
+path this is the RunPod Researcher, after artifact fetch. The report must be a
+result package, not an operations log: experiment id, status (`PASS`, `WARN`,
+`BLOCKED`, or `PENDING`), commit, artifact root, key files, metrics, renderer
+or evaluation context when claim-relevant, allowed claims, disallowed claims,
+and open result TODOs.
+
+RunPod Manager must not report routine allocation, capacity, source staging,
+install, env-gate, cache, volume, pod lifecycle, or no-`RUNNING` status to the
+Evaluation Results Manager. Those operational reports go to PM only. PM may
+summarize an operational blocker in its own board, but should involve the
+Evaluation Results Manager only after a researcher or reviewer has an
+evaluation result package to classify. PM status boards for paper-relevant
+experiments should track whether a result package was sent to the Evaluation
+Results Manager, not whether every infra transition was sent there.
+Paper-writing threads should not treat a result as paper evidence until the
+Evaluation Results Manager classifies it as paper-ready, diagnostic-only, or
+blocked.
+
+The Evaluation Results Manager must keep candidate diversity, candidate
+selection, benchmark/environment success, oracle/proxy evidence, and
+mock/fixture plumbing evidence separate. Mock, fixture, proxy-only, or debug
+evidence must never be promoted to paper-ready benchmark success.
+
+The PM owns the routing discipline for paper results. When a new evaluation
+result appears, PM must confirm that the producer reported it to the Evaluation
+Results Manager, wait for the manager's classification, then update the PM
+board with the classification before forwarding the result to paper-writing
+threads. If a result is still blocked or diagnostic-only, the PM may summarize
+it for context but must label it as non-paper-ready evidence.
+
+### Orchestration Policy Persistence
+
+When the user or postdoc changes orchestration policy, the change must be
+persisted in repo files in the same turn as any thread messages. Do not leave a
+new operating rule only in chat, a PM board, or a worker handoff.
+
+Required persistence targets:
+
+- `Summary.md`: current project state, active lane, abandoned lane, current
+  blockers, and immediate next steps.
+- `docs/harness/physical-ai/team-spec.md`: durable role/routing/lifecycle rules.
+- `AGENTS.md`: only short always-loaded triggers or repo-wide defaults.
+
+The postdoc should still notify PM and affected workers, but the file update is
+part of the orchestration change itself.
+
+### Paper-Table Data Priority
+
+Top-level objective: produce manuscript-table experiment data as quickly and
+efficiently as possible. All orchestration decisions should be judged against
+whether they accelerate actual data production for the paper.
+
+For paper-facing evaluation loops, progress is measured by actual table-ready
+data rows, metrics, and artifacts. Smoke checks, dependency checks, model-load
+checks, context-capture probes, and handoff gates are allowed only as minimal
+preconditions for a concrete data-producing run. They are not progress by
+themselves and must not replace the experiment.
+
+Current Risk1-B/C routing rule:
+
+- Active bypass lane: `SECURE` RunPod plus shallow `renderer_backend=osmesa` for
+  diagnostic/plumbing data production.
+- Paused lane: COMMUNITY/EGL `/dev/dri` render-device hunting. Do not re-enter it
+  unless the user explicitly asks for EGL/deployment evidence.
+- RunPod Manager performs allocation, source staging, minimal gates, and handoff.
+  It does not run the experiment.
+- RunPod Researcher runs Qwen generation, SmolVLA action-chunk generation,
+  selector/probe commands, artifact fetch, and result packaging.
+- Tech Lead fixes concrete code/data blockers only, then the loop returns to
+  data production.
+
+### SO101 SmolVLA Fine-Tuning Watch Policy
+
+For RunPod SO101 SmolVLA fine-tuning babysitting, checkpoint and evaluation
+policy is:
+
+- Keep only the validation-best checkpoint plus one latest checkpoint needed for
+  crash recovery. A pruner may delete older non-best checkpoints after each save.
+- Run supervised validation loss after checkpoint saves, preferably CPU-only so
+  the GPU training process can continue.
+- Do not run full closed-loop validation at every checkpoint. Closed-loop
+  rollouts are expensive and can slow or interrupt training; run them when a
+  checkpoint becomes the new validation-best checkpoint, or for an explicit user
+  request. Best-only closed-loop takes precedence over a coarse epoch interval.
+- If full closed-loop validation needs the GPU, pause or finish the training
+  step/checkpoint first, run the rollout, then resume from the latest checkpoint.
+- Smoke closed-loop runs may be recorded separately in the dashboard, but they
+  must be labeled as smoke and must not be treated as validation-set success.
+- Pipeline PRs that touch SO101 SmolVLA training, dataset generation,
+  augmentation, caching, validation, or closed-loop scheduling must run:
+  `PYTHONPATH=src python3 -B -m unittest tests.test_so101_smolvla_pipeline tests.test_lerobot_sampling_augmentation`.
+  Full RunPod retraining starts only after that targeted gate and the full
+  standard-library unit suite pass locally.
+- New train data should target the manifest in
+  `configs/so101/smolvla_pickplace_contact_train100_manifest.json`: doubled
+  train episodes, 256x256 visual inputs, no sticky grasp, and recovery/off-
+  nominal states to cover privileged-teacher versus visual-student drift.
+- RunPod experiment-data lifecycle is download, verify, then delete. Past
+  remote experiment results are not required. For every new RunPod teacher
+  dataset, validation dataset, predecoded cache, checkpoint, rollout video,
+  metric file, dashboard output, and other experiment result bundle, copy the
+  completed artifact back to the local repo, verify the local copy with its
+  manifest or metrics summary, then remove the corresponding remote artifact
+  directory. Do not treat a RunPod artifact as preserved until the local
+  verification succeeds. Stop the Pod after cleanup unless an active follow-up
+  run is already in progress. Do not use the RunPod network volume as the
+  long-term source of truth for experiment data.
+- For SO101 runs under network-volume quota pressure, install Python
+  environments, pip caches, and temporary build files on the Pod local disk
+  such as `/opt/physical-ai`; keep only active dataset/result handoff
+  directories on the network volume. If the network volume is still blocked,
+  write active SO101 datasets/results to Pod local disk and immediately fetch
+  them locally before stopping or deleting the Pod.
+
+## Default Multi-Thread Orchestration
+
+Default new conversations should behave like ordinary Codex collaboration, not
+as the postdoc/orchestrator. Activate postdoc orchestration only when the user
+explicitly says one of these trigger sentences:
+
+- `포닥 모드로 전환해서 PM과 스레드들을 오케스트레이션해줘.`
+- `포닥 모드 켜줘.`
+
+After activation, the postdoc/orchestrator thread is expected to delegate work
+without waiting for the user to explicitly request a new thread whenever the
+task crosses role boundaries. The user may primarily talk to the postdoc
+thread; the postdoc is responsible for routing work, keeping claim boundaries,
+and synthesizing specialist reports.
+
+Default role routing:
+
+- PM/watchdog thread `019eaf36-bb40-7182-8c92-a40550455ca3`: owns checklists,
+  owner tracking, status boards, stale-owner nudges, worker report collection,
+  and final rollups to the postdoc. PM is the required reporting hub for every
+  specialist thread.
+- Tech Lead thread `019eab52-10fb-78f0-923d-678ab82cc70f`: owns repo-backed
+  implementation, tests, diagnostics, install-script changes, and pushed
+  commits. Reports `COMPLETE`, `BLOCKED`, and commit/test summaries to PM.
+- RunPod Manager thread `019eaf4d-4157-7f51-9099-561b7c3a9c1e`: owns RunPod
+  allocation, start/reuse, GitHub remote source staging, install/bootstrap,
+  environment gates, env-ready handoff, stop, and no-`RUNNING` confirmation.
+  Reports allocation, handoff, blocker, cleanup, and no-`RUNNING` status to PM.
+  When capacity is the only blocker and PM/user says to continue, keeps polling
+  in repeated 10-attempt batches until a usable instance is secured or PM/user
+  explicitly cancels. In research mode, preserves the live Pod unless PM/user
+  explicitly requests cleanup or an urgent cost/security/safety risk appears.
+- RunPod Researcher thread `019eab62-ca0b-7770-ad27-5d95f66ebd62`: owns
+  approved experiment execution only after a manager handoff, artifact fetch,
+  and result reporting. Reports exact commands, artifacts, verdicts, and
+  cleanup requests to PM. In research mode, may coordinate directly with Tech
+  Lead on the live Pod and should report meaningful progress/checkpoints to PM
+  instead of requesting automatic cleanup after every attempt.
+- Evaluation Results Manager thread `019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`:
+  owns paper-facing evidence classification. Receives only evaluation result
+  packages from the RunPod Researcher or another result reviewer, not routine
+  PM/RunPod Manager operations reports. Reports paper-ready, diagnostic-only,
+  or blocked classifications to PM.
+- Paper-writing thread `019e9e01-32c0-7641-92b7-0f6c23800122`: owns manuscript
+  prose, figures, captions, and the separate TODO/checklist. Reports draft
+  section completion, unresolved TODOs, and manuscript blockers to PM.
+- Related Works thread `019eaa3f-c52b-7d43-ae62-da4fa5532ec6`: owns citation
+  clusters, overlap checks, and paper-ready related-work synthesis. Reports
+  citation packs, overlap risks, and paper-ready summaries to PM.
+
+Delegation defaults:
+
+- Implementation, install-script cleanup, diagnostics, and tests go to Tech
+  Lead.
+- RunPod lifecycle, volume, cache, source staging, and environment readiness go
+  to RunPod Manager.
+- Actual experiments go to RunPod Researcher only after RunPod Manager reports
+  an env-ready handoff.
+- Research-mode debugging goes to RunPod Researcher and Tech Lead as a direct
+  pair on the live Pod, with PM monitoring progress and ownership.
+- Paper evidence goes to Evaluation Results Manager before it is forwarded to
+  paper-writing, but only as an evaluation result package after a researcher or
+  reviewer has produced artifacts/metrics. Infrastructure status stays with PM.
+- Manuscript prose and figure integration go to the paper-writing thread.
+- Broad literature checks go to the related-works thread.
+
+Every delegated task must name the next owner, expected artifact, allowed claim,
+disallowed claim, and cleanup condition. The postdoc should send PM a tracking
+checklist for any multi-step task and should ask PM to report back when the
+task closes. If a worker reports `BLOCKED`, PM keeps ownership tracking active
+until the blocker has a new owner or the user explicitly stops the objective.
+
+## Main-vs-Legacy State Policy
+
+Keep the active project state small. Current state is maintained in:
+
+- `Summary.md`
+- `AGENTS.md`
+- `docs/harness/physical-ai/team-spec.md`
+- PM checkbox boards
+- Evaluation Results Manager classifications
+- `papers/rss2026_semrob/` for the active manuscript
+
+Development logs, dated experiment notes, old handoff reports, intermediate
+HTML reports, old RunPod recovery notes, and fetched `_workspace/` artifacts are
+legacy by default. Legacy files are useful for provenance and exact evidence,
+but they must not be treated as the current plan unless `Summary.md`, PM, or the
+Evaluation Results Manager explicitly promotes them.
+
+When a worker consults legacy material, it must report that it is using legacy
+evidence and state whether the evidence is still current, superseded, or only
+diagnostic. Paper-writing threads must not cite legacy logs directly as method
+claims.
+
 ## Phase Order
+
+## Local Terminal Policy
+
+For real SO-100 work on this Mac, avoid opening new Terminal windows unless the
+step is truly interactive or requires a macOS app-level permission boundary.
+Interactive hardware calibration is the canonical exception: launch the
+calibration script in a user-visible Terminal and record that the user/operator
+performs the physical calibration. For non-calibration work, prefer the current
+Codex command path for camera checks, metadata inspection, artifact processing,
+reports, tests, and non-interactive hardware helpers when permissions allow.
+If an external Terminal is required for macOS camera/TCC or MPS/runtime access,
+the command must write deterministic logs and artifacts under `_workspace/` and
+the final report must state why the external Terminal path was used.
 
 ### Phase 1: Select Checkpoint
 
@@ -207,7 +510,354 @@ PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
   --json
 ```
 
+Stage-2 Imagine-Then-Act risk probes must run before claiming true imagined
+selection readiness. Use the repo-local probe script to verify candidate
+diversity, simulator clone/imagination fidelity, and oracle-selector
+upper-bound evidence. VLM judges and learned world models stay out of this
+gate. Local dry-run must remain dependency-free and produce `events.jsonl`,
+`summary.json`, SVG image artifacts, and a single-file HTML report:
+
+```bash
+PYTHONPATH=src python3 -B scripts/run_imagine_then_act_risk_probes.py \
+  --preset local-dry-run \
+  --output-dir _workspace/imagine_then_act/risk_probes/local_dry_run \
+  --json
+```
+
+Risk 1 candidate diversity can pass only when the artifact bundle includes
+actual policy-generated action chunks, their candidate seeds/sampling metadata,
+pairwise L2/cosine/normalized distances, per-step variance, endpoint diversity,
+and selected-vs-policy-only distance. Synthetic/mock candidates or
+`--debug-candidate-noise-scale` are plumbing evidence only and must stay
+`WARN`, even when the numeric spread is large. Risk 5 can pass only with
+privileged oracle state/success access; obs/info proxy ranking must remain
+`WARN`/`proxy_only` and must not be reported as benchmark success.
+Before using policy-centered perturbations to address weak Risk 1 diversity,
+inspect the installed LeRobot SmolVLA API first. SmolVLA exposes
+`predict_action_chunk(..., noise=...)` in current LeRobot builds; candidate
+sampling should prefer explicit seeded noise tensors over natural-language or
+post-hoc action perturbation. The diagnostic command must write
+`smolvla_sampling_probe.json` and must not claim Risk 1 PASS by itself:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/probe_smolvla_sampling_api.py \
+  --mode libero-contract \
+  --suite libero_goal \
+  --task-id 6 \
+  --seed 1201 \
+  --num-candidates 5 \
+  --chunk-steps 15 \
+  --action-dim 7 \
+  --renderer-backend egl \
+  --output-dir _workspace/runpod_results/ita_risk_probes/smolvla_sampling_probe_seed1201 \
+  --json
+```
+If native-noise sampling remains weak, Risk1-A may test an
+ambiguity-triggered subgoal/prompt portfolio. It is opt-in only and must never
+change the default baseline path: without both `--risk1a-prompt-portfolio` and
+`--risk1a-ambiguity`, the policy uses the single original task prompt. With
+both flags, the adapter must write `risk1a_prompt_portfolio.json` containing
+the original prompt, 3-4 subgoal-preserving strategy prompts, strategy axes,
+policy-generated action chunks, and diversity metrics. Risk1-A can be a PASS
+candidate only when actual policy-generated chunks clear the native-noise
+reference by the documented relative gate; mock/fallback artifacts are contract
+evidence only:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-smoke \
+  --backend libero-contract \
+  --suite libero_goal \
+  --task-ids 6 \
+  --seed 1201 \
+  --num-candidates 5 \
+  --chunk-steps 15 \
+  --action-dim 7 \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --renderer-backend egl \
+  --risk1a-prompt-portfolio \
+  --risk1a-ambiguity \
+  --output-dir _workspace/runpod_results/ita_risk_probes/risk1a_prompt_portfolio_seed1201 \
+  --json
+```
+Risk1 reclassification boundaries:
+- Risk1-0 native SmolVLA `noise=` candidate generation is `WARN` when actual
+  chunks remain weak or near-identical.
+- Risk1-A template prompt portfolio may be treated as candidate-generation
+  `PASS` when actual `policy_generated` chunks beat native noise. This does
+  not require selector or environment success.
+- Keep Risk1 checkpoints dependency-light:
+  - Risk1-A answers only whether template prompt portfolios expand the frozen
+    SmolVLA candidate action space.
+  - Risk1-B answers only whether an external VLM candidate-prompt / strategy
+    variant generator can produce grounded prompt portfolios that expand that
+    first-chunk action space.
+  - Risk1-C answers whether a selector can choose a better or more plausible
+    candidate from an already generated set.
+  - Risk1-D answers whether candidate generation plus selection improves
+    LIBERO benchmark success.
+- Do not downgrade Risk1-A or Risk1-B because `selected_vs_policy_l2=0`,
+  `pc_success=0`, or selector fallback was used; those are Risk1-C/D evidence.
+- Do not upgrade Risk1-C/D from diversity alone; diversity is Risk1-A/B
+  evidence unless a selection or benchmark-success gate also passes.
+
+Risk1-B tests external VLM-generated grounded candidate prompts / strategy
+variants against the accepted Risk1-A template reference. It is opt-in and
+should usually run as a separate commit/run from Risk1-C unless the goal is a
+combined artifact smoke. The VLM output uses the legacy `subgoals` schema key
+for backward compatibility, but those records are same-immediate-objective
+strategy variants, not temporal subgoal-completion plan steps. The output must
+validate this JSON schema before it can drive frozen SmolVLA:
+`subgoal_text`, `strategy_axis`, `target_object`, `target_region_or_point`,
+`stop_condition`, `confidence`, and optional `rationale`. Candidate models to
+try are `Qwen/Qwen2.5-VL-7B-Instruct`, `Qwen/Qwen2.5-VL-3B-Instruct`, and
+`google/gemma-3-4b-it`. Contract/mock candidate prompts and invalid JSON are
+not PASS evidence. Risk1-B PASS requires validated external-VLM strategy
+variants plus actual policy-generated first action chunks with diversity
+comparable to or better than the Risk1-A template reference. A 15-step smoke
+`pc_success=0` is not a fair full-task failure criterion for Risk1-B/C; full
+benchmark success belongs to Risk1-D:
+
+Latest Risk1-B next-loop rule: the closed `99e88` shallow OSMesa run is a
+WARN baseline (`mean_normalized_pairwise_l2=0.066457`,
+`mean_pairwise_cosine_distance=0.002257`). The next prompt loop must not rerun
+that command unchanged. It should use strategy prompts with concrete
+object-centric motion cues, not only put/place/move synonyms, and compare
+against `0.066457` while preserving the cream-cheese-to-bowl relation.
+
+Risk1-B/C selector usefulness must not be judged only on one easy task. If the
+policy-only baseline already solves a row, selecting the baseline candidate may
+be correct. Next-loop runs should use the baseline-difficulty manifest and keep
+easy controls, hard baseline-fail rows, and uncertain rows separated:
+
+For the task0 repair-only Risk1-B/C handoff lane, RunPod Manager must not run
+the old loose multi-step handoff. Use the bounded wrapper below as the single
+manager command. It verifies pod-local `/usr/bin/python3.12` plus OSMesa/EGL/GL,
+the canonical LIBERO/SmolVLA env, the separate Risk1-B VLM env, Qwen 7B
+readiness, and the shallow OSMesa actual-context/provenance preflight. It does
+not run Qwen generation, SmolVLA probes, or any Researcher experiment.
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+/usr/bin/python3.12 -B scripts/runpod_risk1bc_task0_repair_handoff_preflight.py \
+  --project-dir /workspace/physical-ai/physical_ai_agent \
+  --work-root /workspace/physical-ai \
+  --output-dir /workspace/physical-ai/physical_ai_agent/_workspace/runpod_results/ita_risk_probes/risk1bc_task0_repair_handoff_preflight \
+  --suite libero_goal \
+  --task-id 0 \
+  --seed 1201 \
+  --renderer-backend osmesa \
+  --qwen-readiness-mode model-load \
+  --json
+```
+
+The wrapper writes
+`risk1bc_task0_repair_handoff_preflight.json` plus `heartbeat.json` and
+`progress.jsonl`. Manager should monitor the heartbeat/report files, not
+terminal stdout only, because model-load and install phases can be quiet for
+long windows. Manager may hand off to Researcher only when
+`status=ENV_READY_HANDOFF_READY`. On `status=BLOCKED`, fetch the wrapper output
+directory, report the `blocked_phase`, `blocker_category`, and phase log paths,
+then stop the pod. This is infra orchestration only; Evaluation Results Manager
+routing is not applicable until a Researcher experiment produces actual
+evaluation artifacts.
+
+```bash
+PYTHONPATH=src /workspace/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk1bc_difficulty_eval.py \
+  --manifest configs/eval/risk1bc_baseline_difficulty_manifest.json \
+  --categories baseline_fail_hard,ambiguous_uncertain \
+  --python-bin /workspace/physical-ai/envs/lerobot_py312/bin/python \
+  --vlm-python-bin /workspace/physical-ai/envs/risk1b_vlm_py312/bin/python \
+  --renderer-backend osmesa \
+  --context-backend libero-shallow \
+  --risk-backend libero-contract \
+  --output-dir _workspace/runpod_results/ita_risk_probes/risk1bc_difficulty_split \
+  --json
+```
+
+This command writes `risk1bc_difficulty_plan.json`, `results.jsonl`, and
+`summary.json` without running heavy commands unless `--execute` is added. Each
+row must record `task_id`, `seed`, baseline category/evidence provenance,
+Risk1-B diversity metrics, selected candidate id, selected-vs-policy distance,
+Risk1-C mode, score source, score spread, per-candidate details, and environment
+success separately. Rows whose baseline category is a control pool or unknown
+must not be promoted to easy/hard per-task claims until policy-only evidence for
+that exact task/seed exists. Shallow OSMesa remains diagnostic/plumbing evidence
+unless separate EGL benchmark success evidence is produced.
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-smoke \
+  --backend libero-contract \
+  --suite libero_goal \
+  --task-ids 6 \
+  --seed 1201 \
+  --num-candidates 5 \
+  --chunk-steps 15 \
+  --action-dim 7 \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --renderer-backend egl \
+  --risk1b-vlm-subgoals \
+  --risk1b-generator-backend json \
+  --risk1b-model Qwen/Qwen2.5-VL-7B-Instruct \
+  --risk1b-subgoals-json _workspace/runpod_results/ita_risk_probes/vlm_subgoals_qwen25vl7b_task6_seed1201.json \
+  --output-dir _workspace/runpod_results/ita_risk_probes/risk1b_vlm_subgoals_seed1201 \
+  --json
+```
+
+Risk1-C is selector/quality-gate instrumentation over an existing candidate
+set, not candidate generation. Keep its evidence classes separated:
+- `C0` privileged/oracle simulator selector upper-bound from cloned LIBERO
+  short rollouts and privileged state/success proxies.
+- `C1` non-oracle simulator proxy selector when obs/info/state proxies are
+  available. Prefer observation object-target distance proxies for manipulation
+  tasks when object positions are exposed in the observation; this is a
+  non-oracle selector diagnostic, not benchmark success or privileged oracle
+  evidence.
+- `C2` action-only sanity selector, debug only.
+
+Risk1-C must write `risk1c_sim_selector.json` with selected candidate id,
+selected-vs-policy distance, non-baseline selection rate, score spread,
+rollout/proxy metrics, and plausibility failures. `C0` can show the candidate
+set contains a better chunk but is not a deployable method. `C1` is closer to
+the method claim and needs separate validation. Example combined B+C artifact
+smoke:
+
+Risk1-D is the first end-to-end success checkpoint. It may use candidates from
+Risk1-A or Risk1-B plus a Risk1-C selector, but it must report benchmark
+success separately from candidate diversity and selector diagnostics. For
+LIBERO, start with the fixed focused task (`libero_goal`, task id `6`) and a
+small seed/episode budget before widening to 50+ episodes or more tasks. If a
+condition is substantially underway and still at `0` success, stop that
+condition, fetch artifacts, and debug rather than consuming the rest of the
+budget.
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-smoke \
+  --backend libero-contract \
+  --suite libero_goal \
+  --task-ids 6 \
+  --seed 1201 \
+  --num-candidates 5 \
+  --chunk-steps 15 \
+  --action-dim 7 \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --renderer-backend egl \
+  --risk1b-vlm-subgoals \
+  --risk1b-generator-backend json \
+  --risk1b-subgoals-json _workspace/runpod_results/ita_risk_probes/vlm_subgoals_qwen25vl7b_task6_seed1201.json \
+  --risk1c-sim-selector \
+  --risk1c-selector-modes c0,c1,c2 \
+  --output-dir _workspace/runpod_results/ita_risk_probes/risk1b_risk1c_seed1201 \
+  --json
+```
+If direct LIBERO exposes privileged state or `check_success` but only one
+candidate is evaluated, or all evaluated policy/alternative candidates have no
+privileged score spread, report `privileged_oracle_available` with
+`upper_bound_testable=false` and keep Risk 5 at `WARN`.
+
+RunPod risk-probe order is smoke -> breadth -> full benchmark decision. Use
+`--preset runpod-libero-smoke` first, then `--preset runpod-libero-breadth`.
+Keep the existing RunPod rules: verify GPU util/import gates, fetch artifacts,
+and if a planned evaluation is halfway complete with 0% environment success,
+stop that condition and switch to bug/plumbing/setup triage before spending more
+episodes.
+
+Actual LIBERO risk-probe smoke uses an import-guarded adapter. On a local Mac
+without LeRobot/LIBERO it may return `BLOCKED` with an actionable import/API
+message and still exit 0 as an expected contract outcome. On RunPod it should
+attempt the actual env rollout, write `libero_adapter_evidence.json`, and
+separate exact clone fidelity from weaker deterministic seed replay or
+obs/info-only proxy evidence:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-smoke \
+  --backend libero-contract \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --actual-max-steps 15 \
+  --output-dir _workspace/runpod_results/ita_risk_probes/libero_smoke_seed1201 \
+  --json
+```
+
+For actual LIBERO Risk1/Risk5 probes, do not treat NVIDIA L4 as an EGL-capable
+default target. The 2026-06-10 L4 run blocked before actual SmolVLA candidate
+evidence with `Cannot initialize a EGL device display` /
+`PLATFORM_DEVICE extension` plus `/dev/dri` permission warnings. Prefer a
+known-good renderer GPU first: RTX 4090, RTX 4000 Ada, RTX A5000/A6000, or a
+previously validated A-series/RTX Pod. If manager explicitly chooses to debug
+the same L4 class, run the same smoke with `--renderer-backend osmesa` only as a
+limited CPU-render fallback; it may unblock plumbing evidence, but any Risk1
+PASS still requires actual policy-generated chunks and any Risk5 PASS still
+requires privileged oracle/object-state evidence.
+
+For Risk 2 double-simulation, first check the direct LIBERO/MuJoCo path without
+LeRobot, then run the LeRobot-hooked double-sim smoke. A Risk 2 pass here is
+scoped to episode-start init-state double simulation; mid-episode exact LeRobot
+state sync remains future work:
+
+```bash
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/diagnose_libero_sim_state.py \
+  --suite libero_goal \
+  --task-id 6 \
+  --seed 1201 \
+  --output-dir _workspace/runpod_results/ita_risk_probes/direct_libero_sim_diagnosis_seed1201 \
+  --json
+
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_direct_libero_probe.py \
+  --backend direct-libero \
+  --suite libero_goal \
+  --task-id 6 \
+  --seed 1201 \
+  --max-steps 15 \
+  --output-dir _workspace/runpod_results/ita_risk_probes/direct_libero_probe_seed1201 \
+  --json
+
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-double-sim-smoke \
+  --backend direct-libero \
+  --output-dir _workspace/runpod_results/ita_risk_probes/direct_libero_double_sim_seed1201 \
+  --json
+
+PYTHONPATH=src /root/physical-ai/envs/lerobot_py312/bin/python -B \
+  scripts/run_imagine_then_act_risk_probes.py \
+  --preset runpod-libero-double-sim-smoke \
+  --backend libero-contract \
+  --policy-path lerobot/smolvla_libero \
+  --policy-num-steps 10 \
+  --policy-n-action-steps 15 \
+  --actual-max-steps 15 \
+  --output-dir _workspace/runpod_results/ita_risk_probes/lerobot_hook_double_sim_seed1201 \
+  --json
+```
+
 ### RunPod LIBERO Environment and Parity Scripts
+
+All local and RunPod install/bootstrap implementations must live under
+`scripts/install/`. Future setup instructions should call those paths directly,
+for example `sh scripts/install/runpod_install.sh --component libero-smolvla`, instead
+of adding new install scripts at `scripts/`. Root-level scripts with historical
+names may exist only as compatibility shims that delegate into
+`scripts/install/`; they are not the canonical implementation surface. Missing
+install/bootstrap coverage under `scripts/install/` is a harness blocker.
 
 Use these scripts for reproducible RunPod/LIBERO SmolVLA setup and evaluation
 handoff. They encode the successful 2026-06-09 RunPod recovery path and should
@@ -217,19 +867,130 @@ Environment bootstrap:
 
 ```bash
 cd /workspace/physical-ai/physical_ai_agent
-sh scripts/bootstrap_runpod_libero_smolvla_env.sh
+sh scripts/install/runpod_install.sh --component libero-smolvla
 ```
 
-The bootstrap script is intended for
-`runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` or a similar
-CUDA-12.4-capable Linux image. It creates or reuses
-`/root/physical-ai/envs/lerobot_py312`, pins `torch==2.5.1+cu124`,
+Use `scripts/install/runpod_install.sh --component libero-smolvla` as the operational entrypoint,
+not ad hoc pip commands. It selects a storage profile, runs the package
+bootstrap into a temporary venv, runs the hard CUDA/import gate, and only then
+publishes the venv as usable. A venv directory existing is not sufficient
+evidence; the hard gate must pass.
+
+Profiles:
+
+- `RUNPOD_ENV_PROFILE=volume`: default for reusable LIBERO/SmolVLA Pods. Keeps
+  the repo, published venv, Hugging Face cache, LIBERO assets, reusable vendor
+  checkouts, and final results under `/workspace/physical-ai`; creates
+  `/root/physical-ai -> /workspace/physical-ai` so historical commands using
+  `/root/physical-ai/envs/lerobot_py312/bin/python` continue to work. The first
+  bootstrap may use `/tmp` for transient pip/build cache, but the reusable
+  source, env, model/data caches, assets, and final artifacts must end on the
+  network volume.
+- `RUNPOD_ENV_PROFILE=ephemeral`: use only for no-volume throwaway Pods. Keeps
+  the venv under `/root/physical-ai`; artifacts must be fetched before stop.
+- `RUNPOD_ENV_PROFILE=auto`: chooses `volume` when `/workspace` exists.
+
+The `libero-smolvla` component of `scripts/install/runpod_install.sh` is
+intended for `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` or a
+similar CUDA-12.4-capable Linux image. It creates or reuses the venv path
+supplied by `PY312_VENV`, pins `torch==2.5.1+cu124`,
 `torchvision==0.20.1+cu124`, and `torchaudio==2.5.1+cu124`, installs LeRobot
 editable with `--no-deps`, installs LIBERO/robosuite/MuJoCo runtime packages
-under constraints, writes `$HOME/.libero/config.yaml`, downloads LIBERO assets,
-and prints CUDA/import checks. The key failure mode it prevents is LeRobot
-dependency resolution pulling torch 2.11/CUDA 13 wheels, which produced
-`torch.cuda.is_available() == False` on the tested RunPod driver.
+under constraints, writes a non-interactive LIBERO config, downloads LIBERO
+assets, and runs `scripts/install/runpod_check.sh --component libero-smolvla`.
+The key failure mode it prevents is LeRobot dependency resolution pulling torch
+2.11/CUDA 13 wheels, which produced `torch.cuda.is_available() == False` on the
+tested RunPod driver.
+
+Example persistent-volume setup:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+RUNPOD_ENV_PROFILE=volume \
+PROJECT_DIR="$PWD" \
+LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config \
+sh scripts/install/runpod_install.sh --component libero-smolvla
+```
+
+Preferred reusable volume:
+
+- RunPod volume name/id: `physical_ai_volume_60` / `otq1k142hf`
+- Mount/root: `/workspace` with project root `/workspace/physical-ai`
+- Source checkout: `/workspace/physical-ai/physical_ai_agent`
+- Published venv: `/workspace/physical-ai/envs/lerobot_py312`
+- Canonical Python: `/root/physical-ai/envs/lerobot_py312/bin/python` after the
+  symlink is created; direct volume path
+  `/workspace/physical-ai/envs/lerobot_py312/bin/python` is also valid.
+- Reusable caches/assets: `/workspace/physical-ai/hf_home`,
+  `/workspace/physical-ai/libero_assets`, and
+  `/workspace/physical-ai/vendor/lerobot`
+- Qwen2.5-VL-7B weights may be persisted on this 60GB volume after the
+  Qwen/Gemma model cache policy is explicitly approved by PM. Older 40GB
+  storage could not reliably hold reusable envs plus 7B weights. If a future
+  volume is smaller or under quota pressure, keep reusable envs/config/artifacts
+  on the volume but use pod-local cache such as `/tmp/risk1b_vlm_hf_home` for
+  Qwen/Gemma downloads or clean that cache after generated JSON/artifacts are
+  fetched.
+- Non-interactive LIBERO config: `/workspace/physical-ai/libero_config/config.yaml`.
+  The config must exist before any script calls `libero.libero.get_libero_path()`;
+  otherwise LIBERO may prompt for dataset folders and crash headless runs with
+  `EOFError`.
+
+On a fresh Pod attached to this volume, do not reinstall first. Verify and use
+the existing env:
+
+```bash
+cd /workspace/physical-ai/physical_ai_agent
+PY312_VENV=/workspace/physical-ai/envs/lerobot_py312 \
+LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config \
+sh scripts/install/runpod_check.sh --component libero-smolvla
+LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config \
+PYTHONPATH=src /workspace/physical-ai/envs/lerobot_py312/bin/python <experiment>
+```
+
+Only rerun `scripts/install/runpod_install.sh --component libero-smolvla` when the hard gate
+fails or the requested source/env contract intentionally changes.
+
+RunPod gate tiering:
+
+- Extensive environment gates are reserved for first setup on a new network
+  volume, a rebuilt reusable env/cache, a changed install policy, a known
+  corruption/quota incident, or a concrete failure that points at env/cache
+  drift. Extensive gates may include full canonical/VLM install checks, Qwen
+  model-load readiness, and multi-task context capture coverage.
+- Routine Pod assignment on the current managed 60GB volume must use a minimal
+  handoff gate. The network-volume envs and caches are manager-owned reusable
+  assets, so do not repeatedly reinstall or fully revalidate them just because a
+  new Pod was allocated.
+- Minimal handoff gate for the current Risk1-B/C shallow OSMesa lane:
+  1. verify the exact source commit and `.source_commit`;
+  2. verify the canonical Python and VLM Python paths execute;
+  3. run a quick VLM import/cache/GPU sanity check, not a full Qwen 7B
+     model-load, unless the GPU class/cache/env changed or a previous failure
+     makes model-load relevant;
+  4. run one representative shallow OSMesa context capture smoke, normally
+     task 0 seed 1201 for the target suite;
+  5. hand off to Researcher for the actual manifest breadth. Do not pre-capture
+     every manifest row during handoff unless PM explicitly asks for that
+     coverage.
+- These minimal gates exist only to protect a data-producing run. They are not
+  evaluation progress, and Manager must not substitute repeated gate/smoke loops
+  for Researcher-owned experiment execution.
+- If a minimal gate fails, stop treating it as a generic handoff check and
+  classify the blocker. Escalate to the extensive gate only when the evidence
+  suggests env/cache/install drift rather than experiment-code behavior.
+
+If this script exits non-zero, report `env_bootstrap_blocked`, fetch the
+`env_prepare_*` log directory, stop the Pod when no active run remains, and do
+not launch LIBERO diagnostics/probes/benchmarks.
+
+Bootstrap profiling is part of the environment gate. The prepare/bootstrap
+logs should contain grep-able `[bootstrap-timer]` markers for Pod/repo wrapper
+timing when available and package stages such as `python_venv_create`,
+`pip_upgrade_setup`, `torch_cu124_install`, `lerobot_editable_install`,
+`sim_runtime_deps_install`, `auxiliary_deps_install`, `libero_install`,
+`libero_assets_download`, and `final_import_gate`. Preserve these logs with the
+same artifact bundle as the import gate.
 
 Baseline parity evaluator:
 
@@ -272,20 +1033,23 @@ RunPod lifecycle policy:
 - If about half of a planned condition completes with zero environment success,
   stop that condition and inspect logs, traces, action norms, camera artifacts,
   and eval parsing before continuing.
-- Fetch artifacts before stopping any Pod used for evaluation.
+- Fetch experiment data and artifacts before stopping any Pod used for
+  evaluation.
 - After the approved run is complete and artifacts are fetched, stop the Pod and
   confirm no Pods remain `RUNNING`.
 - If the current instance is unavailable, cheaper or similar SSH-capable GPU
-  fallbacks are acceptable: L4, A10/A10G, RTX 4000 Ada, RTX A4000/A4500/A5000,
-  RTX 3090/3080-class. Prefer an existing network volume when it works; if using
-  ephemeral storage, fetch results before stop.
+  fallbacks are acceptable for non-rendering gates: L4, A10/A10G, RTX 4000 Ada,
+  RTX A4000/A4500/A5000, RTX 3090/3080-class. For actual LIBERO offscreen
+  rendering probes, exclude L4 unless a renderer preflight or explicit OSMesa
+  fallback smoke is the goal. Prefer an existing network volume when it works;
+  if using ephemeral storage, fetch results before stop.
 
 ## Required Checkpoint 01 Verification
 
 Run these commands before completing checkpoint 01:
 
 ```bash
-sh scripts/bootstrap_checkpoint_01.sh
+sh scripts/install/local_install.sh --checkpoint 01
 sh scripts/checkpoint_01.sh
 sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco
 sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env
@@ -305,11 +1069,13 @@ The bootstrap command creates `.venv` and installs MuJoCo if needed. The lightwe
 Use RunPod as the Linux/NVIDIA execution lane for LIBERO, LeRobot/SmolVLA,
 ManiSkill GPU rendering, Isaac, and paper-comparable evaluation runs.
 
-Maintain `docs/runpod_worklog.md` as the durable handoff journal for cloud work.
-Update it whenever a RunPod evaluation, setup fix, result fetch, or lifecycle
-decision changes the state a future conversation needs to recover. Do not
-include API keys, private SSH keys, full `.env` contents, or raw secret-bearing
-API responses.
+Treat `docs/runpod_worklog.md` as a legacy recovery log, not the current RunPod
+state. Current RunPod state must be summarized in `Summary.md`, PM boards, and
+the latest RunPod Manager report. If a manager consults `docs/runpod_worklog.md`
+to recover a command or blocker, it must report that the information came from a
+legacy log and verify it against the current volume/env policy before acting.
+Do not include API keys, private SSH keys, full `.env` contents, or raw
+secret-bearing API responses in any log.
 
 Default workflow:
 
@@ -322,37 +1088,81 @@ sh scripts/runpod_pod.sh status
 RUNPOD_SSH="$RUNPOD_SSH" sh scripts/runpod_check.sh
 ```
 
-RunPod capacity policy:
+RunPod capacity and ownership policy:
 
-- If the preferred existing Pod or exact GPU spec is unavailable, do not stop at
-  `blocked_capacity` when the user has approved RunPod experimentation.
-- Create or start the cheapest available same-class or lower-cost GPU that can
-  run the target benchmark, preferring an existing network volume such as
-  `tchm4gxfvd` and SSH access. Reasonable fallbacks include L4, A10/A10G,
-  RTX 30xx, RTX A4000/A4500/A5000, or another similar/cheaper NVIDIA GPU.
-- Avoid moving to a materially more expensive GPU without explicit approval.
-- When using an ephemeral or no-volume Pod, write all results under a known
-  result directory and fetch them before stopping. Stop confirmation is still
-  mandatory.
-- Record the GPU, hourly cost, Pod ID, volume choice, SSH endpoint, and fallback
-  reason in `docs/runpod_worklog.md`.
+- RunPod allocation, create, start, reuse, bootstrap/install ownership, stop,
+  and no-`RUNNING` confirmation belong to the RunPod manager thread:
+  `019eaf4d-4157-7f51-9099-561b7c3a9c1e`.
+- Other specialist threads may research env/bootstrap reproducibility,
+  profiling, scripts, and gates, but they should request RunPod resource
+  actions from the manager and avoid competing for the same Pod.
+- If a specialist is already working on a Pod when ownership changes or another
+  manager takes over, hand off the current Pod id, active process state, log
+  paths, artifact roots, and stop status to the manager before continuing.
+- Keep a Pod running only while the manager-owned verification batch is active.
+  Once artifacts are fetched and no active process remains, the manager should
+  stop the Pod and confirm no Pods remain `RUNNING`. This cleanup default is
+  suspended in research mode: preserve the live Pod for Researcher/Tech Lead
+  1:1 debugging unless PM/user requests cleanup, research mode is exited, or an
+  urgent cost/security/safety risk appears.
+- Report the GPU, hourly cost, Pod ID, volume choice, SSH endpoint, fallback
+  reason, owner thread, and stop confirmation to PM only. Do not route these
+  operational RunPod lifecycle reports to the Evaluation Results Manager unless
+  they are later included by a researcher/reviewer inside an evaluation result
+  package. `docs/runpod_worklog.md` is legacy provenance only and must not be
+  the current operating board.
 
 RunPod environment policy:
 
 - Environment setup failures are not final blockers until the agent has checked
-  `docs/runpod_worklog.md`, the repo scripts, and relevant official install
-  instructions or package metadata for a known working path.
+  the current harness/Summary, canonical repo install scripts, latest RunPod
+  Manager report, and relevant official install instructions or package metadata
+  for a known working path. If `docs/runpod_worklog.md` is consulted, it must be
+  treated as legacy recovery evidence and verified against the current 60GB
+  volume policy before use.
 - For LIBERO/SmolVLA, first reuse or bootstrap the LeRobot Python environment at
-  `/root/physical-ai/envs/lerobot_py312`; keep pip/model/data caches under
-  `/workspace/physical-ai` but avoid creating package-heavy virtualenvs on the
-  network volume unless persistence is more important than install speed.
-- Preferred LIBERO bootstrap/eval entrypoint:
-  `scripts/eval_smolvla_libero_linux.sh`, with `WORK_ROOT=/workspace/physical-ai`
-  and `PY312_VENV=/root/physical-ai/envs/lerobot_py312`.
-- Next LIBERO/SmolVLA RunPod attempts should be volume-first. If network volume
-  `tchm4gxfvd` is available, attach it and keep the repo, Hugging Face cache,
-  LIBERO assets, pip cache, and any repaired `lerobot_py312` environment under
-  `/workspace/physical-ai` so the next run does not repeat the same bootstrap.
+  `/root/physical-ai/envs/lerobot_py312` by running
+  `scripts/install/runpod_install.sh --component libero-smolvla`. On network-volume Pods this
+  path should resolve through `/root/physical-ai -> /workspace/physical-ai` so
+  the actual venv is persistent at `/workspace/physical-ai/envs/lerobot_py312`.
+  On ephemeral Pods it may live under `/root/physical-ai`, but the Pod must be
+  treated as disposable.
+- Treat `/root/physical-ai/envs/lerobot_py312/bin/python` as the canonical
+  command path only after `scripts/install/runpod_check.sh --component libero-smolvla` passes.
+  Network volumes should hold only reusable files: Hugging Face cache, LIBERO
+  assets, wheel/pip cache, reusable published environments, and fetched
+  artifacts. Do not infer readiness from a clean checkout or venv directory
+  alone.
+- Preferred LIBERO bootstrap/eval entrypoints:
+  `scripts/install/runpod_install.sh --component libero-smolvla` for environment creation,
+  `scripts/install/runpod_check.sh --component libero-smolvla` for the hard gate, and
+  `scripts/eval_smolvla_libero_linux.sh` for evaluation.
+- Next LIBERO/SmolVLA RunPod attempts must attach `physical_ai_volume_60`
+  (`otq1k142hf`) whenever possible. Keep reusable Hugging Face cache, LIBERO
+  assets, reusable vendor checkouts, the published `lerobot_py312` environment,
+  source snapshots intended for reuse, and final artifacts under
+  `/workspace/physical-ai` so the next Pod can start with the hard gate instead
+  of reinstalling. The old 40GB volume `physical_ai_network_volume`
+  (`w59nxx3o43`) has been retired and must not be used for new handoffs.
+- Risk1-B external VLM generation must use a separate reusable environment on
+  the network volume, not the canonical LIBERO/SmolVLA environment. Preserve
+  `/workspace/physical-ai/envs/risk1b_vlm_py312` for Qwen/Gemma JSON
+  generation, but treat large model weights as cache-on-demand. Use pod-local
+  cache such as `/tmp/risk1b_vlm_hf_home` for Qwen/Gemma downloads or clean
+  model weights after generated JSON/artifacts are fetched unless PM explicitly
+  approves persistent storage. Qwen2.5-VL-7B persistence is approved on the
+  60GB volume after model-load preflight passes. The canonical LIBERO/SmolVLA env at
+  `/workspace/physical-ai/envs/lerobot_py312` must not be mutated to satisfy VLM
+  compatibility. RunPod manager handoffs involving Qwen/Gemma must report the
+  VLM env path, `HF_HOME`, cache hit/miss status, whether model weights were
+  downloaded or reused, and any disk-usage concern. If VLM bootstrap leaves a
+  partial or corrupt env/cache, clean it or mark it unusable before stopping the
+  Pod.
+- Do not leave temporary clones, build directories, half-built virtualenvs, or
+  dirty worktrees on the network volume. Because `/workspace` previously hit a
+  git write-heavy `Disk quota exceeded` blocker, prefer ephemeral `/tmp` or
+  `/root` for clone/build/worktree activity and publish only reusable cache/env
+  or final artifacts to the network volume.
 - For no-volume ephemeral Pods, do not hand-install interactively. Use a
   prebuilt bootstrap script or explicit wheel constraints that pin CUDA PyTorch
   to `torch==2.5.1+cu124` from the PyTorch CUDA 12.4 wheel index before
@@ -366,10 +1176,26 @@ RunPod environment policy:
   `torch.cuda.is_available() == True`, confirm `torch.version.cuda` reports a
   CUDA 12.x/cu124-compatible stack, import `lerobot`, `libero`, and `robosuite`,
   and run the Imagine-Then-Act CLI dry-run successfully.
+- Run the hard environment gate before any diagnostic, direct probe, LeRobot
+  smoke, or benchmark:
+  `LIBERO_CONFIG_PATH=/workspace/physical-ai/libero_config PY312_VENV=/root/physical-ai/envs/lerobot_py312 sh scripts/install/runpod_check.sh --component libero-smolvla`.
+  The gate must exit non-zero if the venv python is missing, `torch` is absent,
+  CUDA is false, torch-family versions drift away from the cu124 pins, or any
+  required import fails: `lerobot`, `libero`, `robosuite`, `mujoco`, `av`, or
+  `num2words`. It also writes/verifies `LIBERO_CONFIG_PATH/config.yaml` and
+  calls `get_libero_path()` for `bddl_files`, `init_states`, and `datasets` so
+  non-interactive config prompts fail before Risk 2/5 probes. If this gate
+  fails, report `env_bootstrap_blocked` or `libero_config_prompt` and do not run
+  Risk 2/5 probes.
 - If `lerobot` is missing, bootstrap it instead of reporting a benchmark
   blocker. Only stop after either the benchmark artifact is produced or the
   bootstrap has a concrete, logged dependency failure that cannot be fixed
   within the current approved cost envelope.
+- Bootstrap profiling reports must include the active volume/cache policy,
+  cache hit/miss status, and the exact network-volume files or directories left
+  behind for reuse. If a run uses ephemeral `/root` or `/tmp`, report which
+  artifacts were fetched before stop and which ephemeral build paths were
+  intentionally discarded.
 
 Then, on the Pod:
 
@@ -413,8 +1239,9 @@ sh scripts/runpod_fetch_results.sh
 ```
 
 For long-running baseline debugging, archive completed result directories
-locally and delete those completed remote directories before the network volume
-fills. Preserve the active run explicitly:
+locally and delete those completed remote directories as the default lifecycle,
+not only when the network volume is nearly full. Preserve the active run
+explicitly:
 
 ```bash
 set -a
@@ -547,28 +1374,35 @@ Current lifecycle convention:
 
 ## Validation Checks
 
-- `sh scripts/bootstrap_checkpoint_01.sh`
+- `sh scripts/install/local_install.sh --checkpoint 01`
 - `sh scripts/checkpoint_01.sh`
 - `sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco`
 - `sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env`
 - `sh scripts/checkpoint_02_04.sh`
-- `sh scripts/bootstrap_checkpoint_05_06.sh`
+- `sh scripts/install/local_install.sh --checkpoint 05-06`
 - `sh scripts/checkpoint_05_06.sh`
 - `sh scripts/checkpoint_05_06.sh --require-real-smolvla --output-dir _workspace/checkpoints/checkpoint_05_06_require_real`
-- `sh scripts/bootstrap_checkpoint_07_13.sh`
+- `sh scripts/install/local_install.sh --checkpoint 07-13`
 - `sh scripts/checkpoint_07_13.sh`
-- `sh scripts/bootstrap_checkpoint_14_15.sh`
+- `sh scripts/install/local_install.sh --checkpoint 14-15`
 - `sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla`
 - `sh scripts/checkpoint_16.sh`
 - `sh scripts/checkpoint_17.sh`
 - `sh scripts/checkpoint_18.sh`
 - `sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla`
 - `sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download --smolvla-action-steps 15 --show-inputs --fps 2 --max-steps 1`
+- `sh scripts/so101_interactive_sim.sh --dry-contract --output-dir _workspace/so101_interactive/contract_smoke`
+- `sh scripts/so101_interactive_sim.sh --gui --port 8766 --output-dir _workspace/so101_interactive/gui`
+- `sh scripts/so101_interactive_sim.sh --output-dir _workspace/so101_interactive/scripted_smoke --command observe --command 'nudge shoulder_pan 0.1' --command 'action [0,0,0,0,0,0]'`
+- `PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_smoke.py --env-id MuJoCoPickLift-v1 --camera-name wrist_cam --width 128 --height 128 --steps 4`
+- `PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_policy_smoke.py --env-id MuJoCoPickLift-v1 --camera-name wrist_cam --width 64 --height 64 --rollout-steps 4`
+- `PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_rl.py --env-id MuJoCoReach-v1 --camera-name wrist_cam --width 64 --height 64 --updates 80 --rollout-steps 32 --output-dir _workspace/so101_visual_rl/train_reach`
+- `PYTHONPATH=src .venv/bin/python -B -m physical_ai_agent.sim.so101_live_viewer --env-id MuJoCoReach-v1 --policy visual-rl --visual-policy-checkpoint _workspace/so101_visual_rl/train_reach/so101_visual_rl_policy.pt --visual-policy-camera wrist_cam --browser-only --input-port 8766 --fps 12`
 - `sh scripts/checkpoint_20.sh`
 - `sh scripts/checkpoint_21.sh`
 - `sh scripts/checkpoint_22.sh`
 - `sh scripts/checkpoint_23.sh`
-- `sh scripts/bootstrap_checkpoint_24.sh`
+- `sh scripts/install/local_install.sh --checkpoint 24`
 - `sh scripts/checkpoint_24.sh`
 - `sh scripts/checkpoint_24.sh --require-maniskill`
 - `sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_1ep_1step`
@@ -586,7 +1420,7 @@ Current lifecycle convention:
 Run these commands before completing checkpoints 07-13:
 
 ```bash
-sh scripts/bootstrap_checkpoint_07_13.sh
+sh scripts/install/local_install.sh --checkpoint 07-13
 sh scripts/checkpoint_07_13.sh
 ```
 
@@ -597,7 +1431,7 @@ The bootstrap command installs SO101-Nexus MuJoCo into `.venv`. The checkpoint c
 Run these commands before completing checkpoints 14-15:
 
 ```bash
-sh scripts/bootstrap_checkpoint_14_15.sh
+sh scripts/install/local_install.sh --checkpoint 14-15
 sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla
 ```
 
@@ -652,7 +1486,7 @@ Checkpoint 20 must write a rule-based SO101 subgoal plan. Checkpoint 21 must exe
 Run these commands before completing checkpoint 24:
 
 ```bash
-sh scripts/bootstrap_checkpoint_24.sh
+sh scripts/install/local_install.sh --checkpoint 24
 sh scripts/checkpoint_24.sh --require-maniskill
 sh scripts/checkpoint_24.sh --require-maniskill --episodes 20 --steps 100 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_pickcube_baselines_20ep_100step
 sh scripts/checkpoint_24.sh --require-maniskill --episodes 10 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_dry_10ep_50step
