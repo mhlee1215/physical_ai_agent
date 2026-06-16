@@ -7,8 +7,9 @@
   ],
   "dataset_id": "physical-ai-agent/so101-pickplace-contact-train100-256-recovery",
   "episodes": 100,
+  "expected_frames_per_episode": 232,
   "expected_min_episodes": 100,
-  "frames": 10000,
+  "frames": 23200,
   "generator": "scripts/export_so101_pickplace_teacher_rollouts_lerobot.py",
   "image_shape": [
     3,
@@ -16,7 +17,7 @@
     256
   ],
   "includes_recovery_or_off_nominal_states": true,
-  "notes": "Target doubled train dataset for the next SmolVLA run. Recovery/off-nominal states are required because the teacher is privileged but the student is visual.",
+  "notes": "Target doubled train dataset for the next SmolVLA run. Recovery/off-nominal states are required because the teacher is privileged but the student is visual. Teacher timing is the fast 232-frame recipe: recovery=8, approach=28, settle=4, close=30, lift=48, transport=72, lower=42, release and settle-after-release terminate after task success.",
   "source_episode_count": 50,
   "split": "train",
   "state_dim": 6,

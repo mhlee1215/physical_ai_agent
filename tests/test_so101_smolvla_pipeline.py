@@ -53,9 +53,10 @@ class SO101SmolVLAPipelineTest(TestCase):
             dataset_id="physical-ai-agent/so101-pickplace-contact-train100-256-recovery",
             split="train",
             episodes=100,
-            frames=10000,
+            frames=23200,
             source_episode_count=50,
             target_expansion_factor=2.0,
+            expected_frames_per_episode=232,
             includes_recovery_or_off_nominal_states=True,
             sticky_grasp_allowed=False,
         )
@@ -69,11 +70,13 @@ class SO101SmolVLAPipelineTest(TestCase):
             frames=8000,
             source_episode_count=50,
             target_expansion_factor=2.0,
+            expected_frames_per_episode=232,
             includes_recovery_or_off_nominal_states=False,
             sticky_grasp_allowed=True,
         )
         errors = broken.validate()
         self.assertTrue(any("expected at least 100" in error for error in errors))
+        self.assertTrue(any("expected 18560 from 232 frames/episode" in error for error in errors))
         self.assertTrue(any("sticky_grasp_allowed" in error for error in errors))
         self.assertTrue(any("recovery/off-nominal" in error for error in errors))
 
@@ -143,6 +146,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                         "frames": 5000,
                         "source_episode_count": 50,
                         "target_expansion_factor": 2.0,
+                        "expected_frames_per_episode": 232,
                         "includes_recovery_or_off_nominal_states": True,
                         "sticky_grasp_allowed": False,
                     }

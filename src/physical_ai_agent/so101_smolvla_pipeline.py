@@ -91,6 +91,7 @@ class SO101DatasetManifest:
     frames: int
     source_episode_count: int
     target_expansion_factor: float
+    expected_frames_per_episode: int | None = None
     image_shape: tuple[int, int, int] = (3, 256, 256)
     state_dim: int = 6
     action_dim: int = 6
@@ -120,6 +121,13 @@ class SO101DatasetManifest:
             )
         if self.frames < self.episodes:
             errors.append(f"{self.dataset_id} has fewer frames than episodes")
+        if self.expected_frames_per_episode is not None:
+            expected_frames = int(self.episodes) * int(self.expected_frames_per_episode)
+            if int(self.frames) != expected_frames:
+                errors.append(
+                    f"{self.dataset_id} has {self.frames} frames; expected "
+                    f"{expected_frames} from {self.expected_frames_per_episode} frames/episode"
+                )
         if tuple(self.image_shape) != contract.image_shape:
             errors.append(f"image_shape {self.image_shape} != required {contract.image_shape}")
         if self.state_dim != contract.state_dim:

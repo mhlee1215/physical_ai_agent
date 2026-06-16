@@ -24,6 +24,7 @@ def main() -> None:
     create.add_argument("--split", choices=["train", "validation", "test"], required=True)
     create.add_argument("--episodes", type=int, required=True)
     create.add_argument("--frames", type=int, required=True)
+    create.add_argument("--expected-frames-per-episode", type=int)
     create.add_argument("--source-episode-count", type=int, required=True)
     create.add_argument("--target-expansion-factor", type=float, default=2.0)
     create.add_argument("--includes-recovery-or-off-nominal-states", action="store_true")
@@ -56,6 +57,7 @@ def main() -> None:
             frames=args.frames,
             source_episode_count=args.source_episode_count,
             target_expansion_factor=args.target_expansion_factor,
+            expected_frames_per_episode=args.expected_frames_per_episode,
             includes_recovery_or_off_nominal_states=args.includes_recovery_or_off_nominal_states,
             teacher_uses_privileged_state=args.teacher_uses_privileged_state,
             sticky_grasp_allowed=args.sticky_grasp_allowed,
