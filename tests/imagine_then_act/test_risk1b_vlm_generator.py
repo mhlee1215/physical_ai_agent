@@ -170,7 +170,7 @@ class Risk1BVlmGeneratorTest(TestCase):
                             },
                             {
                                 "subgoal": {
-                                    "subgoal_text": "align the cream cheese before placing it in the bowl",
+                                    "subgoal_text": "put the cream cheese in the bowl using a pre-contact alignment cue",
                                     "strategy_axis": "pre_contact_alignment",
                                     "target_object": "cream cheese",
                                     "target_region_or_point": "inside the bowl",

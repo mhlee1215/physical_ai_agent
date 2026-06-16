@@ -544,27 +544,30 @@ def deterministic_locked_field_output(args: argparse.Namespace, context_summary:
     locked_fields = build_locked_task_fields(task_description)
     manipulated_object = locked_fields["manipulated_object"]
     target_region = locked_fields["target_region"]
+    relation = locked_fields["relation"]
+    final_state = f"{manipulated_object} satisfies {relation}"
+    base_command = task_description.rstrip(".")
     axes = [
-        ("baseline", task_description),
+        ("baseline", base_command),
         (
             "pre_contact_alignment",
-            f"{task_description}; first align the gripper with {manipulated_object} before moving toward {target_region}.",
+            f"{base_command} using a pre-contact alignment cue before final placement at {target_region}",
         ),
         (
             "object_centric_open_side",
-            f"{task_description}; approach {manipulated_object} from the clearest visible side while keeping {target_region} as the destination.",
+            f"{base_command} from the clearest visible side while preserving the final relation with {target_region}",
         ),
         (
             "gripper_pose_precision",
-            f"{task_description}; use a precise gripper pose on {manipulated_object} before placing it at {target_region}.",
+            f"{base_command} using a precise gripper pose on {manipulated_object} before release at {target_region}",
         ),
         (
             "short_horizon_contact",
-            f"{task_description}; make the smallest useful contact with {manipulated_object} that advances it toward {target_region}.",
+            f"{base_command} using the shortest contact path that still completes the relation with {target_region}",
         ),
         (
             "collision_avoidant_approach",
-            f"{task_description}; move {manipulated_object} toward {target_region} along a collision-avoidant path.",
+            f"{base_command} along a collision-avoidant path that finishes with {manipulated_object} at {target_region}",
         ),
     ]
     records = []
@@ -576,7 +579,7 @@ def deterministic_locked_field_output(args: argparse.Namespace, context_summary:
                 "locked_task_fields": locked_fields,
                 "target_object": manipulated_object,
                 "target_region_or_point": target_region,
-                "stop_condition": f"{manipulated_object} satisfies the original relation with {target_region}: {task_description}",
+                "stop_condition": final_state,
                 "confidence": 1.0 if axis == "baseline" else 0.55,
                 "rationale": "deterministic locked-field fallback; not external VLM generation",
             }
