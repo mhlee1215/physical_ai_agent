@@ -92,6 +92,8 @@ class SO101DatasetManifest:
     source_episode_count: int
     target_expansion_factor: float
     expected_frames_per_episode: int | None = None
+    min_frames_per_episode: int | None = None
+    max_frames_per_episode: int | None = None
     image_shape: tuple[int, int, int] = (3, 256, 256)
     state_dim: int = 6
     action_dim: int = 6
@@ -127,6 +129,20 @@ class SO101DatasetManifest:
                 errors.append(
                     f"{self.dataset_id} has {self.frames} frames; expected "
                     f"{expected_frames} from {self.expected_frames_per_episode} frames/episode"
+                )
+        if self.min_frames_per_episode is not None:
+            min_frames = int(self.episodes) * int(self.min_frames_per_episode)
+            if int(self.frames) < min_frames:
+                errors.append(
+                    f"{self.dataset_id} has {self.frames} frames; expected at least "
+                    f"{min_frames} from {self.min_frames_per_episode} min frames/episode"
+                )
+        if self.max_frames_per_episode is not None:
+            max_frames = int(self.episodes) * int(self.max_frames_per_episode)
+            if int(self.frames) > max_frames:
+                errors.append(
+                    f"{self.dataset_id} has {self.frames} frames; expected at most "
+                    f"{max_frames} from {self.max_frames_per_episode} max frames/episode"
                 )
         if tuple(self.image_shape) != contract.image_shape:
             errors.append(f"image_shape {self.image_shape} != required {contract.image_shape}")

@@ -53,10 +53,11 @@ class SO101SmolVLAPipelineTest(TestCase):
             dataset_id="physical-ai-agent/so101-pickplace-contact-train100-256-recovery",
             split="train",
             episodes=100,
-            frames=23200,
+            frames=23000,
             source_episode_count=50,
             target_expansion_factor=2.0,
-            expected_frames_per_episode=232,
+            min_frames_per_episode=220,
+            max_frames_per_episode=240,
             includes_recovery_or_off_nominal_states=True,
             sticky_grasp_allowed=False,
         )
@@ -70,15 +71,32 @@ class SO101SmolVLAPipelineTest(TestCase):
             frames=8000,
             source_episode_count=50,
             target_expansion_factor=2.0,
-            expected_frames_per_episode=232,
+            min_frames_per_episode=220,
+            max_frames_per_episode=240,
             includes_recovery_or_off_nominal_states=False,
             sticky_grasp_allowed=True,
         )
         errors = broken.validate()
         self.assertTrue(any("expected at least 100" in error for error in errors))
-        self.assertTrue(any("expected 18560 from 232 frames/episode" in error for error in errors))
+        self.assertTrue(any("expected at least 17600 from 220 min frames/episode" in error for error in errors))
         self.assertTrue(any("sticky_grasp_allowed" in error for error in errors))
         self.assertTrue(any("recovery/off-nominal" in error for error in errors))
+
+        too_long = SO101DatasetManifest(
+            dataset_id="too-long",
+            split="train",
+            episodes=100,
+            frames=25000,
+            source_episode_count=50,
+            target_expansion_factor=2.0,
+            min_frames_per_episode=220,
+            max_frames_per_episode=240,
+            includes_recovery_or_off_nominal_states=True,
+            sticky_grasp_allowed=False,
+        )
+        self.assertTrue(
+            any("expected at most 24000 from 240 max frames/episode" in error for error in too_long.validate())
+        )
 
     def test_closed_loop_best_only_ignores_non_best_checkpoints(self) -> None:
         schedule = SO101TrainingSchedule(closed_loop_policy="best_only")
@@ -146,7 +164,8 @@ class SO101SmolVLAPipelineTest(TestCase):
                         "frames": 5000,
                         "source_episode_count": 50,
                         "target_expansion_factor": 2.0,
-                        "expected_frames_per_episode": 232,
+                        "min_frames_per_episode": 220,
+                        "max_frames_per_episode": 240,
                         "includes_recovery_or_off_nominal_states": True,
                         "sticky_grasp_allowed": False,
                     }
