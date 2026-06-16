@@ -83,13 +83,13 @@ paper-facing concepts:
   512-padding preprocessing, sample-time CUDA/MPS augmentation, doubled
   recovery-aware train data, dataset manifest validation, and monitor-managed
   validation/closed-loop/overfit stopping.
-- SO101 RunPod storage policy: do not keep completed datasets, checkpoints,
-  videos, caches, or training run directories on RunPod as the system of
-  record. At the end of each SO101 data-generation, training, or evaluation
-  run, download the dataset/result bundle to the local repo, verify the local
-  manifest or metrics, then delete the remote RunPod artifact directory. Keep
-  reusable Python environments on the Pod's local disk when practical; use the
-  network volume only for active dataset/result handoff.
+- RunPod experiment-data storage policy: past remote experiment results are not
+  required as the system of record. For all future RunPod data-generation,
+  training, evaluation, and closed-loop runs, download the dataset/result bundle
+  to the local repo at run completion, verify the local manifest or metrics,
+  then delete the completed remote RunPod artifact directory. Keep reusable
+  Python environments on the Pod's local disk when practical; use the network
+  volume only for active handoff/cache, not long-term experiment-data storage.
 
 ### What We Have Learned
 

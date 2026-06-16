@@ -204,14 +204,14 @@ policy is:
   `configs/so101/smolvla_pickplace_contact_train100_manifest.json`: doubled
   train episodes, 256x256 visual inputs, no sticky grasp, and recovery/off-
   nominal states to cover privileged-teacher versus visual-student drift.
-- SO101 RunPod artifact lifecycle is download-first and delete-after-fetch.
-  Completed SO101 teacher datasets, validation datasets, predecoded caches,
-  checkpoints, rollout videos, metrics, and dashboard outputs must be copied
-  back to the local repo before they are treated as preserved. After the local
-  copy is verified with its manifest or metrics summary, remove the remote
-  RunPod artifact directory and stop the Pod unless an active follow-up run is
-  already in progress. Do not use the RunPod network volume as the long-term
-  source of truth for SO101 experiments.
+- RunPod experiment-data lifecycle is download-first and delete-after-fetch.
+  Completed teacher datasets, validation datasets, predecoded caches,
+  checkpoints, rollout videos, metrics, dashboard outputs, and other experiment
+  result bundles must be copied back to the local repo before they are treated
+  as preserved. After the local copy is verified with its manifest or metrics
+  summary, remove the remote RunPod artifact directory and stop the Pod unless
+  an active follow-up run is already in progress. Do not use the RunPod network
+  volume as the long-term source of truth for experiment data.
 - For SO101 runs under network-volume quota pressure, install Python
   environments, pip caches, and temporary build files on the Pod local disk
   such as `/opt/physical-ai`; keep only active dataset/result handoff
@@ -1031,7 +1031,8 @@ RunPod lifecycle policy:
 - If about half of a planned condition completes with zero environment success,
   stop that condition and inspect logs, traces, action norms, camera artifacts,
   and eval parsing before continuing.
-- Fetch artifacts before stopping any Pod used for evaluation.
+- Fetch experiment data and artifacts before stopping any Pod used for
+  evaluation.
 - After the approved run is complete and artifacts are fetched, stop the Pod and
   confirm no Pods remain `RUNNING`.
 - If the current instance is unavailable, cheaper or similar SSH-capable GPU
@@ -1236,8 +1237,9 @@ sh scripts/runpod_fetch_results.sh
 ```
 
 For long-running baseline debugging, archive completed result directories
-locally and delete those completed remote directories before the network volume
-fills. Preserve the active run explicitly:
+locally and delete those completed remote directories as the default lifecycle,
+not only when the network volume is nearly full. Preserve the active run
+explicitly:
 
 ```bash
 set -a
