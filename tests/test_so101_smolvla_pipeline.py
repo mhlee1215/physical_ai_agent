@@ -137,20 +137,25 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(decision["best"]["checkpoint"], "001490")
         self.assertEqual(decision["reason"], "validation_loss_worse_than_best")
 
-    def test_dataset_manifest_cli_validates_committed_target(self) -> None:
-        manifest = Path("configs/so101/smolvla_pickplace_contact_train100_manifest.json")
+    def test_dataset_manifest_cli_validates_committed_targets(self) -> None:
+        manifests = [
+            Path("configs/so101/smolvla_pickplace_contact_train100_manifest.json"),
+            Path("configs/so101/smolvla_pickplace_contact_val24_manifest.json"),
+        ]
 
-        completed = subprocess.run(
-            [sys.executable, "scripts/so101_dataset_manifest.py", "validate", str(manifest)],
-            check=False,
-            text=True,
-            capture_output=True,
-            env={**os.environ, "PYTHONPATH": "src"},
-        )
+        for manifest in manifests:
+            with self.subTest(manifest=manifest):
+                completed = subprocess.run(
+                    [sys.executable, "scripts/so101_dataset_manifest.py", "validate", str(manifest)],
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                    env={**os.environ, "PYTHONPATH": "src"},
+                )
 
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["validation_errors"], [])
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                payload = json.loads(completed.stdout)
+                self.assertEqual(payload["validation_errors"], [])
 
     def test_dataset_manifest_cli_rejects_under_expansion(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
