@@ -28,6 +28,10 @@ class LiveViewerConfig:
     allow_download: bool = False
     smolvla_action_steps: int = 15
     smolvla_worker_python: str = ""
+    visual_policy_checkpoint: str = "_workspace/so101_visual_rl/train/so101_visual_rl_policy.pt"
+    visual_policy_camera: str = "wrist_cam"
+    visual_reach_checkpoint: str = "_workspace/so101_visual_rl/reach_delta/so101_visual_reach_delta.pt"
+    visual_reach_camera: str = "top_down"
     browser_only: bool = False
     show_inputs: bool = False
     input_width: int = 320
@@ -46,6 +50,8 @@ def run_live_viewer(config: LiveViewerConfig) -> int:
     step = 0
     input_viewer = None
     smolvla_worker = None
+    visual_policy = None
+    visual_reach_policy = None
     action_queue: list[list[float]] = []
     image_feature_mapping: dict[str, str] = {}
     chunk_status = ""
@@ -63,6 +69,30 @@ def run_live_viewer(config: LiveViewerConfig) -> int:
             print(
                 "SmolVLA worker started; "
                 f"executing {config.smolvla_action_steps} actions per predicted chunk.",
+                flush=True,
+            )
+        if config.policy == "visual-rl":
+            visual_policy = VisualRLPolicyClient(
+                checkpoint_path=Path(config.visual_policy_checkpoint),
+                camera_name=config.visual_policy_camera,
+                width=config.input_width,
+                height=config.input_height,
+            )
+            print(
+                f"Loaded visual RL policy from {config.visual_policy_checkpoint} "
+                f"using camera {config.visual_policy_camera}.",
+                flush=True,
+            )
+        if config.policy == "visual-reach":
+            visual_reach_policy = VisualReachPolicyClient(
+                checkpoint_path=Path(config.visual_reach_checkpoint),
+                camera_name=config.visual_reach_camera,
+                width=config.input_width,
+                height=config.input_height,
+            )
+            print(
+                f"Loaded visual reach policy from {config.visual_reach_checkpoint} "
+                f"using camera {config.visual_reach_camera}.",
                 flush=True,
             )
         if config.show_inputs or config.policy == "smolvla" or config.browser_only:
@@ -94,6 +124,8 @@ def run_live_viewer(config: LiveViewerConfig) -> int:
                     config=config,
                     input_viewer=input_viewer,
                     smolvla_worker=smolvla_worker,
+                    visual_policy=visual_policy,
+                    visual_reach_policy=visual_reach_policy,
                     action_queue=action_queue,
                     image_feature_mapping=image_feature_mapping,
                     chunk_status=chunk_status,
@@ -107,7 +139,9 @@ def run_live_viewer(config: LiveViewerConfig) -> int:
                         policy_name=config.policy,
                         inference_latency_s=inference_latency_s,
                         image_feature_mapping=image_feature_mapping,
-                        chunk_status=chunk_status if config.policy == "smolvla" else "",
+                        chunk_status=chunk_status
+                        if config.policy in {"smolvla", "visual-rl", "visual-reach"}
+                        else "",
                     ):
                         break
                 step += 1
@@ -146,6 +180,8 @@ def run_live_viewer(config: LiveViewerConfig) -> int:
                         config=config,
                         input_viewer=input_viewer,
                         smolvla_worker=smolvla_worker,
+                        visual_policy=visual_policy,
+                        visual_reach_policy=visual_reach_policy,
                         action_queue=action_queue,
                         image_feature_mapping=image_feature_mapping,
                         chunk_status=chunk_status,
@@ -160,7 +196,9 @@ def run_live_viewer(config: LiveViewerConfig) -> int:
                             policy_name=config.policy,
                             inference_latency_s=inference_latency_s,
                             image_feature_mapping=image_feature_mapping,
-                            chunk_status=chunk_status if config.policy == "smolvla" else "",
+                            chunk_status=chunk_status
+                            if config.policy in {"smolvla", "visual-rl", "visual-reach"}
+                            else "",
                         ):
                             break
                     step += 1
@@ -170,6 +208,10 @@ def run_live_viewer(config: LiveViewerConfig) -> int:
     finally:
         if input_viewer is not None:
             input_viewer.close()
+        if visual_policy is not None:
+            visual_policy.close()
+        if visual_reach_policy is not None:
+            visual_reach_policy.close()
         if smolvla_worker is not None:
             smolvla_worker.close()
         env.close()
@@ -183,6 +225,8 @@ def _run_policy_step(
     config: LiveViewerConfig,
     input_viewer: "SO101LiveInputViewer | None",
     smolvla_worker: "SmolVLAWorkerClient | None",
+    visual_policy: "VisualRLPolicyClient | None",
+    visual_reach_policy: "VisualReachPolicyClient | None",
     action_queue: list[list[float]],
     image_feature_mapping: dict[str, str],
     chunk_status: str,
@@ -210,11 +254,181 @@ def _run_policy_step(
         predicted_steps = smolvla_worker.last_predicted_chunk_size or executed_steps
         used = executed_steps - len(action_queue)
         chunk_status = f"chunk steps {used}/{executed_steps} from predicted {predicted_steps}"
+    elif config.policy == "reach":
+        action = _reach_controller_action(env)
+        chunk_status = _reach_status(env)
+    elif config.policy == "visual-rl":
+        if visual_policy is None:
+            raise RuntimeError("Visual RL policy was not loaded")
+        action = visual_policy.predict(env=env, state_obs=obs)
+        chunk_status = f"visual RL checkpoint {Path(config.visual_policy_checkpoint).name}"
+    elif config.policy == "visual-reach":
+        if visual_reach_policy is None:
+            raise RuntimeError("Visual reach policy was not loaded")
+        action, predicted_error = visual_reach_policy.predict_action(env=env, state_obs=obs)
+        chunk_status = (
+            f"visual reach delta {float(sum(value * value for value in predicted_error) ** 0.5):.4f}m "
+            f"checkpoint {Path(config.visual_reach_checkpoint).name}"
+        )
     else:
         action = [float(value) for value in sample_action(env.action_space, (step % 120) / 119.0)]
     inference_latency_s = time.perf_counter() - action_started_at
     next_obs, reward, terminated, truncated, _info = env.step(action)
     return next_obs, action, float(reward), bool(terminated), bool(truncated), inference_latency_s, chunk_status
+
+
+def _reach_controller_action(env: Any) -> list[float]:
+    import numpy as np
+
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    target_site = model.site("reach_target").id
+    gripper_site = model.site("gripperframe").id
+    error = data.site_xpos[target_site] - data.site_xpos[gripper_site]
+    return _cartesian_error_controller_action(env, error)
+
+
+def _cartesian_error_controller_action(env: Any, error: Any) -> list[float]:
+    import mujoco
+    import numpy as np
+
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    gripper_site = model.site("gripperframe").id
+    jacp = np.zeros((3, model.nv))
+    jacr = np.zeros((3, model.nv))
+    mujoco.mj_jacSite(model, data, jacp, jacr, gripper_site)
+    bounded_error = np.clip(np.asarray(error, dtype=float), -0.25, 0.25)
+    joint_delta = np.linalg.pinv(jacp, rcond=1e-3) @ (2.0 * bounded_error)
+    action = np.asarray(data.qpos[: model.nu], dtype=float) + 0.05 * joint_delta[: model.nu]
+    low = np.asarray(env.action_space.low, dtype=float)
+    high = np.asarray(env.action_space.high, dtype=float)
+    return np.clip(action, low, high).astype(float).tolist()
+
+
+def _reach_status(env: Any) -> str:
+    import numpy as np
+
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    target = data.site_xpos[model.site("reach_target").id]
+    gripper = data.site_xpos[model.site("gripperframe").id]
+    return f"reach error {float(np.linalg.norm(target - gripper)):.4f}m"
+
+
+class VisualRLPolicyClient:
+    def __init__(
+        self,
+        checkpoint_path: Path,
+        camera_name: str,
+        width: int,
+        height: int,
+    ) -> None:
+        import mujoco
+
+        from physical_ai_agent.policies.so101_visual_actor_critic import (
+            load_so101_visual_actor_critic_checkpoint,
+        )
+
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Visual RL checkpoint does not exist: {checkpoint_path}")
+        self.model, self.metadata = load_so101_visual_actor_critic_checkpoint(checkpoint_path)
+        model_config = self.metadata.get("config", {}) if isinstance(self.metadata, dict) else {}
+        self.camera_name = camera_name or model_config.get("camera_name", "wrist_cam")
+        self.width = int(model_config.get("width", width))
+        self.height = int(model_config.get("height", height))
+        self.include_state = bool(model_config.get("include_state", True))
+        self.channel_first = bool(model_config.get("channel_first", True))
+        self._renderer: Any | None = None
+        self._mujoco = mujoco
+
+    def predict(self, *, env: Any, state_obs: Any) -> list[float]:
+        import numpy as np
+        import torch
+
+        if self._renderer is None:
+            self._renderer = self._mujoco.Renderer(
+                env.unwrapped.model,
+                height=self.height,
+                width=self.width,
+            )
+        observation = {"image": self._render_pixels(env)}
+        if self.include_state:
+            observation["state"] = np.asarray(state_obs, dtype=np.float32).reshape(-1)
+        with torch.no_grad():
+            action_packet = self.model.act(observation, deterministic=True)
+        return [float(value) for value in action_packet["action"].cpu().numpy()[0]]
+
+    def _render_pixels(self, env: Any) -> Any:
+        from physical_ai_agent.sim.so101_camera_input import _make_camera
+
+        self._renderer.update_scene(env.unwrapped.data, camera=_make_camera(env, self.camera_name))
+        pixels = self._renderer.render()
+        if self.channel_first:
+            return pixels.transpose(2, 0, 1)
+        return pixels
+
+    def close(self) -> None:
+        if self._renderer is not None:
+            self._renderer.close()
+
+
+class VisualReachPolicyClient:
+    def __init__(
+        self,
+        checkpoint_path: Path,
+        camera_name: str,
+        width: int,
+        height: int,
+    ) -> None:
+        import mujoco
+
+        from physical_ai_agent.policies.so101_visual_reach_delta import (
+            load_so101_visual_reach_delta_checkpoint,
+        )
+
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Visual reach checkpoint does not exist: {checkpoint_path}")
+        self.model, self.metadata = load_so101_visual_reach_delta_checkpoint(checkpoint_path)
+        model_config = self.metadata.get("config", {}) if isinstance(self.metadata, dict) else {}
+        self.camera_name = camera_name or model_config.get("camera_name", "top_down")
+        self.width = int(model_config.get("width", width))
+        self.height = int(model_config.get("height", height))
+        self.include_state = bool(model_config.get("include_state", True))
+        self.channel_first = bool(model_config.get("channel_first", True))
+        self._renderer: Any | None = None
+        self._mujoco = mujoco
+
+    def predict_action(self, *, env: Any, state_obs: Any) -> tuple[list[float], list[float]]:
+        import numpy as np
+        import torch
+
+        if self._renderer is None:
+            self._renderer = self._mujoco.Renderer(
+                env.unwrapped.model,
+                height=self.height,
+                width=self.width,
+            )
+        observation = {"image": self._render_pixels(env)}
+        if self.include_state:
+            observation["state"] = np.asarray(state_obs, dtype=np.float32).reshape(-1)
+        with torch.no_grad():
+            predicted_error = self.model(observation).detach().cpu().numpy()[0].astype(float)
+        action = _cartesian_error_controller_action(env, predicted_error)
+        return action, predicted_error.tolist()
+
+    def _render_pixels(self, env: Any) -> Any:
+        from physical_ai_agent.sim.so101_camera_input import _make_camera
+
+        self._renderer.update_scene(env.unwrapped.data, camera=_make_camera(env, self.camera_name))
+        pixels = self._renderer.render()
+        if self.channel_first:
+            return pixels.transpose(2, 0, 1)
+        return pixels
+
+    def close(self) -> None:
+        if self._renderer is not None:
+            self._renderer.close()
 
 
 class SmolVLAActionChunk:
@@ -560,7 +774,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--policy",
-        choices=["sample", "smolvla"],
+        choices=["sample", "reach", "smolvla", "visual-rl", "visual-reach"],
         default="sample",
         help="Action source for the live simulation.",
     )
@@ -576,6 +790,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--smolvla-worker-python",
         default="",
         help="Python executable for the isolated SmolVLA inference worker.",
+    )
+    parser.add_argument(
+        "--visual-policy-checkpoint",
+        default="_workspace/so101_visual_rl/train/so101_visual_rl_policy.pt",
+        help="Torch checkpoint produced by scripts/train_so101_visual_rl.py.",
+    )
+    parser.add_argument(
+        "--visual-policy-camera",
+        default="wrist_cam",
+        help="Camera name to render for the visual RL policy.",
+    )
+    parser.add_argument(
+        "--visual-reach-checkpoint",
+        default="_workspace/so101_visual_rl/reach_delta/so101_visual_reach_delta.pt",
+        help="Torch checkpoint produced by scripts/train_so101_visual_reach_delta.py.",
+    )
+    parser.add_argument(
+        "--visual-reach-camera",
+        default="top_down",
+        help="Camera name to render for the visual reach delta estimator.",
     )
     parser.add_argument(
         "--browser-only",
@@ -612,6 +846,10 @@ def main() -> None:
             allow_download=args.allow_download,
             smolvla_action_steps=args.smolvla_action_steps,
             smolvla_worker_python=args.smolvla_worker_python,
+            visual_policy_checkpoint=args.visual_policy_checkpoint,
+            visual_policy_camera=args.visual_policy_camera,
+            visual_reach_checkpoint=args.visual_reach_checkpoint,
+            visual_reach_camera=args.visual_reach_camera,
             browser_only=args.browser_only,
             show_inputs=args.show_inputs,
             input_width=args.input_width,
