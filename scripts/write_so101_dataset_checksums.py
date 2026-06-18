@@ -8,12 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-DATASET_ROOTS = {
-    "pick_train": Path("_workspace/so101_lerobot/pick_train50_top_wrist_256_seed98200"),
-    "pick_val": Path("_workspace/so101_lerobot/pick_val24_top_wrist_256_seed98100"),
-    "pick_place_train": Path("_workspace/so101_lerobot/pick_place_train50_top_wrist_256_seed99000"),
-    "pick_place_val": Path("_workspace/so101_lerobot/pick_place_val24_top_wrist_256_seed102000"),
-}
+DATASET_CONTRACT = Path("configs/so101/training_datasets/dataset_contract.json")
 
 
 def main() -> None:
@@ -33,12 +28,25 @@ def main() -> None:
         "note": "Raw dataset files are local artifacts and are intentionally excluded from git.",
         "datasets": {
             name: _dataset_entry(repo_root, name, root)
-            for name, root in DATASET_ROOTS.items()
+            for name, root in _dataset_roots_from_contract(repo_root).items()
         },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _dataset_roots_from_contract(repo_root: Path) -> dict[str, Path]:
+    contract_path = repo_root / DATASET_CONTRACT
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    roots: dict[str, Path] = {}
+    for dataset_name, dataset in contract.get("datasets", {}).items():
+        for split_name, split in (("train", dataset.get("train")), ("validation", dataset.get("validation"))):
+            if not isinstance(split, dict):
+                continue
+            suffix = "val" if split_name == "validation" else "train"
+            roots[f"{dataset_name}_{suffix}"] = Path(split["root"])
+    return roots
 
 
 def _dataset_entry(repo_root: Path, name: str, root: Path) -> dict[str, Any]:

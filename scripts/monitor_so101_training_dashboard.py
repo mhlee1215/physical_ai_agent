@@ -30,6 +30,11 @@ def main() -> None:
     parser.add_argument("--policy-device", default="mps", choices=["auto", "cpu", "mps", "cuda"])
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument(
+        "--checkpoint-root",
+        type=Path,
+        help="Checkpoint directory. Defaults to run-dir/checkpoints or run-dir/model/checkpoints.",
+    )
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--dataset-repo-id", required=True)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -46,8 +51,12 @@ def main() -> None:
     parser.add_argument("--closed-loop-seed", type=int, default=98100)
     parser.add_argument("--closed-loop-width", type=int, default=256)
     parser.add_argument("--closed-loop-height", type=int, default=256)
+    parser.add_argument("--closed-loop-task-prompt")
+    parser.add_argument("--closed-loop-eval-skill-mode", choices=["picklift", "pick_from_top_cube"], default="picklift")
+    parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--policy-num-steps", type=int, default=10)
+    parser.add_argument("--closed-loop-input-grid-count", type=int, default=16)
     parser.add_argument("--torch-seed", type=int, default=1000)
     parser.add_argument("--skip-closed-loop", action="store_true")
     parser.add_argument(
@@ -82,7 +91,8 @@ def main() -> None:
 
 
 def check_once(args: argparse.Namespace, run_dir: Path) -> None:
-    checkpoints = _checkpoint_names(run_dir)
+    checkpoint_root = _checkpoint_root(args, run_dir)
+    checkpoints = _checkpoint_names(checkpoint_root)
     latest_checkpoint = checkpoints[-1] if checkpoints else None
     _append_event(
         run_dir,
@@ -98,63 +108,65 @@ def check_once(args: argparse.Namespace, run_dir: Path) -> None:
         return
     train_process = _process_status(args.train_pid_file)
     for checkpoint in checkpoints:
-        if checkpoint == "last" or _validation_already_recorded(run_dir, checkpoint):
+        if checkpoint == "last":
             continue
         checkpoint_step = _checkpoint_to_step(checkpoint)
         if checkpoint_step is not None and checkpoint_step < args.min_validation_step:
             continue
-        policy_path = run_dir / "checkpoints" / checkpoint / "pretrained_model"
+        policy_path = checkpoint_root / checkpoint / "pretrained_model"
         if not policy_path.exists():
             continue
-        if args.defer_validation_while_training and train_process.get("alive"):
-            if not _validation_deferred_already_recorded(run_dir, checkpoint):
-                _append_event(
-                    run_dir,
-                    {
-                        "kind": "validation_deferred",
-                        "detail": (
-                            f"deferred validation for checkpoint {checkpoint}; "
-                            "training is still active on the same GPU"
-                        ),
-                        "checkpoint": checkpoint,
-                        "train_process": train_process,
-                    },
-                )
-                _update_loss_summary(run_dir, checkpoint)
-            continue
-        _append_event(
-            run_dir,
-            {
-                "kind": "validation_start",
-                "detail": f"computing validation loss for checkpoint {checkpoint}",
-                "checkpoint": checkpoint,
-            },
-        )
-        try:
-            report = _run_validation_loss(args, run_dir, checkpoint, policy_path)
-        except Exception as exc:  # noqa: BLE001
+        validation_recorded = _validation_already_recorded(run_dir, checkpoint)
+        if not validation_recorded:
+            if args.defer_validation_while_training and train_process.get("alive"):
+                if not _validation_deferred_already_recorded(run_dir, checkpoint):
+                    _append_event(
+                        run_dir,
+                        {
+                            "kind": "validation_deferred",
+                            "detail": (
+                                f"deferred validation for checkpoint {checkpoint}; "
+                                "training is still active on the same GPU"
+                            ),
+                            "checkpoint": checkpoint,
+                            "train_process": train_process,
+                        },
+                    )
+                    _update_loss_summary(run_dir, checkpoint)
+                continue
             _append_event(
                 run_dir,
                 {
-                    "kind": "validation_error",
-                    "detail": str(exc),
+                    "kind": "validation_start",
+                    "detail": f"computing validation loss for checkpoint {checkpoint}",
                     "checkpoint": checkpoint,
                 },
             )
-            continue
-        _append_validation_metric(run_dir, checkpoint, report, args)
-        _append_event(
-            run_dir,
-            {
-                "kind": "validation_done",
-                "detail": f"checkpoint {checkpoint} val_loss={report['loss_mean']:.6f}",
-                "checkpoint": checkpoint,
-                "loss": report["loss_mean"],
-            },
-        )
-        _update_loss_summary(run_dir, checkpoint)
-        if _maybe_stop_training_on_overfit(args, run_dir, checkpoint, train_process):
-            continue
+            try:
+                report = _run_validation_loss(args, run_dir, checkpoint, policy_path)
+            except Exception as exc:  # noqa: BLE001
+                _append_event(
+                    run_dir,
+                    {
+                        "kind": "validation_error",
+                        "detail": str(exc),
+                        "checkpoint": checkpoint,
+                    },
+                )
+                continue
+            _append_validation_metric(run_dir, checkpoint, report, args)
+            _append_event(
+                run_dir,
+                {
+                    "kind": "validation_done",
+                    "detail": f"checkpoint {checkpoint} val_loss={report['loss_mean']:.6f}",
+                    "checkpoint": checkpoint,
+                    "loss": report["loss_mean"],
+                },
+            )
+            _update_loss_summary(run_dir, checkpoint)
+            if _maybe_stop_training_on_overfit(args, run_dir, checkpoint, train_process):
+                continue
         if not _should_run_closed_loop(args, run_dir, checkpoint):
             continue
         _append_event(
@@ -261,10 +273,30 @@ def _run_closed_loop_eval(
         str(args.policy_n_action_steps),
         "--policy-num-steps",
         str(args.policy_num_steps),
+        "--sample-input-grid-count",
+        str(args.closed_loop_input_grid_count),
         "--torch-seed",
         str(args.torch_seed),
-        "--no-record-rollout-gif",
+        "--eval-skill-mode",
+        args.closed_loop_eval_skill_mode,
+        "--record-rollout-gif" if args.closed_loop_record_rollout_gif else "--no-record-rollout-gif",
     ]
+    if args.closed_loop_task_prompt:
+        cmd.extend(["--task-prompt", args.closed_loop_task_prompt])
+    if args.closed_loop_eval_skill_mode == "pick_from_top_cube":
+        cmd.extend(
+            [
+                "--no-sweep",
+                "--pick-start-min-actual-z",
+                "0.05",
+                "--pick-start-min-actual-abs-y",
+                "0.015",
+                "--pick-start-max-actual-abs-y",
+                "0.065",
+                "--pick-start-z-offset",
+                "0.7",
+            ]
+        )
     if args.local_files_only:
         cmd.append("--local-files-only")
     completed = subprocess.run(cmd, cwd=args.repo_root, env=_runtime_env(args), text=True, capture_output=True, check=False)
@@ -282,14 +314,24 @@ def _runtime_env(args: argparse.Namespace) -> dict[str, str]:
         "HF_DATASETS_CACHE": str(args.repo_root / "_workspace" / "hf_datasets_cache"),
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
+        "MUJOCO_GL": os.environ.get("MUJOCO_GL", "egl"),
+        "PYOPENGL_PLATFORM": os.environ.get("PYOPENGL_PLATFORM", "egl"),
     }
     if args.policy_device == "cpu":
         env["CUDA_VISIBLE_DEVICES"] = ""
     return env
 
 
-def _checkpoint_names(run_dir: Path) -> list[str]:
-    checkpoints_dir = run_dir / "checkpoints"
+def _checkpoint_root(args: argparse.Namespace, run_dir: Path) -> Path:
+    if args.checkpoint_root is not None:
+        return args.checkpoint_root if args.checkpoint_root.is_absolute() else run_dir / args.checkpoint_root
+    for candidate in (run_dir / "checkpoints", run_dir / "model" / "checkpoints"):
+        if candidate.exists():
+            return candidate
+    return run_dir / "checkpoints"
+
+
+def _checkpoint_names(checkpoints_dir: Path) -> list[str]:
     if not checkpoints_dir.exists():
         return []
     return sorted(path.name for path in checkpoints_dir.iterdir() if path.is_dir() and path.name.isdigit())
@@ -466,13 +508,66 @@ def _append_closed_loop_metric(run_dir: Path, checkpoint: str, report: dict[str,
         "step": _checkpoint_to_step(checkpoint),
         "checkpoint": checkpoint,
         "success_rate": report.get("success_rate"),
+        "env_success_rate": report.get("env_success_rate"),
         "grasp_rate": report.get("grasp_rate"),
+        "eval_skill_mode": report.get("eval_skill_mode"),
+        "task_prompt": report.get("task_prompt"),
         "episodes": len(report.get("episodes") or []),
         "duration_s": report.get("duration_s"),
         "report_path": report.get("report_path"),
         "policy_rollout_config": report.get("policy_rollout_config"),
     }
     _append_jsonl(run_dir / "metrics" / "closed_loop_metrics.jsonl", row)
+    _write_closed_loop_tensorboard(run_dir, row, report)
+
+
+def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: dict[str, Any]) -> None:
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+    except Exception:
+        return
+
+    log_dir = run_dir / "tensorboard" / "so101_smolvla"
+    step = int(row.get("step") or 0)
+    with SummaryWriter(log_dir=str(log_dir)) as writer:
+        for key in ("success_rate", "grasp_rate", "episodes", "duration_s"):
+            value = row.get(key)
+            if isinstance(value, (int, float)):
+                writer.add_scalar(f"closed_loop/{key}", float(value), global_step=step)
+        for camera_name, image_path in _first_closed_loop_input_grid_paths(report).items():
+            image = _read_hwc_image(Path(image_path))
+            if image is not None:
+                writer.add_image(
+                    f"closed_loop/input_{camera_name}_grid",
+                    image,
+                    global_step=step,
+                    dataformats="HWC",
+                )
+
+
+def _first_closed_loop_input_grid_paths(report: dict[str, Any]) -> dict[str, str]:
+    for episode in report.get("episodes") or []:
+        paths = episode.get("input_grid_paths")
+        if isinstance(paths, dict) and paths:
+            return {str(key): str(value) for key, value in paths.items()}
+    return {}
+
+
+def _read_hwc_image(path: Path) -> Any | None:
+    if not path.exists():
+        return None
+    try:
+        import imageio.v2 as imageio
+
+        return imageio.imread(path)
+    except Exception:
+        try:
+            import numpy as np
+            from PIL import Image
+
+            return np.asarray(Image.open(path).convert("RGB"))
+        except Exception:
+            return None
 
 
 def _update_loss_summary(run_dir: Path, checkpoint: str | None) -> None:

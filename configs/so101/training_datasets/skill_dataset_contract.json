@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "description": "SO101 agentic primitive datasets. These are additive skill segments and must not replace the official full-task datasets without explicit user approval.",
+  "policy": {
+    "camera_contract": {
+      "observation.images.camera1": "egocentric_cam",
+      "observation.images.camera2": "wrist_cam",
+      "observation.images.camera3": "wrist_cam duplicate"
+    },
+    "camera_pose_contract": {
+      "observation.images.camera1": {
+        "role": "egocentric_cam",
+        "must_not_change_without_user_approval": true,
+        "pose": {
+          "type": "free",
+          "lookat": [0.245, 0.11, 0.035],
+          "distance": 0.63,
+          "azimuth": 270,
+          "elevation": -82,
+          "rotation_degrees": 90
+        }
+      }
+    },
+    "image_shape_chw": [3, 256, 256],
+    "state_shape": [6],
+    "action_shape": [6]
+  },
+  "datasets": {
+    "move_over_cube": {
+      "task": "move_over_cube",
+      "description": "Move the fully closed gripper from a randomized arm pose to at least 5 cm above the visible cube.",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-move-over-cube-train100-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/move_over_cube_train100_ego_wrist_256_seed110000",
+        "expected_episodes": 100
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-move-over-cube-valid25-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/move_over_cube_valid25_ego_wrist_256_seed111000",
+        "expected_episodes": 25
+      }
+    },
+    "pick_from_top_cube": {
+      "task": "pick_from_top_cube",
+      "description": "Start with the fully closed gripper at least 5 cm above the visible cube, correct, grasp, and lift.",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-pick-from-top-cube-train100-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_from_top_cube_train100_ego_wrist_256_seed112000",
+        "expected_episodes": 100
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-pick-from-top-cube-valid25-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_from_top_cube_valid25_ego_wrist_256_seed113000",
+        "expected_episodes": 25
+      }
+    }
+  }
+}

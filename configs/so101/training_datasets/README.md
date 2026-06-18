@@ -28,21 +28,38 @@ Config fields:
 - `augmentation`: optional train-time sampling augmentation defaults. Supported
   fields are `state_jitter_std`, `state_jitter_arm_only`,
   `state_dropout_prob`, `state_dropout_keep_gripper`,
-  `action_dropout_prob`, `image_camera_dropout_prob`,
-  `image_patch_dropout_prob`, and `gpu_image_augmentation`.
-  Dropout defaults should usually stay explicit at `0.0` until an experiment
-  intentionally enables them. Validation data is not augmented.
+  `image_camera_dropout_prob`, `image_patch_dropout_prob`,
+  `image_patch_mask_ratio`, and `gpu_image_augmentation`. SO101 training configs
+  should include moderate train-time augmentation by default. Validation and
+  closed-loop test data must stay unaugmented.
 
 Dropout locations:
 
 - `state_dropout_prob`: zeros random dimensions in `observation.state`.
   `state_dropout_keep_gripper=true` preserves the gripper channel.
-- `action_dropout_prob`: zeros random dimensions in the teacher `action`
-  tensor during training.
 - `image_camera_dropout_prob`: with `gpu_image_augmentation=true`, zeros a
   whole `observation.images.*` camera frame for selected batch items.
 - `image_patch_dropout_prob`: with `gpu_image_augmentation=true`, zeros one
   random image patch for selected batch items.
+- `image_patch_mask_ratio`: with `gpu_image_augmentation=true`, masks this
+  fraction of an 8x8 patch grid for every image sample.
+- Do not add action-label dropout to SO101 BC dataset configs. If action chunks
+  need smoothing, use an explicit predicted-action temporal smoothness loss or
+  inference-time temporal ensembling/chunk smoothing.
+
+Default moderate train-time preset:
+
+```json
+{
+  "state_jitter_std": 0.003,
+  "state_dropout_prob": 0.02,
+  "state_dropout_keep_gripper": true,
+  "image_camera_dropout_prob": 0.0,
+  "image_patch_dropout_prob": 0.0,
+  "image_patch_mask_ratio": 0.15,
+  "gpu_image_augmentation": true
+}
+```
 
 CLI args still win. If an arg is already present after `--`, the launcher does
 not overwrite it from the dataset config.
@@ -52,6 +69,21 @@ Dataset checksums:
 - `checksums.json` records compact metadata and SHA-256 checksums for the local
   SO101 LeRobot datasets. Raw dataset files live under `_workspace/` and are
   intentionally excluded from git.
+- `dataset_contract.json` is the source of truth for SO101 dataset semantics.
+  It defines the required camera mapping and the required train/validation
+  splits for:
+  `pick_cube`, `pick_and_place_cube`, `pick_cube_grip_focus`, and
+  `pick_and_place_cube_grip_focus`.
+- `skill_dataset_contract.json` is the additive source of truth for agentic
+  primitive datasets. These skill datasets, such as `move_over_cube` and
+  `pick_from_top_cube`, must not replace the full-task datasets unless the user
+  explicitly approves that change.
+- Do not change dataset roots, camera mapping, task semantics, split names, or
+  start-mode semantics without explicit user approval. If a change is needed,
+  ask first and record the approval in the PR summary.
+- Required camera mapping is fixed as:
+  `camera1 = egocentric_cam`, `camera2 = wrist_cam`, and
+  `camera3 = wrist_cam duplicate` when the third camera feature is present.
 - Regenerate after rebuilding datasets:
 
 ```bash

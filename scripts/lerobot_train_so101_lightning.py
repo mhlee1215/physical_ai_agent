@@ -18,13 +18,19 @@ from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.sampler import EpisodeAwareSampler
-from lerobot.datasets.utils import cycle
+try:
+    from lerobot.datasets.utils import cycle
+except ImportError:
+    from itertools import cycle
 from lerobot.optim.factory import make_optimizer_and_scheduler
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.scripts.lerobot_train import make_dataset
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
 from lerobot.utils.random_utils import set_seed
-from lerobot.utils.train_utils import get_step_checkpoint_dir, save_checkpoint, update_last_checkpoint
+try:
+    from lerobot.utils.train_utils import get_step_checkpoint_dir, load_training_state, save_checkpoint, update_last_checkpoint
+except ModuleNotFoundError:
+    from lerobot.common.train_utils import get_step_checkpoint_dir, load_training_state, save_checkpoint, update_last_checkpoint
 
 from physical_ai_agent.lerobot_sampling_augmentation import (
     SamplingAugmentationConfig,
@@ -55,13 +61,14 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--so101-state-jitter-arm-only", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--so101-state-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-state-dropout-keep-gripper", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--so101-action-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-image-camera-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-image-patch-dropout-prob", type=float, default=0.0)
+    parser.add_argument("--so101-image-patch-mask-ratio", type=float, default=0.0)
     parser.add_argument("--so101-gpu-image-augmentation", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--so101-action-prefix-loss-steps", type=int, default=0)
     parser.add_argument("--so101-action-prefix-loss-weight", type=float, default=1.0)
     parser.add_argument("--so101-image-cache-dir", type=Path)
+    parser.add_argument("--validation-image-cache-dir", type=Path)
     parser.add_argument("--so101-augmentation-report", type=Path)
     parser.add_argument("--tensorboard-log-dir", type=Path)
     parser.add_argument("--lightning-precision", default="16-mixed")
@@ -114,9 +121,9 @@ def _apply_augmentation_env(args: argparse.Namespace) -> None:
     os.environ["SO101_STATE_JITTER_ARM_ONLY"] = "1" if args.so101_state_jitter_arm_only else "0"
     os.environ["SO101_STATE_DROPOUT_PROB"] = str(args.so101_state_dropout_prob)
     os.environ["SO101_STATE_DROPOUT_KEEP_GRIPPER"] = "1" if args.so101_state_dropout_keep_gripper else "0"
-    os.environ["SO101_ACTION_DROPOUT_PROB"] = str(args.so101_action_dropout_prob)
     os.environ["SO101_IMAGE_CAMERA_DROPOUT_PROB"] = str(args.so101_image_camera_dropout_prob)
     os.environ["SO101_IMAGE_PATCH_DROPOUT_PROB"] = str(args.so101_image_patch_dropout_prob)
+    os.environ["SO101_IMAGE_PATCH_MASK_RATIO"] = str(args.so101_image_patch_mask_ratio)
     os.environ["SO101_GPU_IMAGE_AUGMENTATION"] = "1" if args.so101_gpu_image_augmentation else "0"
     if args.so101_image_cache_dir is not None:
         os.environ["SO101_IMAGE_CACHE_DIR"] = str(args.so101_image_cache_dir)
@@ -161,6 +168,12 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         policy = policy.wrap_with_peft(peft_cli_overrides=dataclasses.asdict(cfg.peft))
     preprocessor, postprocessor = _make_processors(cfg, dataset, policy)
     optimizer, scheduler = make_optimizer_and_scheduler(cfg, policy)
+    resume_step = 0
+    if cfg.resume:
+        checkpoint_path = _resolve_resume_checkpoint_path(cfg)
+        resume_step, optimizer, scheduler = load_training_state(checkpoint_path, optimizer, scheduler)
+        logging.info("Resumed LeRobot training state from %s at step %s", checkpoint_path, resume_step)
+        print(f"Resumed LeRobot training state from {checkpoint_path} at step {resume_step}", flush=True)
 
     dataloader = _make_dataloader(cfg, dataset)
     validation_dataloader = _make_validation_dataloader(cfg, wrapper_args)
@@ -195,6 +208,7 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         input_image_cameras=_parse_csv(wrapper_args.log_input_image_cameras),
         log_input_images_every_n_steps=int(wrapper_args.log_input_images_every_n_steps),
         log_input_metadata_every_n_steps=_metadata_log_interval(wrapper_args),
+        initial_step=resume_step,
     )
     tb_log_dir = (wrapper_args.tensorboard_log_dir or cfg.output_dir / "tensorboard").resolve()
     logger = TensorBoardLogger(save_dir=str(tb_log_dir), name="so101_smolvla", version="")
@@ -208,15 +222,17 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         postprocessor=postprocessor,
         save_freq=int(cfg.save_freq),
         enabled=bool(cfg.save_checkpoint),
+        initial_step=resume_step,
     )
     callbacks.append(checkpoint_callback)
     log_every_n_steps = wrapper_args.lightning_log_every_n_steps or max(1, int(cfg.log_freq))
+    remaining_steps = max(0, int(cfg.steps) - int(resume_step))
     trainer = Trainer(
         accelerator=wrapper_args.lightning_accelerator,
         devices=_parse_devices(wrapper_args.lightning_devices),
         strategy=wrapper_args.lightning_strategy,
         precision=wrapper_args.lightning_precision,
-        max_steps=int(cfg.steps),
+        max_steps=remaining_steps,
         logger=logger,
         callbacks=callbacks,
         log_every_n_steps=log_every_n_steps,
@@ -229,6 +245,9 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     if wrapper_args.so101_augmentation_report is not None:
         write_sampling_augmentation_report(wrapper_args.so101_augmentation_report, augmentation, sys.argv[1:])
     logging.info("TensorBoard logs: %s", logger.log_dir)
+    if remaining_steps <= 0:
+        logging.info("No remaining steps: cfg.steps=%s resume_step=%s", cfg.steps, resume_step)
+        return
     trainer.fit(module, train_dataloaders=dataloader)
     checkpoint_callback.save_final(trainer)
 
@@ -260,10 +279,72 @@ def _add_tensorboard_custom_scalars(logger: Any) -> None:
         return
     experiment.add_custom_scalars(
         {
+            "important_metrics": {
+                "train_val_loss": ["Multiline", ["^important/loss$"]],
+            },
             "loss": {
-                "train_vs_val": ["Multiline", ["train/loss", "val/loss"]],
-            }
+                "train_vs_val": ["Multiline", ["^train/loss$", "^val/loss$"]],
+            },
+            "closed_loop": {
+                "success_grasp": [
+                    "Multiline",
+                    ["closed_loop/success_rate", "closed_loop/grasp_rate"],
+                ],
+            },
+            "action_chunk_smoothness": {
+                "teacher_vs_predicted_jitter": [
+                    "Multiline",
+                    [
+                        "^val/action_jitter/predicted/jerk_abs_mean$",
+                        "^val/action_jitter/teacher/jerk_abs_mean$",
+                        "^val/action_jitter/predicted/delta_l2_step_mean$",
+                        "^val/action_jitter/teacher/delta_l2_step_mean$",
+                    ],
+                ],
+                "predicted_to_teacher_ratio": [
+                    "Multiline",
+                    [
+                        "^val/action_jitter/ratio/jerk_abs_mean$",
+                        "^val/action_jitter/ratio/path_to_endpoint_ratio_mean$",
+                    ],
+                ],
+            },
+            "throughput": {
+                "samples_per_second": ["Multiline", ["train/samples_per_s"]],
+                "seconds_per_sample": [
+                    "Multiline",
+                    ["train/update_s_per_sample", "train/data_s_per_sample"],
+                ],
+                "batch_size": ["Multiline", ["train/batch_size", "val/batch_size"]],
+            },
+            "system": {
+                "gpu_utilization": ["Multiline", ["system/gpu_util_percent"]],
+                "gpu_memory": [
+                    "Multiline",
+                    ["system/gpu_memory_used_mb", "system/gpu_memory_used_percent"],
+                ],
+            },
         }
+    )
+
+
+def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig) -> Path:
+    if cfg.checkpoint_path is not None:
+        return Path(cfg.checkpoint_path)
+    checkpoint_root = Path(cfg.output_dir) / "checkpoints"
+    last_path = checkpoint_root / "last"
+    if last_path.exists():
+        return last_path
+    candidates = [
+        path
+        for path in checkpoint_root.iterdir()
+        if path.is_dir() and path.name.isdigit()
+    ] if checkpoint_root.exists() else []
+    if candidates:
+        return max(candidates, key=lambda path: int(path.name))
+    raise ValueError(
+        "cfg.resume is true but no checkpoint path was provided and no checkpoint "
+        f"was found under {checkpoint_root}"
     )
 
 
@@ -332,6 +413,7 @@ def _make_dataloader(cfg: TrainPipelineConfig, dataset: Any) -> torch.utils.data
         pin_memory=str(cfg.policy.device) == "cuda",
         drop_last=False,
         prefetch_factor=2 if cfg.num_workers > 0 else None,
+        persistent_workers=cfg.num_workers > 0,
     )
 
 
@@ -350,6 +432,8 @@ def _make_validation_dataloader(
         delta_timestamps=delta_timestamps,
         video_backend=cfg.dataset.video_backend,
     )
+    if wrapper_args.validation_image_cache_dir is not None:
+        dataset = PredecodedImageCacheDataset(dataset, wrapper_args.validation_image_cache_dir)
     return torch.utils.data.DataLoader(
         dataset,
         num_workers=wrapper_args.validation_num_workers,
@@ -358,6 +442,7 @@ def _make_validation_dataloader(
         pin_memory=str(cfg.policy.device) == "cuda",
         drop_last=False,
         prefetch_factor=2 if wrapper_args.validation_num_workers > 0 else None,
+        persistent_workers=wrapper_args.validation_num_workers > 0,
     )
 
 
@@ -375,11 +460,88 @@ def _validation_epoch_interval(args: argparse.Namespace, step_interval: int) -> 
     return 0 if value is None else max(0, int(value))
 
 
+def _scalar_value(value: Any) -> float | None:
+    if torch.is_tensor(value) and value.numel() == 1:
+        return float(value.detach().cpu())
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
 def _metadata_log_interval(args: argparse.Namespace) -> int:
     value = args.log_input_metadata_every_n_steps
     if value is None:
         value = args.log_input_images_every_n_steps
     return max(0, int(value))
+
+
+def _action_chunk_jitter_metrics(policy: Any, batch: dict[str, Any]) -> dict[str, Any]:
+    if ACTION not in batch or not hasattr(policy, "predict_action_chunk"):
+        return {}
+    was_training = getattr(policy, "training", False)
+    try:
+        if hasattr(policy, "reset"):
+            policy.reset()
+        predicted = policy.predict_action_chunk(batch)
+        teacher = batch[ACTION]
+        predicted = _valid_action_chunk(predicted, batch.get("action_is_pad"))
+        teacher = _valid_action_chunk(teacher, batch.get("action_is_pad"))
+        predicted_metrics = _chunk_smoothness_metrics(predicted.detach().float())
+        teacher_metrics = _chunk_smoothness_metrics(teacher.detach().float())
+        return {
+            "predicted": predicted_metrics,
+            "teacher": teacher_metrics,
+            "ratio": _smoothness_ratios(predicted_metrics, teacher_metrics),
+        }
+    finally:
+        if was_training:
+            policy.train()
+
+
+def _valid_action_chunk(chunk: torch.Tensor, action_is_pad: torch.Tensor | None) -> torch.Tensor:
+    if action_is_pad is None:
+        return chunk
+    valid = (~action_is_pad).to(device=chunk.device)
+    if valid.ndim == 2 and valid.shape[1] == chunk.shape[1]:
+        return chunk * valid.unsqueeze(-1).to(chunk.dtype)
+    return chunk
+
+
+def _chunk_smoothness_metrics(chunks: torch.Tensor) -> dict[str, float]:
+    if chunks.ndim != 3 or chunks.shape[1] < 2:
+        return {}
+    delta = chunks[:, 1:, :] - chunks[:, :-1, :]
+    jerk = delta[:, 1:, :] - delta[:, :-1, :] if delta.shape[1] > 1 else torch.zeros_like(delta)
+    endpoint = chunks[:, -1, :] - chunks[:, 0, :]
+    path = delta.norm(dim=-1).sum(dim=-1)
+    endpoint_norm = endpoint.norm(dim=-1)
+    path_ratio = path / endpoint_norm.clamp_min(1e-8)
+    return {
+        "delta_abs_mean": float(delta.abs().mean().detach().cpu()),
+        "delta_rms": float(torch.sqrt((delta * delta).mean()).detach().cpu()),
+        "delta_l2_step_mean": float(delta.norm(dim=-1).mean().detach().cpu()),
+        "jerk_abs_mean": float(jerk.abs().mean().detach().cpu()),
+        "jerk_rms": float(torch.sqrt((jerk * jerk).mean()).detach().cpu()),
+        "path_length_mean": float(path.mean().detach().cpu()),
+        "path_to_endpoint_ratio_mean": float(path_ratio.mean().detach().cpu()),
+    }
+
+
+def _smoothness_ratios(predicted: dict[str, float], teacher: dict[str, float]) -> dict[str, float]:
+    keys = (
+        "delta_abs_mean",
+        "delta_rms",
+        "delta_l2_step_mean",
+        "jerk_abs_mean",
+        "jerk_rms",
+        "path_length_mean",
+        "path_to_endpoint_ratio_mean",
+    )
+    return {
+        key: float(predicted[key]) / max(float(teacher[key]), 1e-8)
+        for key in keys
+        if key in predicted and key in teacher
+    }
 
 
 class _SO101LightningModule:
@@ -401,6 +563,7 @@ class _SO101LightningModule:
         input_image_cameras: tuple[str, ...],
         log_input_images_every_n_steps: int,
         log_input_metadata_every_n_steps: int,
+        initial_step: int = 0,
     ) -> Any:
         class SO101LightningModuleImpl(LightningModule):
             def __init__(self) -> None:
@@ -417,11 +580,13 @@ class _SO101LightningModule:
                 self.validation_step_interval = max(0, int(validation_step_interval))
                 self.validation_epoch_interval = max(0, int(validation_epoch_interval))
                 self.validation_iter: Any | None = None
-                self.train_batches_seen = 0
+                self.initial_step = max(0, int(initial_step))
+                self.train_batches_seen = self.initial_step
                 self.input_image_cameras = input_image_cameras
                 self.log_input_images_every_n_steps = max(0, int(log_input_images_every_n_steps))
                 self.log_input_metadata_every_n_steps = max(0, int(log_input_metadata_every_n_steps))
                 self._last_step_started = 0.0
+                self._colored_loss_writers: dict[str, Any] = {}
 
             def forward(self, batch: dict[str, Any]) -> Any:
                 return self.policy.forward(batch)
@@ -443,9 +608,33 @@ class _SO101LightningModule:
                     prefix_weight=self.action_prefix_loss_weight,
                 )
                 batch_size = _batch_size(batch)
+                update_s = time.perf_counter() - started
                 self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True, batch_size=batch_size)
-                self.log("train/update_s", time.perf_counter() - started, on_step=True, on_epoch=False, batch_size=batch_size)
+                self.log("train/batch_size", float(batch_size), on_step=True, on_epoch=False, batch_size=batch_size)
+                self.log("train/update_s", update_s, on_step=True, on_epoch=False, batch_size=batch_size)
                 self.log("train/data_s", dataloading_s, on_step=True, on_epoch=False, batch_size=batch_size)
+                self.log(
+                    "train/update_s_per_sample",
+                    _seconds_per_sample(update_s, batch_size),
+                    on_step=True,
+                    on_epoch=False,
+                    batch_size=batch_size,
+                )
+                self.log(
+                    "train/data_s_per_sample",
+                    _seconds_per_sample(dataloading_s, batch_size),
+                    on_step=True,
+                    on_epoch=False,
+                    batch_size=batch_size,
+                )
+                self.log(
+                    "train/samples_per_s",
+                    _samples_per_second(batch_size, update_s),
+                    on_step=True,
+                    on_epoch=False,
+                    batch_size=batch_size,
+                )
+                self._log_colored_loss_scalar("important/loss", loss, series="train")
                 for key, value in (output_dict or {}).items():
                     if key == "loss":
                         continue
@@ -465,7 +654,7 @@ class _SO101LightningModule:
                     return
                 epoch = int(getattr(self.trainer, "current_epoch", 0)) + 1
                 if epoch > 0 and epoch % self.validation_epoch_interval == 0:
-                    self._run_scheduled_validation(log_step=int(self.trainer.global_step))
+                    self._run_scheduled_validation(log_step=self._absolute_step())
 
             def _run_step_validation_if_due(self, *, completed_step: int) -> None:
                 if self.validation_dataloader is None or self.validation_step_interval <= 0:
@@ -491,6 +680,11 @@ class _SO101LightningModule:
                     },
                 }
 
+            def on_fit_end(self) -> None:
+                for writer in self._colored_loss_writers.values():
+                    writer.close()
+                self._colored_loss_writers.clear()
+
             def run_validation_batch(self, batch: dict[str, Any], *, log_step: int | None = None) -> Any:
                 was_training = self.policy.training
                 self.policy.eval()
@@ -505,14 +699,23 @@ class _SO101LightningModule:
                         prefix_steps=self.action_prefix_loss_steps,
                         prefix_weight=self.action_prefix_loss_weight,
                     )
+                    jitter_metrics = _action_chunk_jitter_metrics(self.policy, batch)
                 batch_size = _batch_size(batch)
                 self._log_validation_scalar("val/loss", loss, batch_size=batch_size, log_step=log_step)
+                self._log_colored_loss_scalar("important/loss", loss, series="val", log_step=log_step)
                 for key, value in (output_dict or {}).items():
                     if key == "loss":
                         continue
                     self._log_validation_scalar(f"val/{key}", value, batch_size=batch_size, log_step=log_step)
+                self._log_action_jitter_metrics(jitter_metrics, batch_size=batch_size, log_step=log_step)
                 if was_training:
                     self.policy.train()
+                self._log_validation_scalar(
+                    "val/batch_size",
+                    float(batch_size),
+                    batch_size=batch_size,
+                    log_step=log_step,
+                )
                 return loss
 
             def _log_validation_scalar(
@@ -539,6 +742,33 @@ class _SO101LightningModule:
                     return
                 self.log(tag, scalar, on_step=True, on_epoch=False, batch_size=batch_size)
 
+            def _log_colored_loss_scalar(
+                self,
+                tag: str,
+                value: Any,
+                *,
+                series: str,
+                log_step: int | None = None,
+            ) -> None:
+                scalar = _scalar_value(value)
+                if scalar is None:
+                    return
+                log_dir = Path(str(getattr(getattr(self, "logger", None), "log_dir", "")))
+                if not log_dir:
+                    return
+                run_dir = log_dir.parent / ("important_train_loss" if series == "train" else "important_val_loss")
+                writer = self._colored_loss_writers.get(str(run_dir))
+                if writer is None:
+                    try:
+                        from torch.utils.tensorboard import SummaryWriter
+                    except ModuleNotFoundError:
+                        return
+                    writer = SummaryWriter(log_dir=str(run_dir))
+                    self._colored_loss_writers[str(run_dir)] = writer
+                step = int(log_step if log_step is not None else getattr(self.trainer, "global_step", 0))
+                writer.add_scalar(tag, scalar, global_step=step)
+                writer.flush()
+
             def _log_input_images(
                 self,
                 batch: dict[str, Any],
@@ -549,6 +779,8 @@ class _SO101LightningModule:
                 if self.log_input_images_every_n_steps <= 0:
                     return
                 step = int(log_step if log_step is not None else getattr(self.trainer, "global_step", 0))
+                if log_step is None:
+                    step += self.initial_step
                 if step % self.log_input_images_every_n_steps != 0:
                     return
                 experiment = getattr(getattr(self, "logger", None), "experiment", None)
@@ -558,7 +790,7 @@ class _SO101LightningModule:
                     key = f"observation.images.{camera}"
                     if key not in batch:
                         continue
-                    image = _tensorboard_image(batch[key])
+                    image = _tensorboard_image_grid(batch[key]) if split == "val" else _tensorboard_image(batch[key])
                     if image is None:
                         continue
                     experiment.add_image(f"{split}/input_{camera}", image, global_step=step)
@@ -574,6 +806,8 @@ class _SO101LightningModule:
                 if self.log_input_metadata_every_n_steps <= 0:
                     return
                 step = int(log_step if log_step is not None else getattr(self.trainer, "global_step", 0))
+                if log_step is None:
+                    step += self.initial_step
                 if step % self.log_input_metadata_every_n_steps != 0:
                     return
                 experiment = getattr(getattr(self, "logger", None), "experiment", None)
@@ -603,6 +837,29 @@ class _SO101LightningModule:
                             global_step=step,
                         )
 
+            def _log_action_jitter_metrics(
+                self,
+                metrics: dict[str, Any],
+                *,
+                batch_size: int,
+                log_step: int | None,
+            ) -> None:
+                for namespace in ("predicted", "teacher", "ratio"):
+                    values = metrics.get(namespace)
+                    if not isinstance(values, dict):
+                        continue
+                    for key, value in values.items():
+                        if isinstance(value, (int, float)):
+                            self._log_validation_scalar(
+                                f"val/action_jitter/{namespace}/{key}",
+                                float(value),
+                                batch_size=batch_size,
+                                log_step=log_step,
+                            )
+
+            def _absolute_step(self) -> int:
+                return self.initial_step + int(getattr(self.trainer, "global_step", 0))
+
         return SO101LightningModuleImpl()
 
 
@@ -617,6 +874,7 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             postprocessor: Any,
             save_freq: int,
             enabled: bool,
+            initial_step: int,
         ) -> None:
             super().__init__()
             self.cfg = cfg
@@ -625,6 +883,7 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             self.postprocessor = postprocessor
             self.save_freq = max(1, int(save_freq))
             self.enabled = enabled
+            self.initial_step = max(0, int(initial_step))
             self.saved_steps: set[int] = set()
 
         def on_train_batch_end(
@@ -636,15 +895,16 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             batch_idx: int,
         ) -> None:
             del outputs, batch, batch_idx
-            step = int(trainer.global_step)
+            step = self.initial_step + int(trainer.global_step)
             if not self.enabled or step <= 0:
                 return
             if step % self.save_freq == 0 or step >= int(self.cfg.steps):
                 self._save(trainer, pl_module, step)
 
         def save_final(self, trainer: Any) -> None:
-            if self.enabled and int(trainer.global_step) > 0:
-                self._save(trainer, self.policy_module, int(trainer.global_step))
+            step = self.initial_step + int(trainer.global_step)
+            if self.enabled and step > 0:
+                self._save(trainer, self.policy_module, step)
 
         def _save(self, trainer: Any, pl_module: Any, step: int) -> None:
             if step in self.saved_steps:
@@ -764,6 +1024,15 @@ def _batch_size(batch: dict[str, Any]) -> int:
     return 1
 
 
+def _seconds_per_sample(seconds: float, batch_size: int) -> float:
+    return float(seconds) / max(1, int(batch_size))
+
+
+def _samples_per_second(batch_size: int, seconds: float) -> float:
+    seconds = max(float(seconds), 1e-12)
+    return float(max(1, int(batch_size))) / seconds
+
+
 def _parse_csv(value: str | None) -> tuple[str, ...]:
     if not value:
         return ()
@@ -796,6 +1065,41 @@ def _tensorboard_image(value: Any) -> torch.Tensor | None:
     return image.clamp(0.0, 1.0)
 
 
+def _tensorboard_image_grid(value: Any, *, max_images: int = 16) -> torch.Tensor | None:
+    if not torch.is_tensor(value):
+        return None
+    tensor = value.detach()
+    if tensor.ndim == 3:
+        return _tensorboard_image(tensor)
+    while tensor.ndim > 4:
+        tensor = tensor[0]
+    if tensor.ndim != 4:
+        return _tensorboard_image(tensor)
+    if tensor.shape[1] not in (1, 3, 4) and tensor.shape[-1] in (1, 3, 4):
+        tensor = tensor.permute(0, 3, 1, 2)
+    if tensor.shape[1] == 4:
+        tensor = tensor[:, :3]
+    if tensor.shape[1] not in (1, 3):
+        return _tensorboard_image(tensor)
+    images = tensor[: max(1, int(max_images))].float().cpu()
+    if images.numel() == 0:
+        return None
+    if float(images.max()) > 2.0:
+        images = images / 255.0
+    elif float(images.min()) < 0.0:
+        images = (images + 1.0) / 2.0
+    images = images.clamp(0.0, 1.0)
+    rows = int(max(1, round(float(images.shape[0]) ** 0.5)))
+    cols = int((images.shape[0] + rows - 1) // rows)
+    c, h, w = int(images.shape[1]), int(images.shape[2]), int(images.shape[3])
+    grid = torch.zeros((c, rows * h, cols * w), dtype=images.dtype)
+    for index, image in enumerate(images):
+        row = index // cols
+        col = index % cols
+        grid[:, row * h : (row + 1) * h, col * w : (col + 1) * w] = image
+    return grid
+
+
 def _camera_contract_markdown() -> str:
     return "\n".join(
         [
@@ -803,7 +1107,7 @@ def _camera_contract_markdown() -> str:
             "",
             "| model input | source view |",
             "| --- | --- |",
-            "| observation.images.camera1 | top_down |",
+            "| observation.images.camera1 | egocentric_cam |",
             "| observation.images.camera2 | wrist_cam |",
             "| observation.images.camera3 | wrist_cam duplicate |",
         ]

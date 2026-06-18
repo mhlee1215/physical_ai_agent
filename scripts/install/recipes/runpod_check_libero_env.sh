@@ -114,6 +114,8 @@ for package, module in [
     ("mujoco", "mujoco"),
     ("av", "av"),
     ("num2words", "num2words"),
+    ("lightning", "lightning"),
+    ("tensorboard", "tensorboard"),
     ("so101-nexus-mujoco", "so101_nexus_mujoco"),
     ("so101-nexus-core", "so101_nexus_core"),
 ]:

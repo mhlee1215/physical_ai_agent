@@ -29,13 +29,49 @@ adding SO101 sample-time controls:
 - image color, sharpness, affine jitter;
 - camera-level image dropout with `--so101-image-camera-dropout-prob`;
 - patch image dropout with `--so101-image-patch-dropout-prob`;
+- patch-ratio image masking with `--so101-image-patch-mask-ratio`;
 - motor-state jitter with `--so101-state-jitter-std`;
-- motor-state dropout with `--so101-state-dropout-prob`;
-- optional action dropout with `--so101-action-dropout-prob`.
+- motor-state dropout with `--so101-state-dropout-prob`.
 
 Image augmentation should run after the batch is moved to CUDA/MPS whenever
 possible. CPU-side decoding should be avoided during repeated epochs by using
-the predecoded image cache.
+the predecoded image cache. Training configs should use moderate augmentation
+by default. Validation and closed-loop test datasets should remain unaugmented.
+Do not use teacher-action dropout for SO101 BC runs; it corrupts the label.
+
+Default SO101 training configs use this moderate preset unless an experiment
+explicitly overrides it:
+
+```json
+{
+  "state_jitter_std": 0.003,
+  "state_dropout_prob": 0.02,
+  "state_dropout_keep_gripper": true,
+  "image_camera_dropout_prob": 0.0,
+  "image_patch_dropout_prob": 0.0,
+  "image_patch_mask_ratio": 0.15,
+  "gpu_image_augmentation": true
+}
+```
+
+`image_patch_mask_ratio` masks a fraction of an 8x8 image patch grid for every
+training image sample. It is distinct from legacy `image_patch_dropout_prob`,
+which only masks one random patch for selected samples and should stay `0.0`
+unless a specific ablation requires it.
+
+## Action Smoothness
+
+Action smoothness is not data augmentation. Do not use action-label dropout to
+make predicted chunks smoother. If generated action chunks are jittery, prefer:
+
+- training-side temporal smoothness loss on predicted chunks, such as
+  `lambda_smooth * mean((pred_action[t+1] - pred_action[t]) ** 2)`, starting
+  with a small weight like `0.01`;
+- inference-side temporal ensembling or chunk-boundary smoothing for rollout
+  execution.
+
+Report smoothness loss separately from supervised BC loss in TensorBoard when it
+is enabled.
 
 ## Dataset Expansion
 

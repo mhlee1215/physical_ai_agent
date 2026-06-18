@@ -195,6 +195,19 @@ policy is:
   step/checkpoint first, run the rollout, then resume from the latest checkpoint.
 - Smoke closed-loop runs may be recorded separately in the dashboard, but they
   must be labeled as smoke and must not be treated as validation-set success.
+- SO101 SmolVLA training configs must enable moderate train-time augmentation
+  by default. The current moderate preset is `state_jitter_std=0.003`,
+  `state_dropout_prob=0.02`, `image_patch_mask_ratio=0.15`,
+  `gpu_image_augmentation=true`, `image_camera_dropout_prob=0.0`, and
+  `image_patch_dropout_prob=0.0`. Validation and closed-loop test inputs stay
+  unaugmented. Do not use teacher-action dropout in BC runs.
+- If SO101 action chunks look jittery, handle it as action smoothness, not data
+  augmentation. Preferred training-side regularization is an explicit temporal
+  smoothness loss on predicted action chunks, for example
+  `lambda_smooth * mean((pred_action[t+1] - pred_action[t]) ** 2)` with a small
+  starting weight such as `0.01`. Preferred inference-side mitigation is
+  temporal ensembling or chunk-boundary smoothing. Do not corrupt teacher action
+  labels to get smoother motion.
 - Pipeline PRs that touch SO101 SmolVLA training, dataset generation,
   augmentation, caching, validation, or closed-loop scheduling must run:
   `PYTHONPATH=src python3 -B -m unittest tests.test_so101_smolvla_pipeline tests.test_lerobot_sampling_augmentation`.
@@ -204,6 +217,28 @@ policy is:
   `configs/so101/smolvla_pickplace_contact_train100_manifest.json`: doubled
   train episodes, 256x256 visual inputs, no sticky grasp, and recovery/off-
   nominal states to cover privileged-teacher versus visual-student drift.
+- SO101 dataset generation must preserve the real-hardware-aligned camera
+  contract: `observation.images.camera1` is `egocentric_cam`,
+  `observation.images.camera2` is `wrist_cam`, and `camera3` is a wrist-camera
+  duplicate only for three-camera SmolVLA configs. The current approved
+  `camera1` egocentric pose is important and must not be changed without
+  explicit user approval:
+  `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`.
+  `top_down` remains teacher/debug evidence only and must not be exported as a
+  SmolVLA student input.
+- Default SO101 dataset handoff is local export, local checksum/manifest
+  verification, then upload/sync to RunPod for active GPU training. RunPod
+  should not be the primary MuJoCo/LeRobot teacher-data exporter because remote
+  export on the network volume is slow and does not benefit much from the GPU.
+  Use RunPod-side dataset generation only when local export is blocked, when a
+  remote-only dependency is required, or when the user explicitly asks for it.
+- For future SO101 RunPod handoffs, create a deterministic reusable tarball from
+  the locally verified export before upload. Keep the tarball in a local
+  handoff/staging location with a checksum or manifest reference, then upload
+  that tarball to RunPod and unpack it there. If upload or remote setup fails,
+  retry from the tarball rather than re-exporting or regenerating the dataset.
+  The tarball is a transfer artifact, not the long-term source of truth; the
+  local verified export and manifest remain authoritative.
 - RunPod experiment-data lifecycle is download, verify, then delete. Past
   remote experiment results are not required. For every new RunPod teacher
   dataset, validation dataset, predecoded cache, checkpoint, rollout video,

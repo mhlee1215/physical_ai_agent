@@ -23,6 +23,7 @@ from train_so101_wrist_ego_visual_servo import (
     _make_policy_renderers,
     _make_teacher_renderers,
     _restore_sim_state,
+    _set_qpos,
     _snapshot_sim_state,
     _solve_pregrasp_qpos_variant,
     object_visible_to_teacher,
@@ -78,6 +79,14 @@ def main() -> None:
         help="Optional off-nominal recovery frames before the nominal approach. Default 0 preserves legacy data.",
     )
     parser.add_argument("--recovery-joint-std", type=float, default=0.04)
+    parser.add_argument("--start-mode", choices=["home", "near-gripper"], default="home")
+    parser.add_argument("--near-gripper-joint-std", type=float, default=0.025)
+    parser.add_argument("--randomize-cube-start", action="store_true")
+    parser.add_argument("--cube-start-min-radius", type=float, default=0.10)
+    parser.add_argument("--cube-start-max-radius", type=float, default=0.22)
+    parser.add_argument("--cube-start-angle-half-range-deg", type=float, default=75.0)
+    parser.add_argument("--candidate-selection", choices=["best", "random-top"], default="best")
+    parser.add_argument("--candidate-top-k", type=int, default=4)
     parser.add_argument(
         "--approach-mode",
         choices=["joint", "side-slide"],
@@ -131,6 +140,14 @@ def main() -> None:
         settle_after_release_steps=args.settle_after_release_steps,
         recovery_steps=args.recovery_steps,
         recovery_joint_std=args.recovery_joint_std,
+        start_mode=args.start_mode,
+        near_gripper_joint_std=args.near_gripper_joint_std,
+        randomize_cube_start=args.randomize_cube_start,
+        cube_start_min_radius=args.cube_start_min_radius,
+        cube_start_max_radius=args.cube_start_max_radius,
+        cube_start_angle_half_range_deg=args.cube_start_angle_half_range_deg,
+        candidate_selection=args.candidate_selection,
+        candidate_top_k=args.candidate_top_k,
         approach_mode=args.approach_mode,
         side_approach_retreat=args.side_approach_retreat,
         min_success_frames=args.min_success_frames,
@@ -166,6 +183,14 @@ def export_pickplace_teacher_rollouts(
     settle_after_release_steps: int,
     recovery_steps: int,
     recovery_joint_std: float,
+    start_mode: str,
+    near_gripper_joint_std: float,
+    randomize_cube_start: bool,
+    cube_start_min_radius: float,
+    cube_start_max_radius: float,
+    cube_start_angle_half_range_deg: float,
+    candidate_selection: str,
+    candidate_top_k: int,
     approach_mode: str,
     side_approach_retreat: float,
     min_success_frames: int,
@@ -225,6 +250,14 @@ def export_pickplace_teacher_rollouts(
             _apply_object_shape(env, shape)
             env.reset(seed=candidate_seed)
             _apply_object_shape(env, shape)
+            if bool(randomize_cube_start):
+                _randomize_cube_start(
+                    env,
+                    seed=candidate_seed,
+                    min_radius=cube_start_min_radius,
+                    max_radius=cube_start_max_radius,
+                    angle_half_range_deg=cube_start_angle_half_range_deg,
+                )
             _install_cube_pose_alias(env)
             candidate_seed += 1
             teacher_visible = object_visible_to_teacher(env, teacher_renderers, config=config)
@@ -247,7 +280,12 @@ def export_pickplace_teacher_rollouts(
                     flush=True,
                 )
                 continue
-            best = max(candidates, key=lambda item: float(item["meta"].get("score", -1e9)))
+            best = _select_pickplace_candidate(
+                candidates,
+                seed=candidate_seed - 1,
+                selection=candidate_selection,
+                top_k=candidate_top_k,
+            )
             summary = _write_pickplace_episode(
                 dataset=dataset,
                 env=env,
@@ -267,6 +305,8 @@ def export_pickplace_teacher_rollouts(
                 settle_after_release_steps=settle_after_release_steps,
                 recovery_steps=recovery_steps,
                 recovery_joint_std=recovery_joint_std,
+                start_mode=start_mode,
+                near_gripper_joint_std=near_gripper_joint_std,
                 approach_mode=approach_mode,
                 side_approach_retreat=side_approach_retreat,
                 min_success_frames=min_success_frames,
@@ -339,6 +379,14 @@ def export_pickplace_teacher_rollouts(
             "settle_after_release_steps": int(settle_after_release_steps),
             "recovery_steps": int(recovery_steps),
             "recovery_joint_std": float(recovery_joint_std),
+            "start_mode": str(start_mode),
+            "near_gripper_joint_std": float(near_gripper_joint_std),
+            "randomize_cube_start": bool(randomize_cube_start),
+            "cube_start_min_radius": float(cube_start_min_radius),
+            "cube_start_max_radius": float(cube_start_max_radius),
+            "cube_start_angle_half_range_deg": float(cube_start_angle_half_range_deg),
+            "candidate_selection": str(candidate_selection),
+            "candidate_top_k": int(candidate_top_k),
             "approach_mode": str(approach_mode),
             "side_approach_retreat": float(side_approach_retreat),
             "min_success_frames": int(min_success_frames),
@@ -358,7 +406,7 @@ def export_pickplace_teacher_rollouts(
             "reason": "lerobot/smolvla_base expects camera2 to carry the eye-in-hand/wrist view; camera3 duplicates camera2 when requested.",
         },
         "feature_mapping": {
-            "observation.images.camera1": "top_down",
+            "observation.images.camera1": "egocentric_cam",
             "observation.images.camera2": "wrist_cam",
             **({"observation.images.camera3": "wrist_cam duplicate"} if include_camera3_duplicate else {}),
             "observation.state": "SO101 qpos/control state",
@@ -366,13 +414,13 @@ def export_pickplace_teacher_rollouts(
             "task": TASK,
         },
         "official_camera_contract": {
-            "dataset": "SO101 top+wrist visual-student dataset aligned to official SO100/SVLA feature order",
-            "dataset_features": ["observation.images.top", "observation.images.wrist"],
+            "dataset": "SO101 egocentric+wrist visual-student dataset aligned to the local real-hardware policy cameras",
+            "dataset_features": ["observation.images.egocentric_cam", "observation.images.wrist_cam"],
             "rename_map": {
-                "observation.images.top": "observation.images.camera1",
+                "observation.images.egocentric_cam": "observation.images.camera1",
                 "observation.images.wrist_cam": "observation.images.camera2",
             },
-            "local_verification": "Student inputs use top_down and wrist_cam; teacher renderers may still use egocentric_cam and scene_3d for data generation checks.",
+            "local_verification": "Student inputs use egocentric_cam and wrist_cam; top_down is debug-only and must not be fed to SmolVLA.",
         },
         "episodes": episode_summaries,
         "skipped": skipped,
@@ -460,6 +508,30 @@ def _apply_object_shape(env: Any, shape: dict[str, Any]) -> None:
     data.qvel[:] = 0.0
     unwrapped._initial_obj_z = float(half_extents[2])
     mujoco.mj_forward(model, data)
+
+
+def _randomize_cube_start(
+    env: Any,
+    *,
+    seed: int,
+    min_radius: float,
+    max_radius: float,
+    angle_half_range_deg: float,
+) -> None:
+    import mujoco
+
+    rng = np.random.default_rng(int(seed) + 2309)
+    min_radius = max(0.02, float(min_radius))
+    max_radius = max(min_radius, float(max_radius))
+    radius = float(rng.uniform(min_radius, max_radius))
+    angle = float(rng.uniform(-np.deg2rad(float(angle_half_range_deg)), np.deg2rad(float(angle_half_range_deg))))
+    xy = np.asarray([radius * np.cos(angle), radius * np.sin(angle)], dtype=float)
+    unwrapped = env.unwrapped
+    addr = int(unwrapped._cube_qpos_addr)
+    unwrapped.data.qpos[addr : addr + 2] = xy
+    unwrapped.data.qpos[addr + 2] = float(unwrapped.cube_half_size)
+    unwrapped.data.qvel[:] = 0.0
+    mujoco.mj_forward(unwrapped.model, unwrapped.data)
 
 
 def _set_box_body_mass_and_inertia(model: Any, *, body_id: int, half_extents: np.ndarray, mass: float) -> None:
@@ -578,6 +650,25 @@ def _make_pickplace_grasp_targets(env: Any, *, grasp_filter: str = "all") -> lis
     ]
 
 
+def _select_pickplace_candidate(
+    candidates: list[dict[str, Any]],
+    *,
+    seed: int,
+    selection: str,
+    top_k: int,
+) -> dict[str, Any]:
+    if not candidates:
+        raise ValueError("no pick-place candidates")
+    if selection == "best":
+        return max(candidates, key=lambda item: float(item["meta"].get("score", -1e9)))
+    if selection == "random-top":
+        ordered = sorted(candidates, key=lambda item: float(item["meta"].get("score", -1e9)), reverse=True)
+        pool = ordered[: max(1, min(int(top_k), len(ordered)))]
+        rng = np.random.default_rng(int(seed) + 4513)
+        return pool[int(rng.integers(0, len(pool)))]
+    raise ValueError(f"unknown candidate_selection: {selection}")
+
+
 def _candidate_matches_grasp_filter(spec: dict[str, Any], grasp_filter: str) -> bool:
     mode = str(spec["mode"])
     if grasp_filter == "all":
@@ -678,6 +769,8 @@ def _write_pickplace_episode(
     settle_after_release_steps: int,
     recovery_steps: int,
     recovery_joint_std: float,
+    start_mode: str,
+    near_gripper_joint_std: float,
     approach_mode: str,
     side_approach_retreat: float,
     min_success_frames: int,
@@ -693,6 +786,16 @@ def _write_pickplace_episode(
     q_start[-1] = _open_gripper_value(env)
     q_open = np.clip(q_open.astype(np.float32), env.action_space.low, env.action_space.high)
     q_open[-1] = _open_gripper_value(env)
+    if start_mode == "near-gripper":
+        q_start = _make_near_gripper_qpos(
+            env,
+            q_open,
+            seed=seed,
+            joint_std=near_gripper_joint_std,
+        )
+        _set_qpos(env, q_start)
+    elif start_mode != "home":
+        raise ValueError(f"unknown start_mode: {start_mode}")
     q_close = q_open.copy()
     q_close[-1] = float(env.action_space.low[-1])
     q_release = q_close.copy()
@@ -937,6 +1040,7 @@ def _write_pickplace_episode(
         "q_open": [float(value) for value in q_open],
         "q_side_pre": [float(value) for value in q_side_pre] if q_side_pre is not None else None,
         "approach_mode": approach_mode,
+        "start_mode": start_mode,
         "phase_counts": phase_counts,
         "mean_action_delta": float(np.mean(action_deltas)) if action_deltas else 0.0,
         "max_action_delta": float(np.max(action_deltas)) if action_deltas else 0.0,
@@ -949,6 +1053,17 @@ def _make_recovery_qpos(env: Any, q_start: np.ndarray, *, seed: int, joint_std: 
     if offset.shape[0] >= 6:
         offset[-1] = 0.0
     target = np.asarray(q_start, dtype=np.float32) + offset
+    target[-1] = _open_gripper_value(env)
+    return np.clip(target, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
+def _make_near_gripper_qpos(env: Any, q_open: np.ndarray, *, seed: int, joint_std: float) -> np.ndarray:
+    rng = np.random.default_rng(int(seed) + 9117)
+    target = np.asarray(q_open, dtype=np.float32).copy()
+    jitter = rng.normal(0.0, max(0.0, float(joint_std)), size=target.shape).astype(np.float32)
+    if jitter.shape[0] >= 6:
+        jitter[-1] = 0.0
+    target = target + jitter
     target[-1] = _open_gripper_value(env)
     return np.clip(target, env.action_space.low, env.action_space.high).astype(np.float32)
 
@@ -1027,9 +1142,9 @@ def _make_pickplace_frame(
     include_camera3_duplicate: bool,
 ) -> dict[str, Any]:
     wrist = _render_camera(env, renderers["wrist_cam"], "wrist_cam")
-    top = _render_camera(env, renderers["top_down"], "top_down")
+    ego = _render_camera(env, renderers["egocentric_cam"], "egocentric_cam")
     frame = {
-        "observation.images.camera1": top,
+        "observation.images.camera1": ego,
         "observation.images.camera2": wrist,
         "observation.state": _current_qpos(env).astype(np.float32),
         "action": np.asarray(action, dtype=np.float32),

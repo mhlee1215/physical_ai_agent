@@ -16,6 +16,9 @@ from train_so101_wrist_ego_visual_servo import (
     _current_qpos,
     _make_policy_renderers,
     _make_teacher_renderers,
+    _restore_sim_state,
+    _set_qpos,
+    _snapshot_sim_state,
     make_high_contrast_picklift_env,
     make_teacher_targets,
     object_visible_to_teacher,
@@ -23,6 +26,11 @@ from train_so101_wrist_ego_visual_servo import (
 
 
 TASK = "Grasp the visible cube and lift it up."
+SKILL_TASKS = {
+    "pick_cube": TASK,
+    "move_over_cube": "Move the gripper over the visible cube.",
+    "pick_from_top_cube": "From above the visible cube, grasp it and lift it up.",
+}
 STATE_NAMES = [
     "shoulder_pan",
     "shoulder_lift",
@@ -51,6 +59,92 @@ def main() -> None:
     parser.add_argument("--settle-steps", type=int, default=10)
     parser.add_argument("--close-steps", type=int, default=42)
     parser.add_argument("--lift-steps", type=int, default=58)
+    parser.add_argument("--start-mode", choices=["home", "near-gripper"], default="home")
+    parser.add_argument("--near-gripper-joint-std", type=float, default=0.025)
+    parser.add_argument(
+        "--skill-mode",
+        choices=sorted(SKILL_TASKS),
+        default="pick_cube",
+        help="Export the full pick skill or one of its agentic primitive segments.",
+    )
+    parser.add_argument(
+        "--random-start-joint-std",
+        type=float,
+        default=0.55,
+        help="Joint-space std used for move_over_cube random starts.",
+    )
+    parser.add_argument(
+        "--move-success-tcp-dist",
+        type=float,
+        default=0.085,
+        help="Max TCP-to-object distance accepted for move_over_cube success.",
+    )
+    parser.add_argument(
+        "--move-target-z-offset",
+        type=float,
+        default=0.075,
+        help="Approximate Cartesian z offset from grasp prepose for move_over_cube/pick_from_top starts.",
+    )
+    parser.add_argument(
+        "--closed-gripper-prob",
+        type=float,
+        default=0.45,
+        help="Probability that move_over_cube is exported with the gripper closed.",
+    )
+    parser.add_argument(
+        "--move-gripper-profile",
+        choices=["binary", "balanced", "closed"],
+        default="balanced",
+        help="Gripper qpos sampling for move_over_cube. balanced cycles through closed/intermediate/open gaps.",
+    )
+    parser.add_argument(
+        "--move-min-actual-z",
+        type=float,
+        default=0.0,
+        help="Reject move_over_cube episodes whose final TCP/cube world-z offset is smaller than this.",
+    )
+    parser.add_argument(
+        "--pick-start-joint-std",
+        type=float,
+        default=0.035,
+        help="Joint jitter around the elevated top pose for pick_from_top_cube starts.",
+    )
+    parser.add_argument(
+        "--pick-correction-steps",
+        type=int,
+        default=18,
+        help="Approach/correction steps from elevated top pose to grasp prepose before closing.",
+    )
+    parser.add_argument(
+        "--pick-start-min-abs-y",
+        type=float,
+        default=0.018,
+        help="Minimum absolute world-y offset between pick_from_top start TCP and cube.",
+    )
+    parser.add_argument(
+        "--pick-start-max-abs-y",
+        type=float,
+        default=0.055,
+        help="Maximum absolute world-y offset target between pick_from_top start TCP and cube.",
+    )
+    parser.add_argument(
+        "--pick-start-min-actual-abs-y",
+        type=float,
+        default=0.015,
+        help="Reject pick_from_top episodes whose actual start TCP/cube world-y offset is smaller than this.",
+    )
+    parser.add_argument(
+        "--pick-start-min-actual-z",
+        type=float,
+        default=0.0,
+        help="Reject pick_from_top episodes whose actual start TCP/cube world-z offset is smaller than this.",
+    )
+    parser.add_argument(
+        "--max-attempt-multiplier",
+        type=int,
+        default=8,
+        help="Maximum candidate seeds to try, as episodes * multiplier.",
+    )
     parser.add_argument("--no-camera3-duplicate", action="store_true")
     args = parser.parse_args()
 
@@ -69,6 +163,22 @@ def main() -> None:
         settle_steps=args.settle_steps,
         close_steps=args.close_steps,
         lift_steps=args.lift_steps,
+        start_mode=args.start_mode,
+        near_gripper_joint_std=args.near_gripper_joint_std,
+        skill_mode=args.skill_mode,
+        random_start_joint_std=args.random_start_joint_std,
+        move_success_tcp_dist=args.move_success_tcp_dist,
+        move_target_z_offset=args.move_target_z_offset,
+        closed_gripper_prob=args.closed_gripper_prob,
+        move_gripper_profile=args.move_gripper_profile,
+        move_min_actual_z=args.move_min_actual_z,
+        pick_start_joint_std=args.pick_start_joint_std,
+        pick_correction_steps=args.pick_correction_steps,
+        pick_start_min_abs_y=args.pick_start_min_abs_y,
+        pick_start_max_abs_y=args.pick_start_max_abs_y,
+        pick_start_min_actual_abs_y=args.pick_start_min_actual_abs_y,
+        pick_start_min_actual_z=args.pick_start_min_actual_z,
+        max_attempt_multiplier=args.max_attempt_multiplier,
         include_camera3_duplicate=not args.no_camera3_duplicate,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
@@ -90,6 +200,22 @@ def export_teacher_rollouts(
     settle_steps: int = 10,
     close_steps: int = 42,
     lift_steps: int = 58,
+    start_mode: str = "home",
+    near_gripper_joint_std: float = 0.025,
+    skill_mode: str = "pick_cube",
+    random_start_joint_std: float = 0.55,
+    move_success_tcp_dist: float = 0.085,
+    move_target_z_offset: float = 0.075,
+    closed_gripper_prob: float = 0.45,
+    move_gripper_profile: str = "balanced",
+    move_min_actual_z: float = 0.0,
+    pick_start_joint_std: float = 0.035,
+    pick_correction_steps: int = 18,
+    pick_start_min_abs_y: float = 0.018,
+    pick_start_max_abs_y: float = 0.055,
+    pick_start_min_actual_abs_y: float = 0.015,
+    pick_start_min_actual_z: float = 0.0,
+    max_attempt_multiplier: int = 8,
     include_camera3_duplicate: bool = True,
 ) -> dict[str, Any]:
     import shutil
@@ -118,6 +244,10 @@ def export_teacher_rollouts(
         image_writer_threads=0,
     )
 
+    if skill_mode not in SKILL_TASKS:
+        raise ValueError(f"unknown skill_mode: {skill_mode}")
+    task = SKILL_TASKS[skill_mode]
+
     config = WristEgoServoConfig(width=width, height=height)
     env = make_high_contrast_picklift_env()
     policy_renderers = _make_policy_renderers(env, config)
@@ -130,7 +260,7 @@ def export_teacher_rollouts(
     episode_summaries = []
     try:
         candidate_seed = seed
-        while exported < episodes and attempted < episodes * 8:
+        while exported < episodes and attempted < episodes * max_attempt_multiplier:
             attempted += 1
             env.reset(seed=candidate_seed)
             candidate_seed += 1
@@ -141,6 +271,12 @@ def export_teacher_rollouts(
                 skipped.append({"seed": candidate_seed - 1, "reason": "not_visible_after_sweep"})
                 continue
             candidates = make_teacher_targets(env)
+            if skill_mode in {"move_over_cube", "pick_from_top_cube"}:
+                candidates = [
+                    candidate
+                    for candidate in candidates
+                    if str(candidate["meta"].get("mode")) == "overhead"
+                ]
             if not candidates:
                 skipped.append({"seed": candidate_seed - 1, "reason": "no_successful_teacher_candidate"})
                 continue
@@ -160,6 +296,23 @@ def export_teacher_rollouts(
                 settle_steps=settle_steps,
                 close_steps=close_steps,
                 lift_steps=lift_steps,
+                start_mode=start_mode,
+                near_gripper_joint_std=near_gripper_joint_std,
+                skill_mode=skill_mode,
+                task=task,
+                episode_index=exported,
+                random_start_joint_std=random_start_joint_std,
+                move_success_tcp_dist=move_success_tcp_dist,
+                move_target_z_offset=move_target_z_offset,
+                closed_gripper_prob=closed_gripper_prob,
+                move_gripper_profile=move_gripper_profile,
+                move_min_actual_z=move_min_actual_z,
+                pick_start_joint_std=pick_start_joint_std,
+                pick_correction_steps=pick_correction_steps,
+                pick_start_min_abs_y=pick_start_min_abs_y,
+                pick_start_max_abs_y=pick_start_max_abs_y,
+                pick_start_min_actual_abs_y=pick_start_min_actual_abs_y,
+                pick_start_min_actual_z=pick_start_min_actual_z,
                 include_camera3_duplicate=include_camera3_duplicate,
             )
             if summary["success"]:
@@ -192,7 +345,8 @@ def export_teacher_rollouts(
         "operation": "export_so101_teacher_rollouts_lerobot",
         "root": str(root),
         "repo_id": repo_id,
-        "task": TASK,
+        "task": task,
+        "skill_mode": skill_mode,
         "requested_episodes": episodes,
         "exported_episodes": exported,
         "attempted_seeds": attempted,
@@ -204,6 +358,20 @@ def export_teacher_rollouts(
             "settle_steps": int(settle_steps),
             "close_steps": int(close_steps),
             "lift_steps": int(lift_steps),
+            "start_mode": str(start_mode),
+            "near_gripper_joint_std": float(near_gripper_joint_std),
+            "random_start_joint_std": float(random_start_joint_std),
+            "move_success_tcp_dist": float(move_success_tcp_dist),
+            "move_target_z_offset": float(move_target_z_offset),
+            "closed_gripper_prob": float(closed_gripper_prob),
+            "move_gripper_profile": str(move_gripper_profile),
+            "move_min_actual_z": float(move_min_actual_z),
+            "pick_start_joint_std": float(pick_start_joint_std),
+            "pick_correction_steps": int(pick_correction_steps),
+            "pick_start_min_abs_y": float(pick_start_min_abs_y),
+            "pick_start_max_abs_y": float(pick_start_max_abs_y),
+            "pick_start_min_actual_abs_y": float(pick_start_min_actual_abs_y),
+            "pick_start_min_actual_z": float(pick_start_min_actual_z),
         },
         "camera3_duplicate": {
             "enabled": bool(include_camera3_duplicate),
@@ -211,12 +379,21 @@ def export_teacher_rollouts(
             "reason": "lerobot/smolvla_base expects camera2 to carry the eye-in-hand/wrist view; camera3 duplicates camera2 when requested.",
         },
         "feature_mapping": {
-            "observation.images.camera1": "top_down",
+            "observation.images.camera1": "egocentric_cam",
             "observation.images.camera2": "wrist_cam",
             **({"observation.images.camera3": "wrist_cam duplicate"} if include_camera3_duplicate else {}),
             "observation.state": "SO101 qpos/control state",
             "action": "SO101 qpos target action",
-            "task": TASK,
+            "task": task,
+        },
+        "official_camera_contract": {
+            "dataset": "SO101 egocentric+wrist visual-student dataset aligned to the local real-hardware policy cameras",
+            "dataset_features": ["observation.images.egocentric_cam", "observation.images.wrist_cam"],
+            "rename_map": {
+                "observation.images.egocentric_cam": "observation.images.camera1",
+                "observation.images.wrist_cam": "observation.images.camera2",
+            },
+            "local_verification": "Student inputs use egocentric_cam and wrist_cam; top_down is debug-only and must not be fed to SmolVLA.",
         },
         "action_normalization": {
             "producer": "raw SO101 qpos target in simulator action-space units",
@@ -249,6 +426,23 @@ def _write_teacher_episode(
     settle_steps: int,
     close_steps: int,
     lift_steps: int,
+    start_mode: str,
+    near_gripper_joint_std: float,
+    skill_mode: str,
+    task: str,
+    episode_index: int,
+    random_start_joint_std: float,
+    move_success_tcp_dist: float,
+    move_target_z_offset: float,
+    closed_gripper_prob: float,
+    move_gripper_profile: str,
+    move_min_actual_z: float,
+    pick_start_joint_std: float,
+    pick_correction_steps: int,
+    pick_start_min_abs_y: float,
+    pick_start_max_abs_y: float,
+    pick_start_min_actual_abs_y: float,
+    pick_start_min_actual_z: float,
     include_camera3_duplicate: bool,
 ) -> dict[str, Any]:
     if teacher_style == "legacy":
@@ -262,6 +456,54 @@ def _write_teacher_episode(
             search_steps=search_steps,
             teacher_visible=teacher_visible,
             best_meta=best_meta,
+            task=task,
+            include_camera3_duplicate=include_camera3_duplicate,
+        )
+
+    if skill_mode == "move_over_cube":
+        return _write_move_over_cube_episode(
+            dataset=dataset,
+            env=env,
+            renderers=renderers,
+            q_open=q_open,
+            seed=seed,
+            search_steps=search_steps,
+            teacher_visible=teacher_visible,
+            best_meta=best_meta,
+            approach_steps=approach_steps,
+            settle_steps=settle_steps,
+            episode_index=episode_index,
+            random_start_joint_std=random_start_joint_std,
+            move_success_tcp_dist=move_success_tcp_dist,
+            move_target_z_offset=move_target_z_offset,
+            closed_gripper_prob=closed_gripper_prob,
+            move_gripper_profile=move_gripper_profile,
+            move_min_actual_z=move_min_actual_z,
+            task=task,
+            include_camera3_duplicate=include_camera3_duplicate,
+        )
+
+    if skill_mode == "pick_from_top_cube":
+        return _write_pick_from_top_cube_episode(
+            dataset=dataset,
+            env=env,
+            renderers=renderers,
+            q_open=q_open,
+            seed=seed,
+            search_steps=search_steps,
+            teacher_visible=teacher_visible,
+            best_meta=best_meta,
+            close_steps=close_steps,
+            lift_steps=lift_steps,
+            episode_index=episode_index,
+            move_target_z_offset=move_target_z_offset,
+            pick_start_joint_std=pick_start_joint_std,
+            pick_correction_steps=pick_correction_steps,
+            pick_start_min_abs_y=pick_start_min_abs_y,
+            pick_start_max_abs_y=pick_start_max_abs_y,
+            pick_start_min_actual_abs_y=pick_start_min_actual_abs_y,
+            pick_start_min_actual_z=pick_start_min_actual_z,
+            task=task,
             include_camera3_duplicate=include_camera3_duplicate,
         )
 
@@ -278,6 +520,9 @@ def _write_teacher_episode(
         settle_steps=settle_steps,
         close_steps=close_steps,
         lift_steps=lift_steps,
+        start_mode=start_mode,
+        near_gripper_joint_std=near_gripper_joint_std,
+        task=task,
         include_camera3_duplicate=include_camera3_duplicate,
     )
 
@@ -293,6 +538,7 @@ def _write_legacy_teacher_episode(
     search_steps: int,
     teacher_visible: bool,
     best_meta: dict[str, Any],
+    task: str,
     include_camera3_duplicate: bool,
 ) -> dict[str, Any]:
     q_close = q_open.copy()
@@ -314,6 +560,7 @@ def _write_legacy_teacher_episode(
                 env=env,
                 renderers=renderers,
                 action=np.asarray(action, dtype=np.float32),
+                task=task,
                 include_camera3_duplicate=include_camera3_duplicate,
             )
         )
@@ -356,12 +603,25 @@ def _write_staged_teacher_episode(
     settle_steps: int,
     close_steps: int,
     lift_steps: int,
+    start_mode: str,
+    near_gripper_joint_std: float,
+    task: str,
     include_camera3_duplicate: bool,
 ) -> dict[str, Any]:
     q_start = _current_qpos(env).astype(np.float32)
     q_start[-1] = _open_gripper_value(env)
     q_open = np.clip(q_open.astype(np.float32), env.action_space.low, env.action_space.high)
     q_open[-1] = _open_gripper_value(env)
+    if start_mode == "near-gripper":
+        q_start = _make_near_gripper_qpos(
+            env,
+            q_open,
+            seed=seed,
+            joint_std=near_gripper_joint_std,
+        )
+        _set_qpos(env, q_start)
+    elif start_mode != "home":
+        raise ValueError(f"unknown start_mode: {start_mode}")
     q_close = q_open.copy()
     q_close[-1] = float(env.action_space.low[-1])
     info: dict[str, Any] = env.unwrapped._get_info()
@@ -380,6 +640,7 @@ def _write_staged_teacher_episode(
                 env=env,
                 renderers=renderers,
                 action=action,
+                task=task,
                 include_camera3_duplicate=include_camera3_duplicate,
             )
         )
@@ -437,6 +698,292 @@ def _write_staged_teacher_episode(
         "q_open": [float(value) for value in q_open],
         "q_lift": [float(value) for value in q_lift],
         "teacher_style": "staged",
+        "start_mode": start_mode,
+        "phase_counts": phase_counts,
+        "mean_action_delta": float(np.mean(action_deltas)) if action_deltas else 0.0,
+        "max_action_delta": float(np.max(action_deltas)) if action_deltas else 0.0,
+    }
+
+
+def _write_move_over_cube_episode(
+    *,
+    dataset: Any,
+    env: Any,
+    renderers: dict[str, Any],
+    q_open: np.ndarray,
+    seed: int,
+    search_steps: int,
+    teacher_visible: bool,
+    best_meta: dict[str, Any],
+    approach_steps: int,
+    settle_steps: int,
+    episode_index: int,
+    random_start_joint_std: float,
+    move_success_tcp_dist: float,
+    move_target_z_offset: float,
+    closed_gripper_prob: float,
+    move_gripper_profile: str,
+    move_min_actual_z: float,
+    task: str,
+    include_camera3_duplicate: bool,
+) -> dict[str, Any]:
+    q_open = np.clip(q_open.astype(np.float32), env.action_space.low, env.action_space.high)
+    q_open[-1] = _open_gripper_value(env)
+    q_above = _offset_qpos_by_cartesian(env, q_open, np.asarray([0.0, 0.0, float(move_target_z_offset)]))
+    rng = np.random.default_rng(int(seed) + 4242)
+    gripper_value = _sample_move_gripper_value(
+        env,
+        rng=rng,
+        episode_index=episode_index,
+        profile=move_gripper_profile,
+        closed_gripper_prob=closed_gripper_prob,
+    )
+    q_above[-1] = gripper_value
+    q_above_delta = _tcp_to_object_delta_for_qpos(env, q_above)
+    q_above_z_offset = float(q_above_delta[2])
+    if q_above_z_offset < float(move_min_actual_z):
+        return {
+            "seed": seed,
+            "frames": 0,
+            "success": False,
+            "success_step": None,
+            "search_steps": search_steps,
+            "teacher_visible_in_any_camera": bool(teacher_visible),
+            "best_meta": best_meta,
+            "final_info": dict(env.unwrapped._get_info()),
+            "q_start": [float(value) for value in q_above],
+            "q_above": [float(value) for value in q_above],
+            "q_open": [float(value) for value in q_open],
+            "q_above_tcp_to_obj_delta": [float(value) for value in q_above_delta],
+            "q_above_z_offset": q_above_z_offset,
+            "move_min_actual_z": float(move_min_actual_z),
+            "gripper_value": float(gripper_value),
+            "gripper_closed": bool(gripper_value <= float(env.action_space.low[-1]) + 1e-5),
+            "gripper_profile": str(move_gripper_profile),
+            "gripper_bucket": None,
+            "teacher_style": "staged_skill",
+            "skill_mode": "move_over_cube",
+            "phase_counts": {"move": 0, "settle": 0},
+            "mean_action_delta": 0.0,
+            "max_action_delta": 0.0,
+        }
+    q_start = _make_random_start_qpos(env, q_above, seed=seed, joint_std=random_start_joint_std)
+    q_start[-1] = gripper_value
+    _set_qpos(env, q_start)
+    info: dict[str, Any] = env.unwrapped._get_info()
+    frames = 0
+    phase_counts = {"move": 0, "settle": 0}
+    action_deltas: list[float] = []
+    previous_action: np.ndarray | None = None
+
+    def add_step(action: np.ndarray, phase: str) -> None:
+        nonlocal frames, info, previous_action
+        action = np.clip(np.asarray(action, dtype=np.float32), env.action_space.low, env.action_space.high)
+        action[-1] = gripper_value
+        dataset.add_frame(
+            _make_lerobot_frame(
+                env=env,
+                renderers=renderers,
+                action=action,
+                task=task,
+                include_camera3_duplicate=include_camera3_duplicate,
+            )
+        )
+        frames += 1
+        phase_counts[phase] += 1
+        if previous_action is not None:
+            action_deltas.append(float(np.linalg.norm(action[:5] - previous_action[:5])))
+        previous_action = action.copy()
+        _obs, _reward, _terminated, _truncated, info = env.step(np.asarray(action, dtype=float))
+
+    approach_steps = max(1, int(approach_steps))
+    for index in range(approach_steps):
+        alpha = (index + 1) / float(approach_steps)
+        alpha = 0.5 - 0.5 * float(np.cos(np.pi * alpha))
+        add_step((1.0 - alpha) * q_start + alpha * q_above, "move")
+    for _ in range(max(0, int(settle_steps))):
+        add_step(q_above, "settle")
+
+    tcp_to_obj_dist = float(info.get("tcp_to_obj_dist", 1.0))
+    final_tcp_to_obj_delta = _tcp_to_object_delta(env)
+    final_z_offset = float(final_tcp_to_obj_delta[2])
+    success = tcp_to_obj_dist <= float(move_success_tcp_dist) and final_z_offset >= float(move_min_actual_z)
+    return {
+        "seed": seed,
+        "frames": frames,
+        "success": success,
+        "success_step": frames if success else None,
+        "search_steps": search_steps,
+        "teacher_visible_in_any_camera": bool(teacher_visible),
+        "best_meta": best_meta,
+        "final_info": {
+            "is_grasped": bool(info.get("is_grasped", False)),
+            "lift_height": float(info.get("lift_height", 0.0)),
+            "tcp_to_obj_dist": tcp_to_obj_dist,
+        },
+        "q_start": [float(value) for value in q_start],
+        "q_above": [float(value) for value in q_above],
+        "q_open": [float(value) for value in q_open],
+        "q_above_tcp_to_obj_delta": [float(value) for value in q_above_delta],
+        "q_above_z_offset": q_above_z_offset,
+        "final_tcp_to_obj_delta": [float(value) for value in final_tcp_to_obj_delta],
+        "final_z_offset": final_z_offset,
+        "move_min_actual_z": float(move_min_actual_z),
+        "gripper_value": float(gripper_value),
+        "gripper_closed": bool(gripper_value <= float(env.action_space.low[-1]) + 1e-5),
+        "gripper_profile": str(move_gripper_profile),
+        "gripper_bucket": int(episode_index % 5) if move_gripper_profile == "balanced" else None,
+        "teacher_style": "staged_skill",
+        "skill_mode": "move_over_cube",
+        "phase_counts": phase_counts,
+        "mean_action_delta": float(np.mean(action_deltas)) if action_deltas else 0.0,
+        "max_action_delta": float(np.max(action_deltas)) if action_deltas else 0.0,
+    }
+
+
+def _write_pick_from_top_cube_episode(
+    *,
+    dataset: Any,
+    env: Any,
+    renderers: dict[str, Any],
+    q_open: np.ndarray,
+    seed: int,
+    search_steps: int,
+    teacher_visible: bool,
+    best_meta: dict[str, Any],
+    close_steps: int,
+    lift_steps: int,
+    episode_index: int,
+    move_target_z_offset: float,
+    pick_start_joint_std: float,
+    pick_correction_steps: int,
+    pick_start_min_abs_y: float,
+    pick_start_max_abs_y: float,
+    pick_start_min_actual_abs_y: float,
+    pick_start_min_actual_z: float,
+    task: str,
+    include_camera3_duplicate: bool,
+) -> dict[str, Any]:
+    q_open = np.clip(q_open.astype(np.float32), env.action_space.low, env.action_space.high)
+    q_open[-1] = _open_gripper_value(env)
+    q_above = _offset_qpos_by_cartesian(env, q_open, np.asarray([0.0, 0.0, float(move_target_z_offset)]))
+    q_start = _make_near_gripper_qpos(env, q_above, seed=seed + 313, joint_std=pick_start_joint_std)
+    q_start, start_target_y_offset = _balance_pick_start_y_offset(
+        env,
+        q_start,
+        episode_index=episode_index,
+        min_abs_y=pick_start_min_abs_y,
+        max_abs_y=pick_start_max_abs_y,
+    )
+    q_start[-1] = float(env.action_space.low[-1])
+    _set_qpos(env, q_start)
+    start_tcp_to_obj_delta = _tcp_to_object_delta(env)
+    start_abs_y_offset = float(abs(start_tcp_to_obj_delta[1]))
+    start_z_offset = float(start_tcp_to_obj_delta[2])
+    if start_abs_y_offset < float(pick_start_min_actual_abs_y) or start_z_offset < float(pick_start_min_actual_z):
+        return {
+            "seed": seed,
+            "frames": 0,
+            "success": False,
+            "success_step": None,
+            "search_steps": search_steps,
+            "teacher_visible_in_any_camera": bool(teacher_visible),
+            "best_meta": best_meta,
+            "final_info": dict(env.unwrapped._get_info()),
+            "q_start": [float(value) for value in q_start],
+            "q_above": [float(value) for value in q_above],
+            "q_open": [float(value) for value in q_open],
+            "q_lift": [float(value) for value in q_open],
+            "start_target_y_offset": float(start_target_y_offset),
+            "start_tcp_to_obj_delta": [float(value) for value in start_tcp_to_obj_delta],
+            "start_abs_y_offset": start_abs_y_offset,
+            "start_z_offset": start_z_offset,
+            "pick_start_min_actual_abs_y": float(pick_start_min_actual_abs_y),
+            "pick_start_min_actual_z": float(pick_start_min_actual_z),
+            "teacher_style": "staged_skill",
+            "skill_mode": "pick_from_top_cube",
+            "phase_counts": {"correct": 0, "close": 0, "lift": 0},
+            "mean_action_delta": 0.0,
+            "max_action_delta": 0.0,
+        }
+    q_close = q_open.copy()
+    q_close[-1] = float(env.action_space.low[-1])
+    info: dict[str, Any] = env.unwrapped._get_info()
+    frames = 0
+    success_step = None
+    q_lift = q_close.copy()
+    phase_counts = {"correct": 0, "close": 0, "lift": 0}
+    action_deltas: list[float] = []
+    previous_action: np.ndarray | None = None
+
+    def add_step(action: np.ndarray, phase: str) -> bool:
+        nonlocal frames, info, success_step, previous_action
+        action = np.clip(np.asarray(action, dtype=np.float32), env.action_space.low, env.action_space.high)
+        dataset.add_frame(
+            _make_lerobot_frame(
+                env=env,
+                renderers=renderers,
+                action=action,
+                task=task,
+                include_camera3_duplicate=include_camera3_duplicate,
+            )
+        )
+        frames += 1
+        phase_counts[phase] += 1
+        if previous_action is not None:
+            action_deltas.append(float(np.linalg.norm(action[:5] - previous_action[:5])))
+        previous_action = action.copy()
+        _obs, _reward, terminated, truncated, info = env.step(np.asarray(action, dtype=float))
+        if bool(info.get("success", False)) and success_step is None:
+            success_step = frames
+        return bool(info.get("success", False)) or bool(terminated) or bool(truncated)
+
+    correction_steps = max(0, int(pick_correction_steps))
+    for index in range(correction_steps):
+        alpha = (index + 1) / float(max(1, correction_steps))
+        alpha = 0.5 - 0.5 * float(np.cos(np.pi * alpha))
+        action = (1.0 - alpha) * q_start + alpha * q_open
+        action[-1] = _open_gripper_value(env)
+        if add_step(action, "correct"):
+            break
+
+    if not bool(info.get("success", False)):
+        for _ in range(max(1, int(close_steps))):
+            if add_step(q_close, "close"):
+                break
+    if not bool(info.get("success", False)):
+        for _ in range(max(1, int(lift_steps))):
+            action = np.asarray(_cartesian_error_controller_action(env, np.asarray([0.0, 0.0, 0.12])), dtype=np.float32)
+            action[-1] = q_close[-1]
+            q_lift = np.clip(action, env.action_space.low, env.action_space.high).astype(np.float32)
+            if add_step(q_lift, "lift"):
+                break
+
+    return {
+        "seed": seed,
+        "frames": frames,
+        "success": bool(info.get("success", False)),
+        "success_step": success_step,
+        "search_steps": search_steps,
+        "teacher_visible_in_any_camera": bool(teacher_visible),
+        "best_meta": best_meta,
+        "final_info": {
+            "is_grasped": bool(info.get("is_grasped", False)),
+            "lift_height": float(info.get("lift_height", 0.0)),
+            "tcp_to_obj_dist": float(info.get("tcp_to_obj_dist", 0.0)),
+        },
+        "q_start": [float(value) for value in q_start],
+        "q_above": [float(value) for value in q_above],
+        "q_open": [float(value) for value in q_open],
+        "q_lift": [float(value) for value in q_lift],
+        "start_target_y_offset": float(start_target_y_offset),
+        "start_tcp_to_obj_delta": [float(value) for value in start_tcp_to_obj_delta],
+        "start_abs_y_offset": start_abs_y_offset,
+        "start_z_offset": start_z_offset,
+        "pick_start_min_actual_abs_y": float(pick_start_min_actual_abs_y),
+        "pick_start_min_actual_z": float(pick_start_min_actual_z),
+        "teacher_style": "staged_skill",
+        "skill_mode": "pick_from_top_cube",
         "phase_counts": phase_counts,
         "mean_action_delta": float(np.mean(action_deltas)) if action_deltas else 0.0,
         "max_action_delta": float(np.max(action_deltas)) if action_deltas else 0.0,
@@ -447,21 +994,128 @@ def _open_gripper_value(env: Any) -> float:
     return float(env.action_space.high[-1])
 
 
+def _sample_move_gripper_value(
+    env: Any,
+    *,
+    rng: np.random.Generator,
+    episode_index: int,
+    profile: str,
+    closed_gripper_prob: float,
+) -> float:
+    low = float(env.action_space.low[-1])
+    high = _open_gripper_value(env)
+    if profile == "closed":
+        return low
+    if profile == "balanced":
+        buckets = np.linspace(low, high, num=5, dtype=np.float32)
+        return float(buckets[int(episode_index) % len(buckets)])
+    return low if rng.random() < float(np.clip(closed_gripper_prob, 0.0, 1.0)) else high
+
+
+def _balance_pick_start_y_offset(
+    env: Any,
+    qpos: np.ndarray,
+    *,
+    episode_index: int,
+    min_abs_y: float,
+    max_abs_y: float,
+) -> tuple[np.ndarray, float]:
+    low = max(0.0, float(min_abs_y))
+    high = max(low, float(max_abs_y))
+    buckets = np.linspace(low, high, num=5, dtype=np.float32)
+    target_abs_y = float(buckets[int(episode_index) % len(buckets)])
+    sign = -1.0 if ((int(episode_index) // len(buckets)) % 2) else 1.0
+    target_y_offset = sign * target_abs_y
+    snapshot = _snapshot_sim_state(env)
+    try:
+        qpos = np.clip(np.asarray(qpos, dtype=np.float32), env.action_space.low, env.action_space.high)
+        _set_qpos(env, qpos)
+        current_y_offset = float(_tcp_to_object_delta(env)[1])
+        adjusted = _offset_qpos_by_cartesian(env, qpos, np.asarray([0.0, target_y_offset - current_y_offset, 0.0]))
+        adjusted[-1] = _open_gripper_value(env)
+        return adjusted, target_y_offset
+    finally:
+        _restore_sim_state(env, snapshot)
+
+
+def _tcp_to_object_delta(env: Any) -> np.ndarray:
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    site_id = model.site("gripperframe").id
+    obj_geom_id = int(env.unwrapped._obj_geom_id)
+    return np.asarray(data.site_xpos[site_id], dtype=float) - np.asarray(data.geom_xpos[obj_geom_id], dtype=float)
+
+
+def _tcp_to_object_delta_for_qpos(env: Any, qpos: np.ndarray) -> np.ndarray:
+    snapshot = _snapshot_sim_state(env)
+    try:
+        _set_qpos(env, np.clip(np.asarray(qpos, dtype=np.float32), env.action_space.low, env.action_space.high))
+        return _tcp_to_object_delta(env)
+    finally:
+        _restore_sim_state(env, snapshot)
+
+
+def _make_near_gripper_qpos(env: Any, q_open: np.ndarray, *, seed: int, joint_std: float) -> np.ndarray:
+    rng = np.random.default_rng(int(seed) + 9117)
+    target = np.asarray(q_open, dtype=np.float32).copy()
+    jitter = rng.normal(0.0, max(0.0, float(joint_std)), size=target.shape).astype(np.float32)
+    if jitter.shape[0] >= 6:
+        jitter[-1] = 0.0
+    target = target + jitter
+    target[-1] = _open_gripper_value(env)
+    return np.clip(target, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
+def _offset_qpos_by_cartesian(env: Any, qpos: np.ndarray, offset: np.ndarray, *, steps: int = 10) -> np.ndarray:
+    snapshot = _snapshot_sim_state(env)
+    try:
+        target = np.clip(np.asarray(qpos, dtype=np.float32), env.action_space.low, env.action_space.high)
+        gripper_value = float(target[-1])
+        _set_qpos(env, target)
+        per_step_offset = np.asarray(offset, dtype=float) / float(max(1, int(steps)))
+        action = target.copy()
+        for _ in range(max(1, int(steps))):
+            action = np.asarray(_cartesian_error_controller_action(env, per_step_offset), dtype=np.float32)
+            action[-1] = gripper_value
+            action = np.clip(action, env.action_space.low, env.action_space.high).astype(np.float32)
+            _obs, _reward, terminated, truncated, _info = env.step(np.asarray(action, dtype=float))
+            if terminated or truncated:
+                break
+        result = _current_qpos(env).astype(np.float32)
+        result[-1] = gripper_value
+        return np.clip(result, env.action_space.low, env.action_space.high).astype(np.float32)
+    finally:
+        _restore_sim_state(env, snapshot)
+
+
+def _make_random_start_qpos(env: Any, q_open: np.ndarray, *, seed: int, joint_std: float) -> np.ndarray:
+    rng = np.random.default_rng(int(seed) + 27183)
+    home = _current_qpos(env).astype(np.float32)
+    home[-1] = _open_gripper_value(env)
+    jitter = rng.normal(0.0, max(0.0, float(joint_std)), size=home.shape).astype(np.float32)
+    jitter[-1] = 0.0
+    # Blend a home-relative random pose with the target so starts are varied but still reachable.
+    target = 0.65 * (home + jitter) + 0.35 * np.asarray(q_open, dtype=np.float32)
+    target[-1] = _open_gripper_value(env)
+    return np.clip(target, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
 def _make_lerobot_frame(
     *,
     env: Any,
     renderers: dict[str, Any],
     action: np.ndarray,
+    task: str,
     include_camera3_duplicate: bool,
 ) -> dict[str, Any]:
     wrist = _render_camera(env, renderers["wrist_cam"], "wrist_cam")
-    top = _render_camera(env, renderers["top_down"], "top_down")
+    ego = _render_camera(env, renderers["egocentric_cam"], "egocentric_cam")
     frame = {
-        "observation.images.camera1": top,
+        "observation.images.camera1": ego,
         "observation.images.camera2": wrist,
         "observation.state": _current_qpos(env).astype(np.float32),
         "action": np.asarray(action, dtype=np.float32),
-        "task": TASK,
+        "task": task,
     }
     if include_camera3_duplicate:
         frame["observation.images.camera3"] = wrist.copy()

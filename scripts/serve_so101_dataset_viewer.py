@@ -18,13 +18,10 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-DATASETS = {
-    "pick_train": Path("_workspace/so101_lerobot/pick_train50_top_wrist_256_seed98200"),
-    "pick_val": Path("_workspace/so101_lerobot/pick_val24_top_wrist_256_seed98100"),
-    "pick_place_train": Path("_workspace/so101_lerobot/pick_place_train50_top_wrist_256_seed99000"),
-    "pick_place_val": Path("_workspace/so101_lerobot/pick_place_val24_top_wrist_256_seed102000"),
-}
-OFFICIAL_DATASET_SPLITS = ["pick_train", "pick_val", "pick_place_train", "pick_place_val"]
+DATASET_CONTRACT = Path("configs/so101/training_datasets/dataset_contract.json")
+SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_contract.json")
+DATASETS: dict[str, Path] = {}
+OFFICIAL_DATASET_SPLITS: list[str] = []
 ARCHIVED_DATASET_SPLITS: list[str] = []
 TEMP_DATASET_PATTERNS = [
     "smoke_*",
@@ -37,6 +34,36 @@ CAMERA_KEYS = [
     "observation.images.camera3",
 ]
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+
+
+def _contract_dataset_roots(repo_root: Path) -> dict[str, Path]:
+    contract_path = repo_root / DATASET_CONTRACT
+    if not contract_path.exists():
+        return {}
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    roots: dict[str, Path] = {}
+    for dataset_name, dataset in contract.get("datasets", {}).items():
+        for split_name, split in (("train", dataset.get("train")), ("validation", dataset.get("validation"))):
+            if not isinstance(split, dict):
+                continue
+            suffix = "val" if split_name == "validation" else "train"
+            roots[f"{dataset_name}_{suffix}"] = Path(split["root"])
+    return roots
+
+
+def _skill_dataset_roots(repo_root: Path) -> dict[str, Path]:
+    contract_path = repo_root / SKILL_DATASET_CONTRACT
+    if not contract_path.exists():
+        return {}
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    roots: dict[str, Path] = {}
+    for dataset_name, dataset in contract.get("datasets", {}).items():
+        for split_name, split in (("train", dataset.get("train")), ("validation", dataset.get("validation"))):
+            if not isinstance(split, dict):
+                continue
+            suffix = "val" if split_name == "validation" else "train"
+            roots[f"{dataset_name}_{suffix}"] = Path(split["root"])
+    return roots
 
 
 def main() -> None:
@@ -103,13 +130,18 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
         _dataset_catalog_item(repo_root, split, root, category="official")
         for split, root in official_roots.items()
     ]
+    skill_roots = _skill_dataset_roots(repo_root)
+    skill_items = [
+        _dataset_catalog_item(repo_root, split, root, category="skill")
+        for split, root in skill_roots.items()
+    ]
     archived_items = [_dataset_catalog_item(repo_root, split, DATASETS[split], category="archived") for split in ARCHIVED_DATASET_SPLITS]
     archived_visible_items = [item for item in archived_items if item["status"] == "available"]
     temporary_items = [
         _dataset_catalog_item(repo_root, split, path, category="temporary")
         for split, path in _discover_temporary_datasets(repo_root).items()
     ]
-    for item in [*official_items, *archived_items, *temporary_items]:
+    for item in [*official_items, *skill_items, *archived_items, *temporary_items]:
         if item["status"] == "available":
             payload[item["name"]] = item["summary"]
     return {
@@ -120,6 +152,12 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
                 "title": "Official / current training",
                 "description": "Datasets currently used by the active training/evaluation run.",
                 "items": official_items,
+            },
+            {
+                "id": "skill",
+                "title": "Skill primitives / additive",
+                "description": "Agentic primitive datasets generated without replacing the official full-task datasets.",
+                "items": skill_items,
             },
             {
                 "id": "temporary",
@@ -195,10 +233,6 @@ def _dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
 
 
 def _discover_temporary_datasets(repo_root: Path) -> dict[str, Path]:
-    roots = [
-        repo_root / "_workspace" / "so101_lerobot",
-        Path("/workspace/physical-ai/so101_lerobot"),
-    ]
     env_roots = _parse_dataset_env("SO101_TEMP_DATASETS")
     discovered: dict[str, Path] = {}
     seen_paths: set[Path] = set()
@@ -208,6 +242,13 @@ def _discover_temporary_datasets(repo_root: Path) -> dict[str, Path]:
             continue
         discovered[name] = path
         seen_paths.add(resolved)
+    if os.environ.get("SO101_SHOW_TEMP_DATASETS", "").strip() not in {"1", "true", "yes"}:
+        return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
+
+    roots = [
+        repo_root / "_workspace" / "so101_lerobot",
+        Path("/workspace/physical-ai/so101_lerobot"),
+    ]
     for root in roots:
         if not root.exists():
             continue
@@ -230,7 +271,7 @@ def _official_dataset_roots(repo_root: Path) -> dict[str, Path]:
     env_roots = _parse_dataset_env("SO101_OFFICIAL_DATASETS")
     if env_roots:
         return {split: path.resolve() for split, path in env_roots.items()}
-    return {split: _resolve_dataset_path(repo_root, DATASETS[split]) for split in OFFICIAL_DATASET_SPLITS}
+    return {split: _resolve_dataset_path(repo_root, root) for split, root in _contract_dataset_roots(repo_root).items()}
 
 
 def _parse_dataset_env(name: str) -> dict[str, Path]:
@@ -330,6 +371,7 @@ def _dataset(repo_root: Path, split: str) -> dict[str, Any]:
 def _dataset_roots(repo_root: Path) -> dict[str, Path]:
     roots = {split: _resolve_dataset_path(repo_root, root) for split, root in DATASETS.items()}
     roots.update(_official_dataset_roots(repo_root))
+    roots.update({split: _resolve_dataset_path(repo_root, root) for split, root in _skill_dataset_roots(repo_root).items()})
     roots.update({split: path.resolve() for split, path in _discover_temporary_datasets(repo_root).items()})
     return roots
 

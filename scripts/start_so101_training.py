@@ -59,6 +59,17 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dashboard-port", type=int, default=8767)
     parser.add_argument("--no-tensorboard", action="store_true")
     parser.add_argument("--no-dashboard", action="store_true")
+    parser.add_argument("--no-gpu-monitor", action="store_true")
+    parser.add_argument("--no-progress-monitor", action="store_true")
+    parser.add_argument("--gpu-monitor-interval-s", type=float, default=5.0)
+    parser.add_argument("--progress-monitor-interval-s", type=int, default=600)
+    parser.add_argument("--closed-loop-every-epochs", type=int, default=10)
+    parser.add_argument("--closed-loop-episodes", type=int, default=8)
+    parser.add_argument("--closed-loop-steps", type=int, default=120)
+    parser.add_argument("--closed-loop-policy", choices=["off", "periodic", "best_only", "best_or_periodic"], default="periodic")
+    parser.add_argument("--closed-loop-eval-skill-mode", choices=["picklift", "pick_from_top_cube"], default="picklift")
+    parser.add_argument("--closed-loop-task-prompt")
+    parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument(
         "--validation-interval-steps",
         type=int,
@@ -103,6 +114,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     metrics_dir = run_dir / "metrics"
     tensorboard_dir = run_dir / "tensorboard"
     train_output_dir = run_dir / "model"
+    train_pid_file = run_dir / "train.pid"
     log_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
@@ -134,6 +146,24 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "--repo-root",
         str(repo_root),
     ]
+    gpu_monitor_cmd = [
+        str(args.python),
+        str(repo_root / "scripts" / "log_gpu_metrics_tensorboard.py"),
+        "--log-dir",
+        str(tensorboard_dir / "so101_system"),
+        "--interval-s",
+        str(args.gpu_monitor_interval_s),
+    ]
+    progress_monitor_cmd = _progress_monitor_command(
+        args=args,
+        repo_root=repo_root,
+        run_dir=run_dir,
+        train_output_dir=train_output_dir,
+        dataset_config=dataset_config,
+        training_args=training_args,
+        train_pid_file=train_pid_file,
+    )
+    cache_build_cmds = _cache_build_commands(args.python, repo_root, dataset_config)
 
     launch_plan = {
         "operation": "start_so101_training",
@@ -144,6 +174,9 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "dataset_config": dataset_config,
         "tensorboard_cmd": None if args.no_tensorboard else tensorboard_cmd,
         "dashboard_cmd": None if args.no_dashboard else dashboard_cmd,
+        "gpu_monitor_cmd": None if args.no_gpu_monitor else gpu_monitor_cmd,
+        "progress_monitor_cmd": None if args.no_progress_monitor else progress_monitor_cmd,
+        "cache_build_cmds": cache_build_cmds,
         "tensorboard_url": None if args.no_tensorboard else f"http://127.0.0.1:{args.tensorboard_port}/",
         "dashboard_url": None if args.no_dashboard else f"http://127.0.0.1:{args.dashboard_port}/",
     }
@@ -151,19 +184,31 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         print(json.dumps(launch_plan, indent=2, sort_keys=True))
         return 0
 
+    _run_cache_builds(cache_build_cmds, log_dir=log_dir, cwd=repo_root)
     train = _popen(train_cmd, log_dir / "train.log", cwd=repo_root)
+    train_pid_file.write_text(str(train.pid) + "\n", encoding="utf-8")
     tensorboard = None if args.no_tensorboard else _popen(tensorboard_cmd, log_dir / "tensorboard.log", cwd=repo_root)
     dashboard = None if args.no_dashboard else _popen(dashboard_cmd, log_dir / "dashboard.log", cwd=repo_root)
+    gpu_monitor = None if args.no_gpu_monitor else _popen(gpu_monitor_cmd, log_dir / "gpu_monitor.log", cwd=repo_root)
+    progress_monitor = (
+        None
+        if args.no_progress_monitor or progress_monitor_cmd is None
+        else _popen(progress_monitor_cmd, log_dir / "progress_monitor.log", cwd=repo_root)
+    )
     record = {
         **launch_plan,
         "started_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "train_pid": train.pid,
         "tensorboard_pid": tensorboard.pid if tensorboard else None,
         "dashboard_pid": dashboard.pid if dashboard else None,
+        "gpu_monitor_pid": gpu_monitor.pid if gpu_monitor else None,
+        "progress_monitor_pid": progress_monitor.pid if progress_monitor else None,
         "logs": {
             "train": str(log_dir / "train.log"),
             "tensorboard": str(log_dir / "tensorboard.log") if tensorboard else None,
             "dashboard": str(log_dir / "dashboard.log") if dashboard else None,
+            "gpu_monitor": str(log_dir / "gpu_monitor.log") if gpu_monitor else None,
+            "progress_monitor": str(log_dir / "progress_monitor.log") if progress_monitor else None,
         },
     }
     _write_json(args.lock_file, record)
@@ -177,11 +222,15 @@ def status(lock_file: Path) -> dict[str, Any]:
     train = _process_status(record.get("train_pid"))
     tensorboard = _process_status(record.get("tensorboard_pid"))
     dashboard = _process_status(record.get("dashboard_pid"))
+    gpu_monitor = _process_status(record.get("gpu_monitor_pid"))
+    progress_monitor = _process_status(record.get("progress_monitor_pid"))
     record["train"] = train
     record["tensorboard"] = tensorboard
     record["dashboard"] = dashboard
+    record["gpu_monitor"] = gpu_monitor
+    record["progress_monitor"] = progress_monitor
     record["active"] = any(
-        bool(process.get("alive")) for process in (train, tensorboard, dashboard)
+        bool(process.get("alive")) for process in (train, tensorboard, dashboard, gpu_monitor, progress_monitor)
     )
     return record
 
@@ -192,7 +241,13 @@ def stop(lock_file: Path, *, timeout_s: float, json_output: bool = False) -> int
         payload = {"active": False, "detail": "no active lock"}
         print(json.dumps(payload, indent=2, sort_keys=True) if json_output else _human_status(payload))
         return 0
-    pids = [record.get("dashboard_pid"), record.get("tensorboard_pid"), record.get("train_pid")]
+    pids = [
+        record.get("gpu_monitor_pid"),
+        record.get("progress_monitor_pid"),
+        record.get("dashboard_pid"),
+        record.get("tensorboard_pid"),
+        record.get("train_pid"),
+    ]
     for pid in pids:
         _terminate(pid)
     deadline = time.monotonic() + max(0.0, timeout_s)
@@ -217,6 +272,8 @@ def _human_status(record: dict[str, Any]) -> str:
         f"train: {_process_line(record.get('train'))}",
         f"tensorboard: {_process_line(record.get('tensorboard'))}",
         f"dashboard: {_process_line(record.get('dashboard'))}",
+        f"gpu_monitor: {_process_line(record.get('gpu_monitor'))}",
+        f"progress_monitor: {_process_line(record.get('progress_monitor'))}",
     ]
     if record.get("tensorboard_url"):
         lines.append(f"tensorboard_url: {record['tensorboard_url']}")
@@ -286,6 +343,24 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list
             updated = _ensure_arg(updated, "validation-dataset-repo-id", str(validation["repo_id"]))
         if "root" in validation:
             updated = _ensure_arg(updated, "validation-dataset-root", str(validation["root"]))
+    training = config.get("training") or {}
+    if not isinstance(training, dict):
+        raise SystemExit("dataset config training must be an object")
+    for name, cli_name in (
+        ("num_workers", "num_workers"),
+        ("batch_size", "batch_size"),
+    ):
+        if name in training:
+            updated = _ensure_arg(updated, cli_name, str(training[name]))
+    cache = config.get("predecoded_image_cache") or {}
+    if not isinstance(cache, dict):
+        raise SystemExit("dataset config predecoded_image_cache must be an object")
+    for name, cli_name in (
+        ("train", "so101-image-cache-dir"),
+        ("validation", "validation-image-cache-dir"),
+    ):
+        if name in cache:
+            updated = _ensure_arg(updated, cli_name, str(_resolve_cache_dir(cache, name)))
     tensorboard = config.get("tensorboard") or {}
     if not isinstance(tensorboard, dict):
         raise SystemExit("dataset config tensorboard must be an object")
@@ -301,9 +376,9 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list
     for name, cli_name in (
         ("state_jitter_std", "so101-state-jitter-std"),
         ("state_dropout_prob", "so101-state-dropout-prob"),
-        ("action_dropout_prob", "so101-action-dropout-prob"),
         ("image_camera_dropout_prob", "so101-image-camera-dropout-prob"),
         ("image_patch_dropout_prob", "so101-image-patch-dropout-prob"),
+        ("image_patch_mask_ratio", "so101-image-patch-mask-ratio"),
     ):
         if name in augmentation:
             updated = _ensure_arg(updated, cli_name, str(augmentation[name]))
@@ -342,10 +417,152 @@ def _with_validation_schedule(args: list[str], namespace: argparse.Namespace) ->
     return args
 
 
+def _progress_monitor_command(
+    *,
+    args: argparse.Namespace,
+    repo_root: Path,
+    run_dir: Path,
+    train_output_dir: Path,
+    dataset_config: dict[str, Any] | None,
+    training_args: list[str],
+    train_pid_file: Path,
+) -> list[str] | None:
+    if not dataset_config:
+        return None
+    validation = dataset_config.get("validation_dataset") or dataset_config.get("train_dataset") or {}
+    if not isinstance(validation, dict) or "root" not in validation or "repo_id" not in validation:
+        return None
+    training = dataset_config.get("training") or {}
+    if not isinstance(training, dict):
+        training = {}
+    batch_size = int(_arg_value(training_args, "batch_size") or training.get("batch_size") or 4)
+    steps_per_epoch = int(training.get("steps_per_epoch") or _arg_value(training_args, "steps_per_epoch") or 1)
+    policy_device = str(_arg_value(training_args, "policy.device") or "auto")
+    if policy_device not in {"auto", "cpu", "mps", "cuda"}:
+        policy_device = "auto"
+    cmd = [
+        str(args.python),
+        str(repo_root / "scripts" / "monitor_so101_training_dashboard.py"),
+        "--run-dir",
+        str(run_dir),
+        "--interval-s",
+        str(args.progress_monitor_interval_s),
+        "--policy-device",
+        policy_device,
+        "--python",
+        str(args.python),
+        "--repo-root",
+        str(repo_root),
+        "--checkpoint-root",
+        str(train_output_dir / "checkpoints"),
+        "--dataset-root",
+        str(validation["root"]),
+        "--dataset-repo-id",
+        str(validation["repo_id"]),
+        "--batch-size",
+        str(batch_size),
+        "--max-batches",
+        str(training.get("validation_max_batches", 16)),
+        "--train-pid-file",
+        str(train_pid_file),
+        "--closed-loop-every-epochs",
+        str(args.closed_loop_every_epochs),
+        "--steps-per-epoch",
+        str(steps_per_epoch),
+        "--closed-loop-episodes",
+        str(args.closed_loop_episodes),
+        "--closed-loop-steps",
+        str(args.closed_loop_steps),
+        "--closed-loop-policy",
+        args.closed_loop_policy,
+        "--closed-loop-eval-skill-mode",
+        args.closed_loop_eval_skill_mode,
+        "--local-files-only",
+    ]
+    if args.closed_loop_task_prompt:
+        cmd.extend(["--closed-loop-task-prompt", args.closed_loop_task_prompt])
+    if args.closed_loop_record_rollout_gif:
+        cmd.append("--closed-loop-record-rollout-gif")
+    return cmd
+
+
+def _arg_value(args: list[str], name: str) -> str | None:
+    prefix = f"--{name}="
+    spaced = f"--{name}"
+    for index, arg in enumerate(args):
+        if arg.startswith(prefix):
+            return arg[len(prefix) :]
+        if arg == spaced and index + 1 < len(args):
+            return args[index + 1]
+    return None
+
+
 def _has_any_arg(args: list[str], *names: str) -> bool:
     prefixes = tuple(f"--{name}=" for name in names)
     spaced = {f"--{name}" for name in names}
     return any(arg.startswith(prefixes) or arg in spaced for arg in args)
+
+
+def _cache_build_commands(
+    python: Path,
+    repo_root: Path,
+    config: dict[str, Any] | None,
+) -> list[list[str]]:
+    if not config:
+        return []
+    cache = config.get("predecoded_image_cache") or {}
+    if not isinstance(cache, dict):
+        return []
+    commands: list[list[str]] = []
+    for split, dataset_key in (("train", "train_dataset"), ("validation", "validation_dataset")):
+        dataset = config.get(dataset_key) or {}
+        if split not in cache or not isinstance(dataset, dict):
+            continue
+        if "root" not in dataset or "repo_id" not in dataset:
+            continue
+        cache_dir = _resolve_cache_dir(cache, split)
+        commands.append(
+            [
+                str(python),
+                str(repo_root / "scripts" / "build_so101_predecoded_image_cache.py"),
+                "--dataset-root",
+                str(dataset["root"]),
+                "--dataset-repo-id",
+                str(dataset["repo_id"]),
+                "--cache-dir",
+                str(cache_dir),
+            ]
+        )
+    return commands
+
+
+def _resolve_cache_dir(cache: dict[str, Any], split: str) -> Path:
+    value = cache.get(split)
+    if value is None:
+        raise SystemExit(f"dataset config predecoded_image_cache missing {split}")
+    path = Path(str(value))
+    if path.is_absolute():
+        return path
+    if len(path.parts) > 1:
+        return path
+    root = None
+    root_env = cache.get("root_env")
+    if isinstance(root_env, str) and root_env:
+        root = os.environ.get(root_env)
+    if not root:
+        root = str(cache.get("default_root") or "")
+    if not root:
+        return path
+    return Path(root) / path
+
+
+def _run_cache_builds(commands: list[list[str]], *, log_dir: Path, cwd: Path) -> None:
+    for index, command in enumerate(commands):
+        log_path = log_dir / f"cache_build_{index}.log"
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] $ {' '.join(command)}\n")
+            handle.flush()
+            subprocess.run(command, cwd=cwd, stdout=handle, stderr=subprocess.STDOUT, check=True, text=True)
 
 
 def _tensorboard_executable(python: Path, repo_root: Path) -> list[str] | None:

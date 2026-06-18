@@ -255,6 +255,7 @@ def _load_pretrained_policy(model_id: str, local_files_only: bool, device: str =
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
     import lerobot.policies.smolvla.smolvlm_with_expert as smolvlm_with_expert
 
+    _ensure_local_smolvla_config_type(model_id)
     device_plan = _select_policy_device(device)
 
     def _from_pretrained(selected_device: str):
@@ -316,6 +317,26 @@ def _load_pretrained_policy(model_id: str, local_files_only: bool, device: str =
         )
 
 
+def _ensure_local_smolvla_config_type(model_id: str) -> None:
+    model_path = Path(model_id)
+    config_path = model_path / "config.json"
+    train_config_path = model_path / "train_config.json"
+    if not config_path.is_file() or not train_config_path.is_file():
+        return
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        train_config = json.loads(train_config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if config.get("type"):
+        return
+    policy_type = train_config.get("policy", {}).get("type")
+    if policy_type != "smolvla":
+        return
+    config["type"] = policy_type
+    config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _select_policy_device(device: str, torch_module: Any | None = None) -> dict[str, Any]:
     normalized = device.lower()
     if normalized not in {"auto", "cpu", "mps", "cuda"}:
@@ -331,11 +352,9 @@ def _select_policy_device(device: str, torch_module: Any | None = None) -> dict[
             selected = "cpu"
             fallback_reason = _mps_unavailable_reason(probe)
     elif normalized == "mps" and not probe["mps_available"]:
-        selected = "cpu"
-        fallback_reason = _mps_unavailable_reason(probe)
+        raise RuntimeError(_mps_unavailable_reason(probe))
     elif normalized == "cuda" and not probe["cuda_available"]:
-        selected = "cpu"
-        fallback_reason = "CUDA requested but torch.cuda.is_available() is false."
+        raise RuntimeError("CUDA requested but torch.cuda.is_available() is false.")
 
     return {
         "requested": normalized,
@@ -370,7 +389,7 @@ def _load_with_cpu_fallback(loader: Any, device_plan: dict[str, Any]):
     try:
         policy = loader(selected)
     except Exception as exc:  # noqa: BLE001 - preserve local MPS fallback detail.
-        if selected == "cpu":
+        if selected == "cpu" or str(device_plan["requested"]) in {"mps", "cuda"}:
             raise
         fallback_reason = f"{selected} policy load failed; fell back to CPU: {_short_error(exc)}"
         policy = loader("cpu")

@@ -115,6 +115,29 @@ camera_name_mapping
 baseline handoff
 ```
 
+### SO101 SmolVLA Fine-Tuning
+
+When the task mentions SO101 SmolVLA training, RunPod SO101 fine-tuning,
+SO101 dataset configs, augmentation, validation loss, closed-loop rollouts,
+action chunk jitter, or smoothness, open these anchors first:
+
+```text
+docs/so101_smolvla_training_pipeline.md
+configs/so101/training_datasets/README.md
+docs/harness/physical-ai/team-spec.md
+```
+
+Durable SO101 fine-tuning contract:
+
+- training configs use moderate train-time augmentation by default:
+  `state_jitter_std=0.003`, `state_dropout_prob=0.02`,
+  `image_patch_mask_ratio=0.15`, `gpu_image_augmentation=true`;
+- validation and closed-loop test inputs remain unaugmented;
+- do not use teacher-action dropout in behavior cloning;
+- action chunk jitter is handled through explicit predicted-action temporal
+  smoothness loss or inference-time temporal ensembling/chunk smoothing, not by
+  corrupting teacher labels.
+
 Short anchor:
 
 ```bash
