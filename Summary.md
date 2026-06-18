@@ -90,6 +90,11 @@ paper-facing concepts:
   inputs unaugmented. Do not use teacher-action dropout for BC runs. If action
   chunks need smoothing, use explicit temporal smoothness loss or inference-time
   temporal ensembling/chunk smoothing instead of corrupting labels.
+- User policy: SO101/SmolVLA training runs must execute outside the Codex
+  sandbox. On macOS, MPS availability checks performed inside the sandbox are
+  not authoritative; verify `torch.backends.mps.is_available()` and launch
+  MPS training from an unsandboxed/external runtime. Keep deterministic logs,
+  TensorBoard events, checkpoints, and monitor artifacts under `_workspace/`.
 - RunPod experiment-data storage policy: past remote experiment results are not
   needed. Starting now, every new RunPod data-generation, training, evaluation,
   and closed-loop run must end with a local download, local verification, and

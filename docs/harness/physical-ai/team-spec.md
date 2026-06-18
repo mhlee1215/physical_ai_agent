@@ -195,6 +195,12 @@ policy is:
   step/checkpoint first, run the rollout, then resume from the latest checkpoint.
 - Smoke closed-loop runs may be recorded separately in the dashboard, but they
   must be labeled as smoke and must not be treated as validation-set success.
+- User policy: SO101/SmolVLA training runs execute outside the Codex sandbox.
+  Local macOS MPS checks inside the sandbox are not authoritative; verify MPS
+  from an unsandboxed/external runtime before deciding that MPS is unavailable.
+  Launch local MPS training through that unsandboxed path, while writing logs,
+  TensorBoard events, checkpoints, monitor JSONL, and closed-loop artifacts
+  under `_workspace/` so Codex can inspect and report them afterward.
 - SO101 SmolVLA training configs must enable moderate train-time augmentation
   by default. The current moderate preset is `state_jitter_std=0.003`,
   `state_dropout_prob=0.02`, `image_patch_mask_ratio=0.15`,
@@ -377,6 +383,10 @@ reports, tests, and non-interactive hardware helpers when permissions allow.
 If an external Terminal is required for macOS camera/TCC or MPS/runtime access,
 the command must write deterministic logs and artifacts under `_workspace/` and
 the final report must state why the external Terminal path was used.
+SO101/SmolVLA training is a standing exception: the user has chosen that
+training launches, including local MPS runs, happen outside the Codex sandbox.
+Codex may still prepare configs, inspect `_workspace/` outputs, run lightweight
+non-training tests, and monitor TensorBoard/dashboard logs from the sandbox.
 
 ### Phase 1: Select Checkpoint
 
