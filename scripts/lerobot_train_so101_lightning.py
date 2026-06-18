@@ -4,6 +4,8 @@ import argparse
 import dataclasses
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import time
 from contextlib import nullcontext
@@ -318,10 +320,34 @@ def _add_tensorboard_custom_scalars(logger: Any) -> None:
                 "batch_size": ["Multiline", ["train/batch_size", "val/batch_size"]],
             },
             "system": {
+                "accelerator_status": [
+                    "Multiline",
+                    [
+                        "system/gpu_monitor_available",
+                        "system/accelerator_available",
+                        "system/mps_available",
+                    ],
+                ],
                 "gpu_utilization": ["Multiline", ["system/gpu_util_percent"]],
                 "gpu_memory": [
                     "Multiline",
                     ["system/gpu_memory_used_mb", "system/gpu_memory_used_percent"],
+                ],
+                "host_memory": [
+                    "Multiline",
+                    [
+                        "system/host_memory_used_mb",
+                        "system/host_memory_used_percent",
+                        "system/train_process_rss_mb",
+                    ],
+                ],
+                "host_load": [
+                    "Multiline",
+                    [
+                        "system/load_avg_1m",
+                        "system/train_process_cpu_percent",
+                        "system/train_process_mem_percent",
+                    ],
                 ],
             },
         }
@@ -634,6 +660,7 @@ class _SO101LightningModule:
                     on_epoch=False,
                     batch_size=batch_size,
                 )
+                self._log_system_metrics(batch_size=batch_size)
                 self._log_colored_loss_scalar("important/loss", loss, series="train")
                 for key, value in (output_dict or {}).items():
                     if key == "loss":
@@ -648,6 +675,13 @@ class _SO101LightningModule:
                 self._run_step_validation_if_due(completed_step=self.train_batches_seen)
                 self._last_step_started = time.perf_counter()
                 return loss
+
+            def _log_system_metrics(self, *, batch_size: int) -> None:
+                step = self.train_batches_seen + 1
+                if step != 1 and step % 50 != 0:
+                    return
+                for tag, value in _system_metrics_for_current_process().items():
+                    self.log(tag, value, on_step=True, on_epoch=False, batch_size=batch_size)
 
             def on_train_epoch_end(self) -> None:
                 if self.validation_dataloader is None or self.validation_epoch_interval <= 0:
@@ -1031,6 +1065,123 @@ def _seconds_per_sample(seconds: float, batch_size: int) -> float:
 def _samples_per_second(batch_size: int, seconds: float) -> float:
     seconds = max(float(seconds), 1e-12)
     return float(max(1, int(batch_size))) / seconds
+
+
+def _system_metrics_for_current_process() -> dict[str, float]:
+    mps_available = _mps_available()
+    metrics: dict[str, float] = {
+        "system/accelerator_available": 1.0 if mps_available else 0.0,
+        "system/mps_available": 1.0 if mps_available else 0.0,
+    }
+    try:
+        load_1m, load_5m, load_15m = os.getloadavg()
+    except OSError:
+        load_1m = load_5m = load_15m = 0.0
+    metrics.update(
+        {
+            "system/load_avg_1m": float(load_1m),
+            "system/load_avg_5m": float(load_5m),
+            "system/load_avg_15m": float(load_15m),
+        }
+    )
+    metrics.update({f"system/train_process_{key}": value for key, value in _current_process_metrics().items()})
+    metrics.update({f"system/host_memory_{key}": value for key, value in _host_memory_metrics().items()})
+    return metrics
+
+
+def _mps_available() -> bool:
+    try:
+        return bool(torch.backends.mps.is_available())
+    except Exception:
+        return False
+
+
+def _current_process_metrics() -> dict[str, float]:
+    try:
+        output = subprocess.check_output(
+            ["ps", "-o", "pcpu=,pmem=,rss=", "-p", str(os.getpid())],
+            text=True,
+        )
+    except Exception:
+        return {}
+    parts = output.strip().split()
+    if len(parts) < 3:
+        return {}
+    return {
+        "cpu_percent": _safe_float(parts[0]),
+        "mem_percent": _safe_float(parts[1]),
+        "rss_mb": _safe_float(parts[2]) / 1024.0,
+    }
+
+
+def _host_memory_metrics() -> dict[str, float]:
+    if Path("/proc/meminfo").exists():
+        return _linux_host_memory_metrics()
+    if shutil.which("sysctl") and shutil.which("vm_stat"):
+        return _macos_host_memory_metrics()
+    return {}
+
+
+def _linux_host_memory_metrics() -> dict[str, float]:
+    rows: dict[str, float] = {}
+    for line in Path("/proc/meminfo").read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            rows[parts[0].rstrip(":")] = _safe_float(parts[1]) / 1024.0
+    total = rows.get("MemTotal", 0.0)
+    available = rows.get("MemAvailable", 0.0)
+    return _memory_metrics(total_mb=total, available_mb=available)
+
+
+def _macos_host_memory_metrics() -> dict[str, float]:
+    try:
+        total_bytes = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip())
+        vm_output = subprocess.check_output(["vm_stat"], text=True)
+    except Exception:
+        return {}
+    page_size = 4096
+    rows: dict[str, int] = {}
+    for line in vm_output.splitlines():
+        if "page size of" in line:
+            parts = line.split()
+            for index, part in enumerate(parts):
+                if part == "of" and index + 1 < len(parts):
+                    try:
+                        page_size = int(parts[index + 1])
+                    except ValueError:
+                        pass
+            continue
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        digits = value.strip().rstrip(".").replace(".", "")
+        if digits.isdigit():
+            rows[key.strip()] = int(digits)
+    available_pages = rows.get("Pages free", 0) + rows.get("Pages inactive", 0) + rows.get("Pages speculative", 0)
+    return _memory_metrics(
+        total_mb=total_bytes / (1024.0 * 1024.0),
+        available_mb=(available_pages * page_size) / (1024.0 * 1024.0),
+    )
+
+
+def _memory_metrics(*, total_mb: float, available_mb: float) -> dict[str, float]:
+    if total_mb <= 0:
+        return {}
+    used_mb = max(0.0, total_mb - available_mb)
+    return {
+        "total_mb": total_mb,
+        "used_mb": used_mb,
+        "available_mb": available_mb,
+        "used_percent": 100.0 * used_mb / total_mb,
+        "available_percent": 100.0 * available_mb / total_mb,
+    }
+
+
+def _safe_float(value: str) -> float:
+    try:
+        return float(value)
+    except ValueError:
+        return 0.0
 
 
 def _parse_csv(value: str | None) -> tuple[str, ...]:

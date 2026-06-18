@@ -63,18 +63,29 @@ def _write_nvidia_metrics(writer: object, sample: int) -> None:
 
 
 def _write_host_metrics(writer: object, sample: int, train_pid_file: Path | None) -> None:
+    mps_available = _mps_available()
     writer.add_scalar("system/gpu_monitor_available", 0.0, global_step=sample)
-    writer.add_scalar("system/mps_available", 1.0 if _mps_available() else 0.0, global_step=sample)
+    writer.add_scalar("system/accelerator_available", 1.0 if mps_available else 0.0, global_step=sample)
+    writer.add_scalar("system/mps_available", 1.0 if mps_available else 0.0, global_step=sample)
     load_1m, load_5m, load_15m = os.getloadavg()
     writer.add_scalar("system/load_avg_1m", load_1m, global_step=sample)
     writer.add_scalar("system/load_avg_5m", load_5m, global_step=sample)
     writer.add_scalar("system/load_avg_15m", load_15m, global_step=sample)
+    host_memory = _host_memory()
+    for key, value in host_memory.items():
+        if value is not None:
+            writer.add_scalar(f"system/host_memory_{key}", value, global_step=sample)
     if train_pid_file:
         pid = _read_pid(train_pid_file)
-        rss_mb = _process_rss_mb(pid) if pid else None
-        writer.add_scalar("system/train_process_alive", 1.0 if rss_mb is not None else 0.0, global_step=sample)
-        if rss_mb is not None:
-            writer.add_scalar("system/train_process_rss_mb", rss_mb, global_step=sample)
+        process_metrics = _process_metrics(pid) if pid else None
+        writer.add_scalar(
+            "system/train_process_alive",
+            1.0 if process_metrics is not None else 0.0,
+            global_step=sample,
+        )
+        if process_metrics is not None:
+            for key, value in process_metrics.items():
+                writer.add_scalar(f"system/train_process_{key}", value, global_step=sample)
 
 
 def _mps_available() -> bool:
@@ -93,15 +104,85 @@ def _read_pid(path: Path) -> int | None:
         return None
 
 
-def _process_rss_mb(pid: int) -> float | None:
+def _process_metrics(pid: int) -> dict[str, float] | None:
     try:
-        output = subprocess.check_output(["ps", "-o", "rss=", "-p", str(pid)], text=True)
+        output = subprocess.check_output(["ps", "-o", "pcpu=,pmem=,rss=", "-p", str(pid)], text=True)
     except Exception:
         return None
-    output = output.strip()
-    if not output:
+    parts = output.strip().split()
+    if len(parts) < 3:
         return None
-    return float(output) / 1024.0
+    return {
+        "cpu_percent": _float(parts[0]),
+        "mem_percent": _float(parts[1]),
+        "rss_mb": _float(parts[2]) / 1024.0,
+    }
+
+
+def _host_memory() -> dict[str, float | None]:
+    if Path("/proc/meminfo").exists():
+        return _linux_host_memory()
+    if shutil.which("sysctl") and shutil.which("vm_stat"):
+        return _macos_host_memory()
+    return {}
+
+
+def _linux_host_memory() -> dict[str, float | None]:
+    rows: dict[str, float] = {}
+    for line in Path("/proc/meminfo").read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            rows[parts[0].rstrip(":")] = _float(parts[1]) / 1024.0
+    total = rows.get("MemTotal")
+    available = rows.get("MemAvailable")
+    used = total - available if total is not None and available is not None else None
+    return _memory_row(total_mb=total, used_mb=used, available_mb=available)
+
+
+def _macos_host_memory() -> dict[str, float | None]:
+    try:
+        total_bytes = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip())
+        vm_output = subprocess.check_output(["vm_stat"], text=True)
+    except Exception:
+        return {}
+    page_size = 4096
+    rows: dict[str, int] = {}
+    for line in vm_output.splitlines():
+        if "page size of" in line:
+            parts = line.split()
+            for index, part in enumerate(parts):
+                if part == "of" and index + 1 < len(parts):
+                    try:
+                        page_size = int(parts[index + 1])
+                    except ValueError:
+                        pass
+            continue
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        digits = value.strip().rstrip(".").replace(".", "")
+        if digits.isdigit():
+            rows[key.strip()] = int(digits)
+    free_pages = rows.get("Pages free", 0)
+    inactive_pages = rows.get("Pages inactive", 0)
+    speculative_pages = rows.get("Pages speculative", 0)
+    available_bytes = (free_pages + inactive_pages + speculative_pages) * page_size
+    total_mb = total_bytes / (1024.0 * 1024.0)
+    available_mb = available_bytes / (1024.0 * 1024.0)
+    used_mb = max(0.0, total_mb - available_mb)
+    return _memory_row(total_mb=total_mb, used_mb=used_mb, available_mb=available_mb)
+
+
+def _memory_row(*, total_mb: float | None, used_mb: float | None, available_mb: float | None) -> dict[str, float | None]:
+    used_percent = 100.0 * used_mb / total_mb if total_mb and used_mb is not None else None
+    available_percent = 100.0 * available_mb / total_mb if total_mb and available_mb is not None else None
+    return {
+        "total_mb": total_mb,
+        "used_mb": used_mb,
+        "available_mb": available_mb,
+        "used_percent": used_percent,
+        "available_percent": available_percent,
+    }
 
 
 class GpuRow:
