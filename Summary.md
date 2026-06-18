@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-06-17
+Last updated: 2026-06-18
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -178,6 +178,12 @@ Working collaboration assumptions:
   explicitly asks for postdoc/orchestrator mode.
 - The postdoc/orchestrator owns high-level research judgment, claim boundaries,
   and user-facing synthesis.
+- Do not modify installed third-party library source code, vendored package
+  internals, `site-packages`, TensorBoard frontend bundles, or framework
+  runtime files as a normal fix path. Prefer public APIs, repo-local wrappers,
+  launcher contracts, logging/tag layout changes, or monitor-side adaptations.
+  If a temporary monkey patch or library-source patch is truly unavoidable,
+  ask first and document it as temporary with the tested dependency version.
 - PM owns coordination and concise status tracking.
 - Tech Lead owns code fixes and tests.
 - RunPod Manager owns cloud resource setup and handoff.

@@ -178,6 +178,27 @@ Current Risk1-B/C routing rule:
 - Tech Lead fixes concrete code/data blockers only, then the loop returns to
   data production.
 
+### Third-Party Library Modification Policy
+
+Do not modify installed third-party library source code, vendored package
+internals, `site-packages`, TensorBoard frontend bundles, or framework runtime
+files as a normal fix path. These patches are brittle across dependency
+upgrades and make RunPod/local parity hard to reason about.
+
+Preferred order for dependency-related fixes:
+
+- Use the library's public API, configuration, plugin, callback, logging, or
+  wrapper surface.
+- If the public surface cannot express the desired behavior, adapt this repo's
+  code, data format, TensorBoard tag layout, launcher contract, or monitoring
+  wrapper instead.
+- If a temporary monkey patch or library-source patch is truly unavoidable,
+  ask the user first, document it as temporary, isolate it behind an explicit
+  flag or script, and add a removal note with the dependency version it was
+  tested against.
+- Do not persist direct edits to external library files in PRs or handoff
+  artifacts.
+
 ### SO101 SmolVLA Fine-Tuning Watch Policy
 
 For RunPod SO101 SmolVLA fine-tuning babysitting, checkpoint and evaluation
