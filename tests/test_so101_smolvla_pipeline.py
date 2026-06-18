@@ -322,6 +322,22 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("success_rate", constants)
         self.assertIn("important/closed_loop_success_rate", constants)
 
+    def test_training_monitor_uses_macos_safe_mujoco_gl(self) -> None:
+        import monitor_so101_training_dashboard as monitor
+
+        with mock.patch.dict(os.environ, {"MUJOCO_GL": "egl", "PYOPENGL_PLATFORM": "egl"}, clear=False):
+            with mock.patch("platform.system", return_value="Darwin"):
+                self.assertEqual(monitor._mujoco_render_env("auto"), ("glfw", None))
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("platform.system", return_value="Linux"):
+                self.assertEqual(monitor._mujoco_render_env("auto"), ("egl", "egl"))
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("platform.system", return_value="Darwin"):
+                self.assertEqual(monitor._mujoco_render_env("egl"), ("egl", "egl"))
+                self.assertEqual(monitor._mujoco_render_env("glfw"), ("glfw", None))
+
     def test_single_training_launcher_is_canonical_and_lock_guarded(self) -> None:
         source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -502,6 +518,8 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("progress_monitor_cmd", payload)
             self.assertIn("--closed-loop-eval-skill-mode", payload["progress_monitor_cmd"])
             self.assertIn("pick_from_top_cube", payload["progress_monitor_cmd"])
+            self.assertIn("--mujoco-gl", payload["progress_monitor_cmd"])
+            self.assertIn("auto", payload["progress_monitor_cmd"])
             self.assertIn("--closed-loop-task-prompt", payload["progress_monitor_cmd"])
             self.assertEqual(
                 payload["cache_build_cmds"][0][-1],

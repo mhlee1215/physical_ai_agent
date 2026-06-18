@@ -98,6 +98,12 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--closed-loop-episodes", type=int, default=8)
     parser.add_argument("--closed-loop-steps", type=int, default=120)
     parser.add_argument(
+        "--closed-loop-mujoco-gl",
+        choices=["auto", "glfw", "egl", "osmesa"],
+        default="auto",
+        help="MuJoCo backend for closed-loop rollouts. auto uses glfw on macOS and egl on Linux.",
+    )
+    parser.add_argument(
         "--max-monitored-checkpoints",
         type=int,
         default=20,
@@ -877,6 +883,8 @@ def _progress_monitor_command(
         str(args.closed_loop_episodes),
         "--closed-loop-steps",
         str(args.closed_loop_steps),
+        "--mujoco-gl",
+        args.closed_loop_mujoco_gl,
         "--closed-loop-policy",
         args.closed_loop_policy,
         "--closed-loop-eval-skill-mode",
