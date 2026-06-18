@@ -105,7 +105,12 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--validation-interval-epochs",
         type=int,
-        help="Forward validation cadence as epochs. Ignored by the trainer when step cadence is also set.",
+        default=1,
+        help=(
+            "Forward validation cadence as epochs. Defaults to 1 so HF/RunPod "
+            "training writes val/loss whenever a validation dataset is configured. "
+            "Ignored by the trainer when step cadence is also set."
+        ),
     )
     parser.add_argument("--replace", action="store_true", help="Stop the active run before starting.")
     parser.add_argument("--dry-run", action="store_true", help="Print the launch plan without starting.")

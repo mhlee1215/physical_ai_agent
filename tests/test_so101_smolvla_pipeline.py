@@ -377,6 +377,32 @@ class SO101SmolVLAPipelineTest(TestCase):
                 any("log_gpu_metrics_tensorboard.py" in part for part in payload["gpu_monitor_cmd"])
             )
 
+    def test_single_training_launcher_defaults_to_epoch_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--",
+                    "--dataset.repo_id=physical-ai-agent/test",
+                    "--policy.type=smolvla",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertIn("--validation-interval-epochs=1", payload["train_cmd"])
+
     def test_single_training_launcher_dataset_config_injects_dataset_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = Path(tmpdir) / "dataset_config.json"
