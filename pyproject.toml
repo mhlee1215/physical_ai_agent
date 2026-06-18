@@ -36,6 +36,8 @@ web = [
 ]
 ml = [
   "torch>=2.3",
+  "lightning>=2.4",
+  "tensorboard>=2.17",
   "transformers>=4.43",
 ]
 smolvla = [

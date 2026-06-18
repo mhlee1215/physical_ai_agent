@@ -58,11 +58,11 @@ class SO101AugmentationContract:
     image_color_jitter: bool = True
     image_affine_jitter: bool = True
     image_camera_dropout_prob: float = 0.05
-    image_patch_dropout_prob: float = 0.02
+    image_patch_dropout_prob: float = 0.0
+    image_patch_mask_ratio: float = 0.15
     state_jitter_std: float = 0.01
     state_dropout_prob: float = 0.02
     state_dropout_keep_gripper: bool = True
-    action_dropout_prob: float = 0.0
     run_after_batch_to_device: bool = True
 
     def validate(self) -> list[str]:
@@ -70,8 +70,8 @@ class SO101AugmentationContract:
         for name in (
             "image_camera_dropout_prob",
             "image_patch_dropout_prob",
+            "image_patch_mask_ratio",
             "state_dropout_prob",
-            "action_dropout_prob",
         ):
             value = float(getattr(self, name))
             if value < 0.0 or value >= 1.0:

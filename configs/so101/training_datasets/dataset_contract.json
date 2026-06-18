@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "change_control": "Do not change dataset roots, camera mapping, task semantics, or split semantics without explicit user approval.",
+    "camera_contract": {
+      "observation.images.camera1": "egocentric_cam",
+      "observation.images.camera2": "wrist_cam",
+      "observation.images.camera3": "wrist_cam duplicate"
+    },
+    "camera_pose_contract": {
+      "observation.images.camera1": {
+        "role": "egocentric_cam",
+        "must_not_change_without_user_approval": true,
+        "pose": {
+          "type": "free",
+          "lookat": [0.245, 0.11, 0.035],
+          "distance": 0.63,
+          "azimuth": 270,
+          "elevation": -82,
+          "rotation_degrees": 90
+        }
+      }
+    },
+    "image_shape_chw": [3, 256, 256]
+  },
+  "datasets": {
+    "pick_cube": {
+      "task": "pick",
+      "object": "cube",
+      "start_mode": "home",
+      "required_behavior": "start far from the cube, approach it, grasp it, and lift it",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-pick-cube-train50-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200",
+        "expected_episodes": 50
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-pick-cube-valid24-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_cube_valid24_ego_wrist_256_seed98100",
+        "expected_episodes": 24
+      }
+    },
+    "pick_and_place_cube": {
+      "task": "pick_and_place",
+      "object": "cube",
+      "start_mode": "home",
+      "required_behavior": "start far from the cube, approach it, grasp it, move it to the target, and place it",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-pick-and-place-cube-train50-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_and_place_cube_train50_ego_wrist_256_seed99000",
+        "expected_episodes": 50
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-pick-and-place-cube-valid24-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_and_place_cube_valid24_ego_wrist_256_seed102000",
+        "expected_episodes": 24
+      }
+    },
+    "pick_cube_grip_focus": {
+      "task": "pick",
+      "object": "cube",
+      "start_mode": "near-gripper",
+      "required_behavior": "start near the cube, grasp it, and lift it",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-pick-cube-grip-focus-train50-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_cube_grip_focus_train50_ego_wrist_256_seed104000",
+        "expected_episodes": 50
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-pick-cube-grip-focus-valid24-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_cube_grip_focus_valid24_ego_wrist_256_seed104500",
+        "expected_episodes": 24
+      }
+    },
+    "pick_and_place_cube_grip_focus": {
+      "task": "pick_and_place",
+      "object": "cube",
+      "start_mode": "near-gripper",
+      "required_behavior": "start near the cube, grasp it, move it to the target, and place it",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-pick-and-place-cube-grip-focus-train50-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_and_place_cube_grip_focus_train50_ego_wrist_256_seed106000",
+        "expected_episodes": 50
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-pick-and-place-cube-grip-focus-valid24-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/pick_and_place_cube_grip_focus_valid24_ego_wrist_256_seed106500",
+        "expected_episodes": 24
+      }
+    }
+  }
+}

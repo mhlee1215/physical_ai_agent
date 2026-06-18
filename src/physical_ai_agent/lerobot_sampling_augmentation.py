@@ -13,9 +13,9 @@ class SamplingAugmentationConfig:
     state_jitter_arm_only: bool = True
     state_dropout_prob: float = 0.0
     state_dropout_keep_gripper: bool = True
-    action_dropout_prob: float = 0.0
     image_camera_dropout_prob: float = 0.0
     image_patch_dropout_prob: float = 0.0
+    image_patch_mask_ratio: float = 0.0
     gpu_image_augmentation: bool = False
     state_key: str = "observation.state"
     action_key: str = "action"
@@ -35,9 +35,9 @@ class SamplingAugmentationConfig:
             "True",
         }
         state_dropout_prob = float(os.environ.get("SO101_STATE_DROPOUT_PROB", "0.0"))
-        action_dropout_prob = float(os.environ.get("SO101_ACTION_DROPOUT_PROB", "0.0"))
         image_camera_dropout_prob = float(os.environ.get("SO101_IMAGE_CAMERA_DROPOUT_PROB", "0.0"))
         image_patch_dropout_prob = float(os.environ.get("SO101_IMAGE_PATCH_DROPOUT_PROB", "0.0"))
+        image_patch_mask_ratio = float(os.environ.get("SO101_IMAGE_PATCH_MASK_RATIO", "0.0"))
         state_dropout_keep_gripper = os.environ.get("SO101_STATE_DROPOUT_KEEP_GRIPPER", "1") not in {
             "0",
             "false",
@@ -48,16 +48,16 @@ class SamplingAugmentationConfig:
             state_jitter_arm_only=state_jitter_arm_only,
             state_dropout_prob=state_dropout_prob,
             state_dropout_keep_gripper=state_dropout_keep_gripper,
-            action_dropout_prob=action_dropout_prob,
             image_camera_dropout_prob=image_camera_dropout_prob,
             image_patch_dropout_prob=image_patch_dropout_prob,
+            image_patch_mask_ratio=image_patch_mask_ratio,
             gpu_image_augmentation=gpu_image_augmentation,
             enabled=(
                 state_jitter_std > 0.0
                 or state_dropout_prob > 0.0
-                or action_dropout_prob > 0.0
                 or image_camera_dropout_prob > 0.0
                 or image_patch_dropout_prob > 0.0
+                or image_patch_mask_ratio > 0.0
                 or gpu_image_augmentation
             ),
         )
@@ -86,9 +86,6 @@ class SamplingAugmentedDataset:
         if not torch.is_tensor(value):
             return
         item[self.config.state_key] = augment_state_tensor(value, self.config)
-        action = item.get(self.config.action_key)
-        if torch.is_tensor(action) and self.config.action_dropout_prob > 0.0:
-            item[self.config.action_key] = _dropout_tensor(action, self.config.action_dropout_prob)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.dataset, name)
@@ -220,8 +217,7 @@ def patch_lerobot_train_gpu_augmentation(config: SamplingAugmentationConfig) -> 
 
 def augment_batch_on_device(batch: dict[str, Any], config: SamplingAugmentationConfig) -> None:
     _augment_state_on_device(batch, config)
-    _augment_images_on_device(batch)
-    _augment_action_on_device(batch, config)
+    _augment_images_on_device(batch, config)
 
 
 def _augment_state_on_device(batch: dict[str, Any], config: SamplingAugmentationConfig) -> None:
@@ -252,17 +248,7 @@ def augment_state_tensor(value: Any, config: SamplingAugmentationConfig) -> Any:
     return result.to(value.dtype)
 
 
-def _augment_action_on_device(batch: dict[str, Any], config: SamplingAugmentationConfig) -> None:
-    if config.action_dropout_prob <= 0.0:
-        return
-    import torch
-
-    value = batch.get(config.action_key)
-    if torch.is_tensor(value):
-        batch[config.action_key] = _dropout_tensor(value, config.action_dropout_prob)
-
-
-def _augment_images_on_device(batch: dict[str, Any]) -> None:
+def _augment_images_on_device(batch: dict[str, Any], config: SamplingAugmentationConfig) -> None:
     import torch
     import torch.nn.functional as F
 
@@ -277,6 +263,7 @@ def _augment_images_on_device(batch: dict[str, Any]) -> None:
         image = _color_jitter(image)
         image = _sharpness_jitter(image)
         image = _affine_jitter(image, F)
+        image = _patch_mask_ratio(image, config.image_patch_mask_ratio)
         batch[key] = image.to(value.dtype).clamp(0.0, 1.0)
 
 
@@ -317,6 +304,31 @@ def _patch_dropout(image: Any) -> Any:
         top = int(torch.randint(0, max(1, height - patch_h + 1), (1,), device=image.device).item())
         left = int(torch.randint(0, max(1, width - patch_w + 1), (1,), device=image.device).item())
         result[index, :, top : top + patch_h, left : left + patch_w] = 0.0
+    return result
+
+
+def _patch_mask_ratio(image: Any, ratio: float) -> Any:
+    import torch
+
+    ratio = float(ratio)
+    if ratio <= 0.0:
+        return image
+    ratio = min(ratio, 1.0)
+    batch_size, _channels, height, width = image.shape
+    grid = 8
+    patch_h = max(1, height // grid)
+    patch_w = max(1, width // grid)
+    patches = grid * grid
+    masked_patches = max(1, int(round(patches * ratio)))
+    result = image.clone()
+    for index in range(batch_size):
+        selected = torch.randperm(patches, device=image.device)[:masked_patches]
+        rows = torch.div(selected, grid, rounding_mode="floor")
+        cols = selected % grid
+        for row, col in zip(rows.tolist(), cols.tolist()):
+            top = int(row) * patch_h
+            left = int(col) * patch_w
+            result[index, :, top : min(height, top + patch_h), left : min(width, left + patch_w)] = 0.0
     return result
 
 

@@ -23,9 +23,9 @@ def main() -> None:
     parser.add_argument("--so101-state-jitter-arm-only", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--so101-state-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-state-dropout-keep-gripper", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--so101-action-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-image-camera-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-image-patch-dropout-prob", type=float, default=0.0)
+    parser.add_argument("--so101-image-patch-mask-ratio", type=float, default=0.0)
     parser.add_argument("--so101-gpu-image-augmentation", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--so101-image-cache-dir", type=Path)
     parser.add_argument("--so101-augmentation-report", type=Path)
@@ -46,9 +46,9 @@ def main() -> None:
     os.environ["SO101_STATE_JITTER_ARM_ONLY"] = "1" if args.so101_state_jitter_arm_only else "0"
     os.environ["SO101_STATE_DROPOUT_PROB"] = str(args.so101_state_dropout_prob)
     os.environ["SO101_STATE_DROPOUT_KEEP_GRIPPER"] = "1" if args.so101_state_dropout_keep_gripper else "0"
-    os.environ["SO101_ACTION_DROPOUT_PROB"] = str(args.so101_action_dropout_prob)
     os.environ["SO101_IMAGE_CAMERA_DROPOUT_PROB"] = str(args.so101_image_camera_dropout_prob)
     os.environ["SO101_IMAGE_PATCH_DROPOUT_PROB"] = str(args.so101_image_patch_dropout_prob)
+    os.environ["SO101_IMAGE_PATCH_MASK_RATIO"] = str(args.so101_image_patch_mask_ratio)
     os.environ["SO101_GPU_IMAGE_AUGMENTATION"] = "1" if args.so101_gpu_image_augmentation else "0"
     if args.so101_image_cache_dir is not None:
         os.environ["SO101_IMAGE_CACHE_DIR"] = str(args.so101_image_cache_dir)

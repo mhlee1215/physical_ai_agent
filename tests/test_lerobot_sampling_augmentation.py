@@ -10,6 +10,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in minimal stdlib te
 from physical_ai_agent.lerobot_sampling_augmentation import (
     SamplingAugmentationConfig,
     SamplingAugmentedDataset,
+    augment_batch_on_device,
     augment_state_tensor,
 )
 
@@ -65,15 +66,23 @@ class SamplingAugmentationTest(unittest.TestCase):
         self.assertEqual(float(augmented[5]), 1.0)
 
     @unittest.skipIf(torch is None, "torch is not installed in this Python environment")
-    def test_action_dropout_happens_on_sample(self) -> None:
-        dataset = SamplingAugmentedDataset(
-            FakeDataset(),
-            SamplingAugmentationConfig(action_dropout_prob=1.0, enabled=True),
+    def test_patch_mask_ratio_masks_patch_grid(self) -> None:
+        batch = {
+            "observation.images.camera1": torch.ones((2, 3, 256, 256), dtype=torch.float32),
+        }
+
+        augment_batch_on_device(
+            batch,
+            SamplingAugmentationConfig(
+                image_patch_mask_ratio=0.25,
+                gpu_image_augmentation=True,
+                enabled=True,
+            ),
         )
 
-        item = dataset[0]
-
-        self.assertTrue(torch.equal(item["action"], torch.zeros(6, dtype=torch.float32)))
+        image = batch["observation.images.camera1"]
+        self.assertGreater(int((image == 0.0).sum().item()), 0)
+        self.assertLess(int((image == 0.0).sum().item()), image.numel())
 
 
 if __name__ == "__main__":

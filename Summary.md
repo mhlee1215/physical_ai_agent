@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-06-16
+Last updated: 2026-06-17
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -83,6 +83,13 @@ paper-facing concepts:
   512-padding preprocessing, sample-time CUDA/MPS augmentation, doubled
   recovery-aware train data, dataset manifest validation, and monitor-managed
   validation/closed-loop/overfit stopping.
+- SO101 SmolVLA training configs must include moderate train-time augmentation
+  by default: `state_jitter_std=0.003`, `state_dropout_prob=0.02`,
+  `image_patch_mask_ratio=0.15`, `gpu_image_augmentation=true`, no camera
+  dropout, and no legacy one-patch dropout. Keep validation and closed-loop test
+  inputs unaugmented. Do not use teacher-action dropout for BC runs. If action
+  chunks need smoothing, use explicit temporal smoothness loss or inference-time
+  temporal ensembling/chunk smoothing instead of corrupting labels.
 - RunPod experiment-data storage policy: past remote experiment results are not
   needed. Starting now, every new RunPod data-generation, training, evaluation,
   and closed-loop run must end with a local download, local verification, and
@@ -90,6 +97,17 @@ paper-facing concepts:
   repo is the preservation point for experiment data. Keep reusable Python
   environments on the Pod's local disk when practical; use the network volume
   only for active handoff/cache, not long-term experiment-data storage.
+- SO101 dataset handoff policy: prefer exporting teacher datasets on the local
+  Mac first, then upload/sync the checked export to RunPod for GPU training.
+  RunPod should be used as the CUDA training/evaluation worker, not the primary
+  MuJoCo/LeRobot dataset exporter, unless local export is blocked or the user
+  explicitly asks for remote generation. For future SO101 RunPod handoffs,
+  package the checked local export into a reusable tarball before upload so
+  retry/reupload does not require rebuilding or re-exporting the dataset.
+- SO101 dataset camera1 contract: `camera1` is the real-hardware-aligned
+  `egocentric_cam`, not `top_down`. Current approved camera1 pose is
+  `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`;
+  do not change it during data generation without explicit user approval.
 
 ### What We Have Learned
 

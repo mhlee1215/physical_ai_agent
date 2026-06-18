@@ -33,6 +33,8 @@ SETUPTOOLS_SPEC="${SETUPTOOLS_SPEC:-setuptools>=71,<81}"
 MUJOCO_SPEC="${MUJOCO_SPEC:-mujoco==3.3.2}"
 ROBOSUITE_SPEC="${ROBOSUITE_SPEC:-robosuite==1.4.0}"
 LIBERO_SPEC="${LIBERO_SPEC:-libero}"
+LIGHTNING_SPEC="${LIGHTNING_SPEC:-lightning>=2.4}"
+TENSORBOARD_SPEC="${TENSORBOARD_SPEC:-tensorboard>=2.17}"
 
 export PIP_CACHE_DIR
 export PIP_DISABLE_PIP_VERSION_CHECK="${PIP_DISABLE_PIP_VERSION_CHECK:-1}"
@@ -162,6 +164,9 @@ install_lerobot_and_runtime_deps() {
     huggingface_hub draccus safetensors datasets transformers accelerate \
     imageio imageio-ffmpeg opencv-python-headless pyyaml einops num2words \
     "av>=16,<17"
+  timed_run training_runtime_deps_install "$PY312_VENV/bin/python" -m pip install \
+    --constraint "$WORK_ROOT/torch-cu124-constraints.txt" \
+    "$LIGHTNING_SPEC" "$TENSORBOARD_SPEC"
   timed_run libero_install "$PY312_VENV/bin/python" -m pip install \
     --constraint "$WORK_ROOT/torch-cu124-constraints.txt" \
     "$LIBERO_SPEC"
