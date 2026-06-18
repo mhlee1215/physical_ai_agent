@@ -578,9 +578,13 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list
     for name, cli_name in (
         ("num_workers", "num_workers"),
         ("batch_size", "batch_size"),
+        ("policy_repo_id", "policy.repo_id"),
+        ("lightning_precision", "lightning-precision"),
     ):
         if name in training:
             updated = _ensure_arg(updated, cli_name, str(training[name]))
+    if "policy_push_to_hub" in training:
+        updated = _ensure_arg(updated, "policy.push_to_hub", str(bool(training["policy_push_to_hub"])).lower())
     cache = config.get("predecoded_image_cache") or {}
     if not isinstance(cache, dict):
         raise SystemExit("dataset config predecoded_image_cache must be an object")

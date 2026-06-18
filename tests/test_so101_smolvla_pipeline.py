@@ -393,6 +393,9 @@ class SO101SmolVLAPipelineTest(TestCase):
                         },
                         "training": {
                             "num_workers": 4,
+                            "policy_repo_id": "mhlee1215/test-policy",
+                            "policy_push_to_hub": False,
+                            "lightning_precision": "bf16-mixed",
                         },
                         "predecoded_image_cache": {
                             "root_env": "SO101_TEST_CACHE_ROOT",
@@ -447,6 +450,9 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--validation-dataset-repo-id=physical-ai-agent/val", train_cmd)
             self.assertIn("--validation-dataset-root=_workspace/val", train_cmd)
             self.assertIn("--num_workers=4", train_cmd)
+            self.assertIn("--policy.repo_id=mhlee1215/test-policy", train_cmd)
+            self.assertIn("--policy.push_to_hub=false", train_cmd)
+            self.assertIn("--lightning-precision=bf16-mixed", train_cmd)
             self.assertIn("--so101-image-cache-dir=/tmp/so101-cache/train", train_cmd)
             self.assertIn("--validation-image-cache-dir=/tmp/so101-cache/val", train_cmd)
             self.assertEqual(

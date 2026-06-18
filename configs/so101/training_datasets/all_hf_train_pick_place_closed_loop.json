@@ -82,7 +82,10 @@
   },
   "training": {
     "batch_size": 32,
+    "lightning_precision": "bf16-mixed",
     "num_workers": 4,
+    "policy_push_to_hub": false,
+    "policy_repo_id": "mhlee1215/so101-smolvla-all-hf-pick-place",
     "steps_per_epoch": 1495,
     "validation_max_batches": 32
   },
