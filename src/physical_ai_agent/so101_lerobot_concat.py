@@ -27,12 +27,16 @@ class LeRobotConcatDataset(torch.utils.data.ConcatDataset):
         if not datasets:
             raise ValueError("LeRobotConcatDataset requires at least one child dataset")
         super().__init__(list(datasets))
+        self.source_lengths = [len(dataset) for dataset in datasets]
+        empty_sources = [index for index, length in enumerate(self.source_lengths) if length <= 0]
+        if empty_sources:
+            raise ValueError(f"LeRobotConcatDataset child datasets must be non-empty: {empty_sources}")
         self.meta = datasets[0].meta
         self.repo_id = "+".join(str(getattr(dataset, "repo_id", f"dataset_{index}")) for index, dataset in enumerate(datasets))
         self.root = [str(getattr(dataset, "root", "")) for dataset in datasets]
         self.names = list(names or [f"dataset_{index}" for index in range(len(datasets))])
-        self.source_lengths = [len(dataset) for dataset in datasets]
         self.disable_episode_aware_sampler = True
+        self.requires_dataset_balanced_sampler = True
 
     def source_for_index(self, index: int) -> dict[str, Any]:
         if index < 0:
@@ -46,6 +50,31 @@ class LeRobotConcatDataset(torch.utils.data.ConcatDataset):
             "dataset_name": self.names[dataset_index],
             "local_index": index - previous_size,
         }
+
+    def balanced_sample_weights(self) -> torch.Tensor:
+        """Return per-frame weights whose total mass is equal per child dataset."""
+
+        weights = torch.empty(len(self), dtype=torch.double)
+        start = 0
+        source_count = len(self.source_lengths)
+        for length in self.source_lengths:
+            stop = start + length
+            weights[start:stop] = 1.0 / (source_count * length)
+            start = stop
+        return weights
+
+    def make_dataset_balanced_sampler(
+        self,
+        *,
+        num_samples: int | None = None,
+        generator: torch.Generator | None = None,
+    ) -> torch.utils.data.WeightedRandomSampler:
+        return torch.utils.data.WeightedRandomSampler(
+            weights=self.balanced_sample_weights(),
+            num_samples=int(num_samples or len(self)),
+            replacement=True,
+            generator=generator,
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.datasets[0], name)

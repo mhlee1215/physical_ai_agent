@@ -365,6 +365,87 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(dataset[4]["source"], "b")
         self.assertEqual(dataset.source_for_index(4), {"dataset_index": 1, "dataset_name": "b", "local_index": 2})
         self.assertTrue(dataset.disable_episode_aware_sampler)
+        self.assertTrue(dataset.requires_dataset_balanced_sampler)
+
+    def test_virtual_merge_balanced_sampler_draws_each_dataset_evenly(self) -> None:
+        import torch
+
+        from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset
+
+        class FakeDataset:
+            def __init__(self, name: str, length: int) -> None:
+                self.name = name
+                self.repo_id = name
+                self.root = f"/tmp/{name}"
+                self.meta = {"name": name}
+                self.items = list(range(length))
+
+            def __len__(self) -> int:
+                return len(self.items)
+
+            def __getitem__(self, index: int) -> dict[str, int | str]:
+                return {"source": self.name, "value": self.items[index]}
+
+        dataset = LeRobotConcatDataset(
+            [FakeDataset("small", 2), FakeDataset("large", 8)],
+            names=["small", "large"],
+        )
+
+        weights = dataset.balanced_sample_weights()
+        self.assertAlmostEqual(float(weights[:2].sum()), 0.5)
+        self.assertAlmostEqual(float(weights[2:].sum()), 0.5)
+
+        generator = torch.Generator().manual_seed(7)
+        sampler = dataset.make_dataset_balanced_sampler(num_samples=1000, generator=generator)
+        counts = {"small": 0, "large": 0}
+        for index in sampler:
+            counts[dataset.source_for_index(int(index))["dataset_name"]] += 1
+
+        self.assertGreater(counts["small"], 450)
+        self.assertLess(counts["small"], 550)
+        self.assertGreater(counts["large"], 450)
+        self.assertLess(counts["large"], 550)
+
+    def test_virtual_merge_dataloader_uses_dataset_balanced_sampler(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        from scripts.lerobot_train_so101_lightning import _make_dataloader
+
+        class FakeConcatDataset(torch.utils.data.Dataset):
+            requires_dataset_balanced_sampler = True
+            source_lengths = [2, 8]
+
+            def __init__(self) -> None:
+                self.sampler_calls = 0
+
+            def __len__(self) -> int:
+                return 10
+
+            def __getitem__(self, index: int) -> dict[str, int]:
+                return {"index": index}
+
+            def make_dataset_balanced_sampler(self, *, num_samples: int, generator=None):
+                self.sampler_calls += 1
+                return torch.utils.data.WeightedRandomSampler(
+                    weights=torch.ones(len(self), dtype=torch.double),
+                    num_samples=num_samples,
+                    replacement=True,
+                    generator=generator,
+                )
+
+        dataset = FakeConcatDataset()
+        cfg = SimpleNamespace(
+            num_workers=0,
+            batch_size=2,
+            dataset=SimpleNamespace(streaming=False),
+            policy=SimpleNamespace(device="cpu"),
+        )
+
+        dataloader = _make_dataloader(cfg, dataset)
+
+        self.assertEqual(dataset.sampler_calls, 1)
+        self.assertIsInstance(dataloader.sampler, torch.utils.data.WeightedRandomSampler)
 
     def test_virtual_merge_rejects_schema_mismatch(self) -> None:
         from physical_ai_agent.so101_lerobot_concat import validate_lerobot_dataset_infos

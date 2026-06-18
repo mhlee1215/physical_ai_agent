@@ -93,8 +93,10 @@ Hugging Face dataset workflow:
 For a multi-task run, use `train_datasets` as in
 `all_hf_train_pick_place_closed_loop.json`; the launcher downloads each source
 subfolder and passes the list to the training script. The training script
-validates schema/count compatibility and samples through a frame-proportional
-virtual concat dataset. Physical merged roots under
+validates schema/count compatibility and samples through a dataset-balanced
+random sampler over the virtual concat dataset, so each source split has the
+same expected sampling probability even when frame counts differ. Physical
+merged roots under
 `_workspace/so101_lerobot_merged/` are fallback/debug artifacts only, not the
 canonical training path.
 

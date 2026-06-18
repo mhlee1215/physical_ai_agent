@@ -407,7 +407,21 @@ def _make_processors(cfg: TrainPipelineConfig, dataset: Any, policy: Any) -> tup
 
 
 def _make_dataloader(cfg: TrainPipelineConfig, dataset: Any) -> torch.utils.data.DataLoader:
-    if hasattr(cfg.policy, "drop_n_last_frames") and not getattr(dataset, "disable_episode_aware_sampler", False):
+    if getattr(dataset, "requires_dataset_balanced_sampler", False):
+        sampler = dataset.make_dataset_balanced_sampler(num_samples=len(dataset))
+        shuffle = False
+        logging.info(
+            "Using dataset-balanced random sampler for %s train datasets: lengths=%s",
+            len(getattr(dataset, "source_lengths", [])),
+            getattr(dataset, "source_lengths", []),
+        )
+        print(
+            "Train sampler: dataset_balanced_random "
+            f"datasets={len(getattr(dataset, 'source_lengths', []))} "
+            f"lengths={getattr(dataset, 'source_lengths', [])}",
+            flush=True,
+        )
+    elif hasattr(cfg.policy, "drop_n_last_frames") and not getattr(dataset, "disable_episode_aware_sampler", False):
         sampler = EpisodeAwareSampler(
             dataset.meta.episodes["dataset_from_index"],
             dataset.meta.episodes["dataset_to_index"],

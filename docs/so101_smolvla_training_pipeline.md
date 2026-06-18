@@ -142,8 +142,9 @@ training, supervised validation, and closed-loop evaluation:
 
 Multi-train-split configs should use `train_datasets[]`. The launcher resolves
 each HF subfolder independently and the training script uses a
-frame-proportional virtual `ConcatDataset`; it should not build a physical
-merged LeRobot root for the default path.
+dataset-balanced random sampler over a virtual `ConcatDataset`; it should not
+build a physical merged LeRobot root for the default path. This keeps each
+source split equally likely during training even when frame counts differ.
 
 Before launching a long run, inspect the dry-run `runtime_contract`:
 
