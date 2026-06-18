@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""Tune SO101 camera1 before generating visual-policy datasets.
+
+Use this tool when camera1 needs to match the real egocentric hardware view.
+It renders a browser UI for adjusting the MuJoCo free-camera pose while showing
+camera2/wrist, top/debug, and scene reference views side by side. The saved
+preset is intended to be reviewed by the user first, then wired into the SO101
+dataset exporter / camera contract so future train/validation rollouts use the
+chosen camera1 view.
+"""
+
 from __future__ import annotations
 
 import argparse
