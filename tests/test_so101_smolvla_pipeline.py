@@ -376,6 +376,9 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertTrue(
                 any("log_gpu_metrics_tensorboard.py" in part for part in payload["gpu_monitor_cmd"])
             )
+            self.assertIn("--backend", payload["gpu_monitor_cmd"])
+            self.assertIn("auto", payload["gpu_monitor_cmd"])
+            self.assertIn("--train-pid-file", payload["gpu_monitor_cmd"])
 
     def test_single_training_launcher_defaults_to_epoch_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -214,6 +214,10 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         str(tensorboard_dir / "so101_system"),
         "--interval-s",
         str(args.gpu_monitor_interval_s),
+        "--backend",
+        "auto",
+        "--train-pid-file",
+        str(train_pid_file),
     ]
     progress_monitor_cmd = _progress_monitor_command(
         args=args,
