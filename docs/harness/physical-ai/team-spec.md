@@ -222,6 +222,15 @@ policy is:
   Launch local MPS training through that unsandboxed path, while writing logs,
   TensorBoard events, checkpoints, monitor JSONL, and closed-loop artifacts
   under `_workspace/` so Codex can inspect and report them afterward.
+- SO101 training, supervised validation, and closed-loop tests must remain
+  runnable on both macOS local and Linux/RunPod through
+  `scripts/start_so101_training.py`. The launcher runtime contract is:
+  `--runtime-platform macos` uses `policy.device=mps`,
+  `--lightning-accelerator=mps`, and `--mujoco-gl=glfw`; `--runtime-platform
+  linux` uses `policy.device=cuda`, `--lightning-accelerator=cuda`, and
+  `--mujoco-gl=egl`. `--runtime-platform auto` detects the host. Before a
+  training PR is treated as ready, dry-run both macOS and Linux profiles or run
+  the targeted unit tests that assert these command contracts.
 - SO101 SmolVLA training configs must enable moderate train-time augmentation
   by default. The current moderate preset is `state_jitter_std=0.003`,
   `state_dropout_prob=0.02`, `image_patch_mask_ratio=0.15`,

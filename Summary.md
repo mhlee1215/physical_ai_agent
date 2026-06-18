@@ -95,6 +95,11 @@ paper-facing concepts:
   not authoritative; verify `torch.backends.mps.is_available()` and launch
   MPS training from an unsandboxed/external runtime. Keep deterministic logs,
   TensorBoard events, checkpoints, and monitor artifacts under `_workspace/`.
+- User policy: SO101 training, supervised validation, and closed-loop tests
+  must stay runnable on both local macOS and Linux/RunPod through the canonical
+  launcher. The runtime contract is `macos => mps + MuJoCo glfw` and
+  `linux/RunPod => cuda + MuJoCo egl`; dry-run both profiles or run the targeted
+  command-contract tests before treating a training PR as ready.
 - RunPod experiment-data storage policy: past remote experiment results are not
   needed. Starting now, every new RunPod data-generation, training, evaluation,
   and closed-loop run must end with a local download, local verification, and

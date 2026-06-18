@@ -5,6 +5,7 @@ import argparse
 import copy
 import json
 import os
+import platform
 import shutil
 import signal
 import subprocess
@@ -94,6 +95,18 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--gpu-monitor-interval-s", type=float, default=5.0)
     parser.add_argument("--progress-monitor-interval-s", type=int, default=600)
+    parser.add_argument(
+        "--runtime-platform",
+        choices=["auto", "macos", "linux"],
+        default="auto",
+        help="Runtime profile for training/eval defaults. auto detects the current OS.",
+    )
+    parser.add_argument(
+        "--training-device",
+        choices=["auto", "cpu", "mps", "cuda"],
+        default="auto",
+        help="Default policy.device and Lightning accelerator when not explicitly forwarded.",
+    )
     parser.add_argument("--closed-loop-every-epochs", type=int, default=10)
     parser.add_argument("--closed-loop-episodes", type=int, default=8)
     parser.add_argument("--closed-loop-steps", type=int, default=120)
@@ -189,6 +202,8 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     training_args = _with_dataset_config(training_args, dataset_config)
     training_args = _with_validation_schedule(training_args, args)
     training_args = _with_checkpoint_schedule(training_args, dataset_config, args)
+    runtime_contract = _runtime_contract(args, training_args)
+    training_args = _with_runtime_contract(training_args, runtime_contract)
     train_cmd = [
         str(args.python),
         str(repo_root / "scripts" / "lerobot_train_so101_lightning.py"),
@@ -232,6 +247,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         train_output_dir=train_output_dir,
         dataset_config=dataset_config,
         training_args=training_args,
+        runtime_contract=runtime_contract,
         train_pid_file=train_pid_file,
     )
     cache_build_cmds = _cache_build_commands(args.python, repo_root, dataset_config)
@@ -248,6 +264,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "gpu_monitor_cmd": None if args.no_gpu_monitor else gpu_monitor_cmd,
         "progress_monitor_cmd": None if args.no_progress_monitor else progress_monitor_cmd,
         "cache_build_cmds": cache_build_cmds,
+        "runtime_contract": runtime_contract,
         "tensorboard_url": None if args.no_tensorboard else f"http://127.0.0.1:{args.tensorboard_port}/",
         "dashboard_url": None if args.no_dashboard else f"http://127.0.0.1:{args.dashboard_port}/",
     }
@@ -257,6 +274,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         training_args=training_args,
         train_cmd=train_cmd,
         launch_plan=launch_plan,
+        runtime_contract=runtime_contract,
     )
     if args.dry_run:
         print(json.dumps(launch_plan, indent=2, sort_keys=True))
@@ -703,6 +721,46 @@ def _with_checkpoint_schedule(
     return [*args, f"--save_freq={checkpoint_interval}"]
 
 
+def _runtime_contract(namespace: argparse.Namespace, training_args: list[str]) -> dict[str, str]:
+    runtime_platform = _runtime_platform(namespace.runtime_platform)
+    device = _arg_value(training_args, "policy.device")
+    if device not in {"cpu", "mps", "cuda"}:
+        device = namespace.training_device
+    if device == "auto":
+        device = "mps" if runtime_platform == "macos" else "cuda"
+    lightning_accelerator = _arg_value(training_args, "lightning-accelerator")
+    if not lightning_accelerator or lightning_accelerator == "auto":
+        lightning_accelerator = {"mps": "mps", "cuda": "cuda", "cpu": "cpu"}[device]
+    lightning_devices = _arg_value(training_args, "lightning-devices") or ("1" if device in {"mps", "cuda"} else "auto")
+    mujoco_gl = namespace.closed_loop_mujoco_gl
+    if mujoco_gl == "auto":
+        mujoco_gl = "glfw" if runtime_platform == "macos" else "egl"
+    return {
+        "runtime_platform": runtime_platform,
+        "training_device": device,
+        "lightning_accelerator": lightning_accelerator,
+        "lightning_devices": lightning_devices,
+        "closed_loop_mujoco_gl": mujoco_gl,
+    }
+
+
+def _runtime_platform(requested: str) -> str:
+    if requested in {"macos", "linux"}:
+        return requested
+    system = platform.system().lower()
+    if system == "darwin":
+        return "macos"
+    return "linux"
+
+
+def _with_runtime_contract(args: list[str], contract: dict[str, str]) -> list[str]:
+    updated = [*args]
+    updated = _ensure_arg(updated, "policy.device", contract["training_device"])
+    updated = _ensure_arg(updated, "lightning-accelerator", contract["lightning_accelerator"])
+    updated = _ensure_arg(updated, "lightning-devices", contract["lightning_devices"])
+    return updated
+
+
 def _validate_monitoring_contract(
     *,
     args: argparse.Namespace,
@@ -710,6 +768,7 @@ def _validate_monitoring_contract(
     training_args: list[str],
     train_cmd: list[str],
     launch_plan: dict[str, Any],
+    runtime_contract: dict[str, str],
 ) -> None:
     if not dataset_config or args.allow_incomplete_monitoring:
         return
@@ -729,6 +788,14 @@ def _validate_monitoring_contract(
         errors.append("TensorBoard command is missing.")
     if "--tensorboard-log-dir" not in train_cmd:
         errors.append("training command is missing --tensorboard-log-dir.")
+    if not _has_any_arg(training_args, "policy.device"):
+        errors.append("training command is missing --policy.device for platform-specific execution.")
+    if not _has_any_arg(training_args, "lightning-accelerator"):
+        errors.append("training command is missing --lightning-accelerator for platform-specific execution.")
+    if runtime_contract["runtime_platform"] == "macos" and runtime_contract["training_device"] == "cuda":
+        errors.append("macOS runtime profile cannot default to CUDA; use --training-device mps or cpu.")
+    if runtime_contract["runtime_platform"] == "linux" and runtime_contract["training_device"] == "mps":
+        errors.append("Linux/RunPod runtime profile cannot use MPS; use --training-device cuda or cpu.")
 
     if _validation_interval(training_args) <= 0:
         errors.append("validation cadence must be positive; set --validation-interval-epochs or --validation-interval-steps.")
@@ -744,6 +811,9 @@ def _validate_monitoring_contract(
         errors.append("progress monitor is disabled; it is required for supervised validation and closed-loop metrics.")
     if launch_plan.get("progress_monitor_cmd") is None:
         errors.append("progress monitor command is missing.")
+    progress_monitor_cmd = launch_plan.get("progress_monitor_cmd") or []
+    if "--mujoco-gl" not in progress_monitor_cmd:
+        errors.append("progress monitor command is missing --mujoco-gl for platform-specific closed-loop rendering.")
     if int(args.closed_loop_every_epochs) <= 0:
         errors.append("--closed-loop-every-epochs must be positive.")
     if int(args.closed_loop_episodes) <= 0:
@@ -835,6 +905,7 @@ def _progress_monitor_command(
     train_output_dir: Path,
     dataset_config: dict[str, Any] | None,
     training_args: list[str],
+    runtime_contract: dict[str, str],
     train_pid_file: Path,
 ) -> list[str] | None:
     if not dataset_config:
@@ -884,7 +955,7 @@ def _progress_monitor_command(
         "--closed-loop-steps",
         str(args.closed_loop_steps),
         "--mujoco-gl",
-        args.closed_loop_mujoco_gl,
+        runtime_contract["closed_loop_mujoco_gl"],
         "--closed-loop-policy",
         args.closed_loop_policy,
         "--closed-loop-eval-skill-mode",

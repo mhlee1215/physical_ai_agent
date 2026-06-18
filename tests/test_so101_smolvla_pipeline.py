@@ -490,6 +490,8 @@ class SO101SmolVLAPipelineTest(TestCase):
                     str(Path(tmpdir) / "run"),
                     "--dataset-config",
                     str(config),
+                    "--runtime-platform",
+                    "macos",
                     "--",
                     "--policy.type=smolvla",
                 ],
@@ -519,8 +521,13 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--closed-loop-eval-skill-mode", payload["progress_monitor_cmd"])
             self.assertIn("pick_from_top_cube", payload["progress_monitor_cmd"])
             self.assertIn("--mujoco-gl", payload["progress_monitor_cmd"])
-            self.assertIn("auto", payload["progress_monitor_cmd"])
+            self.assertIn("glfw", payload["progress_monitor_cmd"])
             self.assertIn("--closed-loop-task-prompt", payload["progress_monitor_cmd"])
+            self.assertEqual(payload["runtime_contract"]["runtime_platform"], "macos")
+            self.assertEqual(payload["runtime_contract"]["training_device"], "mps")
+            self.assertEqual(payload["runtime_contract"]["closed_loop_mujoco_gl"], "glfw")
+            self.assertIn("--policy.device=mps", train_cmd)
+            self.assertIn("--lightning-accelerator=mps", train_cmd)
             self.assertEqual(
                 payload["cache_build_cmds"][0][-1],
                 "/tmp/so101-cache/train",
@@ -541,6 +548,66 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--so101-gpu-image-augmentation", train_cmd)
             self.assertFalse(any("action-dropout" in arg for arg in train_cmd))
             self.assertEqual(payload["dataset_config"]["train_dataset"]["repo_id"], "physical-ai-agent/train")
+
+    def test_single_training_launcher_uses_linux_runpod_runtime_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "dataset_config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "train_dataset": {
+                            "repo_id": "physical-ai-agent/train",
+                            "root": "_workspace/train",
+                        },
+                        "validation_dataset": {
+                            "repo_id": "physical-ai-agent/val",
+                            "root": "_workspace/val",
+                        },
+                        "training": {
+                            "steps_per_epoch": 42,
+                            "policy_push_to_hub": False,
+                        },
+                        "closed_loop": {
+                            "eval_skill_mode": "pick_from_top_cube",
+                            "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--dataset-config",
+                    str(config),
+                    "--runtime-platform",
+                    "linux",
+                    "--",
+                    "--policy.type=smolvla",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["runtime_contract"]["runtime_platform"], "linux")
+            self.assertEqual(payload["runtime_contract"]["training_device"], "cuda")
+            self.assertEqual(payload["runtime_contract"]["lightning_accelerator"], "cuda")
+            self.assertEqual(payload["runtime_contract"]["closed_loop_mujoco_gl"], "egl")
+            self.assertIn("--policy.device=cuda", payload["train_cmd"])
+            self.assertIn("--lightning-accelerator=cuda", payload["train_cmd"])
+            self.assertIn("--mujoco-gl", payload["progress_monitor_cmd"])
+            self.assertIn("egl", payload["progress_monitor_cmd"])
 
     def test_single_training_launcher_can_use_local_dataset_roots_for_debugging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
