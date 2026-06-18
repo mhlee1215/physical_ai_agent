@@ -422,6 +422,12 @@ class SO101SmolVLAPipelineTest(TestCase):
                             "policy_repo_id": "mhlee1215/test-policy",
                             "policy_push_to_hub": False,
                             "lightning_precision": "bf16-mixed",
+                            "steps_per_epoch": 42,
+                        },
+                        "closed_loop": {
+                            "eval_skill_mode": "pick_from_top_cube",
+                            "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                            "record_rollout_gif": True,
                         },
                         "predecoded_image_cache": {
                             "root_env": "SO101_TEST_CACHE_ROOT",
@@ -479,8 +485,15 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--policy.repo_id=mhlee1215/test-policy", train_cmd)
             self.assertIn("--policy.push_to_hub=false", train_cmd)
             self.assertIn("--lightning-precision=bf16-mixed", train_cmd)
+            self.assertIn("--validation-interval-epochs=1", train_cmd)
+            self.assertIn("--save_freq=42", train_cmd)
             self.assertIn("--so101-image-cache-dir=/tmp/so101-cache/train", train_cmd)
             self.assertIn("--validation-image-cache-dir=/tmp/so101-cache/val", train_cmd)
+            self.assertIn("tensorboard_cmd", payload)
+            self.assertIn("progress_monitor_cmd", payload)
+            self.assertIn("--closed-loop-eval-skill-mode", payload["progress_monitor_cmd"])
+            self.assertIn("pick_from_top_cube", payload["progress_monitor_cmd"])
+            self.assertIn("--closed-loop-task-prompt", payload["progress_monitor_cmd"])
             self.assertEqual(
                 payload["cache_build_cmds"][0][-1],
                 "/tmp/so101-cache/train",
@@ -533,6 +546,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     "start",
                     "--dry-run",
                     "--use-local-dataset-roots",
+                    "--allow-incomplete-monitoring",
                     "--lock-file",
                     str(Path(tmpdir) / "active.json"),
                     "--run-dir",
@@ -555,6 +569,47 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--validation-dataset-root=_workspace/local_val", train_cmd)
             self.assertNotIn("hf_dataset_downloads", payload["dataset_config"])
             self.assertNotIn("hf_resolved_root", payload["dataset_config"]["train_dataset"])
+
+    def test_single_training_launcher_fails_fast_without_validation_and_closed_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "dataset_config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "train_dataset": {
+                            "repo_id": "physical-ai-agent/train",
+                            "root": "_workspace/train",
+                        },
+                        "training": {"steps_per_epoch": 42},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--dataset-config",
+                    str(config),
+                    "--",
+                    "--policy.type=smolvla",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("SO101 monitored training contract failed", completed.stderr)
+            self.assertIn("validation_dataset", completed.stderr)
+            self.assertIn("closed-loop eval skill mode", completed.stderr)
 
     def test_so101_training_launcher_resolves_hf_dataset_subfolders_before_training(self) -> None:
         from scripts import start_so101_training

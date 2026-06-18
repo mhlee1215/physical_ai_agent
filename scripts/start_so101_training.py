@@ -64,6 +64,14 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-gpu-monitor", action="store_true")
     parser.add_argument("--no-progress-monitor", action="store_true")
     parser.add_argument(
+        "--allow-incomplete-monitoring",
+        action="store_true",
+        help=(
+            "Debug escape hatch: allow dataset-config training to start without "
+            "the default TensorBoard, validation, checkpoint, and closed-loop guards."
+        ),
+    )
+    parser.add_argument(
         "--hf-dataset-cache-root",
         type=Path,
         default=DEFAULT_HF_DATASET_CACHE_ROOT,
@@ -168,6 +176,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     training_args = _forwarded_args(args.training_args, passthrough)
     training_args = _with_dataset_config(training_args, dataset_config)
     training_args = _with_validation_schedule(training_args, args)
+    training_args = _with_checkpoint_schedule(training_args, dataset_config, args)
     train_cmd = [
         str(args.python),
         str(repo_root / "scripts" / "lerobot_train_so101_lightning.py"),
@@ -226,6 +235,13 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "tensorboard_url": None if args.no_tensorboard else f"http://127.0.0.1:{args.tensorboard_port}/",
         "dashboard_url": None if args.no_dashboard else f"http://127.0.0.1:{args.dashboard_port}/",
     }
+    _validate_monitoring_contract(
+        args=args,
+        dataset_config=dataset_config,
+        training_args=training_args,
+        train_cmd=train_cmd,
+        launch_plan=launch_plan,
+    )
     if args.dry_run:
         print(json.dumps(launch_plan, indent=2, sort_keys=True))
         return 0
@@ -653,6 +669,134 @@ def _with_validation_schedule(args: list[str], namespace: argparse.Namespace) ->
     if namespace.validation_interval_epochs is not None:
         return [*args, f"--validation-interval-epochs={int(namespace.validation_interval_epochs)}"]
     return args
+
+
+def _with_checkpoint_schedule(
+    args: list[str],
+    config: dict[str, Any] | None,
+    namespace: argparse.Namespace,
+) -> list[str]:
+    if not config or _has_any_arg(args, "save_freq", "save-freq"):
+        return args
+    if _closed_loop_policy_name(namespace) == "off":
+        return args
+    steps_per_epoch = _steps_per_epoch(config, args)
+    if steps_per_epoch is None:
+        return args
+    return [*args, f"--save_freq={steps_per_epoch}"]
+
+
+def _validate_monitoring_contract(
+    *,
+    args: argparse.Namespace,
+    dataset_config: dict[str, Any] | None,
+    training_args: list[str],
+    train_cmd: list[str],
+    launch_plan: dict[str, Any],
+) -> None:
+    if not dataset_config or args.allow_incomplete_monitoring:
+        return
+
+    errors: list[str] = []
+    validation = dataset_config.get("validation_dataset")
+    if not isinstance(validation, dict):
+        errors.append("dataset config must define validation_dataset for val/loss.")
+    else:
+        for key in ("repo_id", "root"):
+            if not validation.get(key):
+                errors.append(f"validation_dataset.{key} is required for val/loss.")
+
+    if args.no_tensorboard:
+        errors.append("TensorBoard is disabled; remove --no-tensorboard for monitored training.")
+    if launch_plan.get("tensorboard_cmd") is None:
+        errors.append("TensorBoard command is missing.")
+    if "--tensorboard-log-dir" not in train_cmd:
+        errors.append("training command is missing --tensorboard-log-dir.")
+
+    if _validation_interval(training_args) <= 0:
+        errors.append("validation cadence must be positive; set --validation-interval-epochs or --validation-interval-steps.")
+    if not _has_any_arg(training_args, "validation-dataset-root"):
+        errors.append("training command is missing --validation-dataset-root.")
+    if not _has_any_arg(training_args, "validation-dataset-repo-id"):
+        errors.append("training command is missing --validation-dataset-repo-id.")
+
+    closed_loop_policy = _closed_loop_policy_name(args)
+    if closed_loop_policy == "off":
+        errors.append("closed-loop evaluation is disabled; use periodic, best_only, or best_or_periodic.")
+    if args.no_progress_monitor:
+        errors.append("progress monitor is disabled; it is required for supervised validation and closed-loop metrics.")
+    if launch_plan.get("progress_monitor_cmd") is None:
+        errors.append("progress monitor command is missing.")
+    if int(args.closed_loop_every_epochs) <= 0:
+        errors.append("--closed-loop-every-epochs must be positive.")
+    if int(args.closed_loop_episodes) <= 0:
+        errors.append("--closed-loop-episodes must be positive.")
+    if int(args.closed_loop_steps) <= 0:
+        errors.append("--closed-loop-steps must be positive.")
+
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if not args.closed_loop_eval_skill_mode and not (
+        isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode")
+    ):
+        errors.append("closed-loop eval skill mode must be set in config closed_loop.eval_skill_mode or CLI.")
+    if not _closed_loop_task_prompt(args, dataset_config):
+        errors.append("closed-loop task prompt must be set in config closed_loop.task_prompt or CLI.")
+
+    steps_per_epoch = _steps_per_epoch(dataset_config, training_args)
+    if steps_per_epoch is None:
+        errors.append("training.steps_per_epoch or --steps-per-epoch is required for closed-loop scheduling.")
+    save_freq = _positive_int_arg(training_args, "save_freq") or _positive_int_arg(training_args, "save-freq")
+    if save_freq is None:
+        errors.append("checkpoint save cadence is missing; set --save_freq or training.steps_per_epoch.")
+    elif steps_per_epoch is not None:
+        max_closed_loop_gap = steps_per_epoch * int(args.closed_loop_every_epochs)
+        if save_freq > max_closed_loop_gap:
+            errors.append(
+                f"--save_freq={save_freq} is too sparse for closed-loop cadence; "
+                f"expected <= {max_closed_loop_gap}."
+            )
+
+    if errors:
+        detail = "\n".join(f"- {error}" for error in errors)
+        raise SystemExit(f"SO101 monitored training contract failed:\n{detail}")
+
+
+def _validation_interval(args: list[str]) -> int:
+    steps = _positive_int_arg(args, "validation-interval-steps") or _positive_int_arg(
+        args, "validation-every-n-train-steps"
+    )
+    if steps is not None:
+        return steps
+    return _positive_int_arg(args, "validation-interval-epochs") or 0
+
+
+def _steps_per_epoch(config: dict[str, Any], training_args: list[str]) -> int | None:
+    value = _positive_int_arg(training_args, "steps-per-epoch")
+    if value is not None:
+        return value
+    training = config.get("training") or {}
+    if isinstance(training, dict):
+        try:
+            parsed = int(training.get("steps_per_epoch") or 0)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _positive_int_arg(args: list[str], name: str) -> int | None:
+    value = _arg_value(args, name)
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _closed_loop_policy_name(args: argparse.Namespace) -> str:
+    return str(getattr(args, "closed_loop_policy", "periodic") or "periodic")
 
 
 def _progress_monitor_command(
