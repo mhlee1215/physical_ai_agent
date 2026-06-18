@@ -486,7 +486,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--policy.push_to_hub=false", train_cmd)
             self.assertIn("--lightning-precision=bf16-mixed", train_cmd)
             self.assertIn("--validation-interval-epochs=1", train_cmd)
-            self.assertIn("--save_freq=42", train_cmd)
+            self.assertIn("--save_freq=420", train_cmd)
             self.assertIn("--so101-image-cache-dir=/tmp/so101-cache/train", train_cmd)
             self.assertIn("--validation-image-cache-dir=/tmp/so101-cache/val", train_cmd)
             self.assertIn("tensorboard_cmd", payload)
@@ -610,6 +610,58 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("SO101 monitored training contract failed", completed.stderr)
             self.assertIn("validation_dataset", completed.stderr)
             self.assertIn("closed-loop eval skill mode", completed.stderr)
+
+    def test_single_training_launcher_fails_fast_when_checkpoint_cadence_is_too_dense(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "dataset_config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "train_dataset": {
+                            "repo_id": "physical-ai-agent/train",
+                            "root": "_workspace/train",
+                        },
+                        "validation_dataset": {
+                            "repo_id": "physical-ai-agent/val",
+                            "root": "_workspace/val",
+                        },
+                        "training": {"steps_per_epoch": 325},
+                        "closed_loop": {
+                            "eval_skill_mode": "pick_from_top_cube",
+                            "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--dataset-config",
+                    str(config),
+                    "--closed-loop-every-epochs",
+                    "1",
+                    "--",
+                    "--policy.type=smolvla",
+                    "--steps=50000",
+                    "--save_freq=325",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("would create about", completed.stderr)
+            self.assertIn("--max-monitored-checkpoints", completed.stderr)
 
     def test_so101_training_launcher_resolves_hf_dataset_subfolders_before_training(self) -> None:
         from scripts import start_so101_training

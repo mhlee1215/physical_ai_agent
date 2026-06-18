@@ -97,6 +97,12 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--closed-loop-every-epochs", type=int, default=10)
     parser.add_argument("--closed-loop-episodes", type=int, default=8)
     parser.add_argument("--closed-loop-steps", type=int, default=120)
+    parser.add_argument(
+        "--max-monitored-checkpoints",
+        type=int,
+        default=20,
+        help="Fail fast when --steps/--save_freq would create more monitored checkpoints than this.",
+    )
     parser.add_argument("--closed-loop-policy", choices=["off", "periodic", "best_only", "best_or_periodic"], default="periodic")
     parser.add_argument(
         "--closed-loop-eval-skill-mode",
@@ -683,7 +689,8 @@ def _with_checkpoint_schedule(
     steps_per_epoch = _steps_per_epoch(config, args)
     if steps_per_epoch is None:
         return args
-    return [*args, f"--save_freq={steps_per_epoch}"]
+    checkpoint_interval = steps_per_epoch * max(1, int(namespace.closed_loop_every_epochs))
+    return [*args, f"--save_freq={checkpoint_interval}"]
 
 
 def _validate_monitoring_contract(
@@ -755,6 +762,17 @@ def _validate_monitoring_contract(
                 f"--save_freq={save_freq} is too sparse for closed-loop cadence; "
                 f"expected <= {max_closed_loop_gap}."
             )
+        planned_steps = _positive_int_arg(training_args, "steps")
+        max_checkpoints = max(1, int(args.max_monitored_checkpoints))
+        if planned_steps is not None:
+            planned_checkpoints = (planned_steps + save_freq - 1) // save_freq
+            if planned_checkpoints > max_checkpoints:
+                errors.append(
+                    f"--steps={planned_steps} and --save_freq={save_freq} would create "
+                    f"about {planned_checkpoints} checkpoints; expected <= {max_checkpoints}. "
+                    "Increase --save_freq, lower --steps, or raise --max-monitored-checkpoints "
+                    "only when disk capacity is confirmed."
+                )
 
     if errors:
         detail = "\n".join(f"- {error}" for error in errors)
