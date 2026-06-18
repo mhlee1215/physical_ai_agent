@@ -267,16 +267,10 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("/input_camera_contract", constants)
         self.assertIn("observation.state", constants)
         self.assertIn("val/loss", constants)
-        self.assertIn("important/loss", constants)
-        self.assertIn("important_train_loss", constants)
-        self.assertIn("important_val_loss", constants)
-        self.assertIn("train_vs_val", constants)
-        self.assertIn("action_chunk_smoothness", constants)
-        self.assertIn("teacher_vs_predicted_jitter", constants)
-        self.assertIn("predicted_to_teacher_ratio", constants)
+        self.assertIn("important/train_loss", constants)
+        self.assertIn("important/val_loss", constants)
         self.assertIn("val/action_jitter/", constants)
         self.assertIn("path_to_endpoint_ratio_mean", constants)
-        self.assertIn("Multiline", constants)
         self.assertIn("TensorBoardLogger", names)
         self.assertIn("Trainer", names)
         self.assertIn("save_checkpoint", names)
@@ -315,6 +309,18 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn('data-tab="datasetPanel"', html)
         self.assertIn('data-tab="closedLoopPanel"', html)
         self.assertNotIn('data-tab="trainingPanel">Training', html)
+
+    def test_training_monitor_writes_important_closed_loop_scalar(self) -> None:
+        source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        constants = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+
+        self.assertIn("success_rate", constants)
+        self.assertIn("important/closed_loop_success_rate", constants)
 
     def test_single_training_launcher_is_canonical_and_lock_guarded(self) -> None:
         source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")

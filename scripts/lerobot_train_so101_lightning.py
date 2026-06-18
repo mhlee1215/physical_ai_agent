@@ -214,7 +214,6 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     )
     tb_log_dir = (wrapper_args.tensorboard_log_dir or cfg.output_dir / "tensorboard").resolve()
     logger = TensorBoardLogger(save_dir=str(tb_log_dir), name="so101_smolvla", version="")
-    _add_tensorboard_custom_scalars(logger)
     callbacks = []
     checkpoint_callback = _make_lerobot_checkpoint_callback(
         lightning.Callback,
@@ -273,85 +272,6 @@ def _import_tensorboard_logger() -> Any:
     except ModuleNotFoundError:
         from pytorch_lightning.loggers import TensorBoardLogger
     return TensorBoardLogger
-
-
-def _add_tensorboard_custom_scalars(logger: Any) -> None:
-    experiment = getattr(logger, "experiment", None)
-    if experiment is None or not hasattr(experiment, "add_custom_scalars"):
-        return
-    experiment.add_custom_scalars(
-        {
-            "important_metrics": {
-                "train_val_loss": ["Multiline", ["^important/loss$"]],
-            },
-            "loss": {
-                "train_vs_val": ["Multiline", ["^train/loss$", "^val/loss$"]],
-            },
-            "closed_loop": {
-                "success_grasp": [
-                    "Multiline",
-                    ["closed_loop/success_rate", "closed_loop/grasp_rate"],
-                ],
-            },
-            "action_chunk_smoothness": {
-                "teacher_vs_predicted_jitter": [
-                    "Multiline",
-                    [
-                        "^val/action_jitter/predicted/jerk_abs_mean$",
-                        "^val/action_jitter/teacher/jerk_abs_mean$",
-                        "^val/action_jitter/predicted/delta_l2_step_mean$",
-                        "^val/action_jitter/teacher/delta_l2_step_mean$",
-                    ],
-                ],
-                "predicted_to_teacher_ratio": [
-                    "Multiline",
-                    [
-                        "^val/action_jitter/ratio/jerk_abs_mean$",
-                        "^val/action_jitter/ratio/path_to_endpoint_ratio_mean$",
-                    ],
-                ],
-            },
-            "throughput": {
-                "samples_per_second": ["Multiline", ["train/samples_per_s"]],
-                "seconds_per_sample": [
-                    "Multiline",
-                    ["train/update_s_per_sample", "train/data_s_per_sample"],
-                ],
-                "batch_size": ["Multiline", ["train/batch_size", "val/batch_size"]],
-            },
-            "system": {
-                "accelerator_status": [
-                    "Multiline",
-                    [
-                        "system/gpu_monitor_available",
-                        "system/accelerator_available",
-                        "system/mps_available",
-                    ],
-                ],
-                "gpu_utilization": ["Multiline", ["system/gpu_util_percent"]],
-                "gpu_memory": [
-                    "Multiline",
-                    ["system/gpu_memory_used_mb", "system/gpu_memory_used_percent"],
-                ],
-                "host_memory": [
-                    "Multiline",
-                    [
-                        "system/host_memory_used_mb",
-                        "system/host_memory_used_percent",
-                        "system/train_process_rss_mb",
-                    ],
-                ],
-                "host_load": [
-                    "Multiline",
-                    [
-                        "system/load_avg_1m",
-                        "system/train_process_cpu_percent",
-                        "system/train_process_mem_percent",
-                    ],
-                ],
-            },
-        }
-    )
 
 
 def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig) -> Path:
@@ -486,14 +406,6 @@ def _validation_epoch_interval(args: argparse.Namespace, step_interval: int) -> 
     return 0 if value is None else max(0, int(value))
 
 
-def _scalar_value(value: Any) -> float | None:
-    if torch.is_tensor(value) and value.numel() == 1:
-        return float(value.detach().cpu())
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
-
-
 def _metadata_log_interval(args: argparse.Namespace) -> int:
     value = args.log_input_metadata_every_n_steps
     if value is None:
@@ -612,7 +524,6 @@ class _SO101LightningModule:
                 self.log_input_images_every_n_steps = max(0, int(log_input_images_every_n_steps))
                 self.log_input_metadata_every_n_steps = max(0, int(log_input_metadata_every_n_steps))
                 self._last_step_started = 0.0
-                self._colored_loss_writers: dict[str, Any] = {}
 
             def forward(self, batch: dict[str, Any]) -> Any:
                 return self.policy.forward(batch)
@@ -636,6 +547,7 @@ class _SO101LightningModule:
                 batch_size = _batch_size(batch)
                 update_s = time.perf_counter() - started
                 self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True, batch_size=batch_size)
+                self.log("important/train_loss", loss, on_step=True, on_epoch=False, batch_size=batch_size)
                 self.log("train/batch_size", float(batch_size), on_step=True, on_epoch=False, batch_size=batch_size)
                 self.log("train/update_s", update_s, on_step=True, on_epoch=False, batch_size=batch_size)
                 self.log("train/data_s", dataloading_s, on_step=True, on_epoch=False, batch_size=batch_size)
@@ -661,7 +573,6 @@ class _SO101LightningModule:
                     batch_size=batch_size,
                 )
                 self._log_system_metrics(batch_size=batch_size)
-                self._log_colored_loss_scalar("important/loss", loss, series="train")
                 for key, value in (output_dict or {}).items():
                     if key == "loss":
                         continue
@@ -714,11 +625,6 @@ class _SO101LightningModule:
                     },
                 }
 
-            def on_fit_end(self) -> None:
-                for writer in self._colored_loss_writers.values():
-                    writer.close()
-                self._colored_loss_writers.clear()
-
             def run_validation_batch(self, batch: dict[str, Any], *, log_step: int | None = None) -> Any:
                 was_training = self.policy.training
                 self.policy.eval()
@@ -736,7 +642,7 @@ class _SO101LightningModule:
                     jitter_metrics = _action_chunk_jitter_metrics(self.policy, batch)
                 batch_size = _batch_size(batch)
                 self._log_validation_scalar("val/loss", loss, batch_size=batch_size, log_step=log_step)
-                self._log_colored_loss_scalar("important/loss", loss, series="val", log_step=log_step)
+                self._log_validation_scalar("important/val_loss", loss, batch_size=batch_size, log_step=log_step)
                 for key, value in (output_dict or {}).items():
                     if key == "loss":
                         continue
@@ -775,33 +681,6 @@ class _SO101LightningModule:
                     experiment.add_scalar(tag, scalar, global_step=int(log_step or self.trainer.global_step))
                     return
                 self.log(tag, scalar, on_step=True, on_epoch=False, batch_size=batch_size)
-
-            def _log_colored_loss_scalar(
-                self,
-                tag: str,
-                value: Any,
-                *,
-                series: str,
-                log_step: int | None = None,
-            ) -> None:
-                scalar = _scalar_value(value)
-                if scalar is None:
-                    return
-                log_dir = Path(str(getattr(getattr(self, "logger", None), "log_dir", "")))
-                if not log_dir:
-                    return
-                run_dir = log_dir.parent / ("important_train_loss" if series == "train" else "important_val_loss")
-                writer = self._colored_loss_writers.get(str(run_dir))
-                if writer is None:
-                    try:
-                        from torch.utils.tensorboard import SummaryWriter
-                    except ModuleNotFoundError:
-                        return
-                    writer = SummaryWriter(log_dir=str(run_dir))
-                    self._colored_loss_writers[str(run_dir)] = writer
-                step = int(log_step if log_step is not None else getattr(self.trainer, "global_step", 0))
-                writer.add_scalar(tag, scalar, global_step=step)
-                writer.flush()
 
             def _log_input_images(
                 self,

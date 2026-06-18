@@ -538,6 +538,8 @@ def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: d
             value = row.get(key)
             if isinstance(value, (int, float)):
                 writer.add_scalar(f"closed_loop/{key}", float(value), global_step=step)
+                if key == "success_rate":
+                    writer.add_scalar("important/closed_loop_success_rate", float(value), global_step=step)
         for camera_name, image_path in _first_closed_loop_input_grid_paths(report).items():
             image = _read_hwc_image(Path(image_path))
             if image is not None:
