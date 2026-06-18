@@ -117,6 +117,10 @@ paper-facing concepts:
   HF resolution. RunPod should be used as the CUDA training/evaluation worker,
   not the primary MuJoCo/LeRobot dataset exporter, unless local export is
   blocked or the user explicitly asks for remote generation.
+- Multi-train-split SO101 training should use `train_datasets[]` with virtual
+  LeRobot concat at training time. Physical merged train roots under
+  `_workspace/so101_lerobot_merged/` are fallback/debug artifacts, not the
+  canonical training path.
 - SO101 dataset camera1 contract: `camera1` is the real-hardware-aligned
   `egocentric_cam`, not `top_down`. Current approved camera1 pose is
   `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`;

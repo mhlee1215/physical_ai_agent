@@ -20,7 +20,14 @@ PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
 Config fields:
 
 - `train_dataset.repo_id`, `train_dataset.root`: forwarded to LeRobot as
-  `--dataset.repo_id` and `--dataset.root`.
+  `--dataset.repo_id` and `--dataset.root` for legacy single-train-split
+  configs.
+- `train_datasets`: preferred multi-train-split schema. Each entry defines a
+  LeRobot train split with `name`, `repo_id`, `root`, optional HF bundle fields,
+  and optional `expected_episodes` / `expected_frames`. When present, this list
+  takes priority over `train_dataset`; the launcher resolves each HF subfolder
+  independently and the training script uses a virtual `ConcatDataset` instead
+  of physically merging shards.
 - `validation_dataset.repo_id`, `validation_dataset.root`: forwarded as
   validation dataset args.
 - `train_dataset.hf_repo_id`, `train_dataset.hf_path_in_repo`, and matching
@@ -28,10 +35,8 @@ Config fields:
   `scripts/start_so101_training.py start` downloads only the configured
   subfolder before training and forwards the resolved local subfolder path as
   `dataset.root`.
-- `train_dataset.hf_merge_sources`: optional list of HF subfolders to download
-  and merge into `train_dataset.root` before training. Use this for combined
-  multi-task runs while keeping each generated/uploaded dataset as a separate
-  HF bundle subfolder.
+- `train_dataset.hf_merge_sources`: legacy compatibility path. Do not use it
+  for new canonical training configs; use `train_datasets` instead.
 - `camera_contract`: human-readable expected model input mapping.
 - `tensorboard`: optional default input logging cadence.
 - `augmentation`: optional train-time sampling augmentation defaults. Supported
@@ -85,10 +90,13 @@ Hugging Face dataset workflow:
    the downloaded subfolder under `_workspace/hf_datasets/` as the effective
    LeRobot root.
 
-For a multi-task run, use `train_dataset.hf_merge_sources` as in
+For a multi-task run, use `train_datasets` as in
 `all_hf_train_pick_place_closed_loop.json`; the launcher downloads each source
-subfolder, merges the shards with `scripts/merge_so101_lerobot_shards.py`, and
-passes the merged dataset root to LeRobot.
+subfolder and passes the list to the training script. The training script
+validates schema/count compatibility and samples through a frame-proportional
+virtual concat dataset. Physical merged roots under
+`_workspace/so101_lerobot_merged/` are fallback/debug artifacts only, not the
+canonical training path.
 
 For local export debugging, `--use-local-dataset-roots` ignores the HF fields
 and forwards the config's `root` values directly. For HF cache debugging,
