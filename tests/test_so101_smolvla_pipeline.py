@@ -663,6 +663,50 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("would create about", completed.stderr)
             self.assertIn("--max-monitored-checkpoints", completed.stderr)
 
+    def test_prune_so101_checkpoints_keeps_best_validation_and_latest_candidate(self) -> None:
+        from scripts.prune_so101_checkpoints import prune_once
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "run"
+            checkpoints = run_dir / "model" / "checkpoints"
+            metrics = run_dir / "metrics"
+            metrics.mkdir(parents=True)
+            for name in ("000325", "000650", "000975"):
+                checkpoint = checkpoints / name
+                (checkpoint / "pretrained_model").mkdir(parents=True)
+                (checkpoint / "training_state").mkdir()
+                for path in (
+                    checkpoint / "pretrained_model" / "model.safetensors",
+                    checkpoint / "pretrained_model" / "train_config.json",
+                    checkpoint / "training_state" / "training_step.json",
+                    checkpoint / "training_state" / "optimizer_state.safetensors",
+                    checkpoint / "training_state" / "scheduler_state.json",
+                ):
+                    path.write_text("x", encoding="utf-8")
+            (metrics / "validation_metrics.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"checkpoint": "000325", "loss": 0.8}),
+                        json.dumps({"checkpoint": "000650", "loss": 0.4}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            prune_once(
+                run_dir,
+                checkpoint_root=None,
+                keep=set(),
+                keep_latest_complete=1,
+                keep_best_validation=True,
+            )
+
+            self.assertFalse((checkpoints / "000325").exists())
+            self.assertTrue((checkpoints / "000650").exists())
+            self.assertTrue((checkpoints / "000975").exists())
+            self.assertIn("checkpoint_pruned", (metrics / "monitor_events.jsonl").read_text(encoding="utf-8"))
+
     def test_so101_training_launcher_resolves_hf_dataset_subfolders_before_training(self) -> None:
         from scripts import start_so101_training
 
