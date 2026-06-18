@@ -338,6 +338,132 @@ class SO101SmolVLAPipelineTest(TestCase):
                 self.assertEqual(monitor._mujoco_render_env("egl"), ("egl", "egl"))
                 self.assertEqual(monitor._mujoco_render_env("glfw"), ("glfw", None))
 
+    def test_virtual_merge_concat_dataset_len_is_sum(self) -> None:
+        from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset
+
+        class FakeDataset:
+            def __init__(self, name: str, length: int) -> None:
+                self.name = name
+                self.repo_id = name
+                self.root = f"/tmp/{name}"
+                self.meta = {"name": name}
+                self.items = list(range(length))
+
+            def __len__(self) -> int:
+                return len(self.items)
+
+            def __getitem__(self, index: int) -> dict[str, int | str]:
+                return {"source": self.name, "value": self.items[index]}
+
+        dataset = LeRobotConcatDataset(
+            [FakeDataset("a", 2), FakeDataset("b", 3)],
+            names=["a", "b"],
+        )
+
+        self.assertEqual(len(dataset), 5)
+        self.assertEqual(dataset[0]["source"], "a")
+        self.assertEqual(dataset[4]["source"], "b")
+        self.assertEqual(dataset.source_for_index(4), {"dataset_index": 1, "dataset_name": "b", "local_index": 2})
+        self.assertTrue(dataset.disable_episode_aware_sampler)
+        self.assertTrue(dataset.requires_dataset_balanced_sampler)
+
+    def test_virtual_merge_balanced_sampler_draws_each_dataset_evenly(self) -> None:
+        import torch
+
+        from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset
+
+        class FakeDataset:
+            def __init__(self, name: str, length: int) -> None:
+                self.name = name
+                self.repo_id = name
+                self.root = f"/tmp/{name}"
+                self.meta = {"name": name}
+                self.items = list(range(length))
+
+            def __len__(self) -> int:
+                return len(self.items)
+
+            def __getitem__(self, index: int) -> dict[str, int | str]:
+                return {"source": self.name, "value": self.items[index]}
+
+        dataset = LeRobotConcatDataset(
+            [FakeDataset("small", 2), FakeDataset("large", 8)],
+            names=["small", "large"],
+        )
+
+        weights = dataset.balanced_sample_weights()
+        self.assertAlmostEqual(float(weights[:2].sum()), 0.5)
+        self.assertAlmostEqual(float(weights[2:].sum()), 0.5)
+
+        generator = torch.Generator().manual_seed(7)
+        sampler = dataset.make_dataset_balanced_sampler(num_samples=1000, generator=generator)
+        counts = {"small": 0, "large": 0}
+        for index in sampler:
+            counts[dataset.source_for_index(int(index))["dataset_name"]] += 1
+
+        self.assertGreater(counts["small"], 450)
+        self.assertLess(counts["small"], 550)
+        self.assertGreater(counts["large"], 450)
+        self.assertLess(counts["large"], 550)
+
+    def test_virtual_merge_dataloader_uses_dataset_balanced_sampler(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        from scripts.lerobot_train_so101_lightning import _make_dataloader
+
+        class FakeConcatDataset(torch.utils.data.Dataset):
+            requires_dataset_balanced_sampler = True
+            source_lengths = [2, 8]
+
+            def __init__(self) -> None:
+                self.sampler_calls = 0
+
+            def __len__(self) -> int:
+                return 10
+
+            def __getitem__(self, index: int) -> dict[str, int]:
+                return {"index": index}
+
+            def make_dataset_balanced_sampler(self, *, num_samples: int, generator=None):
+                self.sampler_calls += 1
+                return torch.utils.data.WeightedRandomSampler(
+                    weights=torch.ones(len(self), dtype=torch.double),
+                    num_samples=num_samples,
+                    replacement=True,
+                    generator=generator,
+                )
+
+        dataset = FakeConcatDataset()
+        cfg = SimpleNamespace(
+            num_workers=0,
+            batch_size=2,
+            dataset=SimpleNamespace(streaming=False),
+            policy=SimpleNamespace(device="cpu"),
+        )
+
+        dataloader = _make_dataloader(cfg, dataset)
+
+        self.assertEqual(dataset.sampler_calls, 1)
+        self.assertIsInstance(dataloader.sampler, torch.utils.data.WeightedRandomSampler)
+
+    def test_virtual_merge_rejects_schema_mismatch(self) -> None:
+        from physical_ai_agent.so101_lerobot_concat import validate_lerobot_dataset_infos
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root_a = Path(tmpdir) / "a"
+            root_b = Path(tmpdir) / "b"
+            _write_lerobot_info(root_a, camera1_shape=[256, 256, 3])
+            _write_lerobot_info(root_b, camera1_shape=[128, 128, 3])
+
+            with self.assertRaisesRegex(ValueError, "shape must be"):
+                validate_lerobot_dataset_infos(
+                    [
+                        {"name": "a", "root": str(root_a), "repo_id": "a", "expected_episodes": 1, "expected_frames": 2},
+                        {"name": "b", "root": str(root_b), "repo_id": "b", "expected_episodes": 1, "expected_frames": 2},
+                    ]
+                )
+
     def test_single_training_launcher_is_canonical_and_lock_guarded(self) -> None:
         source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -875,7 +1001,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn(str(validation_root), cache_cmds[1])
             self.assertEqual(resolved["hf_dataset_downloads"][0]["path_in_repo"], "datasets/tiny/train")
 
-    def test_so101_training_launcher_resolves_hf_merge_sources(self) -> None:
+    def test_virtual_merge_train_datasets_resolves_multiple_hf_sources(self) -> None:
         from scripts import start_so101_training
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -883,26 +1009,24 @@ class SO101SmolVLAPipelineTest(TestCase):
             cache_root = Path(tmpdir) / "hf_datasets"
             repo_root.mkdir()
             config = {
-                "train_dataset": {
-                    "repo_id": "physical-ai-agent/merged",
-                    "root": "_workspace/merged/train",
-                    "hf_merge_sources": [
-                        {
-                            "name": "pick_cube_train",
-                            "repo_id": "physical-ai-agent/source-a",
-                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
-                            "hf_repo_type": "dataset",
-                            "hf_path_in_repo": "datasets/pick_cube/train",
-                        },
-                        {
-                            "name": "pick_place_train",
-                            "repo_id": "physical-ai-agent/source-b",
-                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
-                            "hf_repo_type": "dataset",
-                            "hf_path_in_repo": "datasets/pick_and_place_cube/train",
-                        },
-                    ],
-                },
+                "train_datasets": [
+                    {
+                        "name": "pick_cube_train",
+                        "repo_id": "physical-ai-agent/source-a",
+                        "root": "_workspace/local_a",
+                        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                        "hf_repo_type": "dataset",
+                        "hf_path_in_repo": "datasets/pick_cube/train",
+                    },
+                    {
+                        "name": "pick_place_train",
+                        "repo_id": "physical-ai-agent/source-b",
+                        "root": "_workspace/local_b",
+                        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                        "hf_repo_type": "dataset",
+                        "hf_path_in_repo": "datasets/pick_and_place_cube/train",
+                    },
+                ],
                 "validation_dataset": {
                     "repo_id": "physical-ai-agent/validation",
                     "root": "_workspace/local_validation",
@@ -915,6 +1039,14 @@ class SO101SmolVLAPipelineTest(TestCase):
                     "task_prompt": "Pick up the small red cube and place it on the blue circle.",
                     "record_rollout_gif": True,
                 },
+                "predecoded_image_cache": {
+                    "default_root": "_workspace/cache",
+                    "train": {
+                        "pick_cube_train": "pick_cube_cache",
+                        "pick_place_train": "pick_place_cache",
+                    },
+                    "validation": "validation_cache",
+                },
             }
 
             with mock.patch.object(start_so101_training, "_snapshot_download") as snapshot_download:
@@ -924,7 +1056,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     cache_root=cache_root,
                     download=True,
                 )
-            resolved = start_so101_training._prepare_merged_train_dataset(
+            prepared = start_so101_training._prepare_merged_train_dataset(
                 resolved,
                 repo_root=repo_root,
                 python=Path(sys.executable),
@@ -932,16 +1064,19 @@ class SO101SmolVLAPipelineTest(TestCase):
             )
 
             local_repo_dir = cache_root / "mhlee1215__so101-nexus-sim-dataset"
-            merged_root = repo_root / "_workspace/merged/train"
             self.assertEqual(snapshot_download.call_count, 3)
-            self.assertEqual(resolved["train_dataset"]["root"], str(merged_root))
-            self.assertEqual(len(resolved["train_dataset"]["hf_resolved_sources"]), 2)
-            self.assertIn(str(local_repo_dir / "datasets/pick_cube/train"), resolved["train_dataset"]["merged_from"])
-            self.assertIn(str(local_repo_dir / "datasets/pick_and_place_cube/train"), resolved["train_dataset"]["merged_from"])
-            self.assertIn("--output-root", resolved["train_dataset"]["merge_command"])
+            self.assertIs(prepared, resolved)
+            self.assertEqual(resolved["train_datasets"][0]["root"], str(local_repo_dir / "datasets/pick_cube/train"))
+            self.assertEqual(
+                resolved["train_datasets"][1]["root"],
+                str(local_repo_dir / "datasets/pick_and_place_cube/train"),
+            )
+            self.assertNotIn("merge_command", resolved["train_datasets"][0])
+            self.assertNotIn("train_dataset", resolved)
 
             train_args = start_so101_training._with_dataset_config([], resolved)
-            self.assertIn(f"--dataset.root={merged_root}", train_args)
+            self.assertIn(f"--dataset.root={local_repo_dir / 'datasets/pick_cube/train'}", train_args)
+            self.assertTrue(any(arg.startswith("--train-datasets-json=") for arg in train_args))
             progress_cmd = start_so101_training._progress_monitor_command(
                 args=argparse.Namespace(
                     python=Path(sys.executable),
@@ -959,6 +1094,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                 train_output_dir=repo_root / "run/model",
                 dataset_config=resolved,
                 training_args=[],
+                runtime_contract={"closed_loop_mujoco_gl": "egl"},
                 train_pid_file=repo_root / "run/train.pid",
             )
             self.assertIn("--closed-loop-eval-skill-mode", progress_cmd)
@@ -997,8 +1133,10 @@ class SO101SmolVLAPipelineTest(TestCase):
                 config = json.loads(config_path.read_text(encoding="utf-8"))
                 self.assertEqual(config["camera_contract"]["observation.images.camera1"], "egocentric_cam")
                 self.assertEqual(config["camera_contract"]["observation.images.camera2"], "wrist_cam")
-                self.assertNotIn("top-wrist", config["train_dataset"]["repo_id"])
-                self.assertNotIn("top_wrist", config["train_dataset"]["root"])
+                train_specs = config.get("train_datasets") or [config["train_dataset"]]
+                for train_spec in train_specs:
+                    self.assertNotIn("top-wrist", train_spec["repo_id"])
+                    self.assertNotIn("top_wrist", train_spec["root"])
 
     def test_so101_egocentric_camera1_pose_is_single_source_of_truth(self) -> None:
         expected_pose = {
@@ -1231,3 +1369,25 @@ class SO101SmolVLAPipelineTest(TestCase):
                     self.assertTrue(row["observation.images.camera2"][0]["bytes"])
                     self.assertEqual(len(row["observation.state"][0]), 6)
                     self.assertEqual(len(row["action"][0]), 6)
+
+
+def _write_lerobot_info(root: Path, *, camera1_shape: list[int]) -> None:
+    (root / "meta").mkdir(parents=True)
+    features = {
+        "observation.images.camera1": {"dtype": "image", "shape": camera1_shape, "names": ["height", "width", "channels"]},
+        "observation.images.camera2": {"dtype": "image", "shape": [256, 256, 3], "names": ["height", "width", "channels"]},
+        "observation.images.camera3": {"dtype": "image", "shape": [256, 256, 3], "names": ["height", "width", "channels"]},
+        "observation.state": {"dtype": "float32", "shape": [6], "names": ["joint"]},
+        "action": {"dtype": "float32", "shape": [6], "names": ["joint"]},
+    }
+    (root / "meta" / "info.json").write_text(
+        json.dumps(
+            {
+                "total_episodes": 1,
+                "total_frames": 2,
+                "fps": 12,
+                "features": features,
+            }
+        ),
+        encoding="utf-8",
+    )
