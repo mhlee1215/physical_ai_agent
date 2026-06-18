@@ -23,6 +23,15 @@ Config fields:
   `--dataset.repo_id` and `--dataset.root`.
 - `validation_dataset.repo_id`, `validation_dataset.root`: forwarded as
   validation dataset args.
+- `train_dataset.hf_repo_id`, `train_dataset.hf_path_in_repo`, and matching
+  validation fields: optional Hugging Face dataset bundle source. When present,
+  `scripts/start_so101_training.py start` downloads only the configured
+  subfolder before training and forwards the resolved local subfolder path as
+  `dataset.root`.
+- `train_dataset.hf_merge_sources`: optional list of HF subfolders to download
+  and merge into `train_dataset.root` before training. Use this for combined
+  multi-task runs while keeping each generated/uploaded dataset as a separate
+  HF bundle subfolder.
 - `camera_contract`: human-readable expected model input mapping.
 - `tensorboard`: optional default input logging cadence.
 - `augmentation`: optional train-time sampling augmentation defaults. Supported
@@ -64,6 +73,28 @@ Default moderate train-time preset:
 CLI args still win. If an arg is already present after `--`, the launcher does
 not overwrite it from the dataset config.
 
+Hugging Face dataset workflow:
+
+1. Generate or re-export datasets locally.
+2. Upload the checked LeRobot exports to the HF dataset bundle:
+   `mhlee1215/so101-nexus-sim-dataset`.
+3. Point each training config split at the bundle subfolder, for example
+   `hf_path_in_repo="datasets/pick_cube/train"`.
+4. Start training through `scripts/start_so101_training.py`; the launcher calls
+   `snapshot_download(..., allow_patterns=["<hf_path_in_repo>/**"])` and uses
+   the downloaded subfolder under `_workspace/hf_datasets/` as the effective
+   LeRobot root.
+
+For a multi-task run, use `train_dataset.hf_merge_sources` as in
+`all_hf_train_pick_place_closed_loop.json`; the launcher downloads each source
+subfolder, merges the shards with `scripts/merge_so101_lerobot_shards.py`, and
+passes the merged dataset root to LeRobot.
+
+For local export debugging, `--use-local-dataset-roots` ignores the HF fields
+and forwards the config's `root` values directly. For HF cache debugging,
+`--skip-hf-dataset-download` resolves the expected HF cache paths without
+network access. Normal training should download from HF first.
+
 Dataset checksums:
 
 - `checksums.json` records compact metadata and SHA-256 checksums for the local
@@ -78,12 +109,26 @@ Dataset checksums:
   primitive datasets. These skill datasets, such as `move_over_cube` and
   `pick_from_top_cube`, must not replace the full-task datasets unless the user
   explicitly approves that change.
+- `export_recipes.json` plus `scripts/export_so101_training_datasets.py`
+  records the pre-export trajectory generation material for every current
+  split. Commit recipes, contracts, tests, and checksum manifests; keep raw
+  LeRobot datasets under `_workspace/` out of PRs.
 - Do not change dataset roots, camera mapping, task semantics, split names, or
   start-mode semantics without explicit user approval. If a change is needed,
   ask first and record the approval in the PR summary.
 - Required camera mapping is fixed as:
   `camera1 = egocentric_cam`, `camera2 = wrist_cam`, and
   `camera3 = wrist_cam duplicate` when the third camera feature is present.
+- Required `camera1` pose is the hardware-aligned egocentric view:
+  `lookat=[0.245, 0.11, 0.035]`, `distance=0.63`, `azimuth=270`,
+  `elevation=-82`, `rotation_degrees=90`.
+- Re-export all current full-task and skill-primitive datasets after changing
+  the approved camera pose:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python scripts/export_so101_training_datasets.py --overwrite
+```
+
 - Regenerate after rebuilding datasets:
 
 ```bash

@@ -32,10 +32,12 @@ from export_so101_teacher_rollouts_lerobot import (
     _offset_qpos_by_cartesian,
     _tcp_to_object_delta,
 )
+from export_so101_pickplace_teacher_rollouts_lerobot import _make_pickplace_env
 
 
 TASK = "Grasp the visible cube and lift it up."
 PICK_FROM_TOP_TASK = "From above the visible cube, grasp it and lift it up."
+PICK_AND_PLACE_TASK = "Pick up the small red cube and place it on the blue circle."
 
 
 def main() -> None:
@@ -57,7 +59,11 @@ def main() -> None:
     parser.add_argument("--policy-n-action-steps", type=int, default=None)
     parser.add_argument("--policy-num-steps", type=int, default=None)
     parser.add_argument("--task-prompt", default=None)
-    parser.add_argument("--eval-skill-mode", choices=["picklift", "pick_from_top_cube"], default="picklift")
+    parser.add_argument(
+        "--eval-skill-mode",
+        choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
+        default="picklift",
+    )
     parser.add_argument("--pick-start-min-actual-z", type=float, default=0.05)
     parser.add_argument("--pick-start-min-actual-abs-y", type=float, default=0.015)
     parser.add_argument("--pick-start-max-actual-abs-y", type=float, default=0.065)
@@ -160,10 +166,10 @@ def evaluate_smolvla_picklift(
     )
     preprocessor, postprocessor = _load_policy_processors(policy, policy_path) if use_policy_processors else (None, None)
     config = WristEgoServoConfig(width=width, height=height)
-    env = make_high_contrast_picklift_env()
+    env = _make_eval_env(eval_skill_mode)
     renderers = _make_policy_renderers(env, config)
     rows = []
-    resolved_task_prompt = task_prompt or (PICK_FROM_TOP_TASK if eval_skill_mode == "pick_from_top_cube" else TASK)
+    resolved_task_prompt = task_prompt or _default_task_prompt(eval_skill_mode)
     try:
         for episode in range(episodes):
             if torch_seed is not None:
@@ -272,6 +278,7 @@ def evaluate_smolvla_picklift(
         "success_rate": float(np.mean([row.get("skill_success", row["success"]) for row in rows])) if rows else 0.0,
         "env_success_rate": float(np.mean([row["success"] for row in rows])) if rows else 0.0,
         "grasp_rate": float(np.mean([row.get("final_is_grasped", 0.0) > 0.5 for row in rows])) if rows else 0.0,
+        "place_rate": float(np.mean([row.get("final_is_obj_placed", False) for row in rows])) if rows else 0.0,
         "duration_s": round(perf_counter() - started, 4),
         "device": _policy_device_metadata(policy),
     }
@@ -279,6 +286,20 @@ def evaluate_smolvla_picklift(
     report["report_path"] = str(report_path)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     return report
+
+
+def _make_eval_env(eval_skill_mode: str) -> Any:
+    if eval_skill_mode == "pick_and_place_cube":
+        return _make_pickplace_env()
+    return make_high_contrast_picklift_env()
+
+
+def _default_task_prompt(eval_skill_mode: str) -> str:
+    if eval_skill_mode == "pick_from_top_cube":
+        return PICK_FROM_TOP_TASK
+    if eval_skill_mode == "pick_and_place_cube":
+        return PICK_AND_PLACE_TASK
+    return TASK
 
 
 def _run_episode(
@@ -361,8 +382,10 @@ def _run_episode(
                 "raw_action": [float(value) for value in raw_action_values],
                 "success": bool(info.get("success", False)),
                 "is_grasped": float(info.get("is_grasped", 0.0)),
+                "is_obj_placed": bool(info.get("is_obj_placed", False)),
                 "lift_height": float(info.get("lift_height", 0.0)),
                 "tcp_to_obj_dist": float(info.get("tcp_to_obj_dist", 0.0)),
+                "obj_to_target_dist": float(info.get("obj_to_target_dist", 0.0)),
             }
         )
         if bool(info.get("success", False)) or terminated or truncated:
@@ -385,7 +408,12 @@ def _run_episode(
     )
     final_is_grasped = float(info.get("is_grasped", 0.0))
     final_lift_height = float(info.get("lift_height", 0.0))
-    skill_success = bool(final_is_grasped > 0.5 and final_lift_height >= float(lift_success_height))
+    final_is_obj_placed = bool(info.get("is_obj_placed", False))
+    final_obj_to_target_dist = float(info.get("obj_to_target_dist", 1.0))
+    if eval_skill_mode == "pick_and_place_cube":
+        skill_success = bool(final_is_obj_placed or (bool(info.get("success", False)) and final_obj_to_target_dist <= 0.035))
+    else:
+        skill_success = bool(final_is_grasped > 0.5 and final_lift_height >= float(lift_success_height))
     return {
         "episode": episode,
         "seed": seed,
@@ -397,8 +425,10 @@ def _run_episode(
         "success": bool(info.get("success", False)),
         "skill_success": skill_success,
         "final_is_grasped": final_is_grasped,
+        "final_is_obj_placed": final_is_obj_placed,
         "final_lift_height": final_lift_height,
         "final_tcp_to_obj_dist": float(info.get("tcp_to_obj_dist", 0.0)),
+        "final_obj_to_target_dist": final_obj_to_target_dist,
         "image_feature_mapping": image_feature_mapping,
         "rollout_gif": gif_path,
         "rollout_mp4": mp4_path,
@@ -445,6 +475,9 @@ def _reset_episode(
     if eval_skill_mode == "picklift":
         env.reset(seed=seed)
         return {"mode": "picklift", "reset_seed": seed}
+    if eval_skill_mode == "pick_and_place_cube":
+        env.reset(seed=seed)
+        return {"mode": "pick_and_place_cube", "reset_seed": seed}
     if eval_skill_mode != "pick_from_top_cube":
         raise ValueError(f"Unsupported eval_skill_mode: {eval_skill_mode}")
     for attempt in range(max(1, int(pick_start_max_attempts))):

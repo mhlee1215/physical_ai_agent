@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -51,8 +52,18 @@ def main() -> None:
     parser.add_argument("--closed-loop-seed", type=int, default=98100)
     parser.add_argument("--closed-loop-width", type=int, default=256)
     parser.add_argument("--closed-loop-height", type=int, default=256)
+    parser.add_argument(
+        "--mujoco-gl",
+        choices=["auto", "glfw", "egl", "osmesa"],
+        default="auto",
+        help="MuJoCo rendering backend for validation rollouts. auto uses glfw on macOS and egl on Linux.",
+    )
     parser.add_argument("--closed-loop-task-prompt")
-    parser.add_argument("--closed-loop-eval-skill-mode", choices=["picklift", "pick_from_top_cube"], default="picklift")
+    parser.add_argument(
+        "--closed-loop-eval-skill-mode",
+        choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
+        default="picklift",
+    )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--policy-num-steps", type=int, default=10)
@@ -307,6 +318,7 @@ def _run_closed_loop_eval(
 
 
 def _runtime_env(args: argparse.Namespace) -> dict[str, str]:
+    mujoco_gl, pyopengl_platform = _mujoco_render_env(args.mujoco_gl)
     env = {
         **os.environ,
         "PATH": str(Path(args.python).parent) + ":" + os.environ.get("PATH", ""),
@@ -314,12 +326,35 @@ def _runtime_env(args: argparse.Namespace) -> dict[str, str]:
         "HF_DATASETS_CACHE": str(args.repo_root / "_workspace" / "hf_datasets_cache"),
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
-        "MUJOCO_GL": os.environ.get("MUJOCO_GL", "egl"),
-        "PYOPENGL_PLATFORM": os.environ.get("PYOPENGL_PLATFORM", "egl"),
+        "MUJOCO_GL": mujoco_gl,
     }
+    if pyopengl_platform is None:
+        env.pop("PYOPENGL_PLATFORM", None)
+    else:
+        env["PYOPENGL_PLATFORM"] = pyopengl_platform
     if args.policy_device == "cpu":
         env["CUDA_VISIBLE_DEVICES"] = ""
     return env
+
+
+def _mujoco_render_env(requested: str = "auto") -> tuple[str, str | None]:
+    if requested != "auto":
+        if requested == "egl":
+            return requested, os.environ.get("PYOPENGL_PLATFORM", "egl")
+        if requested == "glfw":
+            return requested, None
+        return requested, os.environ.get("PYOPENGL_PLATFORM")
+    requested = os.environ.get("MUJOCO_GL")
+    system = platform.system().lower()
+    if system == "darwin":
+        if requested in {"glfw", "osmesa"}:
+            return requested, None
+        return "glfw", None
+    mujoco_gl = requested or "egl"
+    pyopengl_platform = os.environ.get("PYOPENGL_PLATFORM")
+    if pyopengl_platform is None and mujoco_gl == "egl":
+        pyopengl_platform = "egl"
+    return mujoco_gl, pyopengl_platform
 
 
 def _checkpoint_root(args: argparse.Namespace, run_dir: Path) -> Path:
@@ -534,6 +569,8 @@ def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: d
             value = row.get(key)
             if isinstance(value, (int, float)):
                 writer.add_scalar(f"closed_loop/{key}", float(value), global_step=step)
+                if key == "success_rate":
+                    writer.add_scalar("important/closed_loop_success_rate", float(value), global_step=step)
         for camera_name, image_path in _first_closed_loop_input_grid_paths(report).items():
             image = _read_hwc_image(Path(image_path))
             if image is not None:

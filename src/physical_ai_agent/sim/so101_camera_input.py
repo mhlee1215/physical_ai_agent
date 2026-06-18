@@ -56,6 +56,14 @@ POLICY_CAMERA_NAMES = SIM_POLICY_CAMERA_NAMES
 DEBUG_CAMERA_NAMES = SIM_DEBUG_CAMERA_NAMES
 DEFAULT_VIRTUAL_CAMERA_NAMES = ("egocentric_cam", "top_down")
 EGOCENTRIC_IMAGE_ROTATION_DEGREES = 90
+EGOCENTRIC_CAMERA1_POSE = {
+    "type": "free",
+    "lookat": [0.245, 0.11, 0.035],
+    "distance": 0.63,
+    "azimuth": 270,
+    "elevation": -82,
+    "rotation_degrees": EGOCENTRIC_IMAGE_ROTATION_DEGREES,
+}
 
 
 def inspect_so101_camera_specs(env_ids: tuple[str, ...] = DEFAULT_SO101_ENV_IDS) -> list[SO101CameraSpec]:
@@ -238,9 +246,9 @@ def _make_camera(env: Any, camera_name: str) -> Any:
     camera.type = mujoco.mjtCamera.mjCAMERA_FREE
     if camera_name == "egocentric_cam":
         camera.lookat[:] = _egocentric_lookat(env)
-        camera.distance = 0.85
-        camera.azimuth = 270
-        camera.elevation = -58
+        camera.distance = float(EGOCENTRIC_CAMERA1_POSE["distance"])
+        camera.azimuth = float(EGOCENTRIC_CAMERA1_POSE["azimuth"])
+        camera.elevation = float(EGOCENTRIC_CAMERA1_POSE["elevation"])
     else:
         camera.lookat[:] = _top_down_lookat(env)
         camera.distance = 0.65
@@ -250,7 +258,7 @@ def _make_camera(env: Any, camera_name: str) -> Any:
 
 
 def _egocentric_lookat(env: Any) -> list[float]:
-    return [0.18, 0.0, 0.035]
+    return [float(value) for value in EGOCENTRIC_CAMERA1_POSE["lookat"]]
 
 
 def postprocess_camera_frame(camera_name: str, pixels: Any) -> Any:

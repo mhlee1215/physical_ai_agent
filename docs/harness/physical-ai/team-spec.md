@@ -178,6 +178,27 @@ Current Risk1-B/C routing rule:
 - Tech Lead fixes concrete code/data blockers only, then the loop returns to
   data production.
 
+### Third-Party Library Modification Policy
+
+Do not modify installed third-party library source code, vendored package
+internals, `site-packages`, TensorBoard frontend bundles, or framework runtime
+files as a normal fix path. These patches are brittle across dependency
+upgrades and make RunPod/local parity hard to reason about.
+
+Preferred order for dependency-related fixes:
+
+- Use the library's public API, configuration, plugin, callback, logging, or
+  wrapper surface.
+- If the public surface cannot express the desired behavior, adapt this repo's
+  code, data format, TensorBoard tag layout, launcher contract, or monitoring
+  wrapper instead.
+- If a temporary monkey patch or library-source patch is truly unavoidable,
+  ask the user first, document it as temporary, isolate it behind an explicit
+  flag or script, and add a removal note with the dependency version it was
+  tested against.
+- Do not persist direct edits to external library files in PRs or handoff
+  artifacts.
+
 ### SO101 SmolVLA Fine-Tuning Watch Policy
 
 For RunPod SO101 SmolVLA fine-tuning babysitting, checkpoint and evaluation
@@ -195,6 +216,21 @@ policy is:
   step/checkpoint first, run the rollout, then resume from the latest checkpoint.
 - Smoke closed-loop runs may be recorded separately in the dashboard, but they
   must be labeled as smoke and must not be treated as validation-set success.
+- User policy: SO101/SmolVLA training runs execute outside the Codex sandbox.
+  Local macOS MPS checks inside the sandbox are not authoritative; verify MPS
+  from an unsandboxed/external runtime before deciding that MPS is unavailable.
+  Launch local MPS training through that unsandboxed path, while writing logs,
+  TensorBoard events, checkpoints, monitor JSONL, and closed-loop artifacts
+  under `_workspace/` so Codex can inspect and report them afterward.
+- SO101 training, supervised validation, and closed-loop tests must remain
+  runnable on both macOS local and Linux/RunPod through
+  `scripts/start_so101_training.py`. The launcher runtime contract is:
+  `--runtime-platform macos` uses `policy.device=mps`,
+  `--lightning-accelerator=mps`, and `--mujoco-gl=glfw`; `--runtime-platform
+  linux` uses `policy.device=cuda`, `--lightning-accelerator=cuda`, and
+  `--mujoco-gl=egl`. `--runtime-platform auto` detects the host. Before a
+  training PR is treated as ready, dry-run both macOS and Linux profiles or run
+  the targeted unit tests that assert these command contracts.
 - SO101 SmolVLA training configs must enable moderate train-time augmentation
   by default. The current moderate preset is `state_jitter_std=0.003`,
   `state_dropout_prob=0.02`, `image_patch_mask_ratio=0.15`,
@@ -226,19 +262,32 @@ policy is:
   `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`.
   `top_down` remains teacher/debug evidence only and must not be exported as a
   SmolVLA student input.
+- SO101 export materials are source-controlled through
+  `configs/so101/training_datasets/export_recipes.json` and
+  `scripts/export_so101_training_datasets.py`. Raw `_workspace/so101_lerobot`
+  LeRobot datasets stay out of PRs; regenerate them locally from the recipe
+  after camera/trajectory changes, then refresh
+  `configs/so101/training_datasets/checksums.json`.
 - Default SO101 dataset handoff is local export, local checksum/manifest
-  verification, then upload/sync to RunPod for active GPU training. RunPod
+  verification, then upload to the HF dataset bundle
+  `mhlee1215/so101-nexus-sim-dataset`. Training must start through
+  `scripts/start_so101_training.py`, whose dataset config resolver downloads
+  the configured HF subfolder before handing the local path to LeRobot. RunPod
   should not be the primary MuJoCo/LeRobot teacher-data exporter because remote
   export on the network volume is slow and does not benefit much from the GPU.
   Use RunPod-side dataset generation only when local export is blocked, when a
   remote-only dependency is required, or when the user explicitly asks for it.
-- For future SO101 RunPod handoffs, create a deterministic reusable tarball from
-  the locally verified export before upload. Keep the tarball in a local
-  handoff/staging location with a checksum or manifest reference, then upload
-  that tarball to RunPod and unpack it there. If upload or remote setup fails,
-  retry from the tarball rather than re-exporting or regenerating the dataset.
-  The tarball is a transfer artifact, not the long-term source of truth; the
-  local verified export and manifest remain authoritative.
+- Local SO101 dataset roots remain supported for test/debug work. Pass
+  `--use-local-dataset-roots` to `scripts/start_so101_training.py start` to
+  ignore configured HF sources and forward the config's `root` fields directly.
+  Do not use this flag for canonical training unless the user explicitly chooses
+  a local-only run.
+- For future SO101 RunPod handoffs, do not rely on ad hoc rsync of raw dataset
+  directories as the primary path. Upload the verified LeRobot export to HF,
+  configure `hf_repo_id` and `hf_path_in_repo` in the training dataset config,
+  and let the training launcher download exactly that subfolder before training.
+  A tarball can still be used as a temporary fallback transfer artifact, but the
+  HF dataset bundle plus repo manifests are the durable source of truth.
 - RunPod experiment-data lifecycle is download, verify, then delete. Past
   remote experiment results are not required. For every new RunPod teacher
   dataset, validation dataset, predecoded cache, checkpoint, rollout video,
@@ -364,6 +413,10 @@ reports, tests, and non-interactive hardware helpers when permissions allow.
 If an external Terminal is required for macOS camera/TCC or MPS/runtime access,
 the command must write deterministic logs and artifacts under `_workspace/` and
 the final report must state why the external Terminal path was used.
+SO101/SmolVLA training is a standing exception: the user has chosen that
+training launches, including local MPS runs, happen outside the Codex sandbox.
+Codex may still prepare configs, inspect `_workspace/` outputs, run lightweight
+non-training tests, and monitor TensorBoard/dashboard logs from the sandbox.
 
 ### Phase 1: Select Checkpoint
 

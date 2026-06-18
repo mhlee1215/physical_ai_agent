@@ -125,6 +125,31 @@ For active training, supervised validation can run CPU-only after checkpoints.
 Full CUDA closed-loop should run only for new validation-best checkpoints or a
 manual final evaluation.
 
+## Runtime Platforms
+
+The canonical launcher must support both local macOS and Linux/RunPod for
+training, supervised validation, and closed-loop evaluation:
+
+- macOS local: `--runtime-platform macos` defaults to `policy.device=mps`,
+  `--lightning-accelerator=mps`, and closed-loop `--mujoco-gl=glfw`.
+- Linux/RunPod: `--runtime-platform linux` defaults to `policy.device=cuda`,
+  `--lightning-accelerator=cuda`, and closed-loop `--mujoco-gl=egl`.
+- `--runtime-platform auto` detects the host and chooses the matching profile.
+- User-provided `--policy.device`, `--lightning-accelerator`,
+  `--lightning-devices`, or `--closed-loop-mujoco-gl` remain explicit
+  overrides, but monitored training still fails early if validation or
+  closed-loop monitoring is disabled.
+
+Before launching a long run, inspect the dry-run `runtime_contract`:
+
+```bash
+PYTHONPATH=src python3 scripts/start_so101_training.py start --dry-run \
+  --runtime-platform macos --dataset-config <config.json> -- --policy.type=smolvla
+
+PYTHONPATH=src python3 scripts/start_so101_training.py start --dry-run \
+  --runtime-platform linux --dataset-config <config.json> -- --policy.type=smolvla
+```
+
 ## Required Tests
 
 Before opening or updating a PR for this pipeline:

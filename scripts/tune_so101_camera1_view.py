@@ -24,18 +24,18 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from physical_ai_agent.sim.so101_camera_input import _make_camera, postprocess_camera_frame
+from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE, _make_camera, postprocess_camera_frame
 
 
 @dataclass(frozen=True)
 class Camera1Preset:
-    lookat_x: float = 0.18
-    lookat_y: float = 0.0
-    lookat_z: float = 0.035
-    distance: float = 0.85
-    azimuth: float = 270.0
-    elevation: float = -58.0
-    rotation_degrees: int = 90
+    lookat_x: float = float(EGOCENTRIC_CAMERA1_POSE["lookat"][0])
+    lookat_y: float = float(EGOCENTRIC_CAMERA1_POSE["lookat"][1])
+    lookat_z: float = float(EGOCENTRIC_CAMERA1_POSE["lookat"][2])
+    distance: float = float(EGOCENTRIC_CAMERA1_POSE["distance"])
+    azimuth: float = float(EGOCENTRIC_CAMERA1_POSE["azimuth"])
+    elevation: float = float(EGOCENTRIC_CAMERA1_POSE["elevation"])
+    rotation_degrees: int = int(EGOCENTRIC_CAMERA1_POSE["rotation_degrees"])
     width: int = 512
     height: int = 512
 
@@ -396,7 +396,7 @@ HTML = """<!doctype html>
       </section>
     </main>
     <script>
-      const defaults = {lookat_x:0.18, lookat_y:0, lookat_z:0.035, distance:0.85, azimuth:270, elevation:-58, rotation_degrees:90};
+      const defaults = {lookat_x:0.245, lookat_y:0.11, lookat_z:0.035, distance:0.63, azimuth:270, elevation:-82, rotation_degrees:90};
       const fields = [
         ["lookat_x", -0.25, 0.45, 0.005],
         ["lookat_y", -0.35, 0.35, 0.005],
@@ -408,7 +408,7 @@ HTML = """<!doctype html>
       ];
       const presets = {
         default: defaults,
-        hardware: {lookat_x:0.18, lookat_y:0.0, lookat_z:0.03, distance:0.72, azimuth:270, elevation:-62, rotation_degrees:90},
+        hardware: {lookat_x:0.245, lookat_y:0.11, lookat_z:0.035, distance:0.63, azimuth:270, elevation:-82, rotation_degrees:90},
         front: {lookat_x:0.15, lookat_y:0.0, lookat_z:0.04, distance:0.70, azimuth:180, elevation:-35, rotation_degrees:0},
       };
       const state = {...defaults, seed:0, pose:"pregrasp"};

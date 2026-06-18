@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
+import platform
 import shutil
 import signal
 import subprocess
@@ -16,6 +18,7 @@ from typing import Any
 
 DEFAULT_ROOT = Path("_workspace/so101_training")
 DEFAULT_LOCK = DEFAULT_ROOT / "active_training.json"
+DEFAULT_HF_DATASET_CACHE_ROOT = Path("_workspace/hf_datasets")
 
 
 def main() -> int:
@@ -61,13 +64,70 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-dashboard", action="store_true")
     parser.add_argument("--no-gpu-monitor", action="store_true")
     parser.add_argument("--no-progress-monitor", action="store_true")
+    parser.add_argument(
+        "--allow-incomplete-monitoring",
+        action="store_true",
+        help=(
+            "Debug escape hatch: allow dataset-config training to start without "
+            "the default TensorBoard, validation, checkpoint, and closed-loop guards."
+        ),
+    )
+    parser.add_argument(
+        "--hf-dataset-cache-root",
+        type=Path,
+        default=DEFAULT_HF_DATASET_CACHE_ROOT,
+        help="Local root for Hugging Face dataset subfolder downloads.",
+    )
+    parser.add_argument(
+        "--skip-hf-dataset-download",
+        action="store_true",
+        help="Resolve configured HF cache roots without downloading. For debugging only.",
+    )
+    parser.add_argument(
+        "--use-local-dataset-roots",
+        action="store_true",
+        help="Use dataset root fields from the config directly and ignore configured HF dataset sources.",
+    )
+    parser.add_argument(
+        "--hf-local-files-only",
+        action="store_true",
+        help="Require configured HF dataset subfolders to already be present in the local HF cache root.",
+    )
     parser.add_argument("--gpu-monitor-interval-s", type=float, default=5.0)
     parser.add_argument("--progress-monitor-interval-s", type=int, default=600)
+    parser.add_argument(
+        "--runtime-platform",
+        choices=["auto", "macos", "linux"],
+        default="auto",
+        help="Runtime profile for training/eval defaults. auto detects the current OS.",
+    )
+    parser.add_argument(
+        "--training-device",
+        choices=["auto", "cpu", "mps", "cuda"],
+        default="auto",
+        help="Default policy.device and Lightning accelerator when not explicitly forwarded.",
+    )
     parser.add_argument("--closed-loop-every-epochs", type=int, default=10)
     parser.add_argument("--closed-loop-episodes", type=int, default=8)
     parser.add_argument("--closed-loop-steps", type=int, default=120)
+    parser.add_argument(
+        "--closed-loop-mujoco-gl",
+        choices=["auto", "glfw", "egl", "osmesa"],
+        default="auto",
+        help="MuJoCo backend for closed-loop rollouts. auto uses glfw on macOS and egl on Linux.",
+    )
+    parser.add_argument(
+        "--max-monitored-checkpoints",
+        type=int,
+        default=20,
+        help="Fail fast when --steps/--save_freq would create more monitored checkpoints than this.",
+    )
     parser.add_argument("--closed-loop-policy", choices=["off", "periodic", "best_only", "best_or_periodic"], default="periodic")
-    parser.add_argument("--closed-loop-eval-skill-mode", choices=["picklift", "pick_from_top_cube"], default="picklift")
+    parser.add_argument(
+        "--closed-loop-eval-skill-mode",
+        choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
+        default=None,
+    )
     parser.add_argument("--closed-loop-task-prompt")
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument(
@@ -78,7 +138,12 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--validation-interval-epochs",
         type=int,
-        help="Forward validation cadence as epochs. Ignored by the trainer when step cadence is also set.",
+        default=1,
+        help=(
+            "Forward validation cadence as epochs. Defaults to 1 so HF/RunPod "
+            "training writes val/loss whenever a validation dataset is configured. "
+            "Ignored by the trainer when step cadence is also set."
+        ),
     )
     parser.add_argument("--replace", action="store_true", help="Stop the active run before starting.")
     parser.add_argument("--dry-run", action="store_true", help="Print the launch plan without starting.")
@@ -119,9 +184,26 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_config = _load_dataset_config(args.dataset_config, repo_root=repo_root)
+    if not args.use_local_dataset_roots:
+        dataset_config = _resolve_hf_dataset_downloads(
+            dataset_config,
+            repo_root=repo_root,
+            cache_root=args.hf_dataset_cache_root,
+            download=not args.dry_run and not args.skip_hf_dataset_download,
+            local_files_only=bool(args.hf_local_files_only),
+        )
+        dataset_config = _prepare_merged_train_dataset(
+            dataset_config,
+            repo_root=repo_root,
+            python=args.python,
+            merge=not args.dry_run,
+        )
     training_args = _forwarded_args(args.training_args, passthrough)
     training_args = _with_dataset_config(training_args, dataset_config)
     training_args = _with_validation_schedule(training_args, args)
+    training_args = _with_checkpoint_schedule(training_args, dataset_config, args)
+    runtime_contract = _runtime_contract(args, training_args)
+    training_args = _with_runtime_contract(training_args, runtime_contract)
     train_cmd = [
         str(args.python),
         str(repo_root / "scripts" / "lerobot_train_so101_lightning.py"),
@@ -153,6 +235,10 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         str(tensorboard_dir / "so101_system"),
         "--interval-s",
         str(args.gpu_monitor_interval_s),
+        "--backend",
+        "auto",
+        "--train-pid-file",
+        str(train_pid_file),
     ]
     progress_monitor_cmd = _progress_monitor_command(
         args=args,
@@ -161,6 +247,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         train_output_dir=train_output_dir,
         dataset_config=dataset_config,
         training_args=training_args,
+        runtime_contract=runtime_contract,
         train_pid_file=train_pid_file,
     )
     cache_build_cmds = _cache_build_commands(args.python, repo_root, dataset_config)
@@ -177,9 +264,18 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "gpu_monitor_cmd": None if args.no_gpu_monitor else gpu_monitor_cmd,
         "progress_monitor_cmd": None if args.no_progress_monitor else progress_monitor_cmd,
         "cache_build_cmds": cache_build_cmds,
+        "runtime_contract": runtime_contract,
         "tensorboard_url": None if args.no_tensorboard else f"http://127.0.0.1:{args.tensorboard_port}/",
         "dashboard_url": None if args.no_dashboard else f"http://127.0.0.1:{args.dashboard_port}/",
     }
+    _validate_monitoring_contract(
+        args=args,
+        dataset_config=dataset_config,
+        training_args=training_args,
+        train_cmd=train_cmd,
+        launch_plan=launch_plan,
+        runtime_contract=runtime_contract,
+    )
     if args.dry_run:
         print(json.dumps(launch_plan, indent=2, sort_keys=True))
         return 0
@@ -327,6 +423,194 @@ def _load_dataset_config(path: Path | None, *, repo_root: Path) -> dict[str, Any
     return payload
 
 
+def _resolve_hf_dataset_downloads(
+    config: dict[str, Any] | None,
+    *,
+    repo_root: Path,
+    cache_root: Path,
+    download: bool,
+    local_files_only: bool = False,
+) -> dict[str, Any] | None:
+    if not config:
+        return config
+    updated = copy.deepcopy(config)
+    resolved_cache_root = cache_root if cache_root.is_absolute() else repo_root / cache_root
+    downloads: list[dict[str, Any]] = []
+    for dataset_key in ("train_dataset", "validation_dataset"):
+        dataset = updated.get(dataset_key)
+        if not isinstance(dataset, dict):
+            continue
+        merge_sources = dataset.get("hf_merge_sources")
+        if isinstance(merge_sources, list) and merge_sources:
+            resolved_sources = []
+            for source_index, source in enumerate(merge_sources):
+                if not isinstance(source, dict):
+                    raise SystemExit(f"dataset config {dataset_key}.hf_merge_sources[{source_index}] must be an object")
+                resolved_source = _resolve_hf_dataset_source(
+                    source,
+                    fallback=dataset,
+                    repo_root=repo_root,
+                    resolved_cache_root=resolved_cache_root,
+                    dataset_key=dataset_key,
+                    source_index=source_index,
+                    download=download,
+                    local_files_only=local_files_only,
+                )
+                downloads.append(resolved_source["download_record"])
+                resolved_sources.append(resolved_source["source"])
+            dataset["hf_resolved_sources"] = resolved_sources
+            continue
+        hf_repo_id = dataset.get("hf_repo_id") or updated.get("hf_repo_id")
+        hf_path = dataset.get("hf_path_in_repo")
+        if not hf_repo_id and not hf_path:
+            continue
+        if not hf_repo_id or not hf_path:
+            raise SystemExit(f"dataset config {dataset_key} must define both hf_repo_id and hf_path_in_repo")
+        resolved_source = _resolve_hf_dataset_source(
+            dataset,
+            fallback=updated,
+            repo_root=repo_root,
+            resolved_cache_root=resolved_cache_root,
+            dataset_key=dataset_key,
+            source_index=None,
+            download=download,
+            local_files_only=local_files_only,
+        )
+        resolved_root = Path(resolved_source["source"]["root"])
+        dataset["root"] = str(resolved_root)
+        dataset["hf_resolved_root"] = str(resolved_root)
+        downloads.append(resolved_source["download_record"])
+    if downloads:
+        updated["hf_dataset_downloads"] = downloads
+    return updated
+
+
+def _resolve_hf_dataset_source(
+    source: dict[str, Any],
+    *,
+    fallback: dict[str, Any],
+    repo_root: Path,
+    resolved_cache_root: Path,
+    dataset_key: str,
+    source_index: int | None,
+    download: bool,
+    local_files_only: bool,
+) -> dict[str, Any]:
+    del repo_root
+    hf_repo_id = source.get("hf_repo_id") or fallback.get("hf_repo_id")
+    hf_path = source.get("hf_path_in_repo")
+    if not hf_repo_id or not hf_path:
+        label = dataset_key if source_index is None else f"{dataset_key}.hf_merge_sources[{source_index}]"
+        raise SystemExit(f"dataset config {label} must define both hf_repo_id and hf_path_in_repo")
+    hf_repo_type = str(source.get("hf_repo_type") or fallback.get("hf_repo_type") or "dataset")
+    hf_revision = str(source.get("hf_revision") or fallback.get("hf_revision") or "")
+    local_repo_dir = _hf_local_repo_dir(resolved_cache_root, str(hf_repo_id), hf_revision)
+    hf_path_str = str(hf_path).strip("/")
+    allow_patterns = [f"{hf_path_str}/**"]
+    if download:
+        download_kwargs: dict[str, Any] = {
+            "repo_id": str(hf_repo_id),
+            "repo_type": hf_repo_type,
+            "allow_patterns": allow_patterns,
+            "local_dir": local_repo_dir,
+            "local_files_only": local_files_only,
+        }
+        if hf_revision:
+            download_kwargs["revision"] = hf_revision
+        _snapshot_download(**download_kwargs)
+    resolved_root = local_repo_dir / hf_path_str
+    resolved = {
+        "name": source.get("name"),
+        "repo_id": str(source.get("repo_id") or ""),
+        "root": str(resolved_root),
+        "hf_repo_id": str(hf_repo_id),
+        "hf_repo_type": hf_repo_type,
+        "hf_path_in_repo": hf_path_str,
+        "hf_revision": hf_revision,
+        "expected_episodes": source.get("expected_episodes"),
+        "expected_frames": source.get("expected_frames"),
+    }
+    return {
+        "source": {key: value for key, value in resolved.items() if value not in (None, "")},
+        "download_record": {
+            "dataset_key": dataset_key,
+            "source_index": source_index,
+            "source_name": source.get("name"),
+            "repo_id": str(hf_repo_id),
+            "repo_type": hf_repo_type,
+            "path_in_repo": hf_path_str,
+            "revision": hf_revision,
+            "allow_patterns": allow_patterns,
+            "local_dir": str(local_repo_dir),
+            "resolved_root": str(resolved_root),
+            "downloaded": bool(download),
+            "local_files_only": bool(local_files_only),
+        },
+    }
+
+
+def _prepare_merged_train_dataset(
+    config: dict[str, Any] | None,
+    *,
+    repo_root: Path,
+    python: Path,
+    merge: bool,
+) -> dict[str, Any] | None:
+    if not config:
+        return config
+    train = config.get("train_dataset")
+    if not isinstance(train, dict):
+        return config
+    sources = train.get("hf_resolved_sources")
+    if not isinstance(sources, list) or not sources:
+        return config
+    if "root" not in train or "repo_id" not in train:
+        raise SystemExit("merged train_dataset must define root and repo_id")
+    output_root = _resolve_root_path(repo_root, Path(str(train["root"])))
+    shard_roots = [Path(str(source["root"])) for source in sources if isinstance(source, dict) and "root" in source]
+    if len(shard_roots) != len(sources):
+        raise SystemExit("merged train_dataset sources must resolve to local roots")
+    command = [
+        str(python),
+        str(repo_root / "scripts" / "merge_so101_lerobot_shards.py"),
+        "--output-root",
+        str(output_root),
+        "--repo-id",
+        str(train["repo_id"]),
+        "--overwrite",
+    ]
+    for shard_root in shard_roots:
+        command.extend(["--shard", str(shard_root)])
+    train["root"] = str(output_root)
+    train["merge_command"] = command
+    train["merged_from"] = [str(path) for path in shard_roots]
+    if merge:
+        subprocess.run(command, cwd=repo_root, check=True, text=True)
+    return config
+
+
+def _resolve_root_path(repo_root: Path, path: Path) -> Path:
+    return path if path.is_absolute() else repo_root / path
+
+
+def _snapshot_download(**kwargs: Any) -> str:
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise SystemExit(
+            "Dataset config requires Hugging Face download support. Install `huggingface_hub` "
+            "or use --skip-hf-dataset-download only when the resolved roots already exist."
+        ) from exc
+    return str(snapshot_download(**kwargs))
+
+
+def _hf_local_repo_dir(cache_root: Path, repo_id: str, revision: str = "") -> Path:
+    safe_repo = repo_id.replace("/", "__")
+    if revision:
+        return cache_root / safe_repo / revision.replace("/", "__")
+    return cache_root / safe_repo
+
+
 def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list[str]:
     if not config:
         return args
@@ -349,9 +633,13 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list
     for name, cli_name in (
         ("num_workers", "num_workers"),
         ("batch_size", "batch_size"),
+        ("policy_repo_id", "policy.repo_id"),
+        ("lightning_precision", "lightning-precision"),
     ):
         if name in training:
             updated = _ensure_arg(updated, cli_name, str(training[name]))
+    if "policy_push_to_hub" in training:
+        updated = _ensure_arg(updated, "policy.push_to_hub", str(bool(training["policy_push_to_hub"])).lower())
     cache = config.get("predecoded_image_cache") or {}
     if not isinstance(cache, dict):
         raise SystemExit("dataset config predecoded_image_cache must be an object")
@@ -417,6 +705,198 @@ def _with_validation_schedule(args: list[str], namespace: argparse.Namespace) ->
     return args
 
 
+def _with_checkpoint_schedule(
+    args: list[str],
+    config: dict[str, Any] | None,
+    namespace: argparse.Namespace,
+) -> list[str]:
+    if not config or _has_any_arg(args, "save_freq", "save-freq"):
+        return args
+    if _closed_loop_policy_name(namespace) == "off":
+        return args
+    steps_per_epoch = _steps_per_epoch(config, args)
+    if steps_per_epoch is None:
+        return args
+    checkpoint_interval = steps_per_epoch * max(1, int(namespace.closed_loop_every_epochs))
+    return [*args, f"--save_freq={checkpoint_interval}"]
+
+
+def _runtime_contract(namespace: argparse.Namespace, training_args: list[str]) -> dict[str, str]:
+    runtime_platform = _runtime_platform(namespace.runtime_platform)
+    device = _arg_value(training_args, "policy.device")
+    if device not in {"cpu", "mps", "cuda"}:
+        device = namespace.training_device
+    if device == "auto":
+        device = "mps" if runtime_platform == "macos" else "cuda"
+    lightning_accelerator = _arg_value(training_args, "lightning-accelerator")
+    if not lightning_accelerator or lightning_accelerator == "auto":
+        lightning_accelerator = {"mps": "mps", "cuda": "cuda", "cpu": "cpu"}[device]
+    lightning_devices = _arg_value(training_args, "lightning-devices") or ("1" if device in {"mps", "cuda"} else "auto")
+    mujoco_gl = namespace.closed_loop_mujoco_gl
+    if mujoco_gl == "auto":
+        mujoco_gl = "glfw" if runtime_platform == "macos" else "egl"
+    return {
+        "runtime_platform": runtime_platform,
+        "training_device": device,
+        "lightning_accelerator": lightning_accelerator,
+        "lightning_devices": lightning_devices,
+        "closed_loop_mujoco_gl": mujoco_gl,
+    }
+
+
+def _runtime_platform(requested: str) -> str:
+    if requested in {"macos", "linux"}:
+        return requested
+    system = platform.system().lower()
+    if system == "darwin":
+        return "macos"
+    return "linux"
+
+
+def _with_runtime_contract(args: list[str], contract: dict[str, str]) -> list[str]:
+    updated = [*args]
+    updated = _ensure_arg(updated, "policy.device", contract["training_device"])
+    updated = _ensure_arg(updated, "lightning-accelerator", contract["lightning_accelerator"])
+    updated = _ensure_arg(updated, "lightning-devices", contract["lightning_devices"])
+    return updated
+
+
+def _validate_monitoring_contract(
+    *,
+    args: argparse.Namespace,
+    dataset_config: dict[str, Any] | None,
+    training_args: list[str],
+    train_cmd: list[str],
+    launch_plan: dict[str, Any],
+    runtime_contract: dict[str, str],
+) -> None:
+    if not dataset_config or args.allow_incomplete_monitoring:
+        return
+
+    errors: list[str] = []
+    validation = dataset_config.get("validation_dataset")
+    if not isinstance(validation, dict):
+        errors.append("dataset config must define validation_dataset for val/loss.")
+    else:
+        for key in ("repo_id", "root"):
+            if not validation.get(key):
+                errors.append(f"validation_dataset.{key} is required for val/loss.")
+
+    if args.no_tensorboard:
+        errors.append("TensorBoard is disabled; remove --no-tensorboard for monitored training.")
+    if launch_plan.get("tensorboard_cmd") is None:
+        errors.append("TensorBoard command is missing.")
+    if "--tensorboard-log-dir" not in train_cmd:
+        errors.append("training command is missing --tensorboard-log-dir.")
+    if not _has_any_arg(training_args, "policy.device"):
+        errors.append("training command is missing --policy.device for platform-specific execution.")
+    if not _has_any_arg(training_args, "lightning-accelerator"):
+        errors.append("training command is missing --lightning-accelerator for platform-specific execution.")
+    if runtime_contract["runtime_platform"] == "macos" and runtime_contract["training_device"] == "cuda":
+        errors.append("macOS runtime profile cannot default to CUDA; use --training-device mps or cpu.")
+    if runtime_contract["runtime_platform"] == "linux" and runtime_contract["training_device"] == "mps":
+        errors.append("Linux/RunPod runtime profile cannot use MPS; use --training-device cuda or cpu.")
+
+    if _validation_interval(training_args) <= 0:
+        errors.append("validation cadence must be positive; set --validation-interval-epochs or --validation-interval-steps.")
+    if not _has_any_arg(training_args, "validation-dataset-root"):
+        errors.append("training command is missing --validation-dataset-root.")
+    if not _has_any_arg(training_args, "validation-dataset-repo-id"):
+        errors.append("training command is missing --validation-dataset-repo-id.")
+
+    closed_loop_policy = _closed_loop_policy_name(args)
+    if closed_loop_policy == "off":
+        errors.append("closed-loop evaluation is disabled; use periodic, best_only, or best_or_periodic.")
+    if args.no_progress_monitor:
+        errors.append("progress monitor is disabled; it is required for supervised validation and closed-loop metrics.")
+    if launch_plan.get("progress_monitor_cmd") is None:
+        errors.append("progress monitor command is missing.")
+    progress_monitor_cmd = launch_plan.get("progress_monitor_cmd") or []
+    if "--mujoco-gl" not in progress_monitor_cmd:
+        errors.append("progress monitor command is missing --mujoco-gl for platform-specific closed-loop rendering.")
+    if int(args.closed_loop_every_epochs) <= 0:
+        errors.append("--closed-loop-every-epochs must be positive.")
+    if int(args.closed_loop_episodes) <= 0:
+        errors.append("--closed-loop-episodes must be positive.")
+    if int(args.closed_loop_steps) <= 0:
+        errors.append("--closed-loop-steps must be positive.")
+
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if not args.closed_loop_eval_skill_mode and not (
+        isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode")
+    ):
+        errors.append("closed-loop eval skill mode must be set in config closed_loop.eval_skill_mode or CLI.")
+    if not _closed_loop_task_prompt(args, dataset_config):
+        errors.append("closed-loop task prompt must be set in config closed_loop.task_prompt or CLI.")
+
+    steps_per_epoch = _steps_per_epoch(dataset_config, training_args)
+    if steps_per_epoch is None:
+        errors.append("training.steps_per_epoch or --steps-per-epoch is required for closed-loop scheduling.")
+    save_freq = _positive_int_arg(training_args, "save_freq") or _positive_int_arg(training_args, "save-freq")
+    if save_freq is None:
+        errors.append("checkpoint save cadence is missing; set --save_freq or training.steps_per_epoch.")
+    elif steps_per_epoch is not None:
+        max_closed_loop_gap = steps_per_epoch * int(args.closed_loop_every_epochs)
+        if save_freq > max_closed_loop_gap:
+            errors.append(
+                f"--save_freq={save_freq} is too sparse for closed-loop cadence; "
+                f"expected <= {max_closed_loop_gap}."
+            )
+        planned_steps = _positive_int_arg(training_args, "steps")
+        max_checkpoints = max(1, int(args.max_monitored_checkpoints))
+        if planned_steps is not None:
+            planned_checkpoints = (planned_steps + save_freq - 1) // save_freq
+            if planned_checkpoints > max_checkpoints:
+                errors.append(
+                    f"--steps={planned_steps} and --save_freq={save_freq} would create "
+                    f"about {planned_checkpoints} checkpoints; expected <= {max_checkpoints}. "
+                    "Increase --save_freq, lower --steps, or raise --max-monitored-checkpoints "
+                    "only when disk capacity is confirmed."
+                )
+
+    if errors:
+        detail = "\n".join(f"- {error}" for error in errors)
+        raise SystemExit(f"SO101 monitored training contract failed:\n{detail}")
+
+
+def _validation_interval(args: list[str]) -> int:
+    steps = _positive_int_arg(args, "validation-interval-steps") or _positive_int_arg(
+        args, "validation-every-n-train-steps"
+    )
+    if steps is not None:
+        return steps
+    return _positive_int_arg(args, "validation-interval-epochs") or 0
+
+
+def _steps_per_epoch(config: dict[str, Any], training_args: list[str]) -> int | None:
+    value = _positive_int_arg(training_args, "steps-per-epoch")
+    if value is not None:
+        return value
+    training = config.get("training") or {}
+    if isinstance(training, dict):
+        try:
+            parsed = int(training.get("steps_per_epoch") or 0)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _positive_int_arg(args: list[str], name: str) -> int | None:
+    value = _arg_value(args, name)
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _closed_loop_policy_name(args: argparse.Namespace) -> str:
+    return str(getattr(args, "closed_loop_policy", "periodic") or "periodic")
+
+
 def _progress_monitor_command(
     *,
     args: argparse.Namespace,
@@ -425,6 +905,7 @@ def _progress_monitor_command(
     train_output_dir: Path,
     dataset_config: dict[str, Any] | None,
     training_args: list[str],
+    runtime_contract: dict[str, str],
     train_pid_file: Path,
 ) -> list[str] | None:
     if not dataset_config:
@@ -473,17 +954,43 @@ def _progress_monitor_command(
         str(args.closed_loop_episodes),
         "--closed-loop-steps",
         str(args.closed_loop_steps),
+        "--mujoco-gl",
+        runtime_contract["closed_loop_mujoco_gl"],
         "--closed-loop-policy",
         args.closed_loop_policy,
         "--closed-loop-eval-skill-mode",
-        args.closed_loop_eval_skill_mode,
+        _closed_loop_eval_skill_mode(args, dataset_config),
         "--local-files-only",
     ]
-    if args.closed_loop_task_prompt:
-        cmd.extend(["--closed-loop-task-prompt", args.closed_loop_task_prompt])
-    if args.closed_loop_record_rollout_gif:
+    closed_loop_task_prompt = _closed_loop_task_prompt(args, dataset_config)
+    if closed_loop_task_prompt:
+        cmd.extend(["--closed-loop-task-prompt", closed_loop_task_prompt])
+    if args.closed_loop_record_rollout_gif or _closed_loop_record_rollout_gif(dataset_config):
         cmd.append("--closed-loop-record-rollout-gif")
     return cmd
+
+
+def _closed_loop_eval_skill_mode(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    if args.closed_loop_eval_skill_mode:
+        return str(args.closed_loop_eval_skill_mode)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode"):
+        return str(closed_loop["eval_skill_mode"])
+    return "picklift"
+
+
+def _closed_loop_task_prompt(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str | None:
+    if args.closed_loop_task_prompt:
+        return str(args.closed_loop_task_prompt)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("task_prompt"):
+        return str(closed_loop["task_prompt"])
+    return None
+
+
+def _closed_loop_record_rollout_gif(dataset_config: dict[str, Any]) -> bool:
+    closed_loop = dataset_config.get("closed_loop") or {}
+    return bool(isinstance(closed_loop, dict) and closed_loop.get("record_rollout_gif"))
 
 
 def _arg_value(args: list[str], name: str) -> str | None:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import json
 import time
 from pathlib import Path
@@ -21,8 +22,6 @@ def main() -> None:
         try:
             count = _mirror_once(
                 source=source,
-                train_dir=log_root / args.train_run,
-                val_dir=log_root / args.val_run,
                 state_path=state_path,
                 seen=seen,
             )
@@ -36,19 +35,17 @@ def main() -> None:
             )
         except Exception as exc:
             print(f"mirror_error={exc!r}", flush=True)
-        if args.once or (args.until_pid is not None and not Path(f"/proc/{args.until_pid}").exists()):
+        if args.once or (args.until_pid is not None and not _pid_exists(args.until_pid)):
             return
         time.sleep(max(1.0, args.interval_s))
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Mirror SO101 train/val loss into separate TensorBoard runs for readable colors.",
+        description="Mirror SO101 train/val loss into important/* TensorBoard scalar tags.",
     )
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--source-run", default="so101_smolvla")
-    parser.add_argument("--train-run", default="important_train_loss")
-    parser.add_argument("--val-run", default="important_val_loss")
     parser.add_argument("--state-path", type=Path)
     parser.add_argument("--interval-s", type=float, default=60.0)
     parser.add_argument("--until-pid", type=int)
@@ -73,37 +70,67 @@ def _save_seen(path: Path, seen: dict[str, list[int]]) -> None:
     path.write_text(json.dumps(seen, sort_keys=True), encoding="utf-8")
 
 
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _mirror_once(
     *,
     source: Path,
-    train_dir: Path,
-    val_dir: Path,
     state_path: Path,
     seen: dict[str, list[int]],
 ) -> int:
-    main = SummaryWriter(log_dir=str(source))
-    main.add_custom_scalars({"important_metrics": {"train_val_loss": ["Multiline", ["^important/loss$"]]}})
-    main.close()
-
     accumulator = EventAccumulator(str(source), size_guidance={"scalars": 0})
     accumulator.Reload()
     tags = set(accumulator.Tags().get("scalars", []))
     total = 0
-    for source_tag, target_dir in (("train/loss", train_dir), ("val/loss", val_dir)):
-        if source_tag not in tags:
-            continue
-        seen_steps = set(int(step) for step in seen.get(source_tag, []))
-        writer = SummaryWriter(log_dir=str(target_dir))
-        for event in accumulator.Scalars(source_tag):
-            step = int(event.step)
-            if step in seen_steps:
-                continue
-            writer.add_scalar("important/loss", event.value, global_step=step, walltime=event.wall_time)
-            seen_steps.add(step)
-            total += 1
-        writer.close()
-        seen[source_tag] = sorted(seen_steps)
+    with SummaryWriter(log_dir=str(source)) as writer:
+        for source_tag, target_tag in (
+            ("train/loss", "important/train_loss"),
+            ("val/loss", "important/val_loss"),
+        ):
+            total += _mirror_scalar_tag(
+                accumulator=accumulator,
+                tags=tags,
+                writer=writer,
+                source_tag=source_tag,
+                target_tag=target_tag,
+                seen=seen,
+            )
     _save_seen(state_path, seen)
+    return total
+
+
+def _mirror_scalar_tag(
+    *,
+    accumulator: EventAccumulator,
+    tags: set[str],
+    writer: SummaryWriter,
+    source_tag: str,
+    target_tag: str,
+    seen: dict[str, list[int]],
+) -> int:
+    if source_tag not in tags:
+        return 0
+    seen_steps = set(int(step) for step in seen.get(source_tag, []))
+    if target_tag in tags:
+        seen_steps.update(int(event.step) for event in accumulator.Scalars(target_tag))
+    total = 0
+    for event in accumulator.Scalars(source_tag):
+        step = int(event.step)
+        if step in seen_steps:
+            continue
+        writer.add_scalar(target_tag, event.value, global_step=step, walltime=event.wall_time)
+        seen_steps.add(step)
+        total += 1
+    writer.flush()
+    seen[source_tag] = sorted(seen_steps)
     return total
 
 

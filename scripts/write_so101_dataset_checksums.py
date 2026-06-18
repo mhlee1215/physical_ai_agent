@@ -9,6 +9,7 @@ from typing import Any
 
 
 DATASET_CONTRACT = Path("configs/so101/training_datasets/dataset_contract.json")
+SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_contract.json")
 
 
 def main() -> None:
@@ -37,15 +38,18 @@ def main() -> None:
 
 
 def _dataset_roots_from_contract(repo_root: Path) -> dict[str, Path]:
-    contract_path = repo_root / DATASET_CONTRACT
-    contract = json.loads(contract_path.read_text(encoding="utf-8"))
     roots: dict[str, Path] = {}
-    for dataset_name, dataset in contract.get("datasets", {}).items():
-        for split_name, split in (("train", dataset.get("train")), ("validation", dataset.get("validation"))):
-            if not isinstance(split, dict):
-                continue
-            suffix = "val" if split_name == "validation" else "train"
-            roots[f"{dataset_name}_{suffix}"] = Path(split["root"])
+    for contract_path in (DATASET_CONTRACT, SKILL_DATASET_CONTRACT):
+        path = repo_root / contract_path
+        if not path.exists():
+            continue
+        contract = json.loads(path.read_text(encoding="utf-8"))
+        for dataset_name, dataset in contract.get("datasets", {}).items():
+            for split_name, split in (("train", dataset.get("train")), ("validation", dataset.get("validation"))):
+                if not isinstance(split, dict):
+                    continue
+                suffix = "val" if split_name == "validation" else "train"
+                roots[f"{dataset_name}_{suffix}"] = Path(split["root"])
     return roots
 
 
@@ -57,6 +61,7 @@ def _dataset_entry(repo_root: Path, name: str, root: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"missing export report for {name}: {report_path}")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     audit = report.get("audit") or {}
+    official_camera_contract = report.get("official_camera_contract") or {}
     return {
         "root": str(root),
         "repo_id": report.get("repo_id"),
@@ -72,6 +77,9 @@ def _dataset_entry(repo_root: Path, name: str, root: Path) -> dict[str, Any]:
             "observation.images.camera1": (report.get("feature_mapping") or {}).get("observation.images.camera1"),
             "observation.images.camera2": (report.get("feature_mapping") or {}).get("observation.images.camera2"),
             "observation.images.camera3": (report.get("feature_mapping") or {}).get("observation.images.camera3"),
+        },
+        "camera_pose_contract": {
+            "observation.images.camera1": official_camera_contract.get("camera1_pose"),
         },
         "sample_shapes": {
             "observation.images.camera1": (audit.get("sample_shapes") or {}).get("observation.images.camera1"),

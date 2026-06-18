@@ -12,31 +12,80 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prune SO101 training checkpoints to stay under quota.")
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument(
+        "--checkpoint-root",
+        type=Path,
+        help="Checkpoint directory. Defaults to run-dir/checkpoints or run-dir/model/checkpoints.",
+    )
     parser.add_argument("--keep", action="append", default=[], help="Checkpoint name to always keep, e.g. 001490.")
-    parser.add_argument("--keep-latest-complete", type=int, default=2)
+    parser.add_argument("--keep-best-validation", action="store_true")
+    parser.add_argument("--keep-latest-complete", type=int, default=1)
     parser.add_argument("--interval-s", type=float, default=60.0)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
     while True:
-        prune_once(args.run_dir, set(args.keep), args.keep_latest_complete)
+        prune_once(
+            args.run_dir,
+            checkpoint_root=args.checkpoint_root,
+            keep=set(args.keep),
+            keep_latest_complete=args.keep_latest_complete,
+            keep_best_validation=args.keep_best_validation,
+        )
         if args.once:
             return
         time.sleep(args.interval_s)
 
 
-def prune_once(run_dir: Path, keep: set[str], keep_latest_complete: int) -> None:
-    checkpoints_dir = run_dir / "checkpoints"
+def prune_once(
+    run_dir: Path,
+    *,
+    checkpoint_root: Path | None = None,
+    keep: set[str],
+    keep_latest_complete: int,
+    keep_best_validation: bool = False,
+) -> None:
+    checkpoints_dir = _checkpoint_root(run_dir, checkpoint_root)
     if not checkpoints_dir.exists():
         return
     checkpoint_dirs = sorted(path for path in checkpoints_dir.iterdir() if path.is_dir() and path.name.isdigit())
     complete = [path for path in checkpoint_dirs if _is_complete(path)]
     latest_complete = {path.name for path in complete[-keep_latest_complete:]} if keep_latest_complete > 0 else set()
-    keep_names = keep | latest_complete
+    best_validation = {_best_validation_checkpoint(run_dir)} if keep_best_validation else set()
+    keep_names = keep | latest_complete | {name for name in best_validation if name}
     for path in checkpoint_dirs:
         if path.name in keep_names:
             continue
         _remove_checkpoint(run_dir, path, keep_names)
+
+
+def _checkpoint_root(run_dir: Path, checkpoint_root: Path | None) -> Path:
+    if checkpoint_root is not None:
+        return checkpoint_root
+    for candidate in (run_dir / "checkpoints", run_dir / "model" / "checkpoints"):
+        if candidate.exists():
+            return candidate
+    return run_dir / "checkpoints"
+
+
+def _best_validation_checkpoint(run_dir: Path) -> str | None:
+    path = run_dir / "metrics" / "validation_metrics.jsonl"
+    if not path.exists():
+        return None
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("checkpoint") is not None and row.get("loss") is not None:
+            rows.append(row)
+    if not rows:
+        return None
+    best = min(rows, key=lambda row: float(row["loss"]))
+    return str(best["checkpoint"])
 
 
 def _is_complete(checkpoint_dir: Path) -> bool:

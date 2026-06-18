@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-06-17
+Last updated: 2026-06-18
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -90,6 +90,16 @@ paper-facing concepts:
   inputs unaugmented. Do not use teacher-action dropout for BC runs. If action
   chunks need smoothing, use explicit temporal smoothness loss or inference-time
   temporal ensembling/chunk smoothing instead of corrupting labels.
+- User policy: SO101/SmolVLA training runs must execute outside the Codex
+  sandbox. On macOS, MPS availability checks performed inside the sandbox are
+  not authoritative; verify `torch.backends.mps.is_available()` and launch
+  MPS training from an unsandboxed/external runtime. Keep deterministic logs,
+  TensorBoard events, checkpoints, and monitor artifacts under `_workspace/`.
+- User policy: SO101 training, supervised validation, and closed-loop tests
+  must stay runnable on both local macOS and Linux/RunPod through the canonical
+  launcher. The runtime contract is `macos => mps + MuJoCo glfw` and
+  `linux/RunPod => cuda + MuJoCo egl`; dry-run both profiles or run the targeted
+  command-contract tests before treating a training PR as ready.
 - RunPod experiment-data storage policy: past remote experiment results are not
   needed. Starting now, every new RunPod data-generation, training, evaluation,
   and closed-loop run must end with a local download, local verification, and
@@ -97,17 +107,25 @@ paper-facing concepts:
   repo is the preservation point for experiment data. Keep reusable Python
   environments on the Pod's local disk when practical; use the network volume
   only for active handoff/cache, not long-term experiment-data storage.
-- SO101 dataset handoff policy: prefer exporting teacher datasets on the local
-  Mac first, then upload/sync the checked export to RunPod for GPU training.
-  RunPod should be used as the CUDA training/evaluation worker, not the primary
-  MuJoCo/LeRobot dataset exporter, unless local export is blocked or the user
-  explicitly asks for remote generation. For future SO101 RunPod handoffs,
-  package the checked local export into a reusable tarball before upload so
-  retry/reupload does not require rebuilding or re-exporting the dataset.
+- SO101 dataset handoff policy: generate or re-export teacher datasets locally,
+  verify checksums/manifests, upload the checked LeRobot exports to the HF
+  dataset bundle `mhlee1215/so101-nexus-sim-dataset`, then start training
+  through `scripts/start_so101_training.py`. Training configs now point at HF
+  subfolders; the launcher downloads the configured subfolder from HF before
+  training and passes that downloaded path to LeRobot. For test/debug work only,
+  `--use-local-dataset-roots` keeps the config's local `root` values and skips
+  HF resolution. RunPod should be used as the CUDA training/evaluation worker,
+  not the primary MuJoCo/LeRobot dataset exporter, unless local export is
+  blocked or the user explicitly asks for remote generation.
 - SO101 dataset camera1 contract: `camera1` is the real-hardware-aligned
   `egocentric_cam`, not `top_down`. Current approved camera1 pose is
   `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`;
   do not change it during data generation without explicit user approval.
+- SO101 pre-export dataset material is tracked as code/config through
+  `configs/so101/training_datasets/export_recipes.json` and
+  `scripts/export_so101_training_datasets.py`. Raw datasets remain local
+  `_workspace` artifacts; regenerate them from the recipe and refresh
+  `configs/so101/training_datasets/checksums.json` before RunPod upload.
 
 ### What We Have Learned
 
@@ -165,6 +183,12 @@ Working collaboration assumptions:
   explicitly asks for postdoc/orchestrator mode.
 - The postdoc/orchestrator owns high-level research judgment, claim boundaries,
   and user-facing synthesis.
+- Do not modify installed third-party library source code, vendored package
+  internals, `site-packages`, TensorBoard frontend bundles, or framework
+  runtime files as a normal fix path. Prefer public APIs, repo-local wrappers,
+  launcher contracts, logging/tag layout changes, or monitor-side adaptations.
+  If a temporary monkey patch or library-source patch is truly unavoidable,
+  ask first and document it as temporary with the tested dependency version.
 - PM owns coordination and concise status tracking.
 - Tech Lead owns code fixes and tests.
 - RunPod Manager owns cloud resource setup and handoff.
