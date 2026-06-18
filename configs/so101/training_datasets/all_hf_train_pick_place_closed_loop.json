@@ -1,0 +1,115 @@
+{
+  "name": "all_hf_train_pick_place_closed_loop",
+  "description": "SO101 combined HF training set over all uploaded train splits; supervised validation and closed-loop test use pick-and-place.",
+  "task": "multi_task_pick_place_closed_loop",
+  "train_dataset": {
+    "repo_id": "physical-ai-agent/so101-all-train400-ego-wrist-256",
+    "root": "_workspace/so101_lerobot_merged/all_hf_train400_ego_wrist_256",
+    "split": "train",
+    "expected_episodes": 400,
+    "expected_frames": 47835,
+    "hf_merge_sources": [
+      {
+        "name": "pick_cube_train",
+        "repo_id": "physical-ai-agent/so101-pick-cube-train50-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/pick_cube/train",
+        "expected_episodes": 50,
+        "expected_frames": 4598
+      },
+      {
+        "name": "pick_and_place_cube_train",
+        "repo_id": "physical-ai-agent/so101-pick-and-place-cube-train50-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/pick_and_place_cube/train",
+        "expected_episodes": 50,
+        "expected_frames": 14601
+      },
+      {
+        "name": "pick_cube_grip_focus_train",
+        "repo_id": "physical-ai-agent/so101-pick-cube-grip-focus-train50-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/pick_cube_grip_focus/train",
+        "expected_episodes": 50,
+        "expected_frames": 3197
+      },
+      {
+        "name": "pick_and_place_cube_grip_focus_train",
+        "repo_id": "physical-ai-agent/so101-pick-and-place-cube-grip-focus-train50-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/pick_and_place_cube_grip_focus/train",
+        "expected_episodes": 50,
+        "expected_frames": 13260
+      },
+      {
+        "name": "move_over_cube_train",
+        "repo_id": "physical-ai-agent/so101-move-over-cube-train100-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/move_over_cube/train",
+        "expected_episodes": 100,
+        "expected_frames": 5000
+      },
+      {
+        "name": "pick_from_top_cube_train",
+        "repo_id": "physical-ai-agent/so101-pick-from-top-cube-train100-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/pick_from_top_cube/train",
+        "expected_episodes": 100,
+        "expected_frames": 7179
+      }
+    ]
+  },
+  "validation_dataset": {
+    "repo_id": "physical-ai-agent/so101-pick-and-place-cube-valid24-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/pick_and_place_cube_valid24_ego_wrist_256_seed102000",
+    "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+    "hf_repo_type": "dataset",
+    "hf_path_in_repo": "datasets/pick_and_place_cube/validation",
+    "split": "validation",
+    "expected_episodes": 24,
+    "expected_frames": 6943
+  },
+  "camera_contract": {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam",
+    "observation.images.camera3": "wrist_cam duplicate"
+  },
+  "training": {
+    "batch_size": 32,
+    "num_workers": 4,
+    "steps_per_epoch": 1495,
+    "validation_max_batches": 32
+  },
+  "predecoded_image_cache": {
+    "root_env": "SO101_PREDECODED_CACHE_ROOT",
+    "default_root": "_workspace/so101_image_cache",
+    "train": "all_hf_train400_ego_wrist_256",
+    "validation": "pick_and_place_cube_valid24_ego_wrist_256_seed102000"
+  },
+  "tensorboard": {
+    "log_input_images_every_n_steps": 50,
+    "log_input_metadata_every_n_steps": 50
+  },
+  "augmentation": {
+    "state_jitter_std": 0.003,
+    "state_jitter_arm_only": true,
+    "state_dropout_prob": 0.02,
+    "state_dropout_keep_gripper": true,
+    "image_camera_dropout_prob": 0.0,
+    "image_patch_dropout_prob": 0.0,
+    "image_patch_mask_ratio": 0.15,
+    "gpu_image_augmentation": true
+  },
+  "closed_loop": {
+    "eval_skill_mode": "pick_and_place_cube",
+    "task_prompt": "Pick up the small red cube and place it on the blue circle.",
+    "success_metric": "is_obj_placed or obj_to_target_dist <= 0.035",
+    "record_rollout_gif": true
+  }
+}

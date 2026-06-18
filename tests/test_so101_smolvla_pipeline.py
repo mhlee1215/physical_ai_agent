@@ -6,8 +6,9 @@ import subprocess
 import sys
 import tempfile
 import ast
+import argparse
 from pathlib import Path
-from unittest import TestCase
+from unittest import TestCase, mock
 
 from physical_ai_agent.so101_smolvla_pipeline import (
     SO101DatasetManifest,
@@ -469,12 +470,232 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertFalse(any("action-dropout" in arg for arg in train_cmd))
             self.assertEqual(payload["dataset_config"]["train_dataset"]["repo_id"], "physical-ai-agent/train")
 
+    def test_single_training_launcher_can_use_local_dataset_roots_for_debugging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "dataset_config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "train_dataset": {
+                            "repo_id": "physical-ai-agent/train",
+                            "root": "_workspace/local_train",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/tiny/train",
+                        },
+                        "validation_dataset": {
+                            "repo_id": "physical-ai-agent/val",
+                            "root": "_workspace/local_val",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/tiny/validation",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--use-local-dataset-roots",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--dataset-config",
+                    str(config),
+                    "--",
+                    "--policy.type=smolvla",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            train_cmd = payload["train_cmd"]
+            self.assertIn("--dataset.root=_workspace/local_train", train_cmd)
+            self.assertIn("--validation-dataset-root=_workspace/local_val", train_cmd)
+            self.assertNotIn("hf_dataset_downloads", payload["dataset_config"])
+            self.assertNotIn("hf_resolved_root", payload["dataset_config"]["train_dataset"])
+
+    def test_so101_training_launcher_resolves_hf_dataset_subfolders_before_training(self) -> None:
+        from scripts import start_so101_training
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir) / "repo"
+            cache_root = Path(tmpdir) / "hf_datasets"
+            repo_root.mkdir()
+            config = {
+                "train_dataset": {
+                    "repo_id": "physical-ai-agent/train",
+                    "root": "_workspace/local_train",
+                    "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                    "hf_repo_type": "dataset",
+                    "hf_path_in_repo": "datasets/tiny/train",
+                },
+                "validation_dataset": {
+                    "repo_id": "physical-ai-agent/validation",
+                    "root": "_workspace/local_validation",
+                    "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                    "hf_repo_type": "dataset",
+                    "hf_path_in_repo": "datasets/tiny/validation",
+                },
+                "predecoded_image_cache": {
+                    "default_root": str(Path(tmpdir) / "image_cache"),
+                    "train": "train",
+                    "validation": "validation",
+                },
+            }
+
+            with mock.patch.object(start_so101_training, "_snapshot_download") as snapshot_download:
+                resolved = start_so101_training._resolve_hf_dataset_downloads(
+                    config,
+                    repo_root=repo_root,
+                    cache_root=cache_root,
+                    download=True,
+                )
+
+            local_repo_dir = cache_root / "mhlee1215__so101-nexus-sim-dataset"
+            train_root = local_repo_dir / "datasets/tiny/train"
+            validation_root = local_repo_dir / "datasets/tiny/validation"
+            self.assertEqual(snapshot_download.call_count, 2)
+            snapshot_download.assert_any_call(
+                repo_id="mhlee1215/so101-nexus-sim-dataset",
+                repo_type="dataset",
+                allow_patterns=["datasets/tiny/train/**"],
+                local_dir=local_repo_dir,
+                local_files_only=False,
+            )
+            snapshot_download.assert_any_call(
+                repo_id="mhlee1215/so101-nexus-sim-dataset",
+                repo_type="dataset",
+                allow_patterns=["datasets/tiny/validation/**"],
+                local_dir=local_repo_dir,
+                local_files_only=False,
+            )
+            self.assertEqual(resolved["train_dataset"]["root"], str(train_root))
+            self.assertEqual(resolved["validation_dataset"]["root"], str(validation_root))
+            self.assertEqual(config["train_dataset"]["root"], "_workspace/local_train")
+
+            train_args = start_so101_training._with_dataset_config([], resolved)
+            self.assertIn("--dataset.repo_id=physical-ai-agent/train", train_args)
+            self.assertIn(f"--dataset.root={train_root}", train_args)
+            self.assertIn("--validation-dataset-repo-id=physical-ai-agent/validation", train_args)
+            self.assertIn(f"--validation-dataset-root={validation_root}", train_args)
+
+            cache_cmds = start_so101_training._cache_build_commands(
+                Path(sys.executable),
+                repo_root,
+                resolved,
+            )
+            self.assertIn(str(train_root), cache_cmds[0])
+            self.assertIn(str(validation_root), cache_cmds[1])
+            self.assertEqual(resolved["hf_dataset_downloads"][0]["path_in_repo"], "datasets/tiny/train")
+
+    def test_so101_training_launcher_resolves_hf_merge_sources(self) -> None:
+        from scripts import start_so101_training
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir) / "repo"
+            cache_root = Path(tmpdir) / "hf_datasets"
+            repo_root.mkdir()
+            config = {
+                "train_dataset": {
+                    "repo_id": "physical-ai-agent/merged",
+                    "root": "_workspace/merged/train",
+                    "hf_merge_sources": [
+                        {
+                            "name": "pick_cube_train",
+                            "repo_id": "physical-ai-agent/source-a",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/pick_cube/train",
+                        },
+                        {
+                            "name": "pick_place_train",
+                            "repo_id": "physical-ai-agent/source-b",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/pick_and_place_cube/train",
+                        },
+                    ],
+                },
+                "validation_dataset": {
+                    "repo_id": "physical-ai-agent/validation",
+                    "root": "_workspace/local_validation",
+                    "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                    "hf_repo_type": "dataset",
+                    "hf_path_in_repo": "datasets/pick_and_place_cube/validation",
+                },
+                "closed_loop": {
+                    "eval_skill_mode": "pick_and_place_cube",
+                    "task_prompt": "Pick up the small red cube and place it on the blue circle.",
+                    "record_rollout_gif": True,
+                },
+            }
+
+            with mock.patch.object(start_so101_training, "_snapshot_download") as snapshot_download:
+                resolved = start_so101_training._resolve_hf_dataset_downloads(
+                    config,
+                    repo_root=repo_root,
+                    cache_root=cache_root,
+                    download=True,
+                )
+            resolved = start_so101_training._prepare_merged_train_dataset(
+                resolved,
+                repo_root=repo_root,
+                python=Path(sys.executable),
+                merge=False,
+            )
+
+            local_repo_dir = cache_root / "mhlee1215__so101-nexus-sim-dataset"
+            merged_root = repo_root / "_workspace/merged/train"
+            self.assertEqual(snapshot_download.call_count, 3)
+            self.assertEqual(resolved["train_dataset"]["root"], str(merged_root))
+            self.assertEqual(len(resolved["train_dataset"]["hf_resolved_sources"]), 2)
+            self.assertIn(str(local_repo_dir / "datasets/pick_cube/train"), resolved["train_dataset"]["merged_from"])
+            self.assertIn(str(local_repo_dir / "datasets/pick_and_place_cube/train"), resolved["train_dataset"]["merged_from"])
+            self.assertIn("--output-root", resolved["train_dataset"]["merge_command"])
+
+            train_args = start_so101_training._with_dataset_config([], resolved)
+            self.assertIn(f"--dataset.root={merged_root}", train_args)
+            progress_cmd = start_so101_training._progress_monitor_command(
+                args=argparse.Namespace(
+                    python=Path(sys.executable),
+                    progress_monitor_interval_s=600,
+                    closed_loop_every_epochs=10,
+                    closed_loop_episodes=8,
+                    closed_loop_steps=120,
+                    closed_loop_policy="periodic",
+                    closed_loop_eval_skill_mode=None,
+                    closed_loop_task_prompt=None,
+                    closed_loop_record_rollout_gif=False,
+                ),
+                repo_root=repo_root,
+                run_dir=repo_root / "run",
+                train_output_dir=repo_root / "run/model",
+                dataset_config=resolved,
+                training_args=[],
+                train_pid_file=repo_root / "run/train.pid",
+            )
+            self.assertIn("--closed-loop-eval-skill-mode", progress_cmd)
+            self.assertIn("pick_and_place_cube", progress_cmd)
+            self.assertIn("--closed-loop-task-prompt", progress_cmd)
+            self.assertIn("--closed-loop-record-rollout-gif", progress_cmd)
+
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (
             Path("configs/so101/training_datasets/pick.json"),
             Path("configs/so101/training_datasets/pick_place.json"),
             Path("configs/so101/training_datasets/move_over_cube.json"),
             Path("configs/so101/training_datasets/pick_from_top_cube.json"),
+            Path("configs/so101/training_datasets/all_hf_train_pick_place_closed_loop.json"),
         ):
             with self.subTest(config=str(config_path)):
                 config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -493,6 +714,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             Path("configs/so101/training_datasets/pick_place.json"),
             Path("configs/so101/training_datasets/move_over_cube.json"),
             Path("configs/so101/training_datasets/pick_from_top_cube.json"),
+            Path("configs/so101/training_datasets/all_hf_train_pick_place_closed_loop.json"),
         ):
             with self.subTest(config=str(config_path)):
                 config = json.loads(config_path.read_text(encoding="utf-8"))

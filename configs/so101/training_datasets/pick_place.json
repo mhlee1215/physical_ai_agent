@@ -5,11 +5,17 @@
   "train_dataset": {
     "repo_id": "physical-ai-agent/so101-pick-and-place-cube-train50-ego-wrist-256",
     "root": "_workspace/so101_lerobot/pick_and_place_cube_train50_ego_wrist_256_seed99000",
+    "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+    "hf_repo_type": "dataset",
+    "hf_path_in_repo": "datasets/pick_and_place_cube/train",
     "split": "train"
   },
   "validation_dataset": {
     "repo_id": "physical-ai-agent/so101-pick-and-place-cube-valid24-ego-wrist-256",
     "root": "_workspace/so101_lerobot/pick_and_place_cube_valid24_ego_wrist_256_seed102000",
+    "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+    "hf_repo_type": "dataset",
+    "hf_path_in_repo": "datasets/pick_and_place_cube/validation",
     "split": "validation"
   },
   "camera_contract": {

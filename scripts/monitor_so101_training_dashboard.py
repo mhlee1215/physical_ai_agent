@@ -52,7 +52,11 @@ def main() -> None:
     parser.add_argument("--closed-loop-width", type=int, default=256)
     parser.add_argument("--closed-loop-height", type=int, default=256)
     parser.add_argument("--closed-loop-task-prompt")
-    parser.add_argument("--closed-loop-eval-skill-mode", choices=["picklift", "pick_from_top_cube"], default="picklift")
+    parser.add_argument(
+        "--closed-loop-eval-skill-mode",
+        choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
+        default="picklift",
+    )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--policy-num-steps", type=int, default=10)

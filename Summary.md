@@ -97,13 +97,16 @@ paper-facing concepts:
   repo is the preservation point for experiment data. Keep reusable Python
   environments on the Pod's local disk when practical; use the network volume
   only for active handoff/cache, not long-term experiment-data storage.
-- SO101 dataset handoff policy: prefer exporting teacher datasets on the local
-  Mac first, then upload/sync the checked export to RunPod for GPU training.
-  RunPod should be used as the CUDA training/evaluation worker, not the primary
-  MuJoCo/LeRobot dataset exporter, unless local export is blocked or the user
-  explicitly asks for remote generation. For future SO101 RunPod handoffs,
-  package the checked local export into a reusable tarball before upload so
-  retry/reupload does not require rebuilding or re-exporting the dataset.
+- SO101 dataset handoff policy: generate or re-export teacher datasets locally,
+  verify checksums/manifests, upload the checked LeRobot exports to the HF
+  dataset bundle `mhlee1215/so101-nexus-sim-dataset`, then start training
+  through `scripts/start_so101_training.py`. Training configs now point at HF
+  subfolders; the launcher downloads the configured subfolder from HF before
+  training and passes that downloaded path to LeRobot. For test/debug work only,
+  `--use-local-dataset-roots` keeps the config's local `root` values and skips
+  HF resolution. RunPod should be used as the CUDA training/evaluation worker,
+  not the primary MuJoCo/LeRobot dataset exporter, unless local export is
+  blocked or the user explicitly asks for remote generation.
 - SO101 dataset camera1 contract: `camera1` is the real-hardware-aligned
   `egocentric_cam`, not `top_down`. Current approved camera1 pose is
   `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`;

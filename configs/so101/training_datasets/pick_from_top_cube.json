@@ -6,6 +6,9 @@
   "train_dataset": {
     "repo_id": "physical-ai-agent/so101-pick-from-top-cube-train100-ego-wrist-256",
     "root": "_workspace/so101_lerobot/pick_from_top_cube_train100_ego_wrist_256_seed112000",
+    "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+    "hf_repo_type": "dataset",
+    "hf_path_in_repo": "datasets/pick_from_top_cube/train",
     "split": "train",
     "expected_episodes": 100,
     "expected_frames": 7180
@@ -13,6 +16,9 @@
   "validation_dataset": {
     "repo_id": "physical-ai-agent/so101-pick-from-top-cube-valid25-ego-wrist-256",
     "root": "_workspace/so101_lerobot/pick_from_top_cube_valid25_ego_wrist_256_seed113000",
+    "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+    "hf_repo_type": "dataset",
+    "hf_path_in_repo": "datasets/pick_from_top_cube/validation",
     "split": "validation",
     "expected_episodes": 25,
     "expected_frames": 1792

@@ -23,6 +23,15 @@ Config fields:
   `--dataset.repo_id` and `--dataset.root`.
 - `validation_dataset.repo_id`, `validation_dataset.root`: forwarded as
   validation dataset args.
+- `train_dataset.hf_repo_id`, `train_dataset.hf_path_in_repo`, and matching
+  validation fields: optional Hugging Face dataset bundle source. When present,
+  `scripts/start_so101_training.py start` downloads only the configured
+  subfolder before training and forwards the resolved local subfolder path as
+  `dataset.root`.
+- `train_dataset.hf_merge_sources`: optional list of HF subfolders to download
+  and merge into `train_dataset.root` before training. Use this for combined
+  multi-task runs while keeping each generated/uploaded dataset as a separate
+  HF bundle subfolder.
 - `camera_contract`: human-readable expected model input mapping.
 - `tensorboard`: optional default input logging cadence.
 - `augmentation`: optional train-time sampling augmentation defaults. Supported
@@ -63,6 +72,28 @@ Default moderate train-time preset:
 
 CLI args still win. If an arg is already present after `--`, the launcher does
 not overwrite it from the dataset config.
+
+Hugging Face dataset workflow:
+
+1. Generate or re-export datasets locally.
+2. Upload the checked LeRobot exports to the HF dataset bundle:
+   `mhlee1215/so101-nexus-sim-dataset`.
+3. Point each training config split at the bundle subfolder, for example
+   `hf_path_in_repo="datasets/pick_cube/train"`.
+4. Start training through `scripts/start_so101_training.py`; the launcher calls
+   `snapshot_download(..., allow_patterns=["<hf_path_in_repo>/**"])` and uses
+   the downloaded subfolder under `_workspace/hf_datasets/` as the effective
+   LeRobot root.
+
+For a multi-task run, use `train_dataset.hf_merge_sources` as in
+`all_hf_train_pick_place_closed_loop.json`; the launcher downloads each source
+subfolder, merges the shards with `scripts/merge_so101_lerobot_shards.py`, and
+passes the merged dataset root to LeRobot.
+
+For local export debugging, `--use-local-dataset-roots` ignores the HF fields
+and forwards the config's `root` values directly. For HF cache debugging,
+`--skip-hf-dataset-download` resolves the expected HF cache paths without
+network access. Normal training should download from HF first.
 
 Dataset checksums:
 

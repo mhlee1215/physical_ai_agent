@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import shutil
@@ -16,6 +17,7 @@ from typing import Any
 
 DEFAULT_ROOT = Path("_workspace/so101_training")
 DEFAULT_LOCK = DEFAULT_ROOT / "active_training.json"
+DEFAULT_HF_DATASET_CACHE_ROOT = Path("_workspace/hf_datasets")
 
 
 def main() -> int:
@@ -61,13 +63,38 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-dashboard", action="store_true")
     parser.add_argument("--no-gpu-monitor", action="store_true")
     parser.add_argument("--no-progress-monitor", action="store_true")
+    parser.add_argument(
+        "--hf-dataset-cache-root",
+        type=Path,
+        default=DEFAULT_HF_DATASET_CACHE_ROOT,
+        help="Local root for Hugging Face dataset subfolder downloads.",
+    )
+    parser.add_argument(
+        "--skip-hf-dataset-download",
+        action="store_true",
+        help="Resolve configured HF cache roots without downloading. For debugging only.",
+    )
+    parser.add_argument(
+        "--use-local-dataset-roots",
+        action="store_true",
+        help="Use dataset root fields from the config directly and ignore configured HF dataset sources.",
+    )
+    parser.add_argument(
+        "--hf-local-files-only",
+        action="store_true",
+        help="Require configured HF dataset subfolders to already be present in the local HF cache root.",
+    )
     parser.add_argument("--gpu-monitor-interval-s", type=float, default=5.0)
     parser.add_argument("--progress-monitor-interval-s", type=int, default=600)
     parser.add_argument("--closed-loop-every-epochs", type=int, default=10)
     parser.add_argument("--closed-loop-episodes", type=int, default=8)
     parser.add_argument("--closed-loop-steps", type=int, default=120)
     parser.add_argument("--closed-loop-policy", choices=["off", "periodic", "best_only", "best_or_periodic"], default="periodic")
-    parser.add_argument("--closed-loop-eval-skill-mode", choices=["picklift", "pick_from_top_cube"], default="picklift")
+    parser.add_argument(
+        "--closed-loop-eval-skill-mode",
+        choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
+        default=None,
+    )
     parser.add_argument("--closed-loop-task-prompt")
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument(
@@ -119,6 +146,20 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_config = _load_dataset_config(args.dataset_config, repo_root=repo_root)
+    if not args.use_local_dataset_roots:
+        dataset_config = _resolve_hf_dataset_downloads(
+            dataset_config,
+            repo_root=repo_root,
+            cache_root=args.hf_dataset_cache_root,
+            download=not args.dry_run and not args.skip_hf_dataset_download,
+            local_files_only=bool(args.hf_local_files_only),
+        )
+        dataset_config = _prepare_merged_train_dataset(
+            dataset_config,
+            repo_root=repo_root,
+            python=args.python,
+            merge=not args.dry_run,
+        )
     training_args = _forwarded_args(args.training_args, passthrough)
     training_args = _with_dataset_config(training_args, dataset_config)
     training_args = _with_validation_schedule(training_args, args)
@@ -327,6 +368,194 @@ def _load_dataset_config(path: Path | None, *, repo_root: Path) -> dict[str, Any
     return payload
 
 
+def _resolve_hf_dataset_downloads(
+    config: dict[str, Any] | None,
+    *,
+    repo_root: Path,
+    cache_root: Path,
+    download: bool,
+    local_files_only: bool = False,
+) -> dict[str, Any] | None:
+    if not config:
+        return config
+    updated = copy.deepcopy(config)
+    resolved_cache_root = cache_root if cache_root.is_absolute() else repo_root / cache_root
+    downloads: list[dict[str, Any]] = []
+    for dataset_key in ("train_dataset", "validation_dataset"):
+        dataset = updated.get(dataset_key)
+        if not isinstance(dataset, dict):
+            continue
+        merge_sources = dataset.get("hf_merge_sources")
+        if isinstance(merge_sources, list) and merge_sources:
+            resolved_sources = []
+            for source_index, source in enumerate(merge_sources):
+                if not isinstance(source, dict):
+                    raise SystemExit(f"dataset config {dataset_key}.hf_merge_sources[{source_index}] must be an object")
+                resolved_source = _resolve_hf_dataset_source(
+                    source,
+                    fallback=dataset,
+                    repo_root=repo_root,
+                    resolved_cache_root=resolved_cache_root,
+                    dataset_key=dataset_key,
+                    source_index=source_index,
+                    download=download,
+                    local_files_only=local_files_only,
+                )
+                downloads.append(resolved_source["download_record"])
+                resolved_sources.append(resolved_source["source"])
+            dataset["hf_resolved_sources"] = resolved_sources
+            continue
+        hf_repo_id = dataset.get("hf_repo_id") or updated.get("hf_repo_id")
+        hf_path = dataset.get("hf_path_in_repo")
+        if not hf_repo_id and not hf_path:
+            continue
+        if not hf_repo_id or not hf_path:
+            raise SystemExit(f"dataset config {dataset_key} must define both hf_repo_id and hf_path_in_repo")
+        resolved_source = _resolve_hf_dataset_source(
+            dataset,
+            fallback=updated,
+            repo_root=repo_root,
+            resolved_cache_root=resolved_cache_root,
+            dataset_key=dataset_key,
+            source_index=None,
+            download=download,
+            local_files_only=local_files_only,
+        )
+        resolved_root = Path(resolved_source["source"]["root"])
+        dataset["root"] = str(resolved_root)
+        dataset["hf_resolved_root"] = str(resolved_root)
+        downloads.append(resolved_source["download_record"])
+    if downloads:
+        updated["hf_dataset_downloads"] = downloads
+    return updated
+
+
+def _resolve_hf_dataset_source(
+    source: dict[str, Any],
+    *,
+    fallback: dict[str, Any],
+    repo_root: Path,
+    resolved_cache_root: Path,
+    dataset_key: str,
+    source_index: int | None,
+    download: bool,
+    local_files_only: bool,
+) -> dict[str, Any]:
+    del repo_root
+    hf_repo_id = source.get("hf_repo_id") or fallback.get("hf_repo_id")
+    hf_path = source.get("hf_path_in_repo")
+    if not hf_repo_id or not hf_path:
+        label = dataset_key if source_index is None else f"{dataset_key}.hf_merge_sources[{source_index}]"
+        raise SystemExit(f"dataset config {label} must define both hf_repo_id and hf_path_in_repo")
+    hf_repo_type = str(source.get("hf_repo_type") or fallback.get("hf_repo_type") or "dataset")
+    hf_revision = str(source.get("hf_revision") or fallback.get("hf_revision") or "")
+    local_repo_dir = _hf_local_repo_dir(resolved_cache_root, str(hf_repo_id), hf_revision)
+    hf_path_str = str(hf_path).strip("/")
+    allow_patterns = [f"{hf_path_str}/**"]
+    if download:
+        download_kwargs: dict[str, Any] = {
+            "repo_id": str(hf_repo_id),
+            "repo_type": hf_repo_type,
+            "allow_patterns": allow_patterns,
+            "local_dir": local_repo_dir,
+            "local_files_only": local_files_only,
+        }
+        if hf_revision:
+            download_kwargs["revision"] = hf_revision
+        _snapshot_download(**download_kwargs)
+    resolved_root = local_repo_dir / hf_path_str
+    resolved = {
+        "name": source.get("name"),
+        "repo_id": str(source.get("repo_id") or ""),
+        "root": str(resolved_root),
+        "hf_repo_id": str(hf_repo_id),
+        "hf_repo_type": hf_repo_type,
+        "hf_path_in_repo": hf_path_str,
+        "hf_revision": hf_revision,
+        "expected_episodes": source.get("expected_episodes"),
+        "expected_frames": source.get("expected_frames"),
+    }
+    return {
+        "source": {key: value for key, value in resolved.items() if value not in (None, "")},
+        "download_record": {
+            "dataset_key": dataset_key,
+            "source_index": source_index,
+            "source_name": source.get("name"),
+            "repo_id": str(hf_repo_id),
+            "repo_type": hf_repo_type,
+            "path_in_repo": hf_path_str,
+            "revision": hf_revision,
+            "allow_patterns": allow_patterns,
+            "local_dir": str(local_repo_dir),
+            "resolved_root": str(resolved_root),
+            "downloaded": bool(download),
+            "local_files_only": bool(local_files_only),
+        },
+    }
+
+
+def _prepare_merged_train_dataset(
+    config: dict[str, Any] | None,
+    *,
+    repo_root: Path,
+    python: Path,
+    merge: bool,
+) -> dict[str, Any] | None:
+    if not config:
+        return config
+    train = config.get("train_dataset")
+    if not isinstance(train, dict):
+        return config
+    sources = train.get("hf_resolved_sources")
+    if not isinstance(sources, list) or not sources:
+        return config
+    if "root" not in train or "repo_id" not in train:
+        raise SystemExit("merged train_dataset must define root and repo_id")
+    output_root = _resolve_root_path(repo_root, Path(str(train["root"])))
+    shard_roots = [Path(str(source["root"])) for source in sources if isinstance(source, dict) and "root" in source]
+    if len(shard_roots) != len(sources):
+        raise SystemExit("merged train_dataset sources must resolve to local roots")
+    command = [
+        str(python),
+        str(repo_root / "scripts" / "merge_so101_lerobot_shards.py"),
+        "--output-root",
+        str(output_root),
+        "--repo-id",
+        str(train["repo_id"]),
+        "--overwrite",
+    ]
+    for shard_root in shard_roots:
+        command.extend(["--shard", str(shard_root)])
+    train["root"] = str(output_root)
+    train["merge_command"] = command
+    train["merged_from"] = [str(path) for path in shard_roots]
+    if merge:
+        subprocess.run(command, cwd=repo_root, check=True, text=True)
+    return config
+
+
+def _resolve_root_path(repo_root: Path, path: Path) -> Path:
+    return path if path.is_absolute() else repo_root / path
+
+
+def _snapshot_download(**kwargs: Any) -> str:
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise SystemExit(
+            "Dataset config requires Hugging Face download support. Install `huggingface_hub` "
+            "or use --skip-hf-dataset-download only when the resolved roots already exist."
+        ) from exc
+    return str(snapshot_download(**kwargs))
+
+
+def _hf_local_repo_dir(cache_root: Path, repo_id: str, revision: str = "") -> Path:
+    safe_repo = repo_id.replace("/", "__")
+    if revision:
+        return cache_root / safe_repo / revision.replace("/", "__")
+    return cache_root / safe_repo
+
+
 def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list[str]:
     if not config:
         return args
@@ -476,14 +705,38 @@ def _progress_monitor_command(
         "--closed-loop-policy",
         args.closed_loop_policy,
         "--closed-loop-eval-skill-mode",
-        args.closed_loop_eval_skill_mode,
+        _closed_loop_eval_skill_mode(args, dataset_config),
         "--local-files-only",
     ]
-    if args.closed_loop_task_prompt:
-        cmd.extend(["--closed-loop-task-prompt", args.closed_loop_task_prompt])
-    if args.closed_loop_record_rollout_gif:
+    closed_loop_task_prompt = _closed_loop_task_prompt(args, dataset_config)
+    if closed_loop_task_prompt:
+        cmd.extend(["--closed-loop-task-prompt", closed_loop_task_prompt])
+    if args.closed_loop_record_rollout_gif or _closed_loop_record_rollout_gif(dataset_config):
         cmd.append("--closed-loop-record-rollout-gif")
     return cmd
+
+
+def _closed_loop_eval_skill_mode(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    if args.closed_loop_eval_skill_mode:
+        return str(args.closed_loop_eval_skill_mode)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode"):
+        return str(closed_loop["eval_skill_mode"])
+    return "picklift"
+
+
+def _closed_loop_task_prompt(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str | None:
+    if args.closed_loop_task_prompt:
+        return str(args.closed_loop_task_prompt)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("task_prompt"):
+        return str(closed_loop["task_prompt"])
+    return None
+
+
+def _closed_loop_record_rollout_gif(dataset_config: dict[str, Any]) -> bool:
+    closed_loop = dataset_config.get("closed_loop") or {}
+    return bool(isinstance(closed_loop, dict) and closed_loop.get("record_rollout_gif"))
 
 
 def _arg_value(args: list[str], name: str) -> str | None:

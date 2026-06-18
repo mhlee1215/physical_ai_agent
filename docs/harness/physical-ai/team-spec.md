@@ -233,18 +233,25 @@ policy is:
   after camera/trajectory changes, then refresh
   `configs/so101/training_datasets/checksums.json`.
 - Default SO101 dataset handoff is local export, local checksum/manifest
-  verification, then upload/sync to RunPod for active GPU training. RunPod
+  verification, then upload to the HF dataset bundle
+  `mhlee1215/so101-nexus-sim-dataset`. Training must start through
+  `scripts/start_so101_training.py`, whose dataset config resolver downloads
+  the configured HF subfolder before handing the local path to LeRobot. RunPod
   should not be the primary MuJoCo/LeRobot teacher-data exporter because remote
   export on the network volume is slow and does not benefit much from the GPU.
   Use RunPod-side dataset generation only when local export is blocked, when a
   remote-only dependency is required, or when the user explicitly asks for it.
-- For future SO101 RunPod handoffs, create a deterministic reusable tarball from
-  the locally verified export before upload. Keep the tarball in a local
-  handoff/staging location with a checksum or manifest reference, then upload
-  that tarball to RunPod and unpack it there. If upload or remote setup fails,
-  retry from the tarball rather than re-exporting or regenerating the dataset.
-  The tarball is a transfer artifact, not the long-term source of truth; the
-  local verified export and manifest remain authoritative.
+- Local SO101 dataset roots remain supported for test/debug work. Pass
+  `--use-local-dataset-roots` to `scripts/start_so101_training.py start` to
+  ignore configured HF sources and forward the config's `root` fields directly.
+  Do not use this flag for canonical training unless the user explicitly chooses
+  a local-only run.
+- For future SO101 RunPod handoffs, do not rely on ad hoc rsync of raw dataset
+  directories as the primary path. Upload the verified LeRobot export to HF,
+  configure `hf_repo_id` and `hf_path_in_repo` in the training dataset config,
+  and let the training launcher download exactly that subfolder before training.
+  A tarball can still be used as a temporary fallback transfer artifact, but the
+  HF dataset bundle plus repo manifests are the durable source of truth.
 - RunPod experiment-data lifecycle is download, verify, then delete. Past
   remote experiment results are not required. For every new RunPod teacher
   dataset, validation dataset, predecoded cache, checkpoint, rollout video,
