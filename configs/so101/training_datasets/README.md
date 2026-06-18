@@ -78,12 +78,26 @@ Dataset checksums:
   primitive datasets. These skill datasets, such as `move_over_cube` and
   `pick_from_top_cube`, must not replace the full-task datasets unless the user
   explicitly approves that change.
+- `export_recipes.json` plus `scripts/export_so101_training_datasets.py`
+  records the pre-export trajectory generation material for every current
+  split. Commit recipes, contracts, tests, and checksum manifests; keep raw
+  LeRobot datasets under `_workspace/` out of PRs.
 - Do not change dataset roots, camera mapping, task semantics, split names, or
   start-mode semantics without explicit user approval. If a change is needed,
   ask first and record the approval in the PR summary.
 - Required camera mapping is fixed as:
   `camera1 = egocentric_cam`, `camera2 = wrist_cam`, and
   `camera3 = wrist_cam duplicate` when the third camera feature is present.
+- Required `camera1` pose is the hardware-aligned egocentric view:
+  `lookat=[0.245, 0.11, 0.035]`, `distance=0.63`, `azimuth=270`,
+  `elevation=-82`, `rotation_degrees=90`.
+- Re-export all current full-task and skill-primitive datasets after changing
+  the approved camera pose:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python scripts/export_so101_training_datasets.py --overwrite
+```
+
 - Regenerate after rebuilding datasets:
 
 ```bash

@@ -1,18 +1,128 @@
 {
   "algorithm": "sha256",
   "datasets": {
-    "pick_and_place_cube_grip_focus_train": {
-      "audit_sha256": "628e8b6825b6d67aa4c81ce036b8a45431e42901eb5d784ef3125e3b1f07631d",
+    "move_over_cube_train": {
+      "audit_sha256": "2fa6183b861e1b75f66b6eb0d7dedac0abf33f34c9a4f8a41de68d5dfcd94b1c",
       "camera_contract": {
         "observation.images.camera1": "egocentric_cam",
         "observation.images.camera2": "wrist_cam",
         "observation.images.camera3": "wrist_cam duplicate"
       },
-      "directory_sha256": "81f5fa866ce0805a4bb1e0e5d368fdc3d5332322ea57d0a1d06322c32caa6524",
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "fcca77e9da626fc3de61dd75cf1c997adb9e17cfa4d2110acce89c2648568dc3",
+      "episodes": 100,
+      "export_report_sha256": "648f444072531398f7f6b7dea19d02c5d12c87993d6f531d6d1dede47c5f8fd9",
+      "file_count": 8,
+      "frames": 5000,
+      "repo_id": "physical-ai-agent/so101-move-over-cube-train100-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_over_cube_train100_ego_wrist_256_seed110000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 150927870,
+      "task": "Move the gripper over the visible cube."
+    },
+    "move_over_cube_val": {
+      "audit_sha256": "865a23b11b599c05108264f994ae187cb3a52834b050bb064da3a1f382f7b74a",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "ba235feda33047a411c6cb486052eadbaff6b49870480b555065fe5c9e0e390f",
+      "episodes": 25,
+      "export_report_sha256": "38d6a0a783c9e74195f9eee38215b4f134adb752413444c685ba2aab9e81a64d",
+      "file_count": 7,
+      "frames": 1250,
+      "repo_id": "physical-ai-agent/so101-move-over-cube-valid25-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_over_cube_valid25_ego_wrist_256_seed111000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 38411197,
+      "task": "Move the gripper over the visible cube."
+    },
+    "pick_and_place_cube_grip_focus_train": {
+      "audit_sha256": "2de2ef8b686a16a8c9e7e18c111a4e134c2dce4482501140cf12f65102b482dc",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "5279056113a90cc876d056b46bd5afd9739a417152a3960fb48daedeb64e48ef",
       "episodes": 50,
-      "export_report_sha256": "71686c424dd5b792a612581dec2ff2f0d1b488d7c9ff7e00c95218d412647224",
-      "file_count": 10,
-      "frames": 13247,
+      "export_report_sha256": "03350168e9814884e1390bd3acd9a902b3d412a980085d187a7f710b5a75b540",
+      "file_count": 11,
+      "frames": 13260,
       "repo_id": "physical-ai-agent/so101-pick-and-place-cube-grip-focus-train50-ego-wrist-256",
       "root": "_workspace/so101_lerobot/pick_and_place_cube_grip_focus_train50_ego_wrist_256_seed106000",
       "sample_shapes": {
@@ -32,21 +142,35 @@
           256
         ]
       },
-      "size_bytes": 399438370,
+      "size_bytes": 443802232,
       "task": "Pick up the small red cube and place it on the blue circle."
     },
     "pick_and_place_cube_grip_focus_val": {
-      "audit_sha256": "b03751d2705106318dc2850d329628163a32c70d796a895dc237aba28e49596e",
+      "audit_sha256": "ebbeedbfb09dbba1e36e67860c7c40a55429267defd7784212a66f3472a7e83a",
       "camera_contract": {
         "observation.images.camera1": "egocentric_cam",
         "observation.images.camera2": "wrist_cam",
         "observation.images.camera3": "wrist_cam duplicate"
       },
-      "directory_sha256": "0b10fed523a202b7f252dbbc16c919f1c63d199a08f025db5b06299a24ce4894",
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "882ed4e114ded01a08e4c8a0d510e34c9af994d45928fb2973deeb78b1b55dad",
       "episodes": 24,
-      "export_report_sha256": "2ad48ea339393e2616322aa551af398d84eb41f12ee2ede24c3dd980f3a3b65e",
+      "export_report_sha256": "5e98e58aaf155994991f685dadffa22baf840356001816b5a3e91a8fdf41ca89",
       "file_count": 8,
-      "frames": 6342,
+      "frames": 6343,
       "repo_id": "physical-ai-agent/so101-pick-and-place-cube-grip-focus-valid24-ego-wrist-256",
       "root": "_workspace/so101_lerobot/pick_and_place_cube_grip_focus_valid24_ego_wrist_256_seed106500",
       "sample_shapes": {
@@ -66,21 +190,35 @@
           256
         ]
       },
-      "size_bytes": 185200050,
+      "size_bytes": 200047958,
       "task": "Pick up the small red cube and place it on the blue circle."
     },
     "pick_and_place_cube_train": {
-      "audit_sha256": "036d89395de9638d787ddf8e71e0af2c9d27c466ec16b828eb682eea0100196a",
+      "audit_sha256": "f7de2c7853d307df3166fd132adc4f195d75fbe05d276579520d8ba5af49a6fc",
       "camera_contract": {
         "observation.images.camera1": "egocentric_cam",
         "observation.images.camera2": "wrist_cam",
         "observation.images.camera3": "wrist_cam duplicate"
       },
-      "directory_sha256": "87f1578a9bd41be3807ff0841e4df4f1d654ab46278b831559d41e3af3ad125c",
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "794e8cc56fb394af8fa1ba2f82681d0980686cd1b6cf1f866d801a4452809e20",
       "episodes": 50,
-      "export_report_sha256": "7d2ca5df3e22c58103dc26d727537c2bac71dee0403d61b5f3f32f674096b408",
+      "export_report_sha256": "8820537f97b4c36d71cb5e59ced6c6411400e3f6df8fce8491dd3398d00cbd29",
       "file_count": 11,
-      "frames": 14593,
+      "frames": 14601,
       "repo_id": "physical-ai-agent/so101-pick-and-place-cube-train50-ego-wrist-256",
       "root": "_workspace/so101_lerobot/pick_and_place_cube_train50_ego_wrist_256_seed99000",
       "sample_shapes": {
@@ -100,21 +238,35 @@
           256
         ]
       },
-      "size_bytes": 433432832,
+      "size_bytes": 477414844,
       "task": "Pick up the small red cube and place it on the blue circle."
     },
     "pick_and_place_cube_val": {
-      "audit_sha256": "554678c8b849fe6390cfd4853164e7a202380bd17abda540cc6c8e91e32cb5e9",
+      "audit_sha256": "558eef1022eb334b1d6aa58ddc75c7881c680ae633d6a6ed756a30a39dd69d39",
       "camera_contract": {
         "observation.images.camera1": "egocentric_cam",
         "observation.images.camera2": "wrist_cam",
         "observation.images.camera3": "wrist_cam duplicate"
       },
-      "directory_sha256": "4c91196517d62496b275ca0cba012eb11cd97a1d966dd2fe8e6c2846a3e973c7",
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "3e1775769a4c16c4c3f56eb8c514e777f812db83695dc6f74679e8fd80516e81",
       "episodes": 24,
-      "export_report_sha256": "3b2ca851fc9afe6df06a64e6512b1233cccbc4523fac9e4c9401ca1a5c17d010",
-      "file_count": 8,
-      "frames": 6934,
+      "export_report_sha256": "72b62222a3394ab0d66721e45fa0ccaab7948f9da0266be3534cee8c9ce22c41",
+      "file_count": 9,
+      "frames": 6943,
       "repo_id": "physical-ai-agent/so101-pick-and-place-cube-valid24-ego-wrist-256",
       "root": "_workspace/so101_lerobot/pick_and_place_cube_valid24_ego_wrist_256_seed102000",
       "sample_shapes": {
@@ -134,21 +286,35 @@
           256
         ]
       },
-      "size_bytes": 196398472,
+      "size_bytes": 228704161,
       "task": "Pick up the small red cube and place it on the blue circle."
     },
     "pick_cube_grip_focus_train": {
-      "audit_sha256": "e1473a4614e8b8a7150fc20481093623d23d7887021aa1a8b9f23856fafaec78",
+      "audit_sha256": "a3979b6a66eba3010a1ef4610881dbf01e66aade7a515920bd1447ce4666df9d",
       "camera_contract": {
         "observation.images.camera1": "egocentric_cam",
         "observation.images.camera2": "wrist_cam",
         "observation.images.camera3": "wrist_cam duplicate"
       },
-      "directory_sha256": "058d28c4fb42c19c19d947dd8c00ee337dc782a029d5434380b8d755d831290f",
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "7a1c2cfb449fdf05ad6fc74eca10f7462d82c7f1310f97eb520aec7eaab3539b",
       "episodes": 50,
-      "export_report_sha256": "de2088dc512aeb89378415bf0b287def5fb556fd955b1d1c58c75712e95fec90",
+      "export_report_sha256": "586449d9ca825237b3032e34e49f235f294b3b172e1cf5802db22ba787756739",
       "file_count": 7,
-      "frames": 3194,
+      "frames": 3197,
       "repo_id": "physical-ai-agent/so101-pick-cube-grip-focus-train50-ego-wrist-256",
       "root": "_workspace/so101_lerobot/pick_cube_grip_focus_train50_ego_wrist_256_seed104000",
       "sample_shapes": {
@@ -168,21 +334,35 @@
           256
         ]
       },
-      "size_bytes": 72710098,
+      "size_bytes": 83947056,
       "task": "Grasp the visible cube and lift it up."
     },
     "pick_cube_grip_focus_val": {
-      "audit_sha256": "b15f26bc61be730fb442159b69b5a137abf1d76ac4d2143e6682336791e64e74",
+      "audit_sha256": "e68d8007377fecbe4a86f37bc6fcf66519270dbc0d7b79c078366829c6422139",
       "camera_contract": {
         "observation.images.camera1": "egocentric_cam",
         "observation.images.camera2": "wrist_cam",
         "observation.images.camera3": "wrist_cam duplicate"
       },
-      "directory_sha256": "c850be70a7ff3f1c1a242663605c4b8199535f4dfdeaa868029c7e1ad1d12ed1",
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "2ff948aab722c1113e6d199f3a67f8bcd56f85f4b2834c350628d4f3ccedc14b",
       "episodes": 24,
-      "export_report_sha256": "8f3621733554134b46eb9915b9289a2e651e28a00d6799f6f4e0c31f871287a4",
+      "export_report_sha256": "6f570187c21db27295f14f9695937b121924a1894cd7197b045369a0bb48e565",
       "file_count": 7,
-      "frames": 1539,
+      "frames": 1538,
       "repo_id": "physical-ai-agent/so101-pick-cube-grip-focus-valid24-ego-wrist-256",
       "root": "_workspace/so101_lerobot/pick_cube_grip_focus_valid24_ego_wrist_256_seed104500",
       "sample_shapes": {
@@ -202,21 +382,35 @@
           256
         ]
       },
-      "size_bytes": 35293295,
+      "size_bytes": 39660684,
       "task": "Grasp the visible cube and lift it up."
     },
     "pick_cube_train": {
-      "audit_sha256": "22bdca1e23dfbe1804633f77ca45c81355d953dc00dfe7a430e39f5fcb420016",
+      "audit_sha256": "af0646b8ff1d9ca647d308731e4b15d5cb590d4d28c8cd6bc2b6657b16d3d294",
       "camera_contract": {
         "observation.images.camera1": "egocentric_cam",
         "observation.images.camera2": "wrist_cam",
         "observation.images.camera3": "wrist_cam duplicate"
       },
-      "directory_sha256": "c931285db4a0f51b924171998c6cd8f9798cc2fb2c2741908de22360aa9745b5",
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "e9a7ee00c4a3ab728cb6f2b8ee9a740e505326fe9224e7f99a55b20939386969",
       "episodes": 50,
-      "export_report_sha256": "6275a3e3f7b1a83461632198482716c85e8f4033f93ac6dddd777a300fe93f31",
+      "export_report_sha256": "2bc054b0a95700596371373f3b780ad75db42bdbef778660f5cf8d691301bdd4",
       "file_count": 8,
-      "frames": 4599,
+      "frames": 4598,
       "repo_id": "physical-ai-agent/so101-pick-cube-train50-ego-wrist-256",
       "root": "_workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200",
       "sample_shapes": {
@@ -236,19 +430,33 @@
           256
         ]
       },
-      "size_bytes": 112269047,
+      "size_bytes": 125470199,
       "task": "Grasp the visible cube and lift it up."
     },
     "pick_cube_val": {
-      "audit_sha256": "4528c451b05967c4987a9a2efe25933ce716e7e6f0ac762bb08d7c5d8efd43b4",
+      "audit_sha256": "3f1b01583e973b5a97a243dc568565892a0964753c5543d1a7924ca9c3360579",
       "camera_contract": {
         "observation.images.camera1": "egocentric_cam",
         "observation.images.camera2": "wrist_cam",
         "observation.images.camera3": "wrist_cam duplicate"
       },
-      "directory_sha256": "0d00d48b459bf061ac2e3ff9a653c10acb272cacce6d6c14bd4227ac4d632a05",
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "e80d460e81eab10697baac274b593be73d11a3da3e9aaa8ac53319f662fdab98",
       "episodes": 24,
-      "export_report_sha256": "b7fc6f870ca19714804c4d6d785cef941e41ff5feeff392345e7f2967f5d0698",
+      "export_report_sha256": "12f1c0a1e2406664278c216a35669a2c650484ad94ef44d2460870fbe8b705c8",
       "file_count": 7,
       "frames": 2210,
       "repo_id": "physical-ai-agent/so101-pick-cube-valid24-ego-wrist-256",
@@ -270,8 +478,104 @@
           256
         ]
       },
-      "size_bytes": 52550657,
+      "size_bytes": 59193740,
       "task": "Grasp the visible cube and lift it up."
+    },
+    "pick_from_top_cube_train": {
+      "audit_sha256": "a8ec3150f6de255cdf0a541eb8f0141696940cd7cbd555547e925d8b04475c7d",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "c1ad49520a7cc09ea39a7bdc4b27c337846ff001314478697c321098f194dc4c",
+      "episodes": 100,
+      "export_report_sha256": "5939eb53d1824ebcb58d9d5d9e21bec7801422f2df91ff476dd86c1ee4d97f55",
+      "file_count": 8,
+      "frames": 7179,
+      "repo_id": "physical-ai-agent/so101-pick-from-top-cube-train100-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/pick_from_top_cube_train100_ego_wrist_256_seed112000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 196229129,
+      "task": "From above the visible cube, grasp it and lift it up."
+    },
+    "pick_from_top_cube_val": {
+      "audit_sha256": "661142b5d1f7a9d4d64393e4e0cd8a5acb2dba115beaf78a02cf580bb0044eee",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "f7ff17a70c525f567b2705a4c2a627f3db324493cb924a451b6f31b9d55b7e34",
+      "episodes": 25,
+      "export_report_sha256": "5f9dc87973390813028850f99e29d42d76ace1a1ca949f424bd8fdfdbf6365f8",
+      "file_count": 7,
+      "frames": 1793,
+      "repo_id": "physical-ai-agent/so101-pick-from-top-cube-valid25-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/pick_from_top_cube_valid25_ego_wrist_256_seed113000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 49743851,
+      "task": "From above the visible cube, grasp it and lift it up."
     }
   },
   "note": "Raw dataset files are local artifacts and are intentionally excluded from git.",

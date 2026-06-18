@@ -1,0 +1,56 @@
+{
+  "name": "move_over_cube",
+  "description": "SO101 move-over primitive. Uses camera1=egocentric_cam and camera2=wrist_cam. The fully closed gripper moves to at least 5 cm above the visible cube.",
+  "task": "move_over_cube",
+  "prompt": "Move the gripper over the visible cube.",
+  "train_dataset": {
+    "repo_id": "physical-ai-agent/so101-move-over-cube-train100-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_over_cube_train100_ego_wrist_256_seed110000",
+    "split": "train",
+    "expected_episodes": 100,
+    "expected_frames": 5000
+  },
+  "validation_dataset": {
+    "repo_id": "physical-ai-agent/so101-move-over-cube-valid25-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_over_cube_valid25_ego_wrist_256_seed111000",
+    "split": "validation",
+    "expected_episodes": 25,
+    "expected_frames": 1250
+  },
+  "camera_contract": {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam",
+    "observation.images.camera3": "wrist_cam duplicate"
+  },
+  "training": {
+    "batch_size": 32,
+    "num_workers": 4,
+    "steps_per_epoch": 157,
+    "validation_max_batches": 16
+  },
+  "predecoded_image_cache": {
+    "root_env": "SO101_PREDECODED_CACHE_ROOT",
+    "default_root": "_workspace/so101_image_cache",
+    "train": "move_over_cube_train100_ego_wrist_256_seed110000",
+    "validation": "move_over_cube_valid25_ego_wrist_256_seed111000"
+  },
+  "tensorboard": {
+    "log_input_images_every_n_steps": 50,
+    "log_input_metadata_every_n_steps": 50
+  },
+  "augmentation": {
+    "state_jitter_std": 0.003,
+    "state_jitter_arm_only": true,
+    "state_dropout_prob": 0.02,
+    "state_dropout_keep_gripper": true,
+    "image_camera_dropout_prob": 0.0,
+    "image_patch_dropout_prob": 0.0,
+    "image_patch_mask_ratio": 0.15,
+    "gpu_image_augmentation": true
+  },
+  "closed_loop": {
+    "eval_skill_mode": "move_over_cube",
+    "success_metric": "final_tcp_cube_z_offset >= 0.05 and final_tcp_to_obj_dist <= 0.25",
+    "record_rollout_gif": true
+  }
+}

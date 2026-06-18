@@ -14,6 +14,7 @@ from export_so101_teacher_rollouts_lerobot import (
     _render_camera,
     audit_lerobot_dataset,
 )
+from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE
 from physical_ai_agent.sim.so101_live_viewer import _cartesian_error_controller_action
 from train_so101_wrist_ego_picklift_policy import sweep_until_visible
 from train_so101_wrist_ego_visual_servo import (
@@ -420,6 +421,7 @@ def export_pickplace_teacher_rollouts(
                 "observation.images.egocentric_cam": "observation.images.camera1",
                 "observation.images.wrist_cam": "observation.images.camera2",
             },
+            "camera1_pose": EGOCENTRIC_CAMERA1_POSE,
             "local_verification": "Student inputs use egocentric_cam and wrist_cam; top_down is debug-only and must not be fed to SmolVLA.",
         },
         "episodes": episode_summaries,

@@ -17,6 +17,7 @@ from physical_ai_agent.so101_smolvla_pipeline import (
     should_run_closed_loop,
     validate_smolvla_train_config,
 )
+from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE
 
 
 class SO101SmolVLAPipelineTest(TestCase):
@@ -472,6 +473,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         for config_path in (
             Path("configs/so101/training_datasets/pick.json"),
             Path("configs/so101/training_datasets/pick_place.json"),
+            Path("configs/so101/training_datasets/move_over_cube.json"),
             Path("configs/so101/training_datasets/pick_from_top_cube.json"),
         ):
             with self.subTest(config=str(config_path)):
@@ -484,6 +486,110 @@ class SO101SmolVLAPipelineTest(TestCase):
                 self.assertEqual(augmentation["image_camera_dropout_prob"], 0.0)
                 self.assertEqual(augmentation["image_patch_dropout_prob"], 0.0)
                 self.assertNotIn("action_dropout_prob", augmentation)
+
+    def test_so101_dataset_configs_use_approved_egocentric_camera1(self) -> None:
+        for config_path in (
+            Path("configs/so101/training_datasets/pick.json"),
+            Path("configs/so101/training_datasets/pick_place.json"),
+            Path("configs/so101/training_datasets/move_over_cube.json"),
+            Path("configs/so101/training_datasets/pick_from_top_cube.json"),
+        ):
+            with self.subTest(config=str(config_path)):
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(config["camera_contract"]["observation.images.camera1"], "egocentric_cam")
+                self.assertEqual(config["camera_contract"]["observation.images.camera2"], "wrist_cam")
+                self.assertNotIn("top-wrist", config["train_dataset"]["repo_id"])
+                self.assertNotIn("top_wrist", config["train_dataset"]["root"])
+
+    def test_so101_egocentric_camera1_pose_is_single_source_of_truth(self) -> None:
+        expected_pose = {
+            "type": "free",
+            "lookat": [0.245, 0.11, 0.035],
+            "distance": 0.63,
+            "azimuth": 270,
+            "elevation": -82,
+            "rotation_degrees": 90,
+        }
+        self.assertEqual(EGOCENTRIC_CAMERA1_POSE, expected_pose)
+
+        for contract_path in (
+            Path("configs/so101/training_datasets/dataset_contract.json"),
+            Path("configs/so101/training_datasets/skill_dataset_contract.json"),
+        ):
+            with self.subTest(contract=str(contract_path)):
+                contract = json.loads(contract_path.read_text(encoding="utf-8"))
+                pose = contract["policy"]["camera_pose_contract"]["observation.images.camera1"]["pose"]
+                self.assertEqual(pose, expected_pose)
+
+        docs = "\n".join(
+            Path(path).read_text(encoding="utf-8")
+            for path in (
+                "docs/so101_camera_contract.md",
+                "docs/harness/physical-ai/team-spec.md",
+                "Summary.md",
+            )
+        )
+        self.assertIn('"lookat": [0.245, 0.11, 0.035]', docs)
+        self.assertIn('"distance": 0.63', docs)
+        self.assertIn('"elevation": -82', docs)
+
+    def test_so101_export_recipes_cover_all_contract_datasets(self) -> None:
+        recipes = json.loads(
+            Path("configs/so101/training_datasets/export_recipes.json").read_text(encoding="utf-8")
+        )
+        recipe_keys = {
+            (recipe["contract"], recipe["dataset"], recipe["split"])
+            for recipe in recipes["recipes"]
+        }
+        expected_keys = set()
+        for contract_name, contract_path in (
+            ("dataset_contract", Path("configs/so101/training_datasets/dataset_contract.json")),
+            ("skill_dataset_contract", Path("configs/so101/training_datasets/skill_dataset_contract.json")),
+        ):
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+            for dataset_name in contract["datasets"]:
+                expected_keys.add((contract_name, dataset_name, "train"))
+                expected_keys.add((contract_name, dataset_name, "validation"))
+
+        self.assertEqual(recipe_keys, expected_keys)
+        self.assertEqual(recipes["camera_pose_source"], "physical_ai_agent.sim.so101_camera_input.EGOCENTRIC_CAMERA1_POSE")
+        self.assertEqual(recipes["defaults"]["width"], 256)
+        self.assertEqual(recipes["defaults"]["height"], 256)
+
+        for recipe in recipes["recipes"]:
+            with self.subTest(recipe=recipe["name"]):
+                self.assertIn("ego_wrist_256", recipe["root"])
+                self.assertIn("ego-wrist-256", recipe["repo_id"])
+                self.assertIn(recipe["script"], {
+                    "scripts/export_so101_teacher_rollouts_lerobot.py",
+                    "scripts/export_so101_pickplace_teacher_rollouts_lerobot.py",
+                })
+
+    def test_so101_export_recipe_dry_run_builds_expected_commands(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/export_so101_training_datasets.py",
+                "--dry-run",
+                "--overwrite",
+                "--only",
+                "move_over_cube_train",
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+            env={**os.environ, "PYTHONPATH": "src"},
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        command = payload["commands"][0]
+        self.assertIn("scripts/export_so101_teacher_rollouts_lerobot.py", command)
+        self.assertIn("--overwrite", command)
+        self.assertIn("--width", command)
+        self.assertIn("256", command)
+        self.assertIn("--skill-mode", command)
+        self.assertIn("move_over_cube", command)
 
     def test_so101_harness_documents_augmentation_and_smoothness_contract(self) -> None:
         docs = "\n".join(
@@ -510,33 +616,45 @@ class SO101SmolVLAPipelineTest(TestCase):
         checksum_path = Path("configs/so101/training_datasets/checksums.json")
         checksums = json.loads(checksum_path.read_text(encoding="utf-8"))
         self.assertEqual(checksums["algorithm"], "sha256")
-        contract = json.loads(
-            Path("configs/so101/training_datasets/dataset_contract.json").read_text(encoding="utf-8")
-        )
+        contracts = [
+            json.loads(Path(path).read_text(encoding="utf-8"))
+            for path in (
+                "configs/so101/training_datasets/dataset_contract.json",
+                "configs/so101/training_datasets/skill_dataset_contract.json",
+            )
+        ]
 
-        for dataset_name, dataset_spec in contract["datasets"].items():
-            for split_name, suffix in (("train", "train"), ("validation", "val")):
-                checksum_key = f"{dataset_name}_{suffix}"
-                dataset = checksums["datasets"][checksum_key]
-                split = dataset_spec[split_name]
-                self.assertEqual(split["repo_id"], dataset["repo_id"])
-                self.assertEqual(split["root"], dataset["root"])
-                self.assertGreater(dataset["episodes"], 0)
-                self.assertGreater(dataset["frames"], dataset["episodes"])
-                self.assertGreater(dataset["size_bytes"], 0)
-                self.assertRegex(dataset["directory_sha256"], r"^[0-9a-f]{64}$")
-                self.assertRegex(dataset["export_report_sha256"], r"^[0-9a-f]{64}$")
-                self.assertRegex(dataset["audit_sha256"], r"^[0-9a-f]{64}$")
-                self.assertEqual(
-                    dataset["camera_contract"],
-                    {
-                        "observation.images.camera1": "egocentric_cam",
-                        "observation.images.camera2": "wrist_cam",
-                        "observation.images.camera3": "wrist_cam duplicate",
-                    },
-                )
-                self.assertEqual(dataset["sample_shapes"]["observation.images.camera1"], [3, 256, 256])
-                self.assertEqual(dataset["sample_shapes"]["observation.images.camera2"], [3, 256, 256])
+        expected_checksum_keys = set()
+        for contract in contracts:
+            for dataset_name, dataset_spec in contract["datasets"].items():
+                for split_name, suffix in (("train", "train"), ("validation", "val")):
+                    checksum_key = f"{dataset_name}_{suffix}"
+                    expected_checksum_keys.add(checksum_key)
+                    dataset = checksums["datasets"][checksum_key]
+                    split = dataset_spec[split_name]
+                    self.assertEqual(split["repo_id"], dataset["repo_id"])
+                    self.assertEqual(split["root"], dataset["root"])
+                    self.assertGreater(dataset["episodes"], 0)
+                    self.assertGreater(dataset["frames"], dataset["episodes"])
+                    self.assertGreater(dataset["size_bytes"], 0)
+                    self.assertRegex(dataset["directory_sha256"], r"^[0-9a-f]{64}$")
+                    self.assertRegex(dataset["export_report_sha256"], r"^[0-9a-f]{64}$")
+                    self.assertRegex(dataset["audit_sha256"], r"^[0-9a-f]{64}$")
+                    self.assertEqual(
+                        dataset["camera_contract"],
+                        {
+                            "observation.images.camera1": "egocentric_cam",
+                            "observation.images.camera2": "wrist_cam",
+                            "observation.images.camera3": "wrist_cam duplicate",
+                        },
+                    )
+                    self.assertEqual(
+                        dataset["camera_pose_contract"]["observation.images.camera1"],
+                        EGOCENTRIC_CAMERA1_POSE,
+                    )
+                    self.assertEqual(dataset["sample_shapes"]["observation.images.camera1"], [3, 256, 256])
+                    self.assertEqual(dataset["sample_shapes"]["observation.images.camera2"], [3, 256, 256])
+        self.assertEqual(set(checksums["datasets"]), expected_checksum_keys)
 
     def test_so101_dataset_contract_opens_every_required_split(self) -> None:
         import pyarrow.parquet as pq

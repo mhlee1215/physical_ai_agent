@@ -1,19 +1,19 @@
 {
   "name": "pick",
-  "description": "SO101 pick/lift dataset with camera1=top_down and camera2=wrist_cam.",
+  "description": "SO101 pick/lift dataset with camera1=egocentric_cam and camera2=wrist_cam.",
   "task": "pick",
   "train_dataset": {
-    "repo_id": "physical-ai-agent/so101-pick-train50-top-wrist-256",
-    "root": "_workspace/so101_lerobot/pick_train50_top_wrist_256_seed98200",
+    "repo_id": "physical-ai-agent/so101-pick-cube-train50-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200",
     "split": "train"
   },
   "validation_dataset": {
-    "repo_id": "physical-ai-agent/so101-pick-val24-top-wrist-256",
-    "root": "_workspace/so101_lerobot/pick_val24_top_wrist_256_seed98100",
+    "repo_id": "physical-ai-agent/so101-pick-cube-valid24-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/pick_cube_valid24_ego_wrist_256_seed98100",
     "split": "validation"
   },
   "camera_contract": {
-    "observation.images.camera1": "top_down",
+    "observation.images.camera1": "egocentric_cam",
     "observation.images.camera2": "wrist_cam",
     "observation.images.camera3": "wrist_cam duplicate"
   },

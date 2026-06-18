@@ -226,6 +226,12 @@ policy is:
   `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`.
   `top_down` remains teacher/debug evidence only and must not be exported as a
   SmolVLA student input.
+- SO101 export materials are source-controlled through
+  `configs/so101/training_datasets/export_recipes.json` and
+  `scripts/export_so101_training_datasets.py`. Raw `_workspace/so101_lerobot`
+  LeRobot datasets stay out of PRs; regenerate them locally from the recipe
+  after camera/trajectory changes, then refresh
+  `configs/so101/training_datasets/checksums.json`.
 - Default SO101 dataset handoff is local export, local checksum/manifest
   verification, then upload/sync to RunPod for active GPU training. RunPod
   should not be the primary MuJoCo/LeRobot teacher-data exporter because remote

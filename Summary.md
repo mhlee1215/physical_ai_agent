@@ -108,6 +108,11 @@ paper-facing concepts:
   `egocentric_cam`, not `top_down`. Current approved camera1 pose is
   `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`;
   do not change it during data generation without explicit user approval.
+- SO101 pre-export dataset material is tracked as code/config through
+  `configs/so101/training_datasets/export_recipes.json` and
+  `scripts/export_so101_training_datasets.py`. Raw datasets remain local
+  `_workspace` artifacts; regenerate them from the recipe and refresh
+  `configs/so101/training_datasets/checksums.json` before RunPod upload.
 
 ### What We Have Learned
 
