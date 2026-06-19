@@ -486,6 +486,49 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--validation-interval-steps", constants)
         self.assertIn("--validation-interval-epochs", constants)
 
+    def test_closed_loop_eval_exposes_optional_subgoal_valid_mask_chain(self) -> None:
+        source = Path("scripts/evaluate_so101_picklift_smolvla_policy.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        constants = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+
+        self.assertIn("--subgoal-chain-mode", constants)
+        self.assertIn("--subgoal-sequence", constants)
+        self.assertIn("--valid-mask-checkpoint", constants)
+        self.assertIn("valid-mask", constants)
+        self.assertIn("move_over_cube", constants)
+        self.assertIn("subgoal_chain", constants)
+
+    def test_training_launcher_passes_subgoal_chain_flags_to_monitor(self) -> None:
+        source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        constants = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+
+        self.assertIn("--closed-loop-subgoal-chain-mode", constants)
+        self.assertIn("--closed-loop-subgoal-sequence", constants)
+        self.assertIn("--closed-loop-valid-mask-checkpoint", constants)
+
+    def test_training_monitor_passes_subgoal_chain_flags_to_closed_loop_eval(self) -> None:
+        source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        constants = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+
+        self.assertIn("--closed-loop-subgoal-chain-mode", constants)
+        self.assertIn("--subgoal-chain-mode", constants)
+        self.assertIn("--closed-loop-valid-mask-checkpoint", constants)
+        self.assertIn("--valid-mask-checkpoint", constants)
+
     def test_single_training_launcher_dry_run_builds_one_training_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             completed = subprocess.run(
