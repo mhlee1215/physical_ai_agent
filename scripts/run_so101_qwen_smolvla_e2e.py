@@ -12,6 +12,7 @@ from physical_ai_agent.agent_core.qwen_so101_tool_planner import (
     DEFAULT_MODEL,
     DEFAULT_OBJECT,
     DEFAULT_TASK,
+    ChatToolClient,
     OpenAICompatibleQwenClient,
     QwenSO101ToolPlanner,
     SO101ToolPlan,
@@ -31,8 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--qwen-model", default=DEFAULT_MODEL)
     parser.add_argument(
         "--qwen-base-url",
-        required=True,
+        default=None,
         help="OpenAI-compatible Qwen endpoint, e.g. http://127.0.0.1:8000/v1",
+    )
+    parser.add_argument(
+        "--qwen-response-json",
+        type=Path,
+        default=None,
+        help="Use a saved OpenAI-compatible Qwen response instead of calling a live endpoint.",
     )
     parser.add_argument("--qwen-api-key", default=None)
     parser.add_argument("--smolvla-model-id", default=DEFAULT_SMOLVLA_MODEL_ID)
@@ -53,6 +60,7 @@ def main() -> None:
         target_object=args.object,
         qwen_model=args.qwen_model,
         qwen_base_url=args.qwen_base_url,
+        qwen_response_json=args.qwen_response_json,
         qwen_api_key=args.qwen_api_key,
         smolvla_model_id=args.smolvla_model_id,
         env_id=args.env_id,
@@ -72,7 +80,8 @@ def run_e2e(
     task: str,
     target_object: str,
     qwen_model: str,
-    qwen_base_url: str,
+    qwen_base_url: str | None,
+    qwen_response_json: Path | None,
     qwen_api_key: str | None,
     smolvla_model_id: str,
     env_id: str,
@@ -85,10 +94,12 @@ def run_e2e(
     started = perf_counter()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    planner = QwenSO101ToolPlanner(
-        client=OpenAICompatibleQwenClient(base_url=qwen_base_url, api_key=qwen_api_key),
-        model=qwen_model,
+    qwen_client, qwen_source = _qwen_client(
+        qwen_base_url=qwen_base_url,
+        qwen_response_json=qwen_response_json,
+        qwen_api_key=qwen_api_key,
     )
+    planner = QwenSO101ToolPlanner(client=qwen_client, model=qwen_model)
     plan = planner.plan(task=task, target_object=target_object)
     prompt = _task_prompt_from_plan(plan)
 
@@ -123,6 +134,8 @@ def run_e2e(
         "qwen": {
             "model": qwen_model,
             "base_url": qwen_base_url,
+            "source": qwen_source,
+            "response_json": str(qwen_response_json) if qwen_response_json else None,
             "plan_path": str(qwen_plan_path),
             "validated_order": [call.fn for call in plan.calls],
             "primitive_ids": [call.primitive_id for call in plan.calls],
@@ -158,6 +171,36 @@ def _task_prompt_from_plan(plan: SO101ToolPlan) -> str:
         f"{call.index + 1}. {call.prompt}" for call in plan.calls
     )
     return f"{plan.task}. Execute this validated SO101 primitive chain: {primitive_lines}"
+
+
+def _qwen_client(
+    *,
+    qwen_base_url: str | None,
+    qwen_response_json: Path | None,
+    qwen_api_key: str | None,
+) -> tuple[ChatToolClient, str]:
+    if qwen_response_json is not None:
+        return SavedQwenResponseClient(qwen_response_json), "saved_response_json"
+    if not qwen_base_url:
+        raise ValueError("Provide --qwen-base-url for live Qwen or --qwen-response-json for offline mock output.")
+    return OpenAICompatibleQwenClient(base_url=qwen_base_url, api_key=qwen_api_key), "live_openai_compatible"
+
+
+class SavedQwenResponseClient:
+    def __init__(self, response_path: Path) -> None:
+        self.response_path = response_path
+
+    def create_tool_plan(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        tools: list[dict],
+        tool_choice: str,
+        temperature: float,
+    ) -> dict:
+        del model, messages, tools, tool_choice, temperature
+        return json.loads(self.response_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

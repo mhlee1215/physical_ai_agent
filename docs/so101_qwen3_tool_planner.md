@@ -44,8 +44,22 @@ consume later.
 
 ## Qwen + SmolVLA E2E smoke
 
-The real-model E2E test is gated so normal unit tests do not download or load
-large models. It requires an OpenAI-compatible Qwen endpoint and a loadable
+The default E2E unit test uses a saved Qwen response so it still runs when no
+Qwen3 server is listening. It verifies the same validated tool order and checks
+that the derived primitive-chain prompt is passed to the SmolVLA probe:
+
+```bash
+PYTHONPATH=src python -B -m unittest tests.test_qwen_smolvla_e2e
+```
+
+The saved response lives at:
+
+```text
+configs/agent/qwen3_so101_tool_planner_mock_response.json
+```
+
+The real-model E2E branch remains gated so normal unit tests do not download or
+load large models. It requires an OpenAI-compatible Qwen endpoint and a loadable
 LeRobot SmolVLA checkpoint:
 
 ```bash
@@ -71,6 +85,17 @@ PYTHONPATH=src python scripts/run_so101_qwen_smolvla_e2e.py \
   --qwen-model Qwen/Qwen3-8B \
   --smolvla-model-id lerobot/smolvla_base \
   --output-dir _workspace/qwen_smolvla_e2e \
+  --rollout-steps 1 \
+  --require-pass
+```
+
+When Qwen is not running, replay the saved planner response instead:
+
+```bash
+PYTHONPATH=src python scripts/run_so101_qwen_smolvla_e2e.py \
+  --qwen-response-json configs/agent/qwen3_so101_tool_planner_mock_response.json \
+  --smolvla-model-id lerobot/smolvla_base \
+  --output-dir _workspace/qwen_smolvla_e2e_mock_qwen \
   --rollout-steps 1 \
   --require-pass
 ```
