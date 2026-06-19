@@ -73,6 +73,46 @@ make predicted chunks smoother. If generated action chunks are jittery, prefer:
 Report smoothness loss separately from supervised BC loss in TensorBoard when it
 is enabled.
 
+## Optional Subgoal Termination Head
+
+The SmolVLA baseline policy must remain unchanged. For agentic subgoal chaining,
+train a separate lightweight valid-mask head from LeRobot `action_is_pad`
+labels and enable it only during closed-loop evaluation with explicit flags.
+
+The head predicts which positions in a predicted SmolVLA action chunk are still
+valid for the current subgoal. At inference time the evaluator can execute the
+current subgoal until the head predicts padding/end, then switch to the next
+subgoal. This is an experimental substitute for a full verifier; it should be
+reported separately from policy-only baseline rollouts.
+
+Train the head:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/train_so101_valid_mask_head.py \
+  --policy-path <smolvla_checkpoint>/pretrained_model \
+  --dataset-root <train_lerobot_root> \
+  --dataset-repo-id <train_repo_id> \
+  --validation-dataset-root <val_lerobot_root> \
+  --validation-dataset-repo-id <val_repo_id> \
+  --output-dir _workspace/so101_valid_mask_head/pick_from_top_cube
+```
+
+Run closed-loop with the optional chain:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/evaluate_so101_picklift_smolvla_policy.py \
+  --policy-path <smolvla_checkpoint>/pretrained_model \
+  --eval-skill-mode pick_from_top_cube \
+  --subgoal-chain-mode valid-mask \
+  --subgoal-sequence move_over_cube,pick_from_top_cube \
+  --valid-mask-checkpoint _workspace/so101_valid_mask_head/pick_from_top_cube/valid_mask_head.pt
+```
+
+For ablations, use `--subgoal-chain-mode off` for the baseline and
+`--subgoal-chain-mode fixed` to switch subgoals after a fixed number of action
+chunks. Closed-loop reports include a `subgoal_chain` section and per-step
+subgoal metadata.
+
 ## Dataset Expansion
 
 The next train split target is a doubled dataset:

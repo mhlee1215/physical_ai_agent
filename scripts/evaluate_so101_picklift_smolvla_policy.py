@@ -16,6 +16,10 @@ from physical_ai_agent.policies.smolvla_real import (
     _policy_device_metadata,
     _tensor_to_float_list,
 )
+from physical_ai_agent.policies.so101_valid_mask import (
+    execution_horizon_from_valid_probs,
+    load_valid_mask_head,
+)
 from physical_ai_agent.sim.so101_camera_input import _make_camera, postprocess_camera_frame
 from train_so101_wrist_ego_picklift_policy import sweep_until_visible
 from train_so101_wrist_ego_visual_servo import (
@@ -75,6 +79,21 @@ def main() -> None:
     parser.add_argument("--gif-fps", type=int, default=12)
     parser.add_argument("--sample-input-grid-count", type=int, default=16)
     parser.add_argument(
+        "--subgoal-chain-mode",
+        choices=["off", "fixed", "valid-mask"],
+        default="off",
+        help="Optional subgoal termination mode. Baseline policy behavior is mode=off.",
+    )
+    parser.add_argument(
+        "--subgoal-sequence",
+        default=None,
+        help="Comma-separated subgoal names, e.g. move_over_cube,pick_from_top_cube.",
+    )
+    parser.add_argument("--fixed-subgoal-chunks", type=int, default=1)
+    parser.add_argument("--valid-mask-checkpoint", type=Path)
+    parser.add_argument("--valid-mask-threshold", type=float, default=0.5)
+    parser.add_argument("--valid-mask-consecutive", type=int, default=2)
+    parser.add_argument(
         "--use-policy-processors",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -115,6 +134,12 @@ def main() -> None:
         record_rollout_gif=args.record_rollout_gif,
         gif_fps=args.gif_fps,
         sample_input_grid_count=args.sample_input_grid_count,
+        subgoal_chain_mode=args.subgoal_chain_mode,
+        subgoal_sequence=args.subgoal_sequence,
+        fixed_subgoal_chunks=args.fixed_subgoal_chunks,
+        valid_mask_checkpoint=args.valid_mask_checkpoint,
+        valid_mask_threshold=args.valid_mask_threshold,
+        valid_mask_consecutive=args.valid_mask_consecutive,
         use_policy_processors=args.use_policy_processors,
         torch_seed=args.torch_seed,
     )
@@ -149,6 +174,12 @@ def evaluate_smolvla_picklift(
     record_rollout_gif: bool = False,
     gif_fps: int = 12,
     sample_input_grid_count: int = 16,
+    subgoal_chain_mode: str = "off",
+    subgoal_sequence: str | None = None,
+    fixed_subgoal_chunks: int = 1,
+    valid_mask_checkpoint: Path | None = None,
+    valid_mask_threshold: float = 0.5,
+    valid_mask_consecutive: int = 2,
     use_policy_processors: bool = True,
     torch_seed: int | None = None,
 ) -> dict[str, Any]:
@@ -165,6 +196,12 @@ def evaluate_smolvla_picklift(
         num_steps=policy_num_steps,
     )
     preprocessor, postprocessor = _load_policy_processors(policy, policy_path) if use_policy_processors else (None, None)
+    valid_mask_head = None
+    if subgoal_chain_mode == "valid-mask":
+        if valid_mask_checkpoint is None:
+            raise ValueError("--valid-mask-checkpoint is required when --subgoal-chain-mode=valid-mask")
+        selected_device = str(_policy_device_metadata(policy).get("device_selected") or getattr(policy.config, "device", "cpu"))
+        valid_mask_head = load_valid_mask_head(valid_mask_checkpoint, device=selected_device)
     config = WristEgoServoConfig(width=width, height=height)
     env = _make_eval_env(eval_skill_mode)
     renderers = _make_policy_renderers(env, config)
@@ -240,6 +277,12 @@ def evaluate_smolvla_picklift(
                     eval_skill_mode=eval_skill_mode,
                     reset_meta=reset_meta,
                     lift_success_height=pick_start_min_actual_z,
+                    subgoal_chain_mode=subgoal_chain_mode,
+                    subgoal_sequence=_resolve_subgoal_sequence(subgoal_sequence, eval_skill_mode),
+                    fixed_subgoal_chunks=fixed_subgoal_chunks,
+                    valid_mask_head=valid_mask_head,
+                    valid_mask_threshold=valid_mask_threshold,
+                    valid_mask_consecutive=valid_mask_consecutive,
                 )
             )
     finally:
@@ -259,6 +302,14 @@ def evaluate_smolvla_picklift(
         "pre_rollout_sweep": bool(sweep),
         "eval_skill_mode": eval_skill_mode,
         "task_prompt": resolved_task_prompt,
+        "subgoal_chain": {
+            "mode": subgoal_chain_mode,
+            "sequence": _resolve_subgoal_sequence(subgoal_sequence, eval_skill_mode),
+            "fixed_subgoal_chunks": int(fixed_subgoal_chunks),
+            "valid_mask_checkpoint": str(valid_mask_checkpoint) if valid_mask_checkpoint else None,
+            "valid_mask_threshold": float(valid_mask_threshold),
+            "valid_mask_consecutive": int(valid_mask_consecutive),
+        },
         "use_policy_processors": bool(preprocessor is not None and postprocessor is not None),
         "torch_seed": torch_seed,
         "policy_rollout_config": _policy_rollout_config(policy),
@@ -324,6 +375,12 @@ def _run_episode(
     eval_skill_mode: str,
     reset_meta: dict[str, Any],
     lift_success_height: float,
+    subgoal_chain_mode: str,
+    subgoal_sequence: list[str],
+    fixed_subgoal_chunks: int,
+    valid_mask_head: Any | None,
+    valid_mask_threshold: float,
+    valid_mask_consecutive: int,
 ) -> dict[str, Any]:
     records = []
     frames = []
@@ -331,6 +388,12 @@ def _run_episode(
     info = env.unwrapped._get_info()
     image_feature_mapping = {}
     sample_every = max(1, max_steps // max(1, int(sample_input_grid_count)))
+    active_chain = subgoal_chain_mode != "off" and bool(subgoal_sequence)
+    subgoal_index = 0
+    horizon_remaining = 0
+    horizon_reason = "baseline"
+    pending_advance = False
+    n_action_steps = int(getattr(getattr(policy, "config", None), "n_action_steps", 15) or 15)
     if hasattr(policy, "reset"):
         policy.reset()
     for step in range(max_steps):
@@ -339,6 +402,27 @@ def _run_episode(
         camera_pixels = _render_policy_cameras(env, renderers)
         if sample_input_grid_count > 0 and step % sample_every == 0:
             _append_camera_samples(camera_samples, camera_pixels, max_samples=sample_input_grid_count)
+        if active_chain and horizon_remaining <= 0:
+            if pending_advance and subgoal_index < len(subgoal_sequence) - 1:
+                subgoal_index += 1
+                if hasattr(policy, "reset"):
+                    policy.reset()
+            horizon_remaining, horizon_reason = _next_subgoal_horizon(
+                mode=subgoal_chain_mode,
+                policy=policy,
+                preprocessor=preprocessor,
+                qpos=_current_qpos(env).astype(float),
+                camera_pixels=camera_pixels,
+                task_prompt=_subgoal_prompt(subgoal_sequence[subgoal_index], task_prompt),
+                valid_mask_head=valid_mask_head,
+                max_horizon=n_action_steps,
+                fixed_subgoal_chunks=fixed_subgoal_chunks,
+                valid_mask_threshold=valid_mask_threshold,
+                valid_mask_consecutive=valid_mask_consecutive,
+            )
+            pending_advance = horizon_reason in {"fixed_subgoal_stop", "valid_mask_stop"}
+        current_subgoal = subgoal_sequence[subgoal_index] if active_chain else eval_skill_mode
+        current_task_prompt = _subgoal_prompt(current_subgoal, task_prompt)
         if preprocessor is not None and postprocessor is not None:
             raw_action = _predict_action_with_processors(
                 policy=policy,
@@ -346,7 +430,7 @@ def _run_episode(
                 postprocessor=postprocessor,
                 qpos=_current_qpos(env).astype(float),
                 camera_pixels=camera_pixels,
-                task_prompt=task_prompt,
+                task_prompt=current_task_prompt,
             )
             image_feature_mapping = {
                 "observation.images.camera1": "egocentric_cam",
@@ -358,7 +442,7 @@ def _run_episode(
                 policy,
                 _current_qpos(env).astype(float).tolist(),
                 camera_pixels,
-                instruction=task_prompt,
+                instruction=current_task_prompt,
                 local_files_only=True,
             )
             raw_action = policy.select_action(batch)
@@ -386,8 +470,15 @@ def _run_episode(
                 "lift_height": float(info.get("lift_height", 0.0)),
                 "tcp_to_obj_dist": float(info.get("tcp_to_obj_dist", 0.0)),
                 "obj_to_target_dist": float(info.get("obj_to_target_dist", 0.0)),
+                "subgoal_chain_mode": subgoal_chain_mode,
+                "subgoal": current_subgoal,
+                "subgoal_index": subgoal_index,
+                "subgoal_horizon_remaining": int(horizon_remaining),
+                "subgoal_horizon_reason": horizon_reason,
             }
         )
+        if active_chain:
+            horizon_remaining -= 1
         if bool(info.get("success", False)) or terminated or truncated:
             break
     gif_path = None
@@ -419,6 +510,11 @@ def _run_episode(
         "seed": seed,
         "eval_skill_mode": eval_skill_mode,
         "task_prompt": task_prompt,
+        "subgoal_chain": {
+            "mode": subgoal_chain_mode,
+            "sequence": subgoal_sequence,
+            "final_subgoal_index": subgoal_index,
+        },
         "reset_meta": reset_meta,
         "search_steps": search_steps,
         "steps": len(records),
@@ -457,6 +553,96 @@ def _filter_absolute_qpos_action(
         gripper_delta = float(np.clip(target[-1] - current[-1], -float(max_gripper_delta), float(max_gripper_delta)))
         target[-1] = current[-1] + gripper_delta
     return target
+
+
+def _resolve_subgoal_sequence(sequence: str | None, eval_skill_mode: str) -> list[str]:
+    if sequence:
+        items = [item.strip() for item in sequence.split(",") if item.strip()]
+        if items:
+            return items
+    return [eval_skill_mode]
+
+
+def _subgoal_prompt(subgoal: str, fallback: str) -> str:
+    prompts = {
+        "move_over_cube": "Move the gripper above the visible cube.",
+        "pick_from_top_cube": PICK_FROM_TOP_TASK,
+        "picklift": TASK,
+        "pick_and_place_cube": PICK_AND_PLACE_TASK,
+    }
+    return prompts.get(subgoal, fallback)
+
+
+def _next_subgoal_horizon(
+    *,
+    mode: str,
+    policy: Any,
+    preprocessor: Any | None,
+    qpos: np.ndarray,
+    camera_pixels: dict[str, np.ndarray],
+    task_prompt: str,
+    valid_mask_head: Any | None,
+    max_horizon: int,
+    fixed_subgoal_chunks: int,
+    valid_mask_threshold: float,
+    valid_mask_consecutive: int,
+) -> tuple[int, str]:
+    if mode == "fixed":
+        return max(1, int(max_horizon) * max(1, int(fixed_subgoal_chunks))), "fixed_subgoal_stop"
+    if mode != "valid-mask":
+        return max(1, int(max_horizon)), "baseline"
+    if valid_mask_head is None:
+        raise ValueError("valid_mask_head is required for valid-mask subgoal chaining")
+    state_for_head, action_chunk = _predict_action_chunk_for_valid_mask(
+        policy=policy,
+        preprocessor=preprocessor,
+        qpos=qpos,
+        camera_pixels=camera_pixels,
+        task_prompt=task_prompt,
+    )
+    valid_probs = valid_mask_head.predict_valid_probs(state_for_head, action_chunk)
+    if hasattr(policy, "reset"):
+        policy.reset()
+    return execution_horizon_from_valid_probs(
+        valid_probs[0],
+        max_horizon=max_horizon,
+        threshold=valid_mask_threshold,
+        consecutive=valid_mask_consecutive,
+    )
+
+
+def _predict_action_chunk_for_valid_mask(
+    *,
+    policy: Any,
+    preprocessor: Any | None,
+    qpos: np.ndarray,
+    camera_pixels: dict[str, np.ndarray],
+    task_prompt: str,
+) -> tuple[Any, Any]:
+    if preprocessor is not None:
+        observation = {
+            "observation.state": np.asarray(qpos, dtype=np.float32),
+            "observation.images.camera1": np.asarray(camera_pixels["egocentric_cam"], dtype=np.uint8),
+            "observation.images.camera2": np.asarray(camera_pixels["wrist_cam"], dtype=np.uint8),
+            "observation.images.camera3": np.asarray(camera_pixels["wrist_cam"], dtype=np.uint8),
+            "task": task_prompt,
+        }
+        try:
+            batch = preprocessor(observation)
+        except Exception:
+            batch = None
+        if batch is not None:
+            with torch.inference_mode():
+                return batch["observation.state"], policy.predict_action_chunk(batch)
+    batch, _mapping = _build_batch_for_policy(
+        policy,
+        np.asarray(qpos, dtype=float).tolist(),
+        camera_pixels,
+        instruction=task_prompt,
+        local_files_only=True,
+    )
+    with torch.inference_mode():
+        return batch["observation.state"], policy.predict_action_chunk(batch)
 
 
 def _reset_episode(

@@ -97,6 +97,12 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--closed-loop-task-prompt")
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
+    parser.add_argument("--closed-loop-subgoal-chain-mode", choices=["off", "fixed", "valid-mask"], default="off")
+    parser.add_argument("--closed-loop-subgoal-sequence")
+    parser.add_argument("--closed-loop-fixed-subgoal-chunks", type=int, default=1)
+    parser.add_argument("--closed-loop-valid-mask-checkpoint", type=Path)
+    parser.add_argument("--closed-loop-valid-mask-threshold", type=float, default=0.5)
+    parser.add_argument("--closed-loop-valid-mask-consecutive", type=int, default=2)
     parser.add_argument(
         "--validation-interval-steps",
         type=int,
@@ -710,8 +716,20 @@ def _progress_monitor_command(
         args.closed_loop_policy,
         "--closed-loop-eval-skill-mode",
         _closed_loop_eval_skill_mode(args, dataset_config),
+        "--closed-loop-subgoal-chain-mode",
+        args.closed_loop_subgoal_chain_mode,
+        "--closed-loop-fixed-subgoal-chunks",
+        str(args.closed_loop_fixed_subgoal_chunks),
+        "--closed-loop-valid-mask-threshold",
+        str(args.closed_loop_valid_mask_threshold),
+        "--closed-loop-valid-mask-consecutive",
+        str(args.closed_loop_valid_mask_consecutive),
         "--local-files-only",
     ]
+    if args.closed_loop_subgoal_sequence:
+        cmd.extend(["--closed-loop-subgoal-sequence", args.closed_loop_subgoal_sequence])
+    if args.closed_loop_valid_mask_checkpoint:
+        cmd.extend(["--closed-loop-valid-mask-checkpoint", str(args.closed_loop_valid_mask_checkpoint)])
     closed_loop_task_prompt = _closed_loop_task_prompt(args, dataset_config)
     if closed_loop_task_prompt:
         cmd.extend(["--closed-loop-task-prompt", closed_loop_task_prompt])

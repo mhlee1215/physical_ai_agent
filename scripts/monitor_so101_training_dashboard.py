@@ -58,6 +58,12 @@ def main() -> None:
         default="picklift",
     )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
+    parser.add_argument("--closed-loop-subgoal-chain-mode", choices=["off", "fixed", "valid-mask"], default="off")
+    parser.add_argument("--closed-loop-subgoal-sequence")
+    parser.add_argument("--closed-loop-fixed-subgoal-chunks", type=int, default=1)
+    parser.add_argument("--closed-loop-valid-mask-checkpoint", type=Path)
+    parser.add_argument("--closed-loop-valid-mask-threshold", type=float, default=0.5)
+    parser.add_argument("--closed-loop-valid-mask-consecutive", type=int, default=2)
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--policy-num-steps", type=int, default=10)
     parser.add_argument("--closed-loop-input-grid-count", type=int, default=16)
@@ -284,7 +290,19 @@ def _run_closed_loop_eval(
         "--eval-skill-mode",
         args.closed_loop_eval_skill_mode,
         "--record-rollout-gif" if args.closed_loop_record_rollout_gif else "--no-record-rollout-gif",
+        "--subgoal-chain-mode",
+        args.closed_loop_subgoal_chain_mode,
+        "--fixed-subgoal-chunks",
+        str(args.closed_loop_fixed_subgoal_chunks),
+        "--valid-mask-threshold",
+        str(args.closed_loop_valid_mask_threshold),
+        "--valid-mask-consecutive",
+        str(args.closed_loop_valid_mask_consecutive),
     ]
+    if args.closed_loop_subgoal_sequence:
+        cmd.extend(["--subgoal-sequence", args.closed_loop_subgoal_sequence])
+    if args.closed_loop_valid_mask_checkpoint:
+        cmd.extend(["--valid-mask-checkpoint", str(args.closed_loop_valid_mask_checkpoint)])
     if args.closed_loop_task_prompt:
         cmd.extend(["--task-prompt", args.closed_loop_task_prompt])
     if args.closed_loop_eval_skill_mode == "pick_from_top_cube":
