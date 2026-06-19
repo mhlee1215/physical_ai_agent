@@ -31,6 +31,7 @@ class SmolVLAInferenceResult:
     input_preview_path: str
     input_preview_gif_path: str
     image_feature_mapping: dict[str, str]
+    task_prompt: str | None
     used_real_camera_inputs: bool
     device_requested: str
     device_selected: str
@@ -48,6 +49,7 @@ def run_real_smolvla_inference_probe(
     local_files_only: bool = True,
     use_real_camera_inputs: bool = False,
     device: str = "auto",
+    task_prompt: str | None = None,
 ) -> SmolVLAInferenceResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "smolvla_real_inference_report.json"
@@ -89,6 +91,7 @@ def run_real_smolvla_inference_probe(
             rollout_steps=rollout_steps,
             output_dir=output_dir,
             use_real_camera_inputs=use_real_camera_inputs,
+            task_prompt=task_prompt,
         )
         if not records:
             raise RuntimeError("SmolVLA rollout produced no SO101 steps")
@@ -125,6 +128,7 @@ def run_real_smolvla_inference_probe(
         input_preview_path=str(input_preview_path),
         input_preview_gif_path=str(input_preview_gif_path),
         image_feature_mapping=image_feature_mapping,
+        task_prompt=task_prompt,
         used_real_camera_inputs=use_real_camera_inputs,
         device_requested=str(device_metadata.get("device_requested", device)),
         device_selected=str(device_metadata.get("device_selected", "unknown")),
@@ -142,6 +146,7 @@ def _run_policy_rollout(
     rollout_steps: int,
     output_dir: Path,
     use_real_camera_inputs: bool,
+    task_prompt: str | None,
 ) -> tuple[list[SO101Step], list[Any], dict[str, str]]:
     import json
 
@@ -173,7 +178,12 @@ def _run_policy_rollout(
                 if use_real_camera_inputs
                 else {}
             )
-            batch, image_feature_mapping = _build_batch_for_policy(policy, obs, camera_pixels)
+            batch, image_feature_mapping = _build_batch_for_policy(
+                policy,
+                obs,
+                camera_pixels,
+                instruction=task_prompt,
+            )
             raw_action = policy.select_action(batch)
             action = _clip_action(_tensor_to_float_list(raw_action), action_dim)
             camera_paths: dict[str, str] = {}

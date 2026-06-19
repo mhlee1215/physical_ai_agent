@@ -41,3 +41,36 @@ PYTHONPATH=src python scripts/build_so101_qwen_tool_plan.py \
 
 The output is a validated primitive plan JSON that a closed-loop executor can
 consume later.
+
+## Qwen + SmolVLA E2E smoke
+
+The real-model E2E test is gated so normal unit tests do not download or load
+large models. It requires an OpenAI-compatible Qwen endpoint and a loadable
+LeRobot SmolVLA checkpoint:
+
+```bash
+RUN_QWEN_SMOLVLA_E2E=1 \
+QWEN_OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
+QWEN_MODEL=Qwen/Qwen3-8B \
+SMOLVLA_MODEL_ID=lerobot/smolvla_base \
+PYTHONPATH=src python -B -m unittest tests.test_qwen_smolvla_e2e
+```
+
+To permit Hugging Face downloads in a networked RunPod/local environment, add:
+
+```bash
+SMOLVLA_ALLOW_DOWNLOAD=1
+```
+
+The equivalent direct runner writes `qwen_tool_plan.json`,
+`qwen_smolvla_e2e_report.json`, and the SmolVLA rollout artifacts:
+
+```bash
+PYTHONPATH=src python scripts/run_so101_qwen_smolvla_e2e.py \
+  --qwen-base-url http://127.0.0.1:8000/v1 \
+  --qwen-model Qwen/Qwen3-8B \
+  --smolvla-model-id lerobot/smolvla_base \
+  --output-dir _workspace/qwen_smolvla_e2e \
+  --rollout-steps 1 \
+  --require-pass
+```
