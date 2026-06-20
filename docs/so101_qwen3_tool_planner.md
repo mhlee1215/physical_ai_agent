@@ -31,7 +31,7 @@ prompts:
 Start a Qwen3-8B OpenAI-compatible server separately, then run:
 
 ```bash
-PYTHONPATH=src python scripts/build_so101_qwen_tool_plan.py \
+PYTHONPATH=src .venv/bin/python scripts/build_so101_qwen_tool_plan.py \
   --base-url http://127.0.0.1:8000/v1 \
   --model Qwen/Qwen3-8B \
   --task "pick and lift the green cube" \
@@ -49,7 +49,7 @@ Qwen3 server is listening. It verifies the same validated tool order and checks
 that the derived primitive-chain prompt is passed to the SmolVLA probe:
 
 ```bash
-PYTHONPATH=src python -B -m unittest tests.test_qwen_smolvla_e2e
+PYTHONPATH=src .venv/bin/python -B -m unittest tests.test_qwen_smolvla_e2e
 ```
 
 The saved response lives at:
@@ -67,7 +67,7 @@ RUN_QWEN_SMOLVLA_E2E=1 \
 QWEN_OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
 QWEN_MODEL=Qwen/Qwen3-8B \
 SMOLVLA_MODEL_ID=lerobot/smolvla_base \
-PYTHONPATH=src python -B -m unittest tests.test_qwen_smolvla_e2e
+PYTHONPATH=src .venv/bin/python -B -m unittest tests.test_qwen_smolvla_e2e
 ```
 
 To permit Hugging Face downloads in a networked RunPod/local environment, add:
@@ -80,7 +80,7 @@ The equivalent direct runner writes `qwen_tool_plan.json`,
 `qwen_smolvla_e2e_report.json`, and the SmolVLA rollout artifacts:
 
 ```bash
-PYTHONPATH=src python scripts/run_so101_qwen_smolvla_e2e.py \
+PYTHONPATH=src .venv/bin/python scripts/run_so101_qwen_smolvla_e2e.py \
   --qwen-base-url http://127.0.0.1:8000/v1 \
   --qwen-model Qwen/Qwen3-8B \
   --smolvla-model-id lerobot/smolvla_base \
@@ -92,7 +92,7 @@ PYTHONPATH=src python scripts/run_so101_qwen_smolvla_e2e.py \
 When Qwen is not running, replay the saved planner response instead:
 
 ```bash
-PYTHONPATH=src python scripts/run_so101_qwen_smolvla_e2e.py \
+PYTHONPATH=src .venv/bin/python scripts/run_so101_qwen_smolvla_e2e.py \
   --qwen-response-json configs/agent/qwen3_so101_tool_planner_mock_response.json \
   --smolvla-model-id lerobot/smolvla_base \
   --output-dir _workspace/qwen_smolvla_e2e_mock_qwen \
@@ -106,7 +106,7 @@ For training-time closed-loop checks, use the Qwen plan as the orchestration
 layer and route each primitive to its separately trained SmolVLA checkpoint:
 
 ```bash
-PYTHONPATH=src python scripts/run_so101_qwen_closed_loop_eval.py \
+PYTHONPATH=src .venv/bin/python scripts/run_so101_qwen_closed_loop_eval.py \
   --qwen-base-url http://127.0.0.1:1234/v1 \
   --qwen-model qwen3-vl-8b-instruct-mlx \
   --primitive-policy move_over_cube_edge=<move_checkpoint>/pretrained_model \
@@ -126,7 +126,7 @@ Use `--plan-only` for CI/local preflight when SO101-Nexus or SmolVLA weights are
 not available:
 
 ```bash
-PYTHONPATH=src python scripts/run_so101_qwen_closed_loop_eval.py \
+PYTHONPATH=src .venv/bin/python scripts/run_so101_qwen_closed_loop_eval.py \
   --qwen-response-json configs/agent/qwen3_so101_tool_planner_mock_response.json \
   --primitive-policy move_over_cube_edge=<move_checkpoint>/pretrained_model \
   --primitive-policy align_fixed_jaw_cube_edge=<align_checkpoint>/pretrained_model \
