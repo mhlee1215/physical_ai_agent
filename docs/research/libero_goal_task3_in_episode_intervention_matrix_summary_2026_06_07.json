@@ -1,0 +1,88 @@
+{
+  "baseline_condition": "task3_hook_none",
+  "rows": [
+    {
+      "action_step_count": 177,
+      "condition": "task3_hook_none",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": 0.0,
+      "environment_resets": 1,
+      "eval_seconds": 8.557626008987427,
+      "intervention_count": 0,
+      "pc_success": 100.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task_scout_20260607T040343/task3_hook_none",
+      "success": true,
+      "success_per_action_step": 0.005649717514124294,
+      "success_per_eval_minute": 7.011290273375647,
+      "verifier_trigger_count": 1
+    },
+    {
+      "action_step_count": 178,
+      "condition": "task3_spike_scale145_110",
+      "delta_action_steps_vs_baseline": 1,
+      "delta_eval_seconds_vs_baseline": 0.01602792739868164,
+      "environment_resets": 1,
+      "eval_seconds": 8.573653936386108,
+      "intervention_count": 8,
+      "pc_success": 100.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task3_interventions_20260607T040802/task3_spike_scale145_110",
+      "success": true,
+      "success_per_action_step": 0.0056179775280898875,
+      "success_per_eval_minute": 6.99818309033484,
+      "verifier_trigger_count": 8
+    },
+    {
+      "action_step_count": 177,
+      "condition": "task3_spike_scale145_120",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": -0.03293323516845703,
+      "environment_resets": 1,
+      "eval_seconds": 8.52469277381897,
+      "intervention_count": 8,
+      "pc_success": 100.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task3_interventions_20260607T040802/task3_spike_scale145_120",
+      "success": true,
+      "success_per_action_step": 0.005649717514124294,
+      "success_per_eval_minute": 7.038376818021168,
+      "verifier_trigger_count": 8
+    },
+    {
+      "action_step_count": 177,
+      "condition": "task3_spike_clamp145_to135",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": -0.057639360427856445,
+      "environment_resets": 1,
+      "eval_seconds": 8.49998664855957,
+      "intervention_count": 8,
+      "pc_success": 100.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task3_interventions_20260607T040802/task3_spike_clamp145_to135",
+      "success": true,
+      "success_per_action_step": 0.005649717514124294,
+      "success_per_eval_minute": 7.058834617130576,
+      "verifier_trigger_count": 8
+    },
+    {
+      "action_step_count": 177,
+      "condition": "task3_spike_smooth145_a050",
+      "delta_action_steps_vs_baseline": 0,
+      "delta_eval_seconds_vs_baseline": -0.15976405143737793,
+      "environment_resets": 1,
+      "eval_seconds": 8.397861957550049,
+      "intervention_count": 8,
+      "pc_success": 100.0,
+      "root": "_workspace/runpod_results/in_episode_20260607/libero_goal_task3_interventions_20260607T040802/task3_spike_smooth145_a050",
+      "success": true,
+      "success_per_action_step": 0.005649717514124294,
+      "success_per_eval_minute": 7.144675669032325,
+      "verifier_trigger_count": 8
+    }
+  ],
+  "summary": {
+    "conditions": 5.0,
+    "mean_action_step_count": 177.2,
+    "mean_eval_seconds": 8.510764265060425,
+    "mean_success_per_action_step": 0.005643369516917412,
+    "mean_success_per_eval_minute": 7.050272093578911,
+    "success_rate": 100.0
+  }
+}

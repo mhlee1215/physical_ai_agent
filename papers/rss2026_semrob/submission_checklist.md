@@ -17,11 +17,15 @@
 
 ## Experiments
 
+- [ ] Every reported metric has Evaluation Results Manager classification as paper-ready or diagnostic-only with claim boundaries.
+- [ ] No raw run/report metric is promoted into manuscript evidence by inference.
 - [ ] Freeze policy checkpoint.
 - [ ] Freeze action budget.
 - [ ] Freeze seeds and task ordering.
 - [ ] Report policy-only baseline.
 - [ ] Report random chunk, oracle imagined selector, and VLM imagined selector under matched settings or explicitly label unmatched settings.
+- [ ] Report candidate diversity, including normalized pairwise L2, minimum pairwise L2, selected-vs-policy L2, and cosine distance.
+- [ ] If native SmolVLA `noise=` is used, label current evidence as WARN unless new runs show useful diversity.
 - [ ] Report final success using benchmark `info["success"]` / `is_success`.
 - [ ] Report VLM judge outputs only as candidate-selection signals, not final success.
 - [ ] Report candidate count, committed action budget, total simulated/imagination budget, and wall-clock latency.
@@ -31,6 +35,7 @@
 
 - [ ] Table 1: policy-only baseline vs external/reference baseline.
 - [ ] Table 2: policy-only vs random chunk vs oracle imagined selector vs VLM imagined selector.
+- [ ] Optional table: native-noise diversity diagnostic.
 - [ ] Optional figure: imagine-then-act control loop.
 - [ ] Optional figure: candidate predicted outcome image grid with selected chunk.
 

@@ -9,7 +9,7 @@
 \pdfinfo{
    /Author (Anonymous)
    /Title  (Imagine-Then-Act Chunk Selection for Lightweight Vision-Language-Action Policies)
-   /CreationDate (D:20260606140000)
+   /CreationDate (D:20260610170000)
    /Subject (Robotics)
    /Keywords (robot learning; vision-language-action; visual foresight; semantic reasoning)
 }
@@ -18,168 +18,233 @@
 
 \title{Imagine-Then-Act Chunk Selection for Lightweight Vision-Language-Action Policies}
 
-% Replace [add your ID here] after OpenReview assigns the SemRob submission ID.
 \author{Author Names Omitted for Anonymous Review. Paper-ID [add your ID here]}
 
 \maketitle
 
 \begin{abstract}
-% Author-written abstract only. RSS-style policy prohibits submitting text
-% generated entirely by LLMs. Keep this concise: problem, method, evaluation,
-% strongest quantitative result, and why SemRob should care.
-TODO.
+Lightweight vision-language-action (VLA) policies make language-conditioned
+robot control more accessible, but a single predicted action chunk can commit
+the robot to a poor local choice before any semantic feedback is available. We
+study a test-time wrapper for frozen lightweight VLA policies that separates
+three mechanisms: proposing diverse action-chunk candidates, selecting among
+them before execution, and measuring final task success with the environment.
+The wrapper generates a portfolio of subgoal- and prompt-conditioned candidate
+chunks, executes them only through the frozen VLA policy, and evaluates
+pre-execution choices through a simulation- or world-model-like selection
+module. In an initial candidate-generation study with SmolVLA, native policy noise
+reached real action-chunk inference but produced limited diversity
+(\(0.048\) mean normalized pairwise \(L_2\), \(0.0012\) mean cosine distance),
+whereas a template prompt portfolio produced substantially more diverse
+policy-generated chunks (\(0.226\) mean normalized pairwise \(L_2\), \(0.030\)
+mean cosine distance). We present this as evidence that wrapper-level proposal
+generation is a necessary first step toward imagined chunk selection, not as a
+claim of benchmark success improvement. The paper frames a conservative
+architecture for improving frozen lightweight VLA policies while keeping the
+success criterion external: final success is always the benchmark or
+environment signal, never the VLM or simulator selector itself.
 \end{abstract}
 
 \IEEEpeerreviewmaketitle
 
 \section{Introduction}
-% Target: 4-page workshop version. Suggested shape:
-% 1 paragraph: lightweight VLA policies are now practical but brittle.
-% 1 paragraph: stochastic action chunks create multiple possible futures.
-% 1 paragraph: this work selects an action chunk before execution by judging
-% imagined outcome images against the current subgoal.
-% 1 short contribution list.
 
-TODO.
+Vision-language-action models have expanded the scope of language-conditioned
+robot control by mapping images and instructions directly to robot actions.
+Large VLA systems such as RT-2, OpenVLA, Octo, and \(\pi_0\) connect broad
+visual-language representations to manipulation policies
+\cite{zitkovich2023rt2,kim2024openvla,octo2024,black2024pi0}. At the same
+time, practical deployment on low-cost arms, consumer GPUs, and lab-scale
+iteration loops motivates smaller policies such as SmolVLA
+\cite{shukor2025smolvla}. These lightweight policies are attractive because
+they reduce the cost of experimentation and deployment, yet their compactness
+also makes test-time robustness especially important: a single action chunk may
+encode an ambiguous grasp, a premature placement, or a trajectory that does not
+match the user's intended subgoal.
+
+The usual path to improving a VLA policy is to collect more data or fine-tune
+the model. This work studies a complementary path: keep the lightweight VLA
+frozen, and add an external test-time layer that makes the policy's action
+choices more inspectable before committing them to the environment. The core
+idea is simple. Instead of asking a frozen VLA for one action chunk, an
+external module proposes a small portfolio of subgoal or prompt variants. The
+same frozen VLA then produces a candidate action chunk for each variant. A
+selector evaluates the imagined consequence of each candidate, using a
+simulator clone, a learned visual dynamics model, or a vision-language judge,
+and commits only the selected chunk to the actual environment. Final task
+success remains the benchmark success flag.
+
+This framing is intentionally different from using a VLM as a success detector
+or from claiming a new model-predictive control algorithm. Our contribution is
+to organize a wrapper around a frozen lightweight VLA so that candidate
+proposal, candidate selection, and benchmark success remain separate
+quantities. This separation matters empirically. A naive best-of-\(N\) system
+requires candidate diversity, but an initial study showed that native
+SmolVLA noise produced action chunks that were still very similar. In contrast,
+a template prompt portfolio produced meaningfully larger action-chunk
+separation while still routing every candidate through the real SmolVLA policy.
+This suggests that wrapper-level proposal generation, rather than native policy
+noise alone, is the appropriate object of study for test-time chunk selection.
+
+Figure~\ref{fig:overview} summarizes the proposed architecture. A portfolio
+generator expands an ambiguous task into candidate subgoals or prompts; the
+frozen VLA executor produces candidate chunks; a simulation- or
+world-model-like module predicts or checks candidate outcomes; and a selector
+chooses a chunk for execution. The loop can be repeated when the benchmark
+state indicates partial progress or failure, but the evaluation criterion is
+unchanged: only environment success is reported as task success.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/overview.png}
+\caption{Overview of Imagine-Then-Act. An external multimodal planner proposes
+subgoal-conditioned strategy variants, a frozen lightweight VLA produces
+candidate action chunks, an action-conditioned imagination module predicts or
+checks candidate outcomes, and a selection/verification loop executes the
+chosen chunk and replans when progress is insufficient. Final success remains
+the benchmark environment success signal.}
+\label{fig:overview}
+\end{figure*}
+
+The resulting paper asks a bounded question: can an external wrapper improve
+the usefulness of frozen lightweight VLA action proposals before any
+fine-tuning or model replacement? We make three contributions toward that
+question. First, we formulate imagined action-chunk selection as a modular
+wrapper around frozen lightweight VLA execution. Second, we show that
+subgoal/prompt portfolios can induce substantially more diverse SmolVLA action
+chunks than native noise. Third, we define an evaluation protocol that
+separates candidate diversity, selector quality, and environment-measured
+benchmark success.
 
 \section{Related Work}
-% Keep this tight for SemRob. Research-room related-work results should be
-% sorted into these buckets:
-% 1. visual MPC / visual foresight / video prediction
-% 2. world models and imagination-based planning
-% 3. best-of-N / CEM / candidate trajectory selection
-% 4. VLM-as-critic / reward / verifier in robotics
-% 5. VLA and lightweight VLA background
-% 6. agentic LLM concepts only where directly relevant
 
-\subsection{Visual Foresight and Imagination-Based Planning}
-TODO cite visual MPC, visual foresight, action-conditioned video prediction,
-and world-model planning. Connect them to this paper's first proof setting:
-using simulator clone rollouts and renders as oracle imagined outcomes before
-training a deployable action-conditioned visual dynamics model.
+\subsection{Visual Foresight and Model-Predictive Selection}
 
-\subsection{Candidate Trajectory Selection}
-TODO cite best-of-N sampling, CEM, model-predictive control, and trajectory
-ranking methods. Frame this paper as chunk-level candidate selection for a
-fixed lightweight VLA, not as post-hoc recovery after a failed rollout.
+The idea of evaluating possible futures before execution is central to visual
+foresight and model-predictive control. Visual foresight methods learn
+predictive visual models and use them to select actions whose predicted images
+move toward a goal \cite{ebert2018visualforesight}. PETS uses probabilistic
+ensembles and trajectory sampling for model-based reinforcement learning
+\cite{chua2018pets}, while CEM and MPPI-style procedures generate candidate
+control sequences and rank them by a model or cost. Recent work such as VLMPC
+and Prompting with the Future connects model-predictive ideas to
+vision-language evaluation and digital-twin rollouts
+\cite{zhao2024vlmpc,ning2025promptingfuture}. Our method is not a claim of
+novelty over this line. Instead, it asks how the same candidate-selection
+principle can be wrapped around frozen lightweight VLA action chunks, where
+the low-level action generator is a pretrained VLA rather than a hand-designed
+action sampler.
 
-\subsection{VLM Critics and Robotic Verification}
-TODO cite VLM-as-reward, VLM-as-critic, and semantic verifier work in robotics.
-State the boundary clearly: the VLM judge scores predicted outcome images for
-pre-execution selection only; final task success remains the environment
-benchmark signal.
+\subsection{Multimodal Action Generation}
 
-\subsection{Efficient Vision-Language-Action Policies}
-TODO cite SmolVLA~\cite{shukor2025smolvla}, TinyVLA~\cite{wen2024tinyvla},
-OpenVLA~\cite{kim2024openvla}, and broader robot foundation policies such as
-RT-1~\cite{brohan2022rt1} and RT-2~\cite{zitkovich2023rt2}.
+For candidate selection to matter, the system must first generate distinct
+candidate behaviors. Diffusion Policy and Diffuser produce diverse trajectories
+through stochastic denoising \cite{chi2023diffusionpolicy,janner2022diffuser}.
+ACT uses action chunking for imitation learning on low-cost robot hardware
+\cite{zhao2023aloha}. Behavior Transformer and Implicit Behavioral Cloning
+model multimodal behavior distributions through learned action modes or
+implicit energy functions \cite{shafiullah2022bet,florence2021ibc}. These
+methods build diversity into the policy or planner itself. In contrast, we
+study a frozen VLA and create diversity externally, through subgoal and prompt
+portfolios that still require the VLA to generate every executable action
+chunk.
 
-\subsection{Agentic Planning and Feedback}
-TODO cite SayCan~\cite{ahn2022saycan}, Inner Monologue~\cite{huang2022inner},
-Code as Policies~\cite{liang2022code}, ReAct~\cite{yao2022react}, and
-Reflexion~\cite{shinn2023reflexion}. Tie this to SemRob topics: semantic
-goal interpretation and policy steering. Keep this subsection short: the paper
-is not mainly an LLM-agent paper.
+\subsection{Language and Vision-Language Reasoning for Robotics}
+
+Language-model and vision-language systems often improve robot behavior by
+reasoning over skills, subgoals, or affordances rather than directly producing
+low-level motor commands. SayCan grounds language-model plans in learned skill
+affordances \cite{ahn2022saycan}; Inner Monologue incorporates environmental
+feedback into language-conditioned planning \cite{huang2022inner}; Code as
+Policies converts language instructions into executable robot programs
+\cite{liang2022code}; and VoxPoser composes 3D value maps for language-guided
+manipulation \cite{huang2023voxposer}. Our wrapper uses a similar separation
+between semantic reasoning and low-level control, but the interface is an
+action-chunk portfolio for a frozen VLA. A VLM may generate candidate subgoals
+or score imagined outcomes, but it is not the robot policy and does not define
+task success.
+
+\subsection{Vision-Language-Action Policies}
+
+VLA policies connect language-conditioned perception to robot action. RT-1
+scaled transformer policies on robot data \cite{brohan2022rt1}, and RT-2
+showed that vision-language models can transfer web knowledge to robotic
+action prediction \cite{zitkovich2023rt2}. OpenVLA released an open-source VLA
+trained on a large mixture of robot demonstrations \cite{kim2024openvla}, and
+Octo provided an open generalist policy across embodiments \cite{octo2024}.
+Recent systems such as \(\pi_0\) and FAST explore continuous flow-based action
+generation and efficient action tokenization for high-rate robot control
+\cite{black2024pi0,pertsch2025fast}. SmolVLA pushes this direction toward
+smaller and more accessible models, with a 450M-parameter architecture,
+asynchronous inference, and action chunking \cite{shukor2025smolvla}. This
+work keeps such a lightweight VLA frozen and studies how a test-time wrapper
+can structure its candidate action chunks before execution.
 
 \section{Method}
-% Core claim: no base policy weight changes. The wrapper samples candidate
-% action chunks, imagines their outcomes, judges the predicted images against
-% the current subgoal, and executes only the selected chunk.
 
-\subsection{Base Policy and Evaluation Harness}
-TODO describe the fixed SmolVLA policy, observation/action interface, LIBERO
-or ManiSkill environment, seeds, action budgets, and logging artifacts.
+The proposed wrapper has four modules. The portfolio generator receives the
+current observation and task instruction and produces candidate subgoals or
+prompt variants. The frozen VLA executor maps each candidate prompt to an
+action chunk. The imagination module predicts or checks the consequence of
+each chunk, using either a simulator clone, a learned visual dynamics model, or
+a visual judge over predicted outcome images. The selector chooses one chunk
+for execution in the benchmark environment.
 
-\subsection{Candidate Chunk Generation}
-TODO define stochastic chunk sampling from the fixed lightweight VLA. Specify
-candidate count, sampling parameters, action horizon, and whether candidates
-share the same current observation and subgoal.
+The architecture deliberately exposes two interfaces. The proposal interface
+controls how candidate chunks are generated. This can include template prompt
+portfolios, external VLM-generated subgoals, or structured perturbations around
+the nominal VLA chunk. The selection interface controls how candidate chunks
+are ranked before commitment. This can include oracle simulator rollouts for
+upper-bound analysis, non-oracle proxy checks, or image-based VLM scoring. In
+all cases, the committed action is still produced by the frozen VLA policy.
 
-\subsection{Imagined Outcome Rendering}
-TODO define the first proof path: clone simulator state, roll out each
-candidate chunk without committing it to the real evaluation environment, and
-render the resulting outcome image. Explain that this is an oracle-imagination
-upper-bound diagnostic. Later work can replace this with a learned
-action-conditioned visual dynamics or video prediction model.
+\section{Evaluation Protocol}
 
-\subsection{VLM-Guided Chunk Selection}
-TODO define the visual judge inputs: current observation, predicted outcome
-image, candidate metadata, and current subgoal. The judge ranks candidates
-before execution. Only the selected chunk is committed to the benchmark
-environment.
-
-\subsection{Success Semantics}
-TODO state explicitly: final task success is the environment benchmark success
-signal, e.g., \texttt{info["success"]} or \texttt{is\_success}. The VLM judge
-is a pre-execution candidate selector, not a final success detector.
-
-\section{Experiments}
-% Keep this evidence-first. Use matched seeds, same base policy, same action
-% budget where possible. Do not overclaim from small probes.
-
-\subsection{Setup}
-TODO list suites, task IDs, episodes per task, compute environment, simulator
-versions, policy checkpoint, and action-step protocol.
-
-\subsection{Policy-Only Baseline}
-TODO summarize the current routed SmolVLA baseline and cite the local artifact
-paths in the camera-ready or supplement, not in the blinded submission.
+The evaluation separates three outcomes. Candidate diversity measures whether
+the proposal interface creates meaningfully different action chunks. Selector
+quality measures whether the pre-execution selector chooses candidates that
+lead to better predicted or simulated outcomes than random selection.
+Benchmark success measures whether the committed policy execution solves the
+task according to the environment success condition. Only the third quantity is
+reported as task success.
 
 \begin{table}[t]
 \centering
-\caption{Policy-only baseline reproduction on LIBERO. Fill with final
-paper-scale numbers only.}
-\label{tab:baseline}
-\begin{tabular}{lrrrrr}
+\caption{Evaluation axes for the imagine-then-act wrapper. Each axis is
+reported with its own metric, and only environment-defined completion is
+treated as task success.}
+\label{tab:evaluation_axes}
+\begin{tabular}{lll}
 \toprule
-Condition & Goal & Object & Spatial & Long & Avg \\
+Axis & Measures & Success source \\
 \midrule
-Policy-only & TODO & TODO & TODO & TODO & TODO \\
-Reference & TODO & TODO & TODO & TODO & TODO \\
+Candidate diversity & Chunk separation & Action metrics \\
+Selector quality & Pre-execution ranking & Sim/proxy checks \\
+Benchmark success & Task completion & Environment flag \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-\subsection{Imagine-Then-Act Selection Results}
-TODO compare \texttt{policy\_only}, random candidate selection, oracle imagined
-candidate selection, and VLM-guided imagined candidate selection. Report
-success, action steps, wall-clock latency, candidate count, and judge accuracy
-against environment outcomes where available.
-
-\begin{table}[t]
-\centering
-\caption{Imagined chunk selection ablation. Keep all conditions matched by
-seeds, base policy, and committed action budget unless explicitly stated.}
-\label{tab:selection}
-\begin{tabular}{lrrrr}
-\toprule
-Condition & Episodes & Success & $N$ & Latency \\
-\midrule
-Policy-only & TODO & TODO & 1 & TODO \\
-Random chunk & TODO & TODO & TODO & TODO \\
-Oracle imagined selector & TODO & TODO & TODO & TODO \\
-VLM imagined selector & TODO & TODO & TODO & TODO \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\section{Discussion}
-TODO explain when imagined chunk selection helps, when it fails, and whether
-semantic visual judging is actually better than random or oracle-state
-heuristic selection.
 
 \section{Limitations}
-% RSS requires a limitations section for main papers; SemRob follows RSS paper
-% policy, so include it here too.
-TODO include limited task coverage, simulator-only evidence, privileged
-simulator-clone imagination, VLM judge brittleness, latency from evaluating
-multiple candidates, no weight updates, and no real robot claim unless real
-evidence is added.
+
+The current formulation adds test-time computation by evaluating multiple
+candidate chunks before execution. Simulator-based selection is also an
+upper-bound or proxy mechanism unless replaced by a deployable learned dynamics
+model. Prompt portfolios can increase action diversity, but diversity alone
+does not imply better selection or higher success. Finally, because the base
+VLA is frozen, the wrapper can only steer among behaviors that the policy can
+already express under some prompt or subgoal context.
 
 \section{Conclusion}
-TODO one paragraph: what was tested, strongest measured result, and why
-pre-execution imagined chunk selection is a useful control layer for
-lightweight VLA policies.
+
+Imagine-then-act chunk selection provides a structured way to study test-time
+agentic wrappers for lightweight VLA policies. By separating proposal
+generation, pre-execution selection, and environment-measured success, the
+framework avoids treating an auxiliary VLM or simulator score as task success.
+Initial candidate-generation evidence suggests that prompt portfolios can
+produce more diverse frozen-policy action chunks than native policy noise,
+motivating selection mechanisms that evaluate imagined outcomes before
+committing actions to the environment.
 
 \bibliographystyle{plainnat}
 \bibliography{references}

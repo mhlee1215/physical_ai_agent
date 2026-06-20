@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Remote True-Oracle Evidence Pack</title>
+  <style>
+    :root { --ink:#172018; --panel:#fffaf0; --line:#d1bd91; --green:#2f7d59; --red:#b13f31; --gold:#ad7c1d; --muted:#65705f; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Avenir Next", "Trebuchet MS", sans-serif; color:var(--ink); background:radial-gradient(circle at 10% 8%, rgba(47,125,89,.18), transparent 30%), radial-gradient(circle at 88% 8%, rgba(177,63,49,.15), transparent 28%), linear-gradient(135deg,#fcf5e4,#ead7ad); }
+    header { padding:44px clamp(18px,5vw,72px) 24px; }
+    h1 { max-width:1120px; margin:0; font-size:clamp(38px,6vw,78px); line-height:.94; letter-spacing:-.06em; }
+    .lead { max-width:980px; color:var(--muted); font-size:clamp(17px,2vw,22px); line-height:1.45; margin-top:18px; }
+    main { padding:0 clamp(18px,5vw,72px) 70px; }
+    .command,.card { background:rgba(255,250,240,.88); border:1px solid var(--line); border-radius:24px; padding:18px; box-shadow:0 18px 52px rgba(48,35,10,.11); }
+    .command { max-width:1180px; margin-bottom:20px; }
+    pre { overflow:auto; background:#172018; color:#fff9e8; padding:18px; border-radius:18px; }
+    .grid { max-width:1180px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+    .card { min-height:190px; }
+    .tag { display:inline-block; padding:6px 10px; border-radius:999px; background:var(--ink); color:#fff9e8; font-size:12px; font-weight:800; }
+    h2 { margin:15px 0 8px; font-size:23px; letter-spacing:-.025em; }
+    p { color:var(--muted); line-height:1.43; }
+    code { background:rgba(23,32,24,.08); padding:2px 5px; border-radius:6px; }
+    @media (max-width:920px) { .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Remote True-Oracle Evidence Pack</h1>
+    <p class="lead">A single non-destructive command for renderer-capable environments: preflight, two-stage true-oracle gate, result import, dashboard rebuild.</p>
+  </header>
+  <main>
+    <section class="command">
+      <h2>Copy/paste command</h2>
+      <pre>ORACLE_OVERLAY_ROOT=_workspace/runpod_results/affordance_overlay_validation_20260606T1955Z \
+ROOT_OUTPUT_DIR=_workspace/checkpoints/checkpoint_24_actual_sim_true_oracle_two_stage \
+EPISODES=1 \
+STEPS=12 \
+MIN_STRICT_STEPS=10 \
+PYTHON_BIN=python3 \
+sh scripts/run_remote_true_oracle_evidence_pack.sh</pre>
+    </section>
+    <section class="grid">
+      <article class="card"><span class="tag">1</span><h2>No pod lifecycle</h2><p>Does not create, stop, delete, resize, or mutate pod lifecycle state.</p></article>
+      <article class="card"><span class="tag">2</span><h2>Preflight first</h2><p>Checks Python, imports, GPU/Vulkan visibility before attempting simulation.</p></article>
+      <article class="card"><span class="tag">3</span><h2>Probe before policy</h2><p>Runs zero-action <code>affordance_oracle_probe</code> before any SmolVLA policy stage.</p></article>
+      <article class="card"><span class="tag">4</span><h2>Policy gated</h2><p>SmolVLA true-oracle path only runs if probe reaches the strict sample threshold.</p></article>
+      <article class="card"><span class="tag">5</span><h2>10+ strict samples</h2><p>Default gate is <code>MIN_STRICT_STEPS=10</code> with <code>STEPS=12</code>.</p></article>
+      <article class="card"><span class="tag">6</span><h2>Result importer</h2><p>Renders <code>two_stage_summary.json</code> into HTML and manifest automatically.</p></article>
+      <article class="card"><span class="tag">7</span><h2>Dashboard rebuild</h2><p>Runs the repo milestone rebuild so the latest status appears in one place.</p></article>
+      <article class="card"><span class="tag">8</span><h2>Artifact audit</h2><p>Regenerates completeness audit after evidence collection.</p></article>
+      <article class="card"><span class="tag">9</span><h2>Pack summary</h2><p>Writes <code>remote_true_oracle_evidence_pack_summary.json</code>.</p></article>
+      <article class="card"><span class="tag">10</span><h2>Blocked is useful</h2><p>If it blocks, stage-specific status tells us whether the problem is preflight, probe, or policy.</p></article>
+      <article class="card"><span class="tag">11</span><h2>Claim boundary</h2><p>The runner does not prove Tier O; only generated strict manifests can do that.</p></article>
+      <article class="card"><span class="tag">12</span><h2>Next after pass</h2><p>Use C0-C5 experiment matrix to move from Tier O input readiness to success-rate claims.</p></article>
+    </section>
+  </main>
+</body>
+</html>
