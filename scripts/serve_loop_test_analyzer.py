@@ -41,6 +41,9 @@ def main() -> None:
                 query = parse_qs(parsed.query)
                 self._send_artifact(export_dir, Path((query.get("path") or [""])[0]))
                 return
+            if parsed.path == "/vendor/chart.umd.min.js":
+                self._send_vendor_file(Path(__file__).resolve().parents[1] / "third_party" / "chartjs" / "chart.umd.min.js")
+                return
             self.send_error(404)
 
         def log_message(self, fmt: str, *args: Any) -> None:
@@ -77,6 +80,18 @@ def main() -> None:
             self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(str(artifact_path))[0] or "application/octet-stream")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _send_vendor_file(self, path: Path) -> None:
+            if not path.is_file():
+                self.send_error(404)
+                return
+            data = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Cache-Control", "public, max-age=3600")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -179,9 +194,17 @@ def _index_html() -> str:
     .thumb .label { padding:5px 7px; color:var(--muted); font-size:12px; }
     .video-link { display:inline-block; margin-top:8px; color:var(--accent); font-weight:650; }
     .diagnostics { background:#fff; border:1px solid var(--border); border-left:4px solid var(--warn); border-radius:6px; padding:10px; margin-bottom:14px; }
-    .chart-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin-top:8px; }
+    .diagnostics-head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+    .metric-help { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:8px; padding:0 8px 8px; }
+    .metric-help div { border:1px solid #edf0f5; border-radius:6px; padding:8px; background:#fbfcfe; }
+    .chart-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:10px; margin-top:8px; }
     .chart { border:1px solid #edf0f5; border-radius:6px; padding:8px; background:#fbfcfe; }
-    .chart svg { width:100%; height:96px; display:block; }
+    .chart-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
+    .chart-head select { width:auto; min-width:86px; padding:4px 7px; }
+    .chart-canvas { height:210px; }
+    .chart canvas { width:100%; height:100%; display:block; }
+    .chart-lib-warning { display:none; margin-top:8px; color:var(--fail); }
+    .chart-lib-warning.show { display:block; }
     @media (max-width: 850px) { .app { grid-template-columns: 1fr; } aside { border-right:0; border-bottom:1px solid var(--border); max-height:45vh; } .event { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -204,8 +227,10 @@ def _index_html() -> str:
       <div id="detail" class="muted">Select a loop test.</div>
     </main>
   </div>
+  <script src="/vendor/chart.umd.min.js"></script>
   <script>
-    let state = { tests: [], active: null, episode: 0 };
+    let state = { tests: [], active: null, episode: 0, currentEpisode: null };
+    let diagnosticCharts = [];
     const el = id => document.getElementById(id);
     const fmt = value => value === null || value === undefined ? "-" : (typeof value === "number" ? value.toFixed(4) : String(value));
     async function loadList() {
@@ -263,13 +288,13 @@ def _index_html() -> str:
           ${renderPlan(lt)}
         ${renderDiagnostics(ep)}
         <div class="timeline">${renderTimeline(groupTimeline(ep.timeline || []))}</div>`;
+      state.currentEpisode = ep;
+      renderDiagnosticCharts(ep);
     }
     function renderDiagnostics(ep) {
       const rows = (ep.timeline || []).filter(row => row.type === "policy_step");
       if (!rows.length) return "";
-      const rewards = rows.map(row => Number(row.robot?.reward || 0));
-      const dists = rows.map(row => row.robot?.info?.tcp_to_target_dist).filter(value => typeof value === "number");
-      const action0 = rows.map(row => row.policy_output?.action?.[0]).filter(value => typeof value === "number");
+      const actionDimCount = rows.reduce((max, row) => Math.max(max, Array.isArray(row.policy_output?.action) ? row.policy_output.action.length : 0), 0);
       const finalInfo = ep.final_info || {};
       const heuristics = [];
       if (ep.final_success === false) heuristics.push("task did not reach success");
@@ -277,32 +302,93 @@ def _index_html() -> str:
       const endedByMaxSteps = rows.length === Number(ep.steps || rows.length);
       if (endedByMaxSteps && ep.final_success === false) heuristics.push("rollout consumed full planned horizon");
       return `<section class="diagnostics">
-        <strong>Diagnostics</strong>
+        <div class="diagnostics-head">
+          <strong>Diagnostics</strong>
+          <span class="pill">charts: Chart.js</span>
+        </div>
         <div class="metrics">${heuristics.map(item => `<span class="pill warn">${escapeHtml(item)}</span>`).join("") || `<span class="pill robot">no obvious failure heuristic</span>`}</div>
+        <details open>
+          <summary>Metrics explained</summary>
+          <div class="metric-help">
+            <div><strong>Reward</strong><br><span class="muted">Simulator reward returned after each executed env step. It is a progress signal, not the same thing as final task success.</span></div>
+            <div><strong>TCP distance</strong><br><span class="muted"><code>info.tcp_to_target_dist</code>: distance from the robot tool center point / gripper to the target. Lower is better for pick-up style tasks.</span></div>
+            <div><strong>Action dimension</strong><br><span class="muted">One selected component of the executed SmolVLA action vector. <code>action[0]</code> is only the first joint/control target, useful for spotting jitter or saturation, not a full policy score.</span></div>
+          </div>
+        </details>
+        <div id="chartLibWarning" class="chart-lib-warning">Chart.js did not load, so interactive charts are unavailable. The raw values are still available in the rollout timeline below.</div>
         <div class="chart-grid">
-          ${renderSparkChart("reward", rewards, "#047857")}
-          ${renderSparkChart("tcp distance", dists, "#b45309")}
-          ${renderSparkChart("action[0]", action0, "#5b4bdb")}
+          <div class="chart">
+            <div class="chart-head"><strong>Reward</strong><span id="rewardLast" class="muted">-</span></div>
+            <div class="chart-canvas"><canvas id="rewardChart"></canvas></div>
+          </div>
+          <div class="chart">
+            <div class="chart-head"><strong>TCP distance</strong><span id="tcpDistanceLast" class="muted">-</span></div>
+            <div class="chart-canvas"><canvas id="tcpDistanceChart"></canvas></div>
+          </div>
+          <div class="chart">
+            <div class="chart-head">
+              <strong>Action dimension</strong>
+              <select id="diagActionDim" aria-label="action dimension">
+                ${Array.from({ length: Math.max(actionDimCount, 1) }, (_, index) => `<option value="${index}">action[${index}]</option>`).join("")}
+              </select>
+              <span id="actionLast" class="muted">-</span>
+            </div>
+            <div class="chart-canvas"><canvas id="actionChart"></canvas></div>
+          </div>
         </div>
       </section>`;
     }
-    function renderSparkChart(label, values, color) {
-      if (!values.length) return `<div class="chart"><div class="muted">${escapeHtml(label)} unavailable</div></div>`;
-      const min = Math.min(...values);
-      const max = Math.max(...values);
-      const span = max - min || 1;
-      const points = values.map((value, index) => {
-        const x = values.length === 1 ? 0 : (index / (values.length - 1)) * 100;
-        const y = 88 - ((value - min) / span) * 76;
-        return `${x.toFixed(2)},${y.toFixed(2)}`;
-      }).join(" ");
-      return `<div class="chart">
-        <div class="row"><strong>${escapeHtml(label)}</strong><span class="muted">${fmt(values[values.length - 1])}</span></div>
-        <svg viewBox="0 0 100 96" preserveAspectRatio="none">
-          <polyline fill="none" stroke="${color}" stroke-width="2.5" points="${points}"></polyline>
-        </svg>
-        <div class="row muted"><span>min ${fmt(min)}</span><span>max ${fmt(max)}</span></div>
-      </div>`;
+    function renderDiagnosticCharts(ep) {
+      destroyDiagnosticCharts();
+      const rows = (ep.timeline || []).filter(row => row.type === "policy_step");
+      const warning = el("chartLibWarning");
+      if (!rows.length || !warning) return;
+      if (!window.Chart) {
+        warning.classList.add("show");
+        return;
+      }
+      warning.classList.remove("show");
+      const actionSelect = el("diagActionDim");
+      const selectedActionDim = Number(actionSelect?.value || 0);
+      const rewardSeries = rows.map(row => ({ x: Number(row.global_step ?? row.primitive_step ?? 0), y: Number(row.robot?.reward ?? 0) }));
+      const distanceSeries = rows
+        .filter(row => typeof row.robot?.info?.tcp_to_target_dist === "number")
+        .map(row => ({ x: Number(row.global_step ?? row.primitive_step ?? 0), y: row.robot.info.tcp_to_target_dist }));
+      const actionSeries = rows
+        .filter(row => typeof row.policy_output?.action?.[selectedActionDim] === "number")
+        .map(row => ({ x: Number(row.global_step ?? row.primitive_step ?? 0), y: row.policy_output.action[selectedActionDim] }));
+      el("rewardLast").textContent = rewardSeries.length ? fmt(rewardSeries[rewardSeries.length - 1].y) : "-";
+      el("tcpDistanceLast").textContent = distanceSeries.length ? fmt(distanceSeries[distanceSeries.length - 1].y) : "-";
+      el("actionLast").textContent = actionSeries.length ? fmt(actionSeries[actionSeries.length - 1].y) : "-";
+      actionSelect?.addEventListener("change", () => renderDiagnosticCharts(state.currentEpisode || ep), { once: true });
+      diagnosticCharts.push(
+        makeLineChart("rewardChart", "reward", rewardSeries, "#047857", "reward"),
+        makeLineChart("tcpDistanceChart", "tcp distance", distanceSeries, "#b45309", "distance"),
+        makeLineChart("actionChart", `action[${selectedActionDim}]`, actionSeries, "#5b4bdb", "action value"),
+      );
+    }
+    function makeLineChart(canvasId, label, data, color, yTitle) {
+      const canvas = el(canvasId);
+      if (!canvas) return null;
+      return new Chart(canvas, {
+        type: "line",
+        data: { datasets: [{ label, data, borderColor: color, backgroundColor: color, borderWidth: 2, pointRadius: 0, pointHoverRadius: 3, tension: 0.18 }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          parsing: false,
+          interaction: { intersect: false, mode: "nearest" },
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: context => `${label}: ${fmt(context.parsed.y)}` } } },
+          scales: {
+            x: { type: "linear", title: { display: true, text: "global step" }, grid: { color: "#edf0f5" } },
+            y: { title: { display: true, text: yTitle }, grid: { color: "#edf0f5" } }
+          }
+        }
+      });
+    }
+    function destroyDiagnosticCharts() {
+      for (const chart of diagnosticCharts) if (chart) chart.destroy();
+      diagnosticCharts = [];
     }
     function renderPlan(lt) {
       const plan = lt.qwen_plan;
