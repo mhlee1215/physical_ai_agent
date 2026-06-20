@@ -133,6 +133,11 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--closed-loop-task-prompt")
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
+    parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--loop-artifact-width", type=int, default=128)
+    parser.add_argument("--loop-artifact-height", type=int, default=128)
+    parser.add_argument("--loop-artifact-fps", type=int, default=12)
+    parser.add_argument("--loop-artifact-every-n-steps", type=int, default=1)
     parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
     parser.add_argument("--qwen-base-url")
     parser.add_argument("--qwen-api-key")
@@ -1151,6 +1156,22 @@ def _progress_monitor_command(
         cmd.extend(["--closed-loop-task-prompt", closed_loop_task_prompt])
     if args.closed_loop_record_rollout_gif or _closed_loop_record_rollout_gif(dataset_config):
         cmd.append("--closed-loop-record-rollout-gif")
+    if args.record_loop_artifacts:
+        cmd.extend(
+            [
+                "--record-loop-artifacts",
+                "--loop-artifact-width",
+                str(args.loop_artifact_width),
+                "--loop-artifact-height",
+                str(args.loop_artifact_height),
+                "--loop-artifact-fps",
+                str(args.loop_artifact_fps),
+                "--loop-artifact-every-n-steps",
+                str(args.loop_artifact_every_n_steps),
+            ]
+        )
+    else:
+        cmd.append("--no-record-loop-artifacts")
     if closed_loop_runner == "qwen_chain":
         cmd.extend(["--qwen-model", args.qwen_model, "--qwen-object", args.qwen_object])
         if args.qwen_plan_json:

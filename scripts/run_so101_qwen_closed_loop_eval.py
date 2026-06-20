@@ -53,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps-per-primitive", type=int, default=None)
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--policy-num-steps", type=int, default=10)
-    parser.add_argument("--record-loop-artifacts", action="store_true")
+    parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--artifact-width", type=int, default=128)
     parser.add_argument("--artifact-height", type=int, default=128)
     parser.add_argument("--artifact-fps", type=int, default=12)

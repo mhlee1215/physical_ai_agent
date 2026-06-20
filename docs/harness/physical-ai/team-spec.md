@@ -212,6 +212,12 @@ policy is:
   validation-loss checkpoint must also run the Qwen-chain closed-loop test.
   Keep `validation_interval_steps == save_freq == steps_per_epoch` and
   `closed-loop-every-epochs=1` unless the user explicitly changes this lane.
+- All SO101 loop tests must record analyzer artifacts by default. For
+  Qwen-chain closed-loop tests this means raw Qwen request/response payloads,
+  policy input images, robot frames, per-iteration videos, rollout
+  `policy_rollout_config`, and action-chunk metadata. Do not run a loop test
+  with artifact recording disabled unless the user explicitly asks for a
+  lightweight smoke/debug run, and label that run as non-authoritative.
 - For older/general expensive closed-loop lanes, best-only closed-loop may still
   be used when the user has not requested per-validation closed-loop evidence.
 - If full closed-loop validation needs the GPU, pause or finish the training

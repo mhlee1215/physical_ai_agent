@@ -1229,6 +1229,11 @@ class SO101SmolVLAPipelineTest(TestCase):
                     closed_loop_eval_skill_mode=None,
                     closed_loop_task_prompt=None,
                     closed_loop_record_rollout_gif=False,
+                    record_loop_artifacts=True,
+                    loop_artifact_width=128,
+                    loop_artifact_height=128,
+                    loop_artifact_fps=12,
+                    loop_artifact_every_n_steps=1,
                     closed_loop_runner="auto",
                     qwen_model="qwen3-vl-8b-instruct-mlx",
                     qwen_base_url=None,
@@ -1386,6 +1391,8 @@ class SO101SmolVLAPipelineTest(TestCase):
             )
             self.assertIn("--closed-loop-runner", progress_cmd)
             self.assertIn("qwen_chain", progress_cmd)
+            self.assertIn("--record-loop-artifacts", progress_cmd)
+            self.assertIn("--loop-artifact-width", progress_cmd)
             self.assertIn("--qwen-response-json", progress_cmd)
             self.assertIn("configs/agent/qwen3_so101_tool_planner_mock_response.json", progress_cmd)
 

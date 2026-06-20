@@ -254,6 +254,9 @@ the SmolVLA action chunk contract:
 - evidence source: recorded rollout report versus checkpoint config fallback.
 - UI grouping: primitive env substeps are collapsed into SmolVLA action chunks,
   with substeps nested under each chunk.
+- recording policy: Qwen-chain loop tests keep analyzer artifact recording on
+  by default; disabling it is allowed only for explicitly labeled
+  lightweight smoke/debug runs.
 
 ### Phase 2: Recording Upgrade
 
@@ -270,6 +273,7 @@ the SmolVLA action chunk contract:
 - [x] Save Qwen-chain per-iteration videos.
 - [x] Save Qwen-chain raw request/response payloads.
 - [x] Save Qwen-chain action chunk metadata.
+- [x] Make Qwen-chain analyzer artifact recording the default loop-test mode.
 - [ ] Save raw predicted action chunks when evaluator exposes them.
 - [ ] Emit normalized manifest directly from evaluator.
 - [ ] Add tests with lightweight mocked media.

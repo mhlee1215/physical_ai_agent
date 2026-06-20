@@ -71,7 +71,7 @@ def main() -> None:
         default="picklift",
     )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
-    parser.add_argument("--record-loop-artifacts", action="store_true")
+    parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--loop-artifact-width", type=int, default=128)
     parser.add_argument("--loop-artifact-height", type=int, default=128)
     parser.add_argument("--loop-artifact-fps", type=int, default=12)
