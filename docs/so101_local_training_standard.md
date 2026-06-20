@@ -52,6 +52,15 @@ explicitly chooses another experiment.
   `--closed-loop-runner qwen_chain` so the `pick_up_cube` scenario is evaluated
   through the Qwen `move -> align -> pick_up` chain, not the legacy single-skill
   picklift smoke evaluator.
+- Loop tests must record analyzer artifacts by default. Keep
+  `--record-loop-artifacts` enabled for Qwen-chain validation so every loop test
+  preserves raw Qwen payloads, rollout config, action-chunk metadata, and the
+  seed/action/state trace needed to regenerate visual media locally. Do not
+  render PNG/MP4 media during training-time validation by default; use
+  `scripts/build_loop_test_analyzer_export.py --generate-media` when visual
+  frames/videos are needed for inspection. Use `--no-record-loop-artifacts` only
+  for explicitly labeled lightweight smoke or debugging runs, not for validation
+  evidence.
 - The training-time Qwen chain should default to the saved mock response
   `configs/agent/qwen3_so101_tool_planner_mock_response.json` so the epoch
   validation/closed-loop cadence is not blocked when LM Studio or Qwen is not

@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from physical_ai_agent.agent_core.qwen_so101_closed_loop import (
+    LoopArtifactConfig,
     parse_primitive_policy_routes,
     resolve_policy_routes,
     run_closed_loop_plan,
@@ -52,19 +53,30 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                 device="cpu",
                 local_files_only=True,
                 max_steps_per_primitive=2,
+                artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
                 env_factory=FakeEnv,
                 policy_loader=fake_policy_loader,
                 batch_builder=fake_batch_builder,
             )
+            trace_rows = _read_jsonl(Path(report["episodes"][0]["trace_path"]))
             primitive_ids = [
                 row["primitive_id"]
-                for row in _read_jsonl(Path(report["episodes"][0]["trace_path"]))
+                for row in trace_rows
             ]
 
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["episodes_completed"], 1)
         self.assertEqual(report["episodes"][0]["steps"], 6)
+        self.assertIsNone(report["episodes"][0]["media_root"])
+        self.assertEqual(report["loop_artifact_config"]["enabled"], True)
+        self.assertEqual(report["loop_artifact_config"]["render_media"], False)
+        self.assertEqual(trace_rows[0]["media"]["render_mode"], "deferred")
+        self.assertEqual(trace_rows[0]["media"]["policy_input_images"], {})
+        self.assertIsNone(trace_rows[0]["media"]["robot_frame"])
         self.assertEqual(report["success_rate"], 1.0)
+        self.assertEqual(report["policy_rollout_config"]["chunk_size"], 50)
+        self.assertEqual(report["policy_rollout_config"]["n_action_steps"], 15)
+        self.assertEqual(report["policy_rollout_config"]["num_steps"], 10)
         self.assertEqual(
             primitive_ids,
             [
@@ -95,6 +107,9 @@ class FakeConfig:
     device = "cpu"
     image_features = {}
     robot_state_feature = None
+    chunk_size = 50
+    n_action_steps = 50
+    num_steps = 50
 
 
 class FakePolicy:

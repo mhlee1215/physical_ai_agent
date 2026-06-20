@@ -108,6 +108,13 @@ paper-facing concepts:
   launcher. The runtime contract is `macos => mps + MuJoCo glfw` and
   `linux/RunPod => cuda + MuJoCo egl`; dry-run both profiles or run the targeted
   command-contract tests before treating a training PR as ready.
+- User policy: SO101 loop tests must record analyzer artifacts by default.
+  Qwen-chain loop validation should preserve raw Qwen request/response payloads,
+  rollout `policy_rollout_config`, action-chunk metadata, and seed/action/state
+  traces sufficient for local media regeneration. Training-time validation
+  should not render PNG/MP4 media by default; generate frames/videos locally
+  from saved traces when inspection needs them. Disable recording only for
+  explicitly labeled lightweight smoke/debug runs, not for validation evidence.
 - RunPod experiment-data storage policy: past remote experiment results are not
   needed. Starting now, every new RunPod data-generation, training, evaluation,
   and closed-loop run must end with a local download, local verification, and

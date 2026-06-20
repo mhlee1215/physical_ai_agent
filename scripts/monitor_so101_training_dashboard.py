@@ -71,6 +71,11 @@ def main() -> None:
         default="picklift",
     )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
+    parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--loop-artifact-width", type=int, default=128)
+    parser.add_argument("--loop-artifact-height", type=int, default=128)
+    parser.add_argument("--loop-artifact-fps", type=int, default=12)
+    parser.add_argument("--loop-artifact-every-n-steps", type=int, default=1)
     parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
     parser.add_argument("--qwen-base-url")
     parser.add_argument("--qwen-api-key")
@@ -387,7 +392,25 @@ def _run_qwen_chain_closed_loop_eval(
         args.policy_device,
         "--max-steps-per-primitive",
         str(args.closed_loop_steps),
+        "--policy-n-action-steps",
+        str(args.policy_n_action_steps),
+        "--policy-num-steps",
+        str(args.policy_num_steps),
     ]
+    if args.record_loop_artifacts:
+        cmd.extend(
+            [
+                "--record-loop-artifacts",
+                "--artifact-width",
+                str(args.loop_artifact_width),
+                "--artifact-height",
+                str(args.loop_artifact_height),
+                "--artifact-fps",
+                str(args.loop_artifact_fps),
+                "--artifact-every-n-steps",
+                str(args.loop_artifact_every_n_steps),
+            ]
+        )
     if args.qwen_plan_json:
         cmd.extend(["--qwen-plan-json", str(args.qwen_plan_json)])
     elif args.qwen_response_json:
