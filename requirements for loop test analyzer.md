@@ -1,0 +1,289 @@
+# Requirements for Loop Test Analyzer
+
+This is the temporary working checklist for building the loop test analyzer.
+The user-facing term is "loop test" for closed-loop rollout evaluation.
+
+## Goal
+
+Build an interactive loop-test analysis tool that lets a human inspect why a
+policy rollout failed or succeeded. The tool should feel like a chat timeline:
+the left side shows what the policy/planner did and the right side shows what
+the robot arm did.
+
+The first target is SO101 Qwen-chain + SmolVLA loop tests, while keeping the
+schema general enough for baseline SmolVLA-only loop tests.
+
+## Current Artifact Reality
+
+Current Qwen-chain artifacts contain:
+
+- `qwen_closed_loop_eval_report.json`
+- `qwen_closed_loop_episode_000.jsonl`
+- Qwen plan summary
+- primitive/tool call identifiers
+- prompts
+- policy action vectors
+- motor-state observations
+- rewards
+- `tcp_to_target_dist`
+- termination/truncation flags
+
+Current artifacts do not yet contain:
+
+- saved policy input images
+- saved robot multi-view frames
+- per-iteration videos
+- raw Qwen request/response payloads for every run
+- explicit action chunk grouping
+- a normalized manifest shared by baseline and Qwen-chain runs
+
+## Core Concepts
+
+- Loop test: one closed-loop evaluation run for a policy/scenario/checkpoint.
+- Scenario: task definition such as `pick_up_cube`.
+- Policy: execution strategy such as `baseline_smolvla` or `qwen_chain`.
+- Episode: one environment rollout under a loop test.
+- Iteration: one policy-control cycle in the viewer timeline.
+- Tool call: a Qwen/planner-selected primitive call, if present.
+- Primitive: executable skill such as `move_over_cube_edge`.
+- Policy message: left-side timeline item with inputs and outputs.
+- Robot motion: right-side timeline item with frames, state, and motion metrics.
+
+## Required Data Model
+
+### Loop Test Manifest
+
+Each loop test export should have a top-level manifest:
+
+- `schema_version`
+- `loop_test_id`
+- `run_dir`
+- `created_at`
+- `scenario`
+- `policy_type`
+- `policy_label`
+- `checkpoint`
+- `training_step`
+- `validation_loss`
+- `success_rate`
+- `episodes_requested`
+- `episodes_completed`
+- `seed`
+- `report_path`
+- `episodes`
+
+### Episode Manifest
+
+Each episode should expose:
+
+- `episode_index`
+- `final_success`
+- `total_reward`
+- `steps`
+- `reset_info`
+- `final_info`
+- `timeline_path`
+- `media_root`
+- `iterations`
+
+### Timeline Row
+
+The viewer should be able to render from `timeline.jsonl` rows:
+
+- `type`: `planner_call`, `tool_call_start`, `policy_step`,
+  `tool_call_end`, `episode_end`
+- `iteration`
+- `global_step`
+- `primitive_step`
+- `tool_call`
+- `primitive_id`
+- `fn`
+- `policy`
+- `policy_input`
+- `policy_output`
+- `robot`
+- `media`
+- `source`
+
+### Policy Input
+
+Policy input should include:
+
+- task prompt
+- primitive prompt
+- motor/joint state
+- observation vector
+- input image paths by camera/view
+- image feature mapping
+- normalized/preprocessed image preview paths when available
+
+### Policy Output
+
+Policy output should include:
+
+- raw action vector
+- action chunk id
+- action chunk index
+- action chunk horizon
+- decoded motor target when available
+- inference latency when available
+- planner/tool call output when available
+
+### Robot Motion
+
+Robot motion should include:
+
+- joint state / observation
+- tcp pose if available
+- `tcp_to_target_dist`
+- object pose if available
+- gripper state if available
+- reward
+- success flag
+- termination/truncation flags
+- rendered frame paths by view
+- per-iteration video path when available
+
+### Qwen-Specific Fields
+
+Qwen-chain loop tests should additionally preserve:
+
+- Qwen model name
+- thinking mode
+- raw Qwen request JSON
+- raw Qwen response JSON
+- parsed plan JSON
+- ordered tool call list
+- primitive route policy path
+- per-tool start/end summary
+- replan/retry metadata when added later
+
+## Viewer Requirements
+
+### Navigation
+
+Left navigation should support:
+
+- loop test run selection
+- scenario filter
+- policy filter
+- checkpoint list
+- success/failure filter
+- validation loss sorting
+- latest/best checkpoint shortcuts
+
+### Detail View
+
+The detail view should show:
+
+- run header with checkpoint, step, policy, scenario, success, validation loss
+- Qwen plan summary if present
+- episode selector
+- timeline segmented by iteration
+- each iteration numbered `1`, `2`, `3`, ...
+- explicit "iteration end" marker before moving to the next policy/tool call
+
+### Timeline Layout
+
+For each row or grouped iteration:
+
+- left column: policy/planner message
+- right column: robot motion
+- policy side shows input prompt/state/images and output action chunks
+- robot side shows multi-view frame/video, reward, distance, and termination
+- Qwen-chain rows show tool calls nested under the planner message
+- baseline rows omit tool calls and show repeated policy iterations only
+
+### Diagnostics
+
+The UI should make failure causes easy to inspect:
+
+- distance trend
+- reward trend
+- action vector trend
+- primitive duration
+- max-step termination
+- tool call order
+- gripper/action saturation indicators when available
+- before/after thumbnails per iteration
+
+## Export Requirements
+
+The analyzer should export:
+
+- standalone HTML report
+- zip bundle
+- normalized manifest JSON
+- joined metrics CSV
+- episode summary CSV
+- primitive summary CSV
+- timeline JSONL
+- copied source reports/traces
+- copied media frames/videos when available
+
+## Implementation Plan
+
+### Phase 1: Existing Artifact Viewer
+
+- [ ] Define normalized loop-test manifest schema.
+- [ ] Add converter for current Qwen-chain reports and JSONL traces.
+- [ ] Generate `timeline.jsonl` from existing traces.
+- [ ] Preserve source report paths and trace paths.
+- [ ] Build a minimal local analyzer server.
+- [ ] Show loop tests in left navigation.
+- [ ] Show selected rollout as a two-column timeline.
+- [ ] Show Qwen plan/tool calls and per-step action/state/reward/distance.
+- [ ] Show clear media placeholders when frames/videos are unavailable.
+- [ ] Add unit tests for converter and server payloads.
+
+### Phase 2: Recording Upgrade
+
+- [ ] Add loop analyzer recording flags to closed-loop evaluators.
+- [ ] Save policy input images per step.
+- [ ] Save robot multi-view frames per step.
+- [ ] Save per-iteration videos.
+- [ ] Save raw Qwen request/response payloads.
+- [ ] Save action chunk metadata.
+- [ ] Emit normalized manifest directly from evaluator.
+- [ ] Add tests with lightweight mocked media.
+
+### Phase 3: Baseline Compatibility
+
+- [ ] Convert baseline SmolVLA closed-loop traces into the same schema.
+- [ ] Render baseline iterations without Qwen tool calls.
+- [ ] Add side-by-side comparison between baseline and Qwen-chain loop tests.
+- [ ] Add shared diagnostics across policy types.
+
+### Phase 4: Analysis Helpers
+
+- [ ] Add distance/reward/action charts.
+- [ ] Add failure heuristics.
+- [ ] Add iteration summaries.
+- [ ] Add export-to-HTML.
+- [ ] Add downloadable zip bundle from the UI.
+
+## First Implementation Slice
+
+Start with Phase 1 only:
+
+1. Converter from current Qwen-chain artifacts to normalized analyzer export.
+2. Local browser UI that reads the normalized export.
+3. Two-column chat-style timeline with policy left and robot right.
+4. No media recording yet; use placeholders and source JSON fields.
+
+This gives immediate value for the current failed loop tests and creates the
+schema that Phase 2 recording can target.
+
+## Verification Checklist
+
+- [ ] Converter runs on the current
+  `primitive_training_with_qwen_validation_v1/qwen_edge_primitives` artifacts.
+- [ ] Converter output includes all completed checkpoints.
+- [ ] Analyzer server returns loop-test list JSON.
+- [ ] Analyzer server returns detail JSON for one rollout.
+- [ ] Browser UI renders a selected Qwen-chain rollout.
+- [ ] Timeline groups steps by Qwen primitive/tool call.
+- [ ] UI clearly distinguishes evaluator `status=passed` from task success.
+- [ ] Unit tests pass.
+- [ ] If visual media is generated in later phases, inspect it manually before
+  claiming the phase complete.
