@@ -459,11 +459,12 @@ def _index_html() -> str:
       const firstMedia = steps.find(row => row.media?.available)?.media || {};
       const lastMedia = [...steps].reverse().find(row => row.media?.available)?.media || firstMedia;
       const contract = start.policy_output?.action_chunk_contract || steps[0]?.policy_output?.action_chunk || {};
-      const generated = contract.generated_count ?? "unknown";
-      const usedPerChunk = contract.used_per_chunk ?? "unknown";
+      const rolloutConfig = start.policy_output?.rollout_config || firstRawRolloutConfig(steps) || {};
+      const generated = rolloutConfig.chunk_size ?? contract.generated_count ?? "unknown";
+      const usedPerChunk = rolloutConfig.n_action_steps ?? contract.used_per_chunk ?? "unknown";
       const chunks = groupActionChunks(steps);
       const confirmed = Boolean(contract.confirmed_in_rollout);
-      const chunkLabel = chunks.length === 1 ? "chunk" : "chunks";
+      const groupLabel = chunks.length === 1 ? "display group" : "display groups";
       return `
         <div class="iteration">Iteration ${start.iteration}: ${escapeHtml(start.tool_call || "-")}</div>
         <div class="event">
@@ -472,10 +473,11 @@ def _index_html() -> str:
             <div class="metrics">
               <span class="pill policy">function ${escapeHtml(start.tool_call || "-")}</span>
               <span class="pill">primitive ${escapeHtml(start.primitive_id || "-")}</span>
-              <span class="pill ${confirmed ? "robot" : "warn"}">used per chunk (n_action_steps) ${usedPerChunk}</span>
-              <span class="pill warn">generated horizon (chunk_size) ${generated}</span>
-              <span class="pill robot">${chunks.length} ${chunkLabel}</span>
-              <span class="pill">executed env actions ${steps.length}</span>
+              <span class="pill ${confirmed ? "robot" : "warn"}">rollout n_action_steps ${usedPerChunk}</span>
+              <span class="pill warn">rollout chunk_size ${generated}</span>
+              <span class="pill">source ${escapeHtml(rolloutConfig.source || contract.rollout_config_source || "raw_record")}</span>
+              <span class="pill robot">${steps.length} raw rollout records</span>
+              <span class="pill">${chunks.length} ${groupLabel}</span>
             </div>
             <div class="muted">${escapeHtml(contract.note || "")}</div>
             ${renderPolicyInputImages(firstMedia.policy_input_images || {})}
@@ -485,17 +487,16 @@ def _index_html() -> str:
             </div>
             ${start.policy_input?.prompt ? `<div><strong>Prompt</strong><br>${escapeHtml(start.policy_input.prompt)}</div>` : ""}
             <details>
-              <summary>SmolVLA action chunks (${chunks.length})</summary>
+              <summary>Executed rollout records, grouped for display (${chunks.length})</summary>
               <div class="step-list">${chunks.map(renderActionChunk).join("")}</div>
             </details>
-            <details>
-              <summary>Rollout config evidence</summary>
+            <details open>
+              <summary>Raw rollout config evidence</summary>
               <pre>${escapeHtml(JSON.stringify({
-                confirmed_in_rollout: confirmed,
-                source: contract.rollout_config_source,
-                generated_count: contract.generated_count,
-                n_action_steps_used_per_chunk: contract.used_per_chunk,
-                note: contract.note
+                tool_call_start_rollout_config: rolloutConfig,
+                first_step_raw_policy_rollout_config: firstRawRolloutConfig(steps),
+                analyzer_contract: contract,
+                note: "Rows below preserve each raw rollout record under source.record."
               }, null, 2))}</pre>
             </details>
           </section>
@@ -527,6 +528,13 @@ def _index_html() -> str:
       const video = media.iteration_video_gif ? `<a class="video-link" href="${artifactUrl(media.iteration_video_gif)}" target="_blank">open iteration video</a>` : "";
       return `<div class="thumb"><img src="${artifactUrl(media.robot_frame)}" alt="robot frame"><div class="label">latest robot frame</div></div>${video}`;
     }
+    function firstRawRolloutConfig(steps) {
+      for (const row of steps || []) {
+        const config = row.source?.record?.policy_rollout_config;
+        if (config && typeof config === "object") return config;
+      }
+      return null;
+    }
     function groupActionChunks(steps) {
       const byChunk = new Map();
       for (const row of steps) {
@@ -542,17 +550,23 @@ def _index_html() -> str:
       const first = rows[0] || {};
       const last = rows[rows.length - 1] || {};
       const actionChunk = first.policy_output?.action_chunk || {};
-      const expected = actionChunk.used_per_chunk ?? "unknown";
-      const generated = actionChunk.generated_count ?? "unknown";
+      const rawConfig = first.source?.record?.policy_rollout_config || {};
+      const expected = rawConfig.n_action_steps ?? actionChunk.used_per_chunk ?? "unknown";
+      const generated = rawConfig.chunk_size ?? actionChunk.generated_count ?? "unknown";
       return `<div class="step-card">
         <div class="metrics">
-          <span class="pill policy">chunk ${chunk.chunkIndex + 1}</span>
-          <span class="pill warn">chunk_size ${generated}</span>
-          <span class="pill robot">used actions ${rows.length} / n_action_steps ${expected}</span>
+          <span class="pill policy">display group ${chunk.chunkIndex + 1}</span>
+          <span class="pill warn">raw chunk_size ${generated}</span>
+          <span class="pill robot">raw records ${rows.length} / rollout n_action_steps ${expected}</span>
           <span class="pill">global ${first.global_step ?? "-"}-${last.global_step ?? "-"}</span>
         </div>
+        <div class="muted">Grouped from rollout rows for readability; raw records are preserved below.</div>
         <details>
-          <summary>Substeps (${rows.length})</summary>
+          <summary>Raw rollout records: first + last</summary>
+          <pre>${escapeHtml(JSON.stringify({ first: first.source?.record || null, last: last.source?.record || null }, null, 2))}</pre>
+        </details>
+        <details>
+          <summary>Raw env action records (${rows.length})</summary>
           <div class="step-list">${rows.map(renderActionStep).join("")}</div>
         </details>
       </div>`;
@@ -569,7 +583,7 @@ def _index_html() -> str:
           <summary>action + motor state</summary>
           ${renderPolicyInputImages(row.media?.policy_input_images || {})}
           ${row.media?.robot_frame ? `<div class="thumb"><img src="${artifactUrl(row.media.robot_frame)}" alt="robot frame"><div class="label">robot frame</div></div>` : ""}
-          <pre>${escapeHtml(JSON.stringify({ action: row.policy_output?.action, observation: row.policy_input?.observation, info: row.robot?.info }, null, 2))}</pre>
+          <pre>${escapeHtml(JSON.stringify({ raw_rollout_record: row.source?.record || null, analyzer_row: { action: row.policy_output?.action, observation: row.policy_input?.observation, info: row.robot?.info } }, null, 2))}</pre>
         </details>
       </div>`;
     }
