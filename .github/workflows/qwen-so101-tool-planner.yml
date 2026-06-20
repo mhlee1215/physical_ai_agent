@@ -1,0 +1,64 @@
+name: Qwen SO101 Tool Planner
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/qwen-so101-tool-planner.yml"
+      - "configs/agent/qwen3_so101_tool_planner*.json"
+      - "docs/so101_qwen3_tool_planner.md"
+      - "scripts/build_so101_qwen_tool_plan.py"
+      - "scripts/run_so101_qwen_smolvla_e2e.py"
+      - "src/physical_ai_agent/agent_core/qwen_so101_tool_planner.py"
+      - "src/physical_ai_agent/policies/smolvla_real.py"
+      - "tests/test_qwen_so101_tool_planner.py"
+      - "tests/test_qwen_smolvla_e2e.py"
+      - "pyproject.toml"
+  push:
+    branches:
+      - "main"
+      - "codex/so101-qwen-tool-planner"
+    paths:
+      - ".github/workflows/qwen-so101-tool-planner.yml"
+      - "configs/agent/qwen3_so101_tool_planner*.json"
+      - "docs/so101_qwen3_tool_planner.md"
+      - "scripts/build_so101_qwen_tool_plan.py"
+      - "scripts/run_so101_qwen_smolvla_e2e.py"
+      - "src/physical_ai_agent/agent_core/qwen_so101_tool_planner.py"
+      - "src/physical_ai_agent/policies/smolvla_real.py"
+      - "tests/test_qwen_so101_tool_planner.py"
+      - "tests/test_qwen_smolvla_e2e.py"
+      - "pyproject.toml"
+
+jobs:
+  qwen-so101-tests:
+    name: Qwen planner and mock E2E tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run Qwen planner and offline mock E2E tests
+        env:
+          PYTHONPATH: src
+        run: |
+          python -B -m unittest \
+            tests.test_qwen_so101_tool_planner \
+            tests.test_qwen_smolvla_e2e
+
+      - name: Check Qwen SmolVLA E2E runner CLI
+        env:
+          PYTHONPATH: src
+        run: python -B scripts/run_so101_qwen_smolvla_e2e.py --help
