@@ -28,8 +28,9 @@ Config fields:
   `scripts/start_so101_training.py start` downloads only the configured
   subfolder before training and forwards the resolved local subfolder path as
   `dataset.root`.
-- `train_dataset.hf_merge_sources`: optional list of HF subfolders to download
-  and merge into `train_dataset.root` before training. Use this for combined
+- `train_dataset.hf_merge_sources` and `validation_dataset.hf_merge_sources`:
+  optional lists of HF subfolders to download and compose into the configured
+  roots before training. Use this virtual-merge declaration for combined
   multi-task runs while keeping each generated/uploaded dataset as a separate
   HF bundle subfolder.
 - `camera_contract`: human-readable expected model input mapping.
@@ -85,10 +86,10 @@ Hugging Face dataset workflow:
    the downloaded subfolder under `_workspace/hf_datasets/` as the effective
    LeRobot root.
 
-For a multi-task run, use `train_dataset.hf_merge_sources` as in
-`all_hf_train_pick_place_closed_loop.json`; the launcher downloads each source
-subfolder, merges the shards with `scripts/merge_so101_lerobot_shards.py`, and
-passes the merged dataset root to LeRobot.
+For a multi-task run, use `hf_merge_sources` as in
+`all_hf_train_pick_place_closed_loop.json` and `qwen_edge_primitives.json`; the
+launcher downloads each source subfolder, composes the shards, and passes the
+configured train/validation roots to LeRobot.
 
 For local export debugging, `--use-local-dataset-roots` ignores the HF fields
 and forwards the config's `root` values directly. For HF cache debugging,

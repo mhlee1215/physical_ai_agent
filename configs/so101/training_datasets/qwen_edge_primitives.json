@@ -9,7 +9,7 @@
     "root": "_workspace/so101_lerobot_merged/qwen_edge_primitives_train300_ego_wrist_256",
     "split": "train",
     "expected_episodes": 300,
-    "expected_frames": 7148,
+    "expected_frames": 10148,
     "hf_merge_sources": [
       {
         "name": "move_over_cube_edge_train",
@@ -18,7 +18,7 @@
         "hf_repo_type": "dataset",
         "hf_path_in_repo": "datasets/move_over_cube_edge/train",
         "expected_episodes": 100,
-        "expected_frames": 2200
+        "expected_frames": 5200
       },
       {
         "name": "align_fixed_jaw_cube_edge_train",
@@ -45,7 +45,7 @@
     "root": "_workspace/so101_lerobot_merged/qwen_edge_primitives_valid75_ego_wrist_256",
     "split": "validation",
     "expected_episodes": 75,
-    "expected_frames": 1787,
+    "expected_frames": 2535,
     "hf_merge_sources": [
       {
         "name": "move_over_cube_edge_val",
@@ -54,7 +54,7 @@
         "hf_repo_type": "dataset",
         "hf_path_in_repo": "datasets/move_over_cube_edge/validation",
         "expected_episodes": 25,
-        "expected_frames": 550
+        "expected_frames": 1300
       },
       {
         "name": "align_fixed_jaw_cube_edge_val",
@@ -72,7 +72,7 @@
         "hf_repo_type": "dataset",
         "hf_path_in_repo": "datasets/grip_from_edge_cube/validation",
         "expected_episodes": 25,
-        "expected_frames": 687
+        "expected_frames": 685
       }
     ]
   },

@@ -904,11 +904,24 @@ class SO101SmolVLAPipelineTest(TestCase):
                     ],
                 },
                 "validation_dataset": {
-                    "repo_id": "physical-ai-agent/validation",
-                    "root": "_workspace/local_validation",
-                    "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
-                    "hf_repo_type": "dataset",
-                    "hf_path_in_repo": "datasets/pick_and_place_cube/validation",
+                    "repo_id": "physical-ai-agent/merged-validation",
+                    "root": "_workspace/merged/validation",
+                    "hf_merge_sources": [
+                        {
+                            "name": "pick_cube_validation",
+                            "repo_id": "physical-ai-agent/source-a-validation",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/pick_cube/validation",
+                        },
+                        {
+                            "name": "pick_place_validation",
+                            "repo_id": "physical-ai-agent/source-b-validation",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/pick_and_place_cube/validation",
+                        },
+                    ],
                 },
                 "closed_loop": {
                     "eval_skill_mode": "pick_and_place_cube",
@@ -933,15 +946,28 @@ class SO101SmolVLAPipelineTest(TestCase):
 
             local_repo_dir = cache_root / "mhlee1215__so101-nexus-sim-dataset"
             merged_root = repo_root / "_workspace/merged/train"
-            self.assertEqual(snapshot_download.call_count, 3)
+            validation_merged_root = repo_root / "_workspace/merged/validation"
+            self.assertEqual(snapshot_download.call_count, 4)
             self.assertEqual(resolved["train_dataset"]["root"], str(merged_root))
+            self.assertEqual(resolved["validation_dataset"]["root"], str(validation_merged_root))
             self.assertEqual(len(resolved["train_dataset"]["hf_resolved_sources"]), 2)
+            self.assertEqual(len(resolved["validation_dataset"]["hf_resolved_sources"]), 2)
             self.assertIn(str(local_repo_dir / "datasets/pick_cube/train"), resolved["train_dataset"]["merged_from"])
             self.assertIn(str(local_repo_dir / "datasets/pick_and_place_cube/train"), resolved["train_dataset"]["merged_from"])
+            self.assertIn(
+                str(local_repo_dir / "datasets/pick_cube/validation"),
+                resolved["validation_dataset"]["merged_from"],
+            )
+            self.assertIn(
+                str(local_repo_dir / "datasets/pick_and_place_cube/validation"),
+                resolved["validation_dataset"]["merged_from"],
+            )
             self.assertIn("--output-root", resolved["train_dataset"]["merge_command"])
+            self.assertIn("--output-root", resolved["validation_dataset"]["merge_command"])
 
             train_args = start_so101_training._with_dataset_config([], resolved)
             self.assertIn(f"--dataset.root={merged_root}", train_args)
+            self.assertIn(f"--validation-dataset-root={validation_merged_root}", train_args)
             progress_cmd = start_so101_training._progress_monitor_command(
                 args=argparse.Namespace(
                     python=Path(sys.executable),
@@ -960,6 +986,13 @@ class SO101SmolVLAPipelineTest(TestCase):
                 dataset_config=resolved,
                 training_args=[],
                 train_pid_file=repo_root / "run/train.pid",
+                runtime_contract={
+                    "runtime_platform": "linux",
+                    "training_device": "cuda",
+                    "lightning_accelerator": "cuda",
+                    "closed_loop_device": "cuda",
+                    "closed_loop_mujoco_gl": "egl",
+                },
             )
             self.assertIn("--closed-loop-eval-skill-mode", progress_cmd)
             self.assertIn("pick_and_place_cube", progress_cmd)

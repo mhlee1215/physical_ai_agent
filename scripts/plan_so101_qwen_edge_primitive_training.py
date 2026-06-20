@@ -10,6 +10,7 @@ from typing import Any
 
 
 CONFIG = Path("configs/so101/training_datasets/qwen_edge_primitives.json")
+PLAN_NAME = "primitive training with qwen validation v1"
 
 
 def main() -> None:
@@ -55,6 +56,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
 
     return {
         "operation": "plan_so101_qwen_edge_primitive_training",
+        "name": PLAN_NAME,
         "scenario": "pick_up_cube",
         "execution_policy": "qwen_edge_chain",
         "training_policy": "single_smolvla_checkpoint_trained_on_three_primitive_datasets",
@@ -67,15 +69,14 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             source["name"] for source in config["validation_dataset"]["hf_merge_sources"]
         ],
         "notes": [
+            f"Canonical name: {PLAN_NAME}.",
             "This is one training run over the three primitive datasets together.",
             "The output is one SmolVLA checkpoint, not three separate primitive checkpoints.",
             "Closed-loop uses Qwen to switch primitive prompts while routing every primitive to the same checkpoint.",
-            "Prepare the merged validation root before training because the canonical launcher only auto-merges train hf_merge_sources.",
+            "Dataset composition is declared through hf_merge_sources; do not run a separate manual pre-merge step.",
+            "On local macOS, start training outside the Codex sandbox with runtime_platform=macos so the launcher selects MPS.",
         ],
-        "prepare_validation_merge_command": _merge_validation_command(
-            python=args.python,
-            config=config,
-        ),
+        "dataset_merge_policy": "launcher_managed_hf_merge_sources_for_train_and_validation",
         "train_command": _train_command(
             python=args.python,
             config_path=CONFIG,
@@ -146,29 +147,6 @@ def _train_command(
         f"--steps={int(steps)}",
         f"--save_freq={int(save_freq)}",
     ]
-    return _shell(argv)
-
-
-def _merge_validation_command(*, python: str, config: dict[str, Any]) -> str:
-    validation = config["validation_dataset"]
-    argv = [
-        "PYTHONPATH=src",
-        python,
-        "-B",
-        "scripts/merge_so101_lerobot_shards.py",
-        "--output-root",
-        validation["root"],
-        "--repo-id",
-        validation["repo_id"],
-        "--overwrite",
-    ]
-    for source in validation["hf_merge_sources"]:
-        argv.extend(
-            [
-                "--shard",
-                str(Path("_workspace/hf_datasets") / "mhlee1215__so101-nexus-sim-dataset" / source["hf_path_in_repo"]),
-            ]
-        )
     return _shell(argv)
 
 

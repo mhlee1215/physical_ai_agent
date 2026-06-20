@@ -192,7 +192,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
             download=not args.dry_run and not args.skip_hf_dataset_download,
             local_files_only=bool(args.hf_local_files_only),
         )
-        dataset_config = _prepare_merged_train_dataset(
+        dataset_config = _prepare_merged_datasets(
             dataset_config,
             repo_root=repo_root,
             python=args.python,
@@ -549,7 +549,7 @@ def _resolve_hf_dataset_source(
     }
 
 
-def _prepare_merged_train_dataset(
+def _prepare_merged_datasets(
     config: dict[str, Any] | None,
     *,
     repo_root: Path,
@@ -558,35 +558,64 @@ def _prepare_merged_train_dataset(
 ) -> dict[str, Any] | None:
     if not config:
         return config
-    train = config.get("train_dataset")
-    if not isinstance(train, dict):
+    for dataset_key in ("train_dataset", "validation_dataset"):
+        config = _prepare_merged_dataset(
+            config,
+            dataset_key=dataset_key,
+            repo_root=repo_root,
+            python=python,
+            merge=merge,
+        )
+    return config
+
+
+def _prepare_merged_dataset(
+    config: dict[str, Any],
+    *,
+    dataset_key: str,
+    repo_root: Path,
+    python: Path,
+    merge: bool,
+) -> dict[str, Any]:
+    dataset = config.get(dataset_key)
+    if not isinstance(dataset, dict):
         return config
-    sources = train.get("hf_resolved_sources")
+    sources = dataset.get("hf_resolved_sources")
     if not isinstance(sources, list) or not sources:
         return config
-    if "root" not in train or "repo_id" not in train:
-        raise SystemExit("merged train_dataset must define root and repo_id")
-    output_root = _resolve_root_path(repo_root, Path(str(train["root"])))
+    if "root" not in dataset or "repo_id" not in dataset:
+        raise SystemExit(f"merged {dataset_key} must define root and repo_id")
+    output_root = _resolve_root_path(repo_root, Path(str(dataset["root"])))
     shard_roots = [Path(str(source["root"])) for source in sources if isinstance(source, dict) and "root" in source]
     if len(shard_roots) != len(sources):
-        raise SystemExit("merged train_dataset sources must resolve to local roots")
+        raise SystemExit(f"merged {dataset_key} sources must resolve to local roots")
     command = [
         str(python),
         str(repo_root / "scripts" / "merge_so101_lerobot_shards.py"),
         "--output-root",
         str(output_root),
         "--repo-id",
-        str(train["repo_id"]),
+        str(dataset["repo_id"]),
         "--overwrite",
     ]
     for shard_root in shard_roots:
         command.extend(["--shard", str(shard_root)])
-    train["root"] = str(output_root)
-    train["merge_command"] = command
-    train["merged_from"] = [str(path) for path in shard_roots]
+    dataset["root"] = str(output_root)
+    dataset["merge_command"] = command
+    dataset["merged_from"] = [str(path) for path in shard_roots]
     if merge:
         subprocess.run(command, cwd=repo_root, check=True, text=True)
     return config
+
+
+def _prepare_merged_train_dataset(
+    config: dict[str, Any] | None,
+    *,
+    repo_root: Path,
+    python: Path,
+    merge: bool,
+) -> dict[str, Any] | None:
+    return _prepare_merged_datasets(config, repo_root=repo_root, python=python, merge=merge)
 
 
 def _resolve_root_path(repo_root: Path, path: Path) -> Path:

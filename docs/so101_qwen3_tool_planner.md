@@ -137,6 +137,8 @@ PYTHONPATH=src .venv/bin/python scripts/run_so101_qwen_closed_loop_eval.py \
 
 ## Primitive Dataset Training Plan
 
+Canonical name: `primitive training with qwen validation v1`.
+
 For `scenario=pick_up_cube` and `execution_policy=qwen_edge_chain`, train one
 SmolVLA checkpoint on the three primitive datasets together:
 
@@ -164,14 +166,20 @@ PYTHONPATH=src .venv/bin/python scripts/plan_so101_qwen_edge_primitive_training.
 
 The plan contains:
 
-- one train command over the merged primitive train set;
-- one validation-merge command for the three primitive validation splits;
-- one final closed-loop command that routes every Qwen primitive prompt to the
+- one train command over the three primitive train splits declared through
+  `hf_merge_sources`;
+- launcher-managed `hf_merge_sources` resolution for both train and validation,
+  without a separate manual pre-merge command;
+- one final Qwen validation command that routes every Qwen primitive prompt to the
   same trained checkpoint with `--policy-path`.
+
+On local macOS, run this outside the Codex sandbox with
+`--runtime-platform macos`; the launcher then selects MPS for training.
 
 The final evaluation row should be recorded as:
 
 ```text
+name=primitive training with qwen validation v1
 scenario=pick_up_cube
 execution_policy=qwen_edge_chain
 training_policy=single_smolvla_checkpoint_trained_on_three_primitive_datasets
