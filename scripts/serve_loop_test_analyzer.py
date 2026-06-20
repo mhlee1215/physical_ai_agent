@@ -254,10 +254,11 @@ def _index_html() -> str:
       --fail:#b42318; --fail-soft:#fee4e2; --ok:#027a48; --ok-soft:#dcfae6;
     }
     * { box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; }
     body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
-    .app { display: grid; grid-template-columns: 330px minmax(0, 1fr); min-height: 100vh; }
-    aside { border-right: 1px solid var(--border); background: #fff; padding: 14px; overflow: auto; }
-    main { overflow: auto; padding: 16px 18px 32px; }
+    .app { display: grid; grid-template-columns: 330px minmax(0, 1fr); height: 100vh; overflow: hidden; }
+    aside { border-right: 1px solid var(--border); background: #fff; padding: 14px; overflow: auto; min-height: 0; }
+    main { overflow: auto; min-height: 0; padding: 16px 18px 32px; }
     h1 { font-size: 18px; margin: 0 0 12px; }
     h2 { font-size: 16px; margin: 0; }
     .summary, .toolbar { display: grid; gap: 8px; margin-bottom: 12px; }
@@ -313,7 +314,8 @@ def _index_html() -> str:
     .chart canvas { width:100%; height:100%; display:block; }
     .chart-lib-warning { display:none; margin-top:8px; color:var(--fail); }
     .chart-lib-warning.show { display:block; }
-    @media (max-width: 850px) { .app { grid-template-columns: 1fr; } aside { border-right:0; border-bottom:1px solid var(--border); max-height:45vh; } .event { grid-template-columns:1fr; } }
+    @media (max-width: 850px) { .event { grid-template-columns:1fr; } }
+    @media (max-width: 640px) { .app { grid-template-columns: 1fr; grid-template-rows:minmax(160px, 42vh) minmax(0, 1fr); } aside { border-right:0; border-bottom:1px solid var(--border); } }
   </style>
 </head>
 <body>
