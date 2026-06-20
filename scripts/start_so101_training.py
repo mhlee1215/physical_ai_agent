@@ -988,6 +988,11 @@ def _validate_monitoring_contract(
         errors.append("closed-loop eval skill mode must be set in config closed_loop.eval_skill_mode or CLI.")
     if not _closed_loop_task_prompt(args, dataset_config):
         errors.append("closed-loop task prompt must be set in config closed_loop.task_prompt or CLI.")
+    if closed_loop_runner == "qwen_chain" and _closed_loop_valid_mask_checkpoint(args, dataset_config) is None:
+        errors.append(
+            "qwen_chain loop tests require closed_loop.valid_mask_checkpoint or "
+            "--closed-loop-valid-mask-checkpoint."
+        )
 
     steps_per_epoch = _steps_per_epoch(dataset_config, training_args)
     if steps_per_epoch is None:
@@ -1154,7 +1159,7 @@ def _progress_monitor_command(
     closed_loop_subgoal_sequence = getattr(args, "closed_loop_subgoal_sequence", None)
     if closed_loop_subgoal_sequence:
         cmd.extend(["--closed-loop-subgoal-sequence", str(closed_loop_subgoal_sequence)])
-    closed_loop_valid_mask_checkpoint = getattr(args, "closed_loop_valid_mask_checkpoint", None)
+    closed_loop_valid_mask_checkpoint = _closed_loop_valid_mask_checkpoint(args, dataset_config)
     if closed_loop_valid_mask_checkpoint:
         cmd.extend(["--closed-loop-valid-mask-checkpoint", str(closed_loop_valid_mask_checkpoint)])
     closed_loop_task_prompt = _closed_loop_task_prompt(args, dataset_config)
@@ -1216,6 +1221,16 @@ def _closed_loop_runner(args: argparse.Namespace, dataset_config: dict[str, Any]
     if dataset_config.get("execution_policy") == "qwen_edge_chain":
         return "qwen_chain"
     return "picklift"
+
+
+def _closed_loop_valid_mask_checkpoint(args: argparse.Namespace, dataset_config: dict[str, Any]) -> Path | None:
+    value = getattr(args, "closed_loop_valid_mask_checkpoint", None)
+    if value:
+        return Path(value)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("valid_mask_checkpoint"):
+        return Path(str(closed_loop["valid_mask_checkpoint"]))
+    return None
 
 
 def _qwen_response_json(dataset_config: dict[str, Any]) -> Path | None:

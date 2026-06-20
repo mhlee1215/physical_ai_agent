@@ -171,7 +171,10 @@ Use these execution-policy names separately from the scenario:
   optional valid-mask head.
 - `qwen_edge_chain`: Qwen plans the edge-grasp primitive chain
   `move -> align -> pick_up`, and SmolVLA primitive checkpoints execute robot
-  actions.
+  actions. Validation loop tests for this execution policy must use the
+  valid-mask termination head via `closed_loop.valid_mask_checkpoint` or
+  `--closed-loop-valid-mask-checkpoint`; fixed-length primitive execution is
+  not authoritative for this lane.
 
 Do not list `qwen_edge_chain` as a scenario. It is an execution policy/planner
 policy for a scenario such as `pick_up_cube`. A closed-loop row should therefore

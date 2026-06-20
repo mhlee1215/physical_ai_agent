@@ -115,6 +115,11 @@ paper-facing concepts:
   should not render PNG/MP4 media by default; generate frames/videos locally
   from saved traces when inspection needs them. Disable recording only for
   explicitly labeled lightweight smoke/debug runs, not for validation evidence.
+- User policy: Qwen-chain SO101 loop tests must use the valid-mask termination
+  head, not fixed-length primitive execution. Provide
+  `closed_loop.valid_mask_checkpoint` in dataset config or
+  `--closed-loop-valid-mask-checkpoint` on the launcher; missing valid-mask
+  configuration is a contract failure for validation loop tests.
 - RunPod experiment-data storage policy: past remote experiment results are not
   needed. Starting now, every new RunPod data-generation, training, evaluation,
   and closed-loop run must end with a local download, local verification, and
@@ -127,7 +132,9 @@ paper-facing concepts:
   dataset bundle `mhlee1215/so101-nexus-sim-dataset`, then start training
   through `scripts/start_so101_training.py`. Training configs now point at HF
   subfolders; the launcher downloads the configured subfolder from HF before
-  training and passes that downloaded path to LeRobot. For test/debug work only,
+  training and passes that downloaded path to LeRobot. For private HF dataset
+  upload/download, use `HF_TOKEN` from `.env` or the active runtime; do not rely
+  on `HF_API_TOKEN` as the canonical token name. For test/debug work only,
   `--use-local-dataset-roots` keeps the config's local `root` values and skips
   HF resolution. RunPod should be used as the CUDA training/evaluation worker,
   not the primary MuJoCo/LeRobot dataset exporter, unless local export is

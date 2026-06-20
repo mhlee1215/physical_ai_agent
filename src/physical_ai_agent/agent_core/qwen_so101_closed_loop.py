@@ -109,6 +109,10 @@ def run_closed_loop_plan(
     max_steps_per_primitive: int | None = None,
     policy_n_action_steps: int | None = 15,
     policy_num_steps: int | None = 10,
+    valid_mask_checkpoint: Path | None = None,
+    valid_mask_threshold: float = 0.5,
+    valid_mask_consecutive: int = 2,
+    valid_mask_head: Any | None = None,
     artifact_config: LoopArtifactConfig | None = None,
     env_factory: EnvFactory = SO101NexusEnv,
     policy_loader: PolicyLoader = _load_pretrained_policy,
@@ -117,6 +121,12 @@ def run_closed_loop_plan(
     started = perf_counter()
     output_dir.mkdir(parents=True, exist_ok=True)
     primitive_policy_paths = primitive_policy_paths or {}
+    if valid_mask_head is None:
+        if valid_mask_checkpoint is None:
+            raise ValueError("Qwen closed-loop tests require valid_mask_checkpoint")
+        from physical_ai_agent.policies.so101_valid_mask import load_valid_mask_head
+
+        valid_mask_head = load_valid_mask_head(valid_mask_checkpoint, device=None if device == "auto" else device)
     policy_routes = resolve_policy_routes(
         plan,
         default_policy_path=default_policy_path,
@@ -147,6 +157,9 @@ def run_closed_loop_plan(
                     max_steps_per_primitive=max_steps_per_primitive,
                     policy_n_action_steps=policy_n_action_steps,
                     policy_num_steps=policy_num_steps,
+                    valid_mask_head=valid_mask_head,
+                    valid_mask_threshold=valid_mask_threshold,
+                    valid_mask_consecutive=valid_mask_consecutive,
                     artifact_config=artifact_config or LoopArtifactConfig(),
                     batch_builder=batch_builder,
                 )
@@ -173,6 +186,12 @@ def run_closed_loop_plan(
         "success_rate": (sum(1 for value in successful if value) / len(successful)) if successful else None,
         "plan": plan_to_dict(plan),
         "policy_routes": [asdict(route) for route in policy_routes],
+        "valid_mask": {
+            "checkpoint": str(valid_mask_checkpoint) if valid_mask_checkpoint else None,
+            "threshold": float(valid_mask_threshold),
+            "consecutive": int(valid_mask_consecutive),
+            "required_for_loop_test": True,
+        },
         "policy_metadata": policy_metadata,
         "policy_rollout_config": _merged_policy_rollout_config(policy_metadata),
         "loop_artifact_config": asdict(artifact_config or LoopArtifactConfig()),
@@ -205,6 +224,9 @@ def _run_episode(
     max_steps_per_primitive: int | None,
     policy_n_action_steps: int | None,
     policy_num_steps: int | None,
+    valid_mask_head: Any,
+    valid_mask_threshold: float,
+    valid_mask_consecutive: int,
     artifact_config: LoopArtifactConfig,
     batch_builder: BatchBuilder,
 ) -> dict[str, Any]:
@@ -252,6 +274,19 @@ def _run_episode(
                 if max_steps_per_primitive is not None
                 else int(call.max_steps)
             )
+            valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget(
+                policy=policy,
+                obs=obs,
+                camera_pixels={},
+                instruction=call.prompt,
+                local_files_only=local_files_only,
+                batch_builder=batch_builder,
+                valid_mask_head=valid_mask_head,
+                max_horizon=step_budget,
+                threshold=valid_mask_threshold,
+                consecutive=valid_mask_consecutive,
+            )
+            step_budget = min(step_budget, valid_mask_budget)
             for primitive_step in range(step_budget):
                 record_media = _should_render_media(artifact_config, primitive_step)
                 camera_pixels = _render_policy_cameras(env, renderers) if renderers else {}
@@ -296,6 +331,11 @@ def _run_episode(
                     "prompt": call.prompt,
                     "policy_path": policy_path,
                     "policy_rollout_config": policy_rollout_config,
+                    "valid_mask": {
+                        "budget": int(step_budget),
+                        "reason": valid_mask_reason,
+                        "probs": valid_mask_probs,
+                    },
                     "observation": obs,
                     "action": action,
                     "reward": float(reward),
@@ -342,6 +382,11 @@ def _run_episode(
                     "prompt": call.prompt,
                     "policy_path": policy_path,
                     "policy_rollout_config": policy_rollout_config,
+                    "valid_mask": {
+                        "budget": int(step_budget),
+                        "reason": valid_mask_reason,
+                        "probs": valid_mask_probs,
+                    },
                     "steps": primitive_records,
                     "reward": primitive_reward,
                     "terminated": bool(terminated),
@@ -436,6 +481,91 @@ def _merged_policy_rollout_config(policy_metadata: dict[str, dict[str, Any]]) ->
     if all(config == first for config in configs):
         return first
     return {"per_policy": configs}
+
+
+def _valid_mask_primitive_budget(
+    *,
+    policy: Any,
+    obs: Any,
+    camera_pixels: dict[str, Any],
+    instruction: str,
+    local_files_only: bool,
+    batch_builder: BatchBuilder,
+    valid_mask_head: Any,
+    max_horizon: int,
+    threshold: float,
+    consecutive: int,
+) -> tuple[int, str, list[float]]:
+    if not hasattr(policy, "predict_action_chunk"):
+        raise ValueError("Qwen closed-loop valid-mask tests require policy.predict_action_chunk")
+    batch, _mapping = batch_builder(
+        policy,
+        obs,
+        camera_pixels=camera_pixels,
+        instruction=instruction,
+        local_files_only=local_files_only,
+    )
+    action_chunk = policy.predict_action_chunk(batch)
+    state_for_head = batch.get("observation.state", obs) if isinstance(batch, dict) else obs
+    valid_probs_tensor = valid_mask_head.predict_valid_probs(state_for_head, action_chunk)
+    valid_probs = _valid_probs_to_float_list(
+        valid_probs_tensor[0] if hasattr(valid_probs_tensor, "__getitem__") else valid_probs_tensor
+    )
+    horizon, reason = _execution_horizon_from_valid_probs(
+        valid_probs,
+        max_horizon=max_horizon,
+        threshold=threshold,
+        consecutive=consecutive,
+    )
+    if hasattr(policy, "reset"):
+        policy.reset()
+    return int(horizon), reason, [float(value) for value in valid_probs[: int(max_horizon)]]
+
+
+def _execution_horizon_from_valid_probs(
+    valid_probs: Any,
+    *,
+    max_horizon: int,
+    threshold: float,
+    consecutive: int,
+) -> tuple[int, str]:
+    horizon = max(1, int(max_horizon))
+    stop_index = _first_invalid_step(valid_probs, threshold=threshold, consecutive=consecutive)
+    if stop_index is None:
+        return horizon, "max_horizon"
+    return max(1, min(horizon, int(stop_index))), "valid_mask_stop"
+
+
+def _first_invalid_step(valid_probs: Any, *, threshold: float, consecutive: int) -> int | None:
+    probs = _valid_probs_to_float_list(valid_probs)
+    if not probs:
+        return None
+    consecutive = max(1, int(consecutive))
+    invalid_run = 0
+    for index, value in enumerate(probs):
+        if value < float(threshold):
+            invalid_run += 1
+            if invalid_run >= consecutive:
+                return index - consecutive + 1
+        else:
+            invalid_run = 0
+    return None
+
+
+def _valid_probs_to_float_list(value: Any) -> list[float]:
+    if hasattr(value, "detach") and hasattr(value, "cpu"):
+        return [float(item) for item in value.detach().cpu().reshape(-1).tolist()]
+    if hasattr(value, "reshape") and hasattr(value, "tolist"):
+        return [float(item) for item in value.reshape(-1).tolist()]
+    if isinstance(value, (list, tuple)):
+        out: list[float] = []
+        for item in value:
+            if isinstance(item, (list, tuple)):
+                out.extend(_valid_probs_to_float_list(item))
+            else:
+                out.append(float(item))
+        return out
+    return [float(value)]
 
 
 def _success_from_info(info: dict[str, Any]) -> bool | None:

@@ -53,6 +53,7 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                 device="cpu",
                 local_files_only=True,
                 max_steps_per_primitive=2,
+                valid_mask_head=FakeValidMaskHead(),
                 artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
                 env_factory=FakeEnv,
                 policy_loader=fake_policy_loader,
@@ -66,14 +67,17 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["episodes_completed"], 1)
-        self.assertEqual(report["episodes"][0]["steps"], 6)
+        self.assertEqual(report["episodes"][0]["steps"], 3)
         self.assertIsNone(report["episodes"][0]["media_root"])
         self.assertEqual(report["loop_artifact_config"]["enabled"], True)
         self.assertEqual(report["loop_artifact_config"]["render_media"], False)
         self.assertEqual(trace_rows[0]["media"]["render_mode"], "deferred")
         self.assertEqual(trace_rows[0]["media"]["policy_input_images"], {})
         self.assertIsNone(trace_rows[0]["media"]["robot_frame"])
-        self.assertEqual(report["success_rate"], 1.0)
+        self.assertEqual(report["success_rate"], 0.0)
+        self.assertEqual(report["valid_mask"]["required_for_loop_test"], True)
+        self.assertEqual(trace_rows[0]["valid_mask"]["budget"], 1)
+        self.assertEqual(trace_rows[0]["valid_mask"]["reason"], "valid_mask_stop")
         self.assertEqual(report["policy_rollout_config"]["chunk_size"], 50)
         self.assertEqual(report["policy_rollout_config"]["n_action_steps"], 15)
         self.assertEqual(report["policy_rollout_config"]["num_steps"], 10)
@@ -81,10 +85,7 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
             primitive_ids,
             [
                 "move_over_cube_edge",
-                "move_over_cube_edge",
                 "align_fixed_jaw_cube_edge",
-                "align_fixed_jaw_cube_edge",
-                "grip_from_edge_cube",
                 "grip_from_edge_cube",
             ],
         )
@@ -124,6 +125,16 @@ class FakePolicy:
     def select_action(self, batch):
         del batch
         return [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+    def predict_action_chunk(self, batch):
+        del batch
+        return [[[0.0] * 6 for _index in range(50)]]
+
+
+class FakeValidMaskHead:
+    def predict_valid_probs(self, state, action_chunk):
+        del state, action_chunk
+        return [[1.0, 0.1, 0.1, *([0.0] * 47)]]
 
 
 def fake_policy_loader(policy_path: str, local_files_only: bool, device: str) -> FakePolicy:

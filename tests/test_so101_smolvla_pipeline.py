@@ -361,6 +361,9 @@ class SO101SmolVLAPipelineTest(TestCase):
                 closed_loop_steps=2,
                 policy_n_action_steps=15,
                 policy_num_steps=10,
+                closed_loop_valid_mask_checkpoint=Path("/tmp/valid_mask_head.pt"),
+                closed_loop_valid_mask_threshold=0.5,
+                closed_loop_valid_mask_consecutive=2,
                 record_loop_artifacts=True,
                 loop_artifact_width=128,
                 loop_artifact_height=128,
@@ -406,6 +409,8 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(captured_cmd[captured_cmd.index("--policy-n-action-steps") + 1], "15")
         self.assertIn("--policy-num-steps", captured_cmd)
         self.assertEqual(captured_cmd[captured_cmd.index("--policy-num-steps") + 1], "10")
+        self.assertIn("--valid-mask-checkpoint", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--valid-mask-checkpoint") + 1], "/tmp/valid_mask_head.pt")
         self.assertIn("--record-loop-artifacts", captured_cmd)
         self.assertEqual(captured_cmd[captured_cmd.index("--artifact-width") + 1], "128")
 
@@ -1243,6 +1248,13 @@ class SO101SmolVLAPipelineTest(TestCase):
                     qwen_response_json=None,
                     qwen_plan_json=None,
                     qwen_object="green cube",
+                    closed_loop_subgoal_chain_mode="off",
+                    closed_loop_fixed_subgoal_chunks=1,
+                    closed_loop_valid_mask_threshold=0.5,
+                    closed_loop_valid_mask_consecutive=2,
+                    closed_loop_valid_mask_checkpoint=Path("/tmp/valid_mask_head.pt"),
+                    closed_loop_policy_n_action_steps=15,
+                    closed_loop_policy_num_steps=10,
                 ),
                 repo_root=repo_root,
                 run_dir=repo_root / "run",
@@ -1385,6 +1397,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     closed_loop_fixed_subgoal_chunks=1,
                     closed_loop_valid_mask_threshold=0.5,
                     closed_loop_valid_mask_consecutive=2,
+                    closed_loop_valid_mask_checkpoint=Path("/tmp/valid_mask_head.pt"),
                     closed_loop_policy_n_action_steps=15,
                     closed_loop_policy_num_steps=10,
                 ),
@@ -1408,10 +1421,21 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--loop-artifact-width", progress_cmd)
             self.assertIn("--qwen-response-json", progress_cmd)
             self.assertIn("configs/agent/qwen3_so101_tool_planner_mock_response.json", progress_cmd)
+            self.assertIn("--closed-loop-valid-mask-checkpoint", progress_cmd)
+            self.assertIn("/tmp/valid_mask_head.pt", progress_cmd)
             self.assertIn("--policy-n-action-steps", progress_cmd)
             self.assertIn("15", progress_cmd)
             self.assertIn("--policy-num-steps", progress_cmd)
             self.assertIn("10", progress_cmd)
+
+    def test_qwen_edge_dataset_config_requires_valid_mask_checkpoint(self) -> None:
+        config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
+        closed_loop = config["closed_loop"]
+
+        self.assertEqual(config["execution_policy"], "qwen_edge_chain")
+        self.assertEqual(closed_loop["execution_policy"], "qwen_edge_chain")
+        self.assertIn("valid_mask_checkpoint", closed_loop)
+        self.assertTrue(str(closed_loop["valid_mask_checkpoint"]).endswith("valid_mask_head.pt"))
 
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (

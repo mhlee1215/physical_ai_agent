@@ -370,6 +370,8 @@ def _run_qwen_chain_closed_loop_eval(
     checkpoint: str,
     policy_path: Path,
 ) -> dict[str, Any]:
+    if args.closed_loop_valid_mask_checkpoint is None:
+        raise RuntimeError("qwen_chain closed-loop requires --closed-loop-valid-mask-checkpoint")
     output_dir = run_dir / "closed_loop_evals" / f"qwen_chain_seed{args.closed_loop_seed}_{checkpoint}"
     cmd = [
         args.python,
@@ -396,6 +398,12 @@ def _run_qwen_chain_closed_loop_eval(
         str(args.policy_n_action_steps),
         "--policy-num-steps",
         str(args.policy_num_steps),
+        "--valid-mask-checkpoint",
+        str(args.closed_loop_valid_mask_checkpoint),
+        "--valid-mask-threshold",
+        str(args.closed_loop_valid_mask_threshold),
+        "--valid-mask-consecutive",
+        str(args.closed_loop_valid_mask_consecutive),
     ]
     if args.record_loop_artifacts:
         cmd.extend(

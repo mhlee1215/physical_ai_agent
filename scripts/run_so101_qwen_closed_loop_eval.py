@@ -53,6 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps-per-primitive", type=int, default=None)
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--policy-num-steps", type=int, default=10)
+    parser.add_argument("--valid-mask-checkpoint", type=Path)
+    parser.add_argument("--valid-mask-threshold", type=float, default=0.5)
+    parser.add_argument("--valid-mask-consecutive", type=int, default=2)
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--render-loop-media",
@@ -91,6 +94,8 @@ def main() -> None:
             policy_routes=routes,
         )
     else:
+        if args.valid_mask_checkpoint is None:
+            raise SystemExit("--valid-mask-checkpoint is required for Qwen closed-loop tests")
         report = run_closed_loop_plan(
             plan=plan,
             output_dir=args.output_dir,
@@ -104,6 +109,9 @@ def main() -> None:
             max_steps_per_primitive=args.max_steps_per_primitive,
             policy_n_action_steps=args.policy_n_action_steps,
             policy_num_steps=args.policy_num_steps,
+            valid_mask_checkpoint=args.valid_mask_checkpoint,
+            valid_mask_threshold=args.valid_mask_threshold,
+            valid_mask_consecutive=args.valid_mask_consecutive,
             artifact_config=LoopArtifactConfig(
                 enabled=bool(args.record_loop_artifacts),
                 render_media=bool(args.render_loop_media),

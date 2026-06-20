@@ -250,6 +250,12 @@ policy is:
   `--mujoco-gl=egl`. `--runtime-platform auto` detects the host. Before a
   training PR is treated as ready, dry-run both macOS and Linux profiles or run
   the targeted unit tests that assert these command contracts.
+- Qwen-chain SO101 loop tests must use the valid-mask termination head, not
+  fixed-length primitive execution. Provide `closed_loop.valid_mask_checkpoint`
+  in the dataset config or pass `--closed-loop-valid-mask-checkpoint` through
+  `scripts/start_so101_training.py`. Missing valid-mask configuration is a
+  validation-loop contract failure, not a warning. Lightweight smoke/debug runs
+  may bypass this only when explicitly labeled non-authoritative.
 - SO101 SmolVLA training configs must enable moderate train-time augmentation
   by default. The current moderate preset is `state_jitter_std=0.003`,
   `state_dropout_prob=0.02`, `image_patch_mask_ratio=0.15`,
@@ -291,7 +297,10 @@ policy is:
   verification, then upload to the HF dataset bundle
   `mhlee1215/so101-nexus-sim-dataset`. Training must start through
   `scripts/start_so101_training.py`, whose dataset config resolver downloads
-  the configured HF subfolder before handing the local path to LeRobot. RunPod
+  the configured HF subfolder before handing the local path to LeRobot. Private
+  HF dataset uploads/downloads must authenticate with `HF_TOKEN` from `.env` or
+  the active runtime environment; `HF_API_TOKEN` is not the canonical variable
+  for this harness. Never write token values to repo docs, logs, or PRs. RunPod
   should not be the primary MuJoCo/LeRobot teacher-data exporter because remote
   export on the network volume is slow and does not benefit much from the GPU.
   Use RunPod-side dataset generation only when local export is blocked, when a

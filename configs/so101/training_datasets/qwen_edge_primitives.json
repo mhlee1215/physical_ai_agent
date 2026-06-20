@@ -113,6 +113,7 @@
     "scenario": "pick_up_cube",
     "execution_policy": "qwen_edge_chain",
     "task_prompt": "pick and lift the green cube",
+    "valid_mask_checkpoint": "_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt",
     "success_metric": "qwen_edge_chain final success/grasp/lift metrics"
   }
 }
