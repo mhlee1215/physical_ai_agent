@@ -797,8 +797,8 @@ def _index_html() -> str:
             <div class="metrics">
               <span class="pill policy">function ${escapeHtml(start.tool_call || "-")}</span>
               <span class="pill">primitive ${escapeHtml(start.primitive_id || "-")}</span>
-              <span class="pill ${confirmed ? "robot" : "warn"}">rollout n_action_steps ${usedPerChunk}</span>
-              <span class="pill warn">rollout chunk_size ${generated}</span>
+              <span class="pill ${confirmed ? "robot" : "warn"}">executed n_action_steps ${usedPerChunk}</span>
+              <span class="pill warn">VLA generated chunk_size ${generated}</span>
               <span class="pill">source ${escapeHtml(rolloutConfig.source || contract.rollout_config_source || "raw_record")}</span>
               <span class="pill robot">${steps.length} raw rollout records</span>
               <span class="pill">${chunks.length} ${groupLabel}</span>
@@ -880,11 +880,11 @@ def _index_html() -> str:
       return `<div class="step-card">
         <div class="metrics">
           <span class="pill policy">display group ${chunk.chunkIndex + 1}</span>
-          <span class="pill warn">raw chunk_size ${generated}</span>
-          <span class="pill robot">raw records ${rows.length} / rollout n_action_steps ${expected}</span>
+          <span class="pill warn">VLA generated ${generated} actions</span>
+          <span class="pill robot">executed raw records ${rows.length} / n_action_steps ${expected}</span>
           <span class="pill">global ${first.global_step ?? "-"}-${last.global_step ?? "-"}</span>
         </div>
-        <div class="muted">Grouped from rollout rows for readability; raw records are preserved below.</div>
+        <div class="muted">One SmolVLA action chunk may contain more actions than the closed-loop harness executes; this group shows the executed raw rollout records only.</div>
         <details>
           <summary>Raw rollout records: first + last</summary>
           <pre>${escapeHtml(JSON.stringify({ first: first.source?.record || null, last: last.source?.record || null }, null, 2))}</pre>
