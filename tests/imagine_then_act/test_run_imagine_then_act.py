@@ -817,7 +817,7 @@ class ImagineThenActTest(TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("invalid choice", completed.stderr)
 
-    def test_progress_proxy_selector_requires_nonbaseline_to_beat_baseline(self) -> None:
+    def test_progress_proxy_selector_requires_nonbaseline_to_clear_baseline_margin(self) -> None:
         module = _load_instrumented_module()
         candidates = [
             {"candidate_id": "candidate_00_policy_only", "progress_proxy_score": 0.5},
@@ -833,7 +833,16 @@ class ImagineThenActTest(TestCase):
         )
         self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
         self.assertTrue(metadata["progress_proxy_available"])
-        self.assertIn("did not beat baseline", metadata["reason"])
+        self.assertIn("did not clear", metadata["reason"])
+
+        candidates[2]["progress_proxy_score"] = 0.53
+        selected, metadata = module.choose_ita_candidate_with_metadata(
+            candidates,
+            selector_strategy="progress_proxy_or_baseline",
+        )
+        self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
+        self.assertEqual(metadata["best_nonbaseline_progress_proxy_score"], 0.53)
+        self.assertEqual(metadata["baseline_switch_margin"], 0.05)
 
         candidates[2]["progress_proxy_score"] = 0.75
         selected, metadata = module.choose_ita_candidate_with_metadata(
@@ -843,7 +852,7 @@ class ImagineThenActTest(TestCase):
         self.assertEqual(selected["candidate_id"], "candidate_02")
         self.assertEqual(metadata["baseline_progress_proxy_score"], 0.5)
         self.assertEqual(metadata["selected_progress_proxy_score"], 0.75)
-        self.assertIn("beat baseline", metadata["reason"])
+        self.assertIn("cleared baseline switch margin", metadata["reason"])
 
     def test_progress_proxy_selector_falls_back_without_baseline_proxy(self) -> None:
         module = _load_instrumented_module()
@@ -861,6 +870,94 @@ class ImagineThenActTest(TestCase):
         self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
         self.assertTrue(metadata["progress_proxy_available"])
         self.assertIn("baseline proxy is missing", metadata["reason"])
+
+    def test_adaptive_progress_proxy_selector_allows_high_score_medium_margin(self) -> None:
+        module = _load_instrumented_module()
+        candidates = [
+            {"candidate_id": "candidate_00_policy_only", "progress_proxy_score": 0.67},
+            {"candidate_id": "candidate_01", "progress_proxy_score": 0.704},
+            {"candidate_id": "candidate_02", "progress_proxy_score": 0.69},
+        ]
+
+        selected, metadata = module.choose_ita_candidate_with_metadata(
+            candidates,
+            selector_strategy="progress_proxy_or_baseline",
+        )
+        self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
+        self.assertIn("did not clear", metadata["reason"])
+
+        selected, metadata = module.choose_ita_candidate_with_metadata(
+            candidates,
+            selector_strategy="adaptive_progress_proxy_or_baseline",
+        )
+        self.assertEqual(selected["candidate_id"], "candidate_01")
+        self.assertEqual(metadata["adaptive_switch_margin"], 0.03)
+        self.assertEqual(metadata["adaptive_absolute_score"], 0.70)
+        self.assertIn("adaptive observation progress proxy", metadata["reason"])
+
+    def test_adaptive_progress_proxy_selector_rejects_low_absolute_medium_margin(self) -> None:
+        module = _load_instrumented_module()
+        candidates = [
+            {"candidate_id": "candidate_00_policy_only", "progress_proxy_score": 0.45},
+            {"candidate_id": "candidate_01", "progress_proxy_score": 0.49},
+        ]
+
+        selected, metadata = module.choose_ita_candidate_with_metadata(
+            candidates,
+            selector_strategy="adaptive_progress_proxy_or_baseline",
+        )
+        self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
+        self.assertIn("did not clear", metadata["reason"])
+
+    def test_adaptive_progress_proxy_selector_keeps_baseline_for_left_right_pair_assignment(self) -> None:
+        module = _load_instrumented_module()
+        candidates = [
+            {"candidate_id": "candidate_00_policy_only", "progress_proxy_score": 0.50, "is_baseline": True},
+            {
+                "candidate_id": "candidate_01",
+                "progress_proxy_score": 0.95,
+                "candidate_prompt": {
+                    "subgoal_text": "Place the white mug on the left plate and the yellow mug on the right plate.",
+                    "target_object": "white mug and yellow mug",
+                    "target_region_or_point": "left plate and right plate",
+                    "stop_condition": "both mugs are on their respective plates",
+                },
+            },
+        ]
+
+        selected, metadata = module.choose_ita_candidate_with_metadata(
+            candidates,
+            selector_strategy="adaptive_progress_proxy_or_baseline",
+        )
+
+        self.assertEqual(selected["candidate_id"], "candidate_00_policy_only")
+        self.assertTrue(metadata["compound_objective_guardrail"])
+        self.assertIn("compound left/right assignment", metadata["reason"])
+
+    def test_adaptive_progress_proxy_selector_keeps_medium_margin_behavior_for_non_pair_assignment(self) -> None:
+        module = _load_instrumented_module()
+        candidates = [
+            {"candidate_id": "candidate_00_policy_only", "progress_proxy_score": 0.67, "is_baseline": True},
+            {
+                "candidate_id": "candidate_01",
+                "progress_proxy_score": 0.704,
+                "candidate_prompt": {
+                    "subgoal_text": "Place the white mug on the plate.",
+                    "target_object": "white mug",
+                    "target_region_or_point": "plate",
+                    "stop_condition": "white mug is on the plate",
+                },
+            },
+        ]
+
+        selected, metadata = module.choose_ita_candidate_with_metadata(
+            candidates,
+            selector_strategy="adaptive_progress_proxy_or_baseline",
+        )
+
+        self.assertEqual(selected["candidate_id"], "candidate_01")
+        self.assertNotIn("compound_objective_guardrail", metadata)
+        self.assertIn("adaptive observation progress proxy", metadata["reason"])
 
     def test_unknown_selector_strategy_is_rejected_in_internal_helper(self) -> None:
         module = _load_instrumented_module()
@@ -921,9 +1018,44 @@ class ImagineThenActTest(TestCase):
         self.assertEqual(decision["selected_candidate_id"], "candidate_01")
         self.assertFalse(decision["baseline_candidate_selected"])
         self.assertTrue(decision["progress_proxy_available"])
-        self.assertIn("beat baseline", decision["selector_reason"])
-        self.assertEqual(decision["baseline_progress_proxy_score"], 0.5)
+        self.assertIn("cleared baseline switch margin", decision["selector_reason"])
+        self.assertLess(decision["baseline_progress_proxy_score"], 0.5)
         self.assertEqual(decision["selected_progress_proxy_score"], 1.0)
+        self.assertEqual(
+            [row["candidate_id"] for row in decision["candidate_score_table"]],
+            ["candidate_00_policy_only", "candidate_01"],
+        )
+
+    def test_chunk_progress_proxy_prefers_consistent_progress_over_one_step_lunge(self) -> None:
+        module = _load_instrumented_module()
+        semantic_state = {
+            "eef_pos": [0.0, 0.0, 0.0],
+            "target_pos": [1.0, 0.0, 0.0],
+            "eef_to_target_dist": 1.0,
+            "target_object_key": "target_pos",
+        }
+
+        lunge_then_reverse = module.compute_observation_progress_proxy(
+            [
+                [[1.0, 0.0, 0.0]],
+                [[-1.0, 0.0, 0.0]],
+                [[-1.0, 0.0, 0.0]],
+            ],
+            semantic_state,
+        )
+        steady_progress = module.compute_observation_progress_proxy(
+            [
+                [[0.2, 0.0, 0.0]],
+                [[0.2, 0.0, 0.0]],
+                [[0.2, 0.0, 0.0]],
+            ],
+            semantic_state,
+        )
+
+        self.assertIsNotNone(lunge_then_reverse)
+        self.assertIsNotNone(steady_progress)
+        self.assertGreater(steady_progress["score"], lunge_then_reverse["score"])
+        self.assertGreater(lunge_then_reverse["reverse_penalty"], 0.0)
 
     def test_chunk_extraction_applies_postprocessors_for_batch1_chunk2_actiondim7(self) -> None:
         module = _load_instrumented_module()

@@ -1906,6 +1906,8 @@ def describes_completed_relation(text: str, *, manipulated_object: str, target_r
         return False
     if not all(token in normalized_text for token in target_region.split()):
         return False
+    if starts_with_intermediate_motion(normalized_text):
+        return False
     if describes_only_intermediate_relation(normalized_text, target_region=target_region):
         return False
     target_pattern = r"\s+(?:the\s+)?".join(re.escape(part) for part in target_region.split())
@@ -1924,6 +1926,7 @@ def describes_only_intermediate_relation(text: str, *, target_region: str) -> bo
     normalized_text = " ".join(str(text or "").lower().split())
     target_pattern = r"\s+(?:the\s+)?".join(re.escape(part) for part in target_region.split())
     incomplete_patterns = (
+        rf"\b(?:align|aligned|approach|approached|center|centered|move|moved|bring|brought)\b",
         rf"\b(?:align|aligned|approach|approached|move|moved|bring|brought)\s+(?:[^.;]*?)"
         rf"\b(?:toward|towards|near|close\s+to|with)\s+(?:the\s+)?{target_pattern}\b",
         rf"\b(?:close|near)\s+to\s+(?:the\s+)?{target_pattern}\b",
@@ -1937,6 +1940,19 @@ def describes_only_intermediate_relation(text: str, *, target_region: str) -> bo
     has_incomplete = any(re.search(pattern, normalized_text) for pattern in incomplete_patterns)
     has_completion = any(re.search(pattern, normalized_text) for pattern in completion_cues)
     return has_incomplete and not has_completion
+
+
+def starts_with_intermediate_motion(text: str) -> bool:
+    normalized_text = " ".join(str(text or "").lower().split())
+    if not normalized_text:
+        return False
+    return bool(
+        re.match(
+            r"^(?:first\s+)?(?:align|approach|center|move\s+toward|move\s+towards|bring|position\s+near|"
+            r"make\s+first\s+contact|pause\s+at)\b",
+            normalized_text,
+        )
+    )
 
 
 def contains_destination_as_manipulated_object(text: str, target_region: str) -> bool:
