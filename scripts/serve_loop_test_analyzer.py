@@ -310,8 +310,12 @@ def _index_html() -> str:
       const rewards = steps.map(row => row.robot?.reward).filter(value => typeof value === "number");
       const totalReward = rewards.reduce((sum, value) => sum + value, 0);
       const last = steps[steps.length - 1] || {};
-      const generated = "unknown";
-      const used = steps.length;
+      const contract = start.policy_output?.action_chunk_contract || steps[0]?.policy_output?.action_chunk || {};
+      const generated = contract.generated_count ?? "unknown";
+      const usedPerChunk = contract.used_per_chunk ?? "unknown";
+      const chunks = groupActionChunks(steps);
+      const confirmed = Boolean(contract.confirmed_in_rollout);
+      const chunkLabel = chunks.length === 1 ? "chunk" : "chunks";
       return `
         <div class="iteration">Iteration ${start.iteration}: ${escapeHtml(start.tool_call || "-")}</div>
         <div class="event">
@@ -320,17 +324,30 @@ def _index_html() -> str:
             <div class="metrics">
               <span class="pill policy">function ${escapeHtml(start.tool_call || "-")}</span>
               <span class="pill">primitive ${escapeHtml(start.primitive_id || "-")}</span>
-              <span class="pill warn">actions generated ${generated}</span>
-              <span class="pill robot">actions used ${used}</span>
+              <span class="pill ${confirmed ? "robot" : "warn"}">n_action_steps ${usedPerChunk}</span>
+              <span class="pill warn">generated per chunk ${generated}</span>
+              <span class="pill robot">${chunks.length} ${chunkLabel}</span>
+              <span class="pill">executed env actions ${steps.length}</span>
             </div>
+            <div class="muted">${escapeHtml(contract.note || "")}</div>
             <div class="tool-call">
               <strong>function + parameters</strong>
               <pre>${escapeHtml(JSON.stringify({ function: start.tool_call, parameters: start.tool_parameters || {} }, null, 2))}</pre>
             </div>
             ${start.policy_input?.prompt ? `<div><strong>Prompt</strong><br>${escapeHtml(start.policy_input.prompt)}</div>` : ""}
             <details>
-              <summary>Action steps (${used})</summary>
-              <div class="step-list">${steps.map(renderActionStep).join("")}</div>
+              <summary>SmolVLA action chunks (${chunks.length})</summary>
+              <div class="step-list">${chunks.map(renderActionChunk).join("")}</div>
+            </details>
+            <details>
+              <summary>Rollout config evidence</summary>
+              <pre>${escapeHtml(JSON.stringify({
+                confirmed_in_rollout: confirmed,
+                source: contract.rollout_config_source,
+                generated_count: contract.generated_count,
+                n_action_steps_used_per_chunk: contract.used_per_chunk,
+                note: contract.note
+              }, null, 2))}</pre>
             </details>
           </section>
           <section class="panel robot">
@@ -349,11 +366,42 @@ def _index_html() -> str:
         </div>
         <div class="iteration">Iteration ${start.iteration} end</div>`;
     }
+    function groupActionChunks(steps) {
+      const byChunk = new Map();
+      for (const row of steps) {
+        const chunk = row.policy_output?.action_chunk || {};
+        const key = Number.isInteger(chunk.chunk_index) ? chunk.chunk_index : 0;
+        if (!byChunk.has(key)) byChunk.set(key, []);
+        byChunk.get(key).push(row);
+      }
+      return Array.from(byChunk.entries()).sort((a, b) => a[0] - b[0]).map(([chunkIndex, rows]) => ({ chunkIndex, rows }));
+    }
+    function renderActionChunk(chunk) {
+      const rows = chunk.rows || [];
+      const first = rows[0] || {};
+      const last = rows[rows.length - 1] || {};
+      const actionChunk = first.policy_output?.action_chunk || {};
+      const expected = actionChunk.used_per_chunk ?? "unknown";
+      const generated = actionChunk.generated_count ?? "unknown";
+      return `<div class="step-card">
+        <div class="metrics">
+          <span class="pill policy">chunk ${chunk.chunkIndex + 1}</span>
+          <span class="pill warn">generated ${generated}</span>
+          <span class="pill robot">used ${rows.length} / ${expected}</span>
+          <span class="pill">global ${first.global_step ?? "-"}-${last.global_step ?? "-"}</span>
+        </div>
+        <details>
+          <summary>Substeps (${rows.length})</summary>
+          <div class="step-list">${rows.map(renderActionStep).join("")}</div>
+        </details>
+      </div>`;
+    }
     function renderActionStep(row) {
       return `<div class="step-card">
         <div class="metrics">
           <span class="pill">global ${row.global_step ?? "-"}</span>
           <span class="pill">primitive ${row.primitive_step ?? "-"}</span>
+          <span class="pill policy">chunk step ${row.policy_output?.action_chunk?.chunk_step_index ?? "-"}</span>
           <span class="pill robot">reward ${fmt(row.robot?.reward)}</span>
         </div>
         <details>

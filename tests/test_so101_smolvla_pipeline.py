@@ -359,12 +359,16 @@ class SO101SmolVLAPipelineTest(TestCase):
                 closed_loop_seed=98100,
                 policy_device="cpu",
                 closed_loop_steps=2,
+                policy_n_action_steps=15,
+                policy_num_steps=10,
                 local_files_only=True,
                 mujoco_gl="glfw",
             )
+            captured_cmd = []
 
             def fake_run(cmd, cwd, env, text, capture_output, check):
                 del cwd, env, text, capture_output, check
+                captured_cmd[:] = cmd
                 output_dir = Path(cmd[cmd.index("--output-dir") + 1])
                 output_dir.mkdir(parents=True)
                 (output_dir / "qwen_closed_loop_eval_report.json").write_text(
@@ -393,6 +397,10 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(report["operation"], "so101_qwen_closed_loop_eval")
         self.assertEqual(report["success_rate"], 1.0)
         self.assertEqual(report["eval_skill_mode"], "qwen_edge_chain")
+        self.assertIn("--policy-n-action-steps", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--policy-n-action-steps") + 1], "15")
+        self.assertIn("--policy-num-steps", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--policy-num-steps") + 1], "10")
 
     def test_virtual_merge_concat_dataset_len_is_sum(self) -> None:
         from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset

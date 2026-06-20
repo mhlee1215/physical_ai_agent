@@ -50,6 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     parser.add_argument("--allow-download", action="store_true")
     parser.add_argument("--max-steps-per-primitive", type=int, default=None)
+    parser.add_argument("--policy-n-action-steps", type=int, default=15)
+    parser.add_argument("--policy-num-steps", type=int, default=10)
     parser.add_argument(
         "--plan-only",
         action="store_true",
@@ -86,6 +88,8 @@ def main() -> None:
             device=args.device,
             local_files_only=not args.allow_download,
             max_steps_per_primitive=args.max_steps_per_primitive,
+            policy_n_action_steps=args.policy_n_action_steps,
+            policy_num_steps=args.policy_num_steps,
         )
     print(json.dumps(report, indent=2, sort_keys=True))
     if args.require_pass and report["status"] not in {"passed", "planned"}:

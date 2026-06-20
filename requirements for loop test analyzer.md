@@ -239,19 +239,34 @@ The analyzer should export:
 - [x] Add collapsible system prompt, tool calls, and action-step details.
 - [x] Add color-coded readability for policy, robot, warning, and failure state.
 
-Phase 1 limitation: legacy traces store one selected action per environment
-step. They do not preserve the full generated action chunk horizon, so the
-viewer shows `actions generated = unknown` and `actions used = recorded steps`.
-Phase 2 must record generated chunk counts directly from the evaluator.
+Phase 1 limitation: older legacy traces store one selected action per
+environment step. If the report did not explicitly record rollout
+`policy_rollout_config`, `n_action_steps=15` is not confirmed by that artifact
+even when the training monitor default was 15. The analyzer may read checkpoint
+config as fallback evidence, but it must label that as unconfirmed rollout
+evidence.
+
+Current requirement: Qwen-chain loop tests must explicitly record and display
+the SmolVLA action chunk contract:
+
+- generated action horizon: checkpoint/model `chunk_size` such as 50.
+- consumed action horizon: rollout `n_action_steps` such as 15.
+- evidence source: recorded rollout report versus checkpoint config fallback.
+- UI grouping: primitive env substeps are collapsed into SmolVLA action chunks,
+  with substeps nested under each chunk.
 
 ### Phase 2: Recording Upgrade
 
-- [ ] Add loop analyzer recording flags to closed-loop evaluators.
+- [x] Record Qwen-chain rollout `policy_rollout_config`.
+- [x] Pass `--policy-n-action-steps 15` into Qwen-chain training-time loop tests.
+- [x] Display chunk contract and collapse primitive substeps by action chunk.
+- [ ] Add loop analyzer recording flags to all closed-loop evaluators.
 - [ ] Save policy input images per step.
 - [ ] Save robot multi-view frames per step.
 - [ ] Save per-iteration videos.
 - [ ] Save raw Qwen request/response payloads.
-- [ ] Save action chunk metadata.
+- [x] Save Qwen-chain action chunk metadata.
+- [ ] Save raw predicted action chunks when evaluator exposes them.
 - [ ] Emit normalized manifest directly from evaluator.
 - [ ] Add tests with lightweight mocked media.
 

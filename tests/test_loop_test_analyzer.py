@@ -14,6 +14,22 @@ import serve_loop_test_analyzer as server
 
 
 class LoopTestAnalyzerTest(unittest.TestCase):
+    def test_qwen_chain_loop_test_id_keeps_nact15_variant_distinct(self) -> None:
+        self.assertEqual(
+            exporter._loop_test_id_from_report_path(
+                Path("closed_loop_evals/qwen_chain_seed98100_001792/qwen_closed_loop_eval_report.json"),
+                "001792",
+            ),
+            "qwen_chain_001792",
+        )
+        self.assertEqual(
+            exporter._loop_test_id_from_report_path(
+                Path("closed_loop_evals/qwen_chain_seed98100_nact15_001792/qwen_closed_loop_eval_report.json"),
+                "001792",
+            ),
+            "qwen_chain_nact15_001792",
+        )
+
     def test_build_export_converts_qwen_chain_trace_to_timeline(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -47,6 +63,11 @@ class LoopTestAnalyzerTest(unittest.TestCase):
                         "episodes_requested": 1,
                         "episodes_completed": 1,
                         "seed": 98100,
+                        "policy_rollout_config": {
+                            "chunk_size": 50,
+                            "n_action_steps": 15,
+                            "num_steps": 10,
+                        },
                         "plan": {
                             "model": "qwen3-vl-8b-instruct-mlx",
                             "task": "pick and lift the green cube",
@@ -85,8 +106,10 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         first_tool = next(row for row in timeline if row["type"] == "tool_call_start")
         self.assertEqual(first_tool["tool_parameters"]["primitive_id"], "move_over_cube_edge")
         first_step = next(row for row in timeline if row["type"] == "policy_step")
-        self.assertEqual(first_step["policy_output"]["action_chunk"]["used_count"], 1)
-        self.assertIn("generated chunk count was not recorded", first_step["policy_output"]["action_chunk"]["note"])
+        self.assertEqual(first_step["policy_output"]["action_chunk"]["generated_count"], 50)
+        self.assertEqual(first_step["policy_output"]["action_chunk"]["used_per_chunk"], 15)
+        self.assertTrue(first_step["policy_output"]["action_chunk"]["confirmed_in_rollout"])
+        self.assertEqual(detail["episodes"][0]["iterations"][0]["action_chunk_summary"]["chunk_count"], 1)
 
 
 def _record(step: int, fn: str, primitive_id: str) -> dict:

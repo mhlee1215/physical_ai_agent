@@ -74,7 +74,7 @@ def _build_loop_test(
 ) -> dict[str, Any]:
     checkpoint = _checkpoint_from_report_path(report_path)
     step = _checkpoint_to_step(checkpoint)
-    loop_test_id = f"qwen_chain_{checkpoint}"
+    loop_test_id = _loop_test_id_from_report_path(report_path, checkpoint)
     loop_dir = output_dir / "loop_tests" / loop_test_id
     loop_dir.mkdir(parents=True, exist_ok=True)
     source_dir = loop_dir / "source"
@@ -217,9 +217,9 @@ def _timeline_rows(
                 rows.append(_tool_end_row(iteration, current_key, record, checkpoint, step, episode_index))
             iteration += 1
             current_key = key
-            rows.append(_tool_start_row(iteration, record, checkpoint, step, episode_index))
+            rows.append(_tool_start_row(iteration, record, report, checkpoint, step, episode_index))
         primitive_step_counts[key] += 1
-        rows.append(_policy_step_row(iteration, record, checkpoint, step, episode_index))
+        rows.append(_policy_step_row(iteration, record, report, checkpoint, step, episode_index))
     if current_key is not None and records:
         rows.append(_tool_end_row(iteration, current_key, records[-1], checkpoint, step, episode_index))
     rows.append(
@@ -239,7 +239,15 @@ def _timeline_rows(
     return rows
 
 
-def _tool_start_row(iteration: int, record: dict[str, Any], checkpoint: str, step: int | None, episode_index: int) -> dict[str, Any]:
+def _tool_start_row(
+    iteration: int,
+    record: dict[str, Any],
+    report: dict[str, Any],
+    checkpoint: str,
+    step: int | None,
+    episode_index: int,
+) -> dict[str, Any]:
+    rollout_config = _rollout_config_for_record(record, report)
     return {
         "type": "tool_call_start",
         "iteration": iteration,
@@ -252,13 +260,30 @@ def _tool_start_row(iteration: int, record: dict[str, Any], checkpoint: str, ste
         "primitive_id": record.get("primitive_id"),
         "policy": {"type": "smolvla", "policy_path": record.get("policy_path")},
         "policy_input": {"prompt": record.get("prompt")},
-        "policy_output": {"tool_call": _tool_call_from_record(iteration, record)},
+        "policy_output": {
+            "tool_call": _tool_call_from_record(iteration, record),
+            "rollout_config": rollout_config,
+            "action_chunk_contract": _action_chunk_contract(rollout_config),
+        },
         "robot": None,
         "media": {"available": False, "reason": "legacy rollout has no saved frames or videos"},
     }
 
 
-def _policy_step_row(iteration: int, record: dict[str, Any], checkpoint: str, step: int | None, episode_index: int) -> dict[str, Any]:
+def _policy_step_row(
+    iteration: int,
+    record: dict[str, Any],
+    report: dict[str, Any],
+    checkpoint: str,
+    step: int | None,
+    episode_index: int,
+) -> dict[str, Any]:
+    rollout_config = _rollout_config_for_record(record, report)
+    contract = _action_chunk_contract(rollout_config)
+    primitive_step = _int_or_none(record.get("primitive_step"))
+    used_per_chunk = _int_or_none(contract.get("used_per_chunk"))
+    chunk_index = primitive_step // used_per_chunk if primitive_step is not None and used_per_chunk else None
+    chunk_step_index = primitive_step % used_per_chunk if primitive_step is not None and used_per_chunk else None
     return {
         "type": "policy_step",
         "iteration": iteration,
@@ -280,9 +305,10 @@ def _policy_step_row(iteration: int, record: dict[str, Any], checkpoint: str, st
         "policy_output": {
             "action": record.get("action"),
             "action_chunk": {
-                "generated_count": None,
-                "used_count": 1,
-                "note": "legacy trace stores one selected action per environment step; generated chunk count was not recorded",
+                **contract,
+                "chunk_index": chunk_index,
+                "chunk_step_index": chunk_step_index,
+                "executed_step_count": 1,
             },
         },
         "robot": {
@@ -332,6 +358,8 @@ def _iteration_summary(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 for step in timeline
                 if step.get("type") == "policy_step" and step.get("iteration") == row.get("iteration")
             ]
+            contract = ((row.get("policy_output") or {}).get("action_chunk_contract") or {})
+            chunks = _chunk_groups(action_steps)
             rows.append(
                 {
                     "iteration": row.get("iteration"),
@@ -340,14 +368,122 @@ def _iteration_summary(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "primitive_id": row.get("primitive_id"),
                     "start_global_step": row.get("global_step"),
                     "action_chunk_summary": {
-                        "generated_count": None,
-                        "used_count": len(action_steps),
+                        **contract,
+                        "chunk_count": len(chunks),
+                        "executed_action_steps": len(action_steps),
                         "recorded_policy_steps": len(action_steps),
-                        "note": "legacy trace does not preserve generated action chunk horizon",
+                        "chunks": chunks,
                     },
                 }
             )
     return rows
+
+
+def _rollout_config_for_record(record: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    for source, value in (
+        ("recorded_rollout_config", record.get("policy_rollout_config")),
+        ("recorded_report_config", report.get("policy_rollout_config")),
+        ("policy_metadata_config", _metadata_rollout_config(report, record.get("policy_path"))),
+    ):
+        if isinstance(value, dict) and value:
+            return {**value, "source": source, "confirmed_in_rollout": source.startswith("recorded_")}
+    config = _checkpoint_config(record.get("policy_path"))
+    if config:
+        return {**config, "source": "checkpoint_config_file", "confirmed_in_rollout": False}
+    return {
+        "chunk_size": None,
+        "n_action_steps": None,
+        "num_steps": None,
+        "source": "not_recorded",
+        "confirmed_in_rollout": False,
+    }
+
+
+def _metadata_rollout_config(report: dict[str, Any], policy_path: Any) -> dict[str, Any] | None:
+    metadata = report.get("policy_metadata") or {}
+    if policy_path in metadata and isinstance(metadata[policy_path], dict):
+        value = metadata[policy_path].get("rollout_config")
+        return value if isinstance(value, dict) else None
+    return None
+
+
+def _checkpoint_config(policy_path: Any) -> dict[str, Any]:
+    if not policy_path:
+        return {}
+    config_path = Path(str(policy_path)) / "pretrained_model" / "config.json"
+    if not config_path.exists():
+        config_path = Path(str(policy_path)) / "config.json"
+    if not config_path.exists():
+        return {}
+    try:
+        payload = _read_json(config_path)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {
+        "chunk_size": payload.get("chunk_size"),
+        "n_action_steps": payload.get("n_action_steps"),
+        "num_steps": payload.get("num_steps"),
+    }
+
+
+def _action_chunk_contract(rollout_config: dict[str, Any]) -> dict[str, Any]:
+    generated = _int_or_none(rollout_config.get("chunk_size"))
+    used = _int_or_none(rollout_config.get("n_action_steps"))
+    confirmed = bool(rollout_config.get("confirmed_in_rollout"))
+    source = rollout_config.get("source") or "not_recorded"
+    if confirmed:
+        note = "rollout report explicitly records this SmolVLA action horizon"
+    elif source == "checkpoint_config_file":
+        note = "checkpoint config only; legacy rollout did not explicitly record the applied horizon"
+    else:
+        note = "legacy rollout did not record SmolVLA chunk horizon"
+    return {
+        "generated_count": generated,
+        "used_per_chunk": used,
+        "rollout_config_source": source,
+        "confirmed_in_rollout": confirmed,
+        "note": note,
+    }
+
+
+def _chunk_groups(action_steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    chunks: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    no_chunk_rows = []
+    for row in action_steps:
+        action_chunk = ((row.get("policy_output") or {}).get("action_chunk") or {})
+        chunk_index = action_chunk.get("chunk_index")
+        if isinstance(chunk_index, int):
+            chunks[chunk_index].append(row)
+        else:
+            no_chunk_rows.append(row)
+    if no_chunk_rows and not chunks:
+        return [
+            {
+                "chunk_index": None,
+                "used_count": len(no_chunk_rows),
+                "start_global_step": no_chunk_rows[0].get("global_step"),
+                "end_global_step": no_chunk_rows[-1].get("global_step"),
+            }
+        ]
+    out = []
+    for chunk_index in sorted(chunks):
+        rows = chunks[chunk_index]
+        out.append(
+            {
+                "chunk_index": chunk_index,
+                "used_count": len(rows),
+                "start_global_step": rows[0].get("global_step"),
+                "end_global_step": rows[-1].get("global_step"),
+            }
+        )
+    return out
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _qwen_prompts(plan: dict[str, Any]) -> dict[str, Any]:
@@ -432,6 +568,19 @@ def _checkpoint_from_report_path(path: Path) -> str:
     if len(match) == 2 and match[1].isdigit():
         return match[1]
     return path.parent.name
+
+
+def _loop_test_id_from_report_path(path: Path, checkpoint: str) -> str:
+    parent = path.parent.name
+    canonical = f"qwen_chain_seed98100_{checkpoint}"
+    if parent == canonical:
+        return f"qwen_chain_{checkpoint}"
+    if parent.startswith("qwen_chain_") and parent.endswith(f"_{checkpoint}"):
+        suffix = parent.removeprefix("qwen_chain_").removesuffix(f"_{checkpoint}")
+        suffix = suffix.removeprefix("seed98100_").strip("_")
+        if suffix:
+            return f"qwen_chain_{suffix}_{checkpoint}"
+    return f"qwen_chain_{checkpoint}"
 
 
 def _checkpoint_to_step(checkpoint: str) -> int | None:

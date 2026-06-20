@@ -65,6 +65,9 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
         self.assertEqual(report["episodes_completed"], 1)
         self.assertEqual(report["episodes"][0]["steps"], 6)
         self.assertEqual(report["success_rate"], 1.0)
+        self.assertEqual(report["policy_rollout_config"]["chunk_size"], 50)
+        self.assertEqual(report["policy_rollout_config"]["n_action_steps"], 15)
+        self.assertEqual(report["policy_rollout_config"]["num_steps"], 10)
         self.assertEqual(
             primitive_ids,
             [
@@ -95,6 +98,9 @@ class FakeConfig:
     device = "cpu"
     image_features = {}
     robot_state_feature = None
+    chunk_size = 50
+    n_action_steps = 50
+    num_steps = 50
 
 
 class FakePolicy:

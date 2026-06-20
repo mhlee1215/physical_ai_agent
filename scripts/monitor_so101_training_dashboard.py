@@ -387,6 +387,10 @@ def _run_qwen_chain_closed_loop_eval(
         args.policy_device,
         "--max-steps-per-primitive",
         str(args.closed_loop_steps),
+        "--policy-n-action-steps",
+        str(args.policy_n_action_steps),
+        "--policy-num-steps",
+        str(args.policy_num_steps),
     ]
     if args.qwen_plan_json:
         cmd.extend(["--qwen-plan-json", str(args.qwen_plan_json)])

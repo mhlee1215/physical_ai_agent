@@ -97,6 +97,8 @@ def run_closed_loop_plan(
     device: str = "auto",
     local_files_only: bool = True,
     max_steps_per_primitive: int | None = None,
+    policy_n_action_steps: int | None = 15,
+    policy_num_steps: int | None = 10,
     env_factory: EnvFactory = SO101NexusEnv,
     policy_loader: PolicyLoader = _load_pretrained_policy,
     batch_builder: BatchBuilder = _build_batch_for_policy,
@@ -132,6 +134,8 @@ def run_closed_loop_plan(
                     device=device,
                     local_files_only=local_files_only,
                     max_steps_per_primitive=max_steps_per_primitive,
+                    policy_n_action_steps=policy_n_action_steps,
+                    policy_num_steps=policy_num_steps,
                     batch_builder=batch_builder,
                 )
             )
@@ -158,6 +162,7 @@ def run_closed_loop_plan(
         "plan": plan_to_dict(plan),
         "policy_routes": [asdict(route) for route in policy_routes],
         "policy_metadata": policy_metadata,
+        "policy_rollout_config": _merged_policy_rollout_config(policy_metadata),
         "episodes": episodes_out,
         "report_path": str(output_dir / "qwen_closed_loop_eval_report.json"),
     }
@@ -185,6 +190,8 @@ def _run_episode(
     device: str,
     local_files_only: bool,
     max_steps_per_primitive: int | None,
+    policy_n_action_steps: int | None,
+    policy_num_steps: int | None,
     batch_builder: BatchBuilder,
 ) -> dict[str, Any]:
     env = env_factory(env_id, None)
@@ -208,6 +215,15 @@ def _run_episode(
                 policy_path=policy_path,
                 local_files_only=local_files_only,
                 device=device,
+            )
+            _override_policy_rollout_config(
+                policy,
+                n_action_steps=policy_n_action_steps,
+                num_steps=policy_num_steps,
+            )
+            policy_rollout_config = _policy_rollout_config(policy)
+            policy_metadata.setdefault(policy_path, {}).update(
+                {"rollout_config": policy_rollout_config}
             )
             if hasattr(policy, "reset"):
                 policy.reset()
@@ -240,6 +256,7 @@ def _run_episode(
                     "primitive_id": call.primitive_id,
                     "prompt": call.prompt,
                     "policy_path": policy_path,
+                    "policy_rollout_config": policy_rollout_config,
                     "observation": obs,
                     "action": action,
                     "reward": float(reward),
@@ -259,6 +276,7 @@ def _run_episode(
                     "primitive_id": call.primitive_id,
                     "prompt": call.prompt,
                     "policy_path": policy_path,
+                    "policy_rollout_config": policy_rollout_config,
                     "steps": primitive_records,
                     "reward": primitive_reward,
                     "terminated": bool(terminated),
@@ -303,6 +321,53 @@ def _policy_for_route(
         policy_cache[policy_path] = policy
         policy_metadata[policy_path] = _policy_device_metadata(policy)
     return policy_cache[policy_path]
+
+
+def _override_policy_rollout_config(
+    policy: Any,
+    *,
+    n_action_steps: int | None,
+    num_steps: int | None,
+) -> None:
+    config = getattr(policy, "config", None)
+    if config is None:
+        return
+    if n_action_steps is not None:
+        if n_action_steps < 1:
+            raise ValueError(f"policy_n_action_steps must be positive, got {n_action_steps}")
+        chunk_size = getattr(config, "chunk_size", None)
+        if chunk_size is not None and n_action_steps > int(chunk_size):
+            raise ValueError(f"policy_n_action_steps={n_action_steps} exceeds chunk_size={chunk_size}")
+        config.n_action_steps = int(n_action_steps)
+    if num_steps is not None:
+        if num_steps < 1:
+            raise ValueError(f"policy_num_steps must be positive, got {num_steps}")
+        config.num_steps = int(num_steps)
+    if hasattr(policy, "reset"):
+        policy.reset()
+
+
+def _policy_rollout_config(policy: Any) -> dict[str, Any]:
+    config = getattr(policy, "config", None)
+    return {
+        "chunk_size": getattr(config, "chunk_size", None),
+        "n_action_steps": getattr(config, "n_action_steps", None),
+        "num_steps": getattr(config, "num_steps", None),
+    }
+
+
+def _merged_policy_rollout_config(policy_metadata: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    configs = [
+        value.get("rollout_config")
+        for value in policy_metadata.values()
+        if isinstance(value.get("rollout_config"), dict)
+    ]
+    if not configs:
+        return None
+    first = dict(configs[0])
+    if all(config == first for config in configs):
+        return first
+    return {"per_policy": configs}
 
 
 def _success_from_info(info: dict[str, Any]) -> bool | None:
