@@ -99,3 +99,38 @@ PYTHONPATH=src python scripts/run_so101_qwen_smolvla_e2e.py \
   --rollout-steps 1 \
   --require-pass
 ```
+
+## Closed-loop primitive-chain evaluation
+
+For training-time closed-loop checks, use the Qwen plan as the orchestration
+layer and route each primitive to its separately trained SmolVLA checkpoint:
+
+```bash
+PYTHONPATH=src python scripts/run_so101_qwen_closed_loop_eval.py \
+  --qwen-base-url http://127.0.0.1:1234/v1 \
+  --qwen-model qwen3-vl-8b-instruct-mlx \
+  --primitive-policy move_over_cube_edge=<move_checkpoint>/pretrained_model \
+  --primitive-policy align_fixed_jaw_cube_edge=<align_checkpoint>/pretrained_model \
+  --primitive-policy grip_from_edge_cube=<grip_checkpoint>/pretrained_model \
+  --episodes 8 \
+  --max-steps-per-primitive 90 \
+  --device cuda \
+  --output-dir _workspace/qwen_so101_closed_loop/train_eval
+```
+
+The runner keeps one SO101 environment alive per episode and executes the
+validated `move -> align -> pick_up` plan in sequence. Qwen chooses and
+validates the primitive chain; SmolVLA checkpoints produce the robot actions.
+
+Use `--plan-only` for CI/local preflight when SO101-Nexus or SmolVLA weights are
+not available:
+
+```bash
+PYTHONPATH=src python scripts/run_so101_qwen_closed_loop_eval.py \
+  --qwen-response-json configs/agent/qwen3_so101_tool_planner_mock_response.json \
+  --primitive-policy move_over_cube_edge=<move_checkpoint>/pretrained_model \
+  --primitive-policy align_fixed_jaw_cube_edge=<align_checkpoint>/pretrained_model \
+  --primitive-policy grip_from_edge_cube=<grip_checkpoint>/pretrained_model \
+  --plan-only \
+  --require-pass
+```
