@@ -425,6 +425,14 @@ def _index_html() -> str:
     .inline-player { border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#0b1220; margin-bottom:8px; }
     .inline-player video, .inline-player img { width:100%; display:block; aspect-ratio:4/3; object-fit:contain; background:#0b1220; }
     .inline-player .label { padding:5px 7px; color:#e5e7eb; font-size:12px; background:#111827; }
+    .sync-player { border:1px solid var(--border); border-radius:6px; padding:8px; background:#fff; margin-bottom:8px; }
+    .sync-player-views { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
+    .sync-view { border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#0b1220; min-width:0; }
+    .sync-view img { width:100%; display:block; aspect-ratio:4/3; object-fit:contain; background:#0b1220; }
+    .sync-view .label { padding:5px 7px; color:#e5e7eb; font-size:12px; background:#111827; }
+    .sync-controls { display:grid; grid-template-columns:auto minmax(0, 1fr) auto; align-items:center; gap:8px; margin-top:8px; }
+    .sync-controls input { padding:0; }
+    .sync-step { color:var(--muted); font-size:12px; white-space:nowrap; }
     .video-link { display:inline-block; margin-top:8px; color:var(--accent); font-weight:650; }
     .diagnostics { background:#fff; border:1px solid var(--border); border-left:4px solid var(--warn); border-radius:6px; padding:10px; margin-bottom:14px; }
     .diagnostics-head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -532,6 +540,7 @@ def _index_html() -> str:
         <div class="timeline">${renderTimeline(groupTimeline(ep.timeline || []))}</div>`;
       state.currentEpisode = ep;
       renderDiagnosticCharts(ep);
+      initSyncedPlayers();
       refreshMediaJobStatus();
     }
     function renderDiagnostics(ep) {
@@ -830,7 +839,7 @@ def _index_html() -> str:
           </section>
           <section class="panel robot">
             <h3>Robot motion</h3>
-            ${renderRobotMedia(lastMedia, last.policy_input?.image_feature_mapping || {})}
+            ${renderRobotMedia(steps)}
             <div class="metrics">
               <span class="pill robot">total reward ${fmt(totalReward)}</span>
               <span class="pill">last global ${last.global_step ?? "-"}</span>
@@ -851,11 +860,44 @@ def _index_html() -> str:
         <div class="thumb"><img src="${artifactUrl(path)}" alt="${escapeHtml(name)}"><div class="label">${escapeHtml(name)}</div></div>
       `).join("")}</div>`;
     }
-    function renderRobotMedia(media, imageFeatureMapping = {}) {
+    function renderRobotMedia(steps) {
+      const frames = syncedRobotFrames(steps || []);
+      if (frames.length) return renderSyncedRobotPlayer(frames);
+      const media = [...(steps || [])].reverse().find(row => row.media?.available)?.media || {};
       if (!media?.robot_frame) return `<div class="placeholder">${media?.reason || "robot frames unavailable"}</div>`;
       const player = renderInlineRobotPlayer(media);
-      const policyCameras = renderRobotPolicyCameras(media.policy_input_images || {}, imageFeatureMapping);
-      return `${player}${policyCameras}<div class="thumb"><img src="${artifactUrl(media.robot_frame)}" alt="robot frame"><div class="label">top_down · latest robot frame</div></div>`;
+      return `${player}<div class="thumb"><img src="${artifactUrl(media.robot_frame)}" alt="robot frame"><div class="label">top_down · latest robot frame</div></div>`;
+    }
+    function syncedRobotFrames(steps) {
+      return steps.map(row => {
+        const images = row.media?.policy_input_images || {};
+        const mapping = row.policy_input?.image_feature_mapping || {};
+        const camera1Name = mapping["observation.images.camera1"] || defaultCameraNameForFeature("observation.images.camera1");
+        const camera2Name = mapping["observation.images.camera2"] || defaultCameraNameForFeature("observation.images.camera2");
+        return {
+          step: row.global_step ?? row.primitive_step ?? 0,
+          camera1: images[camera1Name],
+          camera1Name,
+          camera2: images[camera2Name],
+          camera2Name,
+          topDown: row.media?.robot_frame,
+        };
+      }).filter(frame => frame.camera1 && frame.camera2 && frame.topDown);
+    }
+    function renderSyncedRobotPlayer(frames) {
+      const first = frames[0];
+      return `<div class="sync-player" data-frames='${escapeHtml(JSON.stringify(frames))}'>
+        <div class="sync-player-views">
+          <div class="sync-view"><img data-view="camera1" src="${artifactUrl(first.camera1)}" alt="camera1"><div class="label">camera1 · ${escapeHtml(first.camera1Name)}</div></div>
+          <div class="sync-view"><img data-view="camera2" src="${artifactUrl(first.camera2)}" alt="camera2"><div class="label">camera2 · ${escapeHtml(first.camera2Name)}</div></div>
+          <div class="sync-view"><img data-view="topDown" src="${artifactUrl(first.topDown)}" alt="top_down"><div class="label">top_down</div></div>
+        </div>
+        <div class="sync-controls">
+          <button type="button" data-action="play">Play</button>
+          <input type="range" min="0" max="${frames.length - 1}" value="0" step="1" data-action="seek">
+          <span class="sync-step">step ${first.step} · 1/${frames.length}</span>
+        </div>
+      </div>`;
     }
     function renderInlineRobotPlayer(media) {
       if (media?.iteration_video_mp4) {
@@ -900,6 +942,58 @@ def _index_html() -> str:
       if (feature.endsWith("camera1")) return "egocentric_cam";
       if (feature.endsWith("camera2")) return "wrist_cam";
       return "";
+    }
+    function initSyncedPlayers() {
+      document.querySelectorAll(".sync-player").forEach(player => {
+        if (player.dataset.ready === "1") return;
+        player.dataset.ready = "1";
+        let frames = [];
+        try {
+          frames = JSON.parse(player.dataset.frames || "[]");
+        } catch {
+          frames = [];
+        }
+        if (!frames.length) return;
+        let index = 0;
+        let timer = null;
+        const playButton = player.querySelector('[data-action="play"]');
+        const seek = player.querySelector('[data-action="seek"]');
+        const stepLabel = player.querySelector(".sync-step");
+        const setFrame = nextIndex => {
+          index = Math.max(0, Math.min(frames.length - 1, Number(nextIndex) || 0));
+          const frame = frames[index];
+          const camera1 = player.querySelector('[data-view="camera1"]');
+          const camera2 = player.querySelector('[data-view="camera2"]');
+          const topDown = player.querySelector('[data-view="topDown"]');
+          if (camera1) camera1.src = artifactUrl(frame.camera1);
+          if (camera2) camera2.src = artifactUrl(frame.camera2);
+          if (topDown) topDown.src = artifactUrl(frame.topDown);
+          if (seek) seek.value = String(index);
+          if (stepLabel) stepLabel.textContent = `step ${frame.step} · ${index + 1}/${frames.length}`;
+        };
+        const stop = () => {
+          if (timer) clearInterval(timer);
+          timer = null;
+          if (playButton) playButton.textContent = "Play";
+        };
+        const start = () => {
+          if (timer) return;
+          if (playButton) playButton.textContent = "Pause";
+          timer = setInterval(() => {
+            if (index >= frames.length - 1) {
+              stop();
+              return;
+            }
+            setFrame(index + 1);
+          }, 100);
+        };
+        playButton?.addEventListener("click", () => timer ? stop() : start());
+        seek?.addEventListener("input", event => {
+          stop();
+          setFrame(event.target.value);
+        });
+        setFrame(0);
+      });
     }
     function firstRawRolloutConfig(steps) {
       for (const row of steps || []) {
