@@ -181,6 +181,130 @@ sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download -
 
 This path avoids the macOS `mjpython` native-window trampoline by streaming the MuJoCo 3D scene, `wrist_cam`, `egocentric_cam`, `top_down`, action bars, image-feature mapping, chunk status, and inference latency to `http://127.0.0.1:8765`. It loads `lerobot/smolvla_base` in an isolated worker process, predicts an action chunk, executes 15 actions from that chunk, steps SO101-Nexus with each selected action, and refreshes the chunk after 15 executed actions so the sim does not blindly consume all 50 predicted actions from a stale observation.
 
+## Interactive SO101 Sim Control
+
+Run a lightweight command loop that Codex can drive without opening a GUI:
+
+```bash
+sh scripts/so101_interactive_sim.sh
+```
+
+Open the lightweight browser control GUI:
+
+```bash
+sh scripts/so101_interactive_sim.sh --gui --port 8766 --output-dir _workspace/so101_interactive/gui
+```
+
+Then open `http://127.0.0.1:8766`.
+
+Scripted usage for repeatable agent steps:
+
+```bash
+sh scripts/so101_interactive_sim.sh \
+  --output-dir _workspace/so101_interactive/demo \
+  --command observe \
+  --command 'nudge shoulder_pan 0.1' \
+  --command 'action [0,0,0,0,0,0]'
+```
+
+The command surface is intentionally close to the real SO-100/SO-101 six-joint order (`shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `wrist_roll`, `gripper`), but this path is simulation-only. It writes `session_manifest.json`, `latest_observation.json`, and `events.jsonl`; all artifacts keep `send_action_called=false` and `real_robot_safe_to_execute=false`. See `docs/sim_to_real_so101_interactive_contract.md` before using any sim candidate as input to a future real SO-101 adapter.
+
+## Visual RL Observation Wrapper
+
+Wrap SO101-Nexus Gymnasium environments so RL policies receive rendered camera images instead of only state vectors:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_smoke.py \
+  --env-id MuJoCoPickLift-v1 \
+  --camera-name wrist_cam \
+  --width 128 \
+  --height 128 \
+  --steps 4
+```
+
+The wrapper exposes `Dict(image=uint8[3,H,W], state=float32[N])` by default. Artifacts are written under `_workspace/so101_visual_rl/smoke/`, including `visual_rl_manifest.json` and per-step camera frames. Use `--no-state` for image-only observations or `--channel-last` for `uint8[H,W,3]`.
+
+Run a tiny CNN actor-critic against the same visual observation stream and apply one trainability update:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_policy_smoke.py \
+  --env-id MuJoCoPickLift-v1 \
+  --camera-name wrist_cam \
+  --width 64 \
+  --height 64 \
+  --rollout-steps 4
+```
+
+This writes `_workspace/so101_visual_rl/policy_smoke/visual_policy_smoke_manifest.json` plus `policy_obs_*.png` camera frames. The manifest records image/state/action shapes, rollout rewards, actor-critic losses, entropy, and gradient norm.
+
+Train the lightweight visual actor-critic and replay the learned checkpoint in the browser viewer:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_rl.py \
+  --env-id MuJoCoReach-v1 \
+  --camera-name wrist_cam \
+  --width 64 \
+  --height 64 \
+  --updates 80 \
+  --rollout-steps 32 \
+  --output-dir _workspace/so101_visual_rl/train_reach
+
+PYTHONPATH=src .venv/bin/python -B -m physical_ai_agent.sim.so101_live_viewer \
+  --env-id MuJoCoReach-v1 \
+  --policy visual-rl \
+  --visual-policy-checkpoint _workspace/so101_visual_rl/train_reach/so101_visual_rl_policy.pt \
+  --visual-policy-camera wrist_cam \
+  --browser-only \
+  --input-port 8766 \
+  --fps 12
+```
+
+The training run writes `training_manifest.json` and `so101_visual_rl_policy.pt`. The browser viewer shows the 3D scene, camera inputs, action bars, and the loaded visual-RL checkpoint name.
+
+For a more stable controller-prior policy, train a visual target-error estimator and use it through the Jacobian reach controller:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_reach_delta.py \
+  --env-id MuJoCoReach-v1 \
+  --camera-name top_down \
+  --width 64 \
+  --height 64 \
+  --samples 12000 \
+  --epochs 30 \
+  --output-dir _workspace/so101_visual_rl/reach_delta
+
+PYTHONPATH=src .venv/bin/python -B -m physical_ai_agent.sim.so101_live_viewer \
+  --env-id MuJoCoReach-v1 \
+  --policy visual-reach \
+  --visual-reach-checkpoint _workspace/so101_visual_rl/reach_delta/so101_visual_reach_delta.pt \
+  --visual-reach-camera top_down \
+  --browser-only \
+  --input-port 8766 \
+  --fps 12
+```
+
+This policy predicts the 3D target-minus-gripper error from visual observations and lets the Jacobian controller turn that estimate into joint actions.
+
+To save intermediate generation videos and loss/evaluation plots:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_reach_delta.py \
+  --env-id MuJoCoReach-v1 \
+  --camera-name top_down \
+  --width 64 \
+  --height 64 \
+  --samples 12000 \
+  --epochs 30 \
+  --eval-every 5 \
+  --eval-steps 100 \
+  --video-steps 100 \
+  --output-dir _workspace/so101_visual_rl/reach_delta_artifacts
+```
+
+This writes `plots/loss_curve.png`, `plots/eval_curve.png`, per-generation GIFs under `videos/`, and checkpoint snapshots under `checkpoints/`. Use the live viewer with `--max-steps N` to avoid an unbounded stream.
+
+Object pickup is possible through `MuJoCoPickLift-v1` or `MuJoCoPickAndPlace-v1`, but it needs a staged visual policy: object reach, grasp close, and lift/placing. The reach-delta trainer is the first stage; pickup should add object-relative delta, gripper command, and lift-height success metrics.
+
 ## Checkpoint 16
 
 Capture and preview the actual inputs available to policies before adding planner or verifier logic:
