@@ -323,6 +323,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("important/closed_loop_success_rate", constants)
 
     def test_training_monitor_uses_macos_safe_mujoco_gl(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
         import monitor_so101_training_dashboard as monitor
 
         with mock.patch.dict(os.environ, {"MUJOCO_GL": "egl", "PYOPENGL_PLATFORM": "egl"}, clear=False):
@@ -337,6 +338,61 @@ class SO101SmolVLAPipelineTest(TestCase):
             with mock.patch("platform.system", return_value="Darwin"):
                 self.assertEqual(monitor._mujoco_render_env("egl"), ("egl", "egl"))
                 self.assertEqual(monitor._mujoco_render_env("glfw"), ("glfw", None))
+
+    def test_training_monitor_qwen_chain_runner_reads_qwen_report(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        import monitor_so101_training_dashboard as monitor
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "run"
+            args = argparse.Namespace(
+                python=sys.executable,
+                repo_root=Path.cwd(),
+                closed_loop_task_prompt="pick and lift the green cube",
+                qwen_object="green cube",
+                qwen_model="qwen3-vl-8b-instruct-mlx",
+                qwen_plan_json=None,
+                qwen_response_json=Path("configs/agent/qwen3_so101_tool_planner_mock_response.json"),
+                qwen_base_url=None,
+                qwen_api_key=None,
+                closed_loop_episodes=1,
+                closed_loop_seed=98100,
+                policy_device="cpu",
+                closed_loop_steps=2,
+                local_files_only=True,
+                mujoco_gl="glfw",
+            )
+
+            def fake_run(cmd, cwd, env, text, capture_output, check):
+                del cwd, env, text, capture_output, check
+                output_dir = Path(cmd[cmd.index("--output-dir") + 1])
+                output_dir.mkdir(parents=True)
+                (output_dir / "qwen_closed_loop_eval_report.json").write_text(
+                    json.dumps(
+                        {
+                            "operation": "so101_qwen_closed_loop_eval",
+                            "status": "passed",
+                            "success_rate": 1.0,
+                            "episodes": [{"final_success": True}],
+                            "plan": {"task": "pick and lift the green cube"},
+                            "report_path": str(output_dir / "qwen_closed_loop_eval_report.json"),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return argparse.Namespace(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(monitor.subprocess, "run", side_effect=fake_run):
+                report = monitor._run_qwen_chain_closed_loop_eval(
+                    args,
+                    run_dir,
+                    "000224",
+                    Path("/tmp/policy"),
+                )
+
+        self.assertEqual(report["operation"], "so101_qwen_closed_loop_eval")
+        self.assertEqual(report["success_rate"], 1.0)
+        self.assertEqual(report["eval_skill_mode"], "qwen_edge_chain")
 
     def test_virtual_merge_concat_dataset_len_is_sum(self) -> None:
         from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset
@@ -571,7 +627,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("auto", payload["gpu_monitor_cmd"])
             self.assertIn("--train-pid-file", payload["gpu_monitor_cmd"])
 
-    def test_single_training_launcher_defaults_to_epoch_validation(self) -> None:
+    def test_single_training_launcher_defaults_validation_to_closed_loop_cadence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             completed = subprocess.run(
                 [
@@ -596,6 +652,24 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
             self.assertIn("--validation-interval-epochs=1", payload["train_cmd"])
+
+    def test_qwen_edge_merge_normalizes_legacy_static_finger_prompts(self) -> None:
+        from scripts.merge_so101_lerobot_shards import _normalize_task_prompt
+
+        self.assertEqual(
+            _normalize_task_prompt("Move the static finger pad above one visible green cube edge."),
+            "Move the gripper above one visible green cube edge.",
+        )
+        self.assertEqual(
+            _normalize_task_prompt("Align the static finger pad with one visible red cube edge."),
+            "Align the gripper jaws around one visible red cube edge.",
+        )
+        self.assertEqual(
+            _normalize_task_prompt(
+                "Keep the static finger pad at the blue cube edge, close the gripper, and lift."
+            ),
+            "Close the gripper on the blue cube edge and lift.",
+        )
 
     def test_single_training_launcher_dataset_config_injects_dataset_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -673,6 +747,15 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
             train_cmd = payload["train_cmd"]
+            self.assertEqual(
+                payload["local_training_standard"]["name"],
+                "primitive training with qwen validation v1",
+            )
+            self.assertTrue(payload["local_training_standard"]["doc"].endswith("docs/so101_local_training_standard.md"))
+            self.assertIn(
+                "Local SO101/SmolVLA training launches outside the Codex sandbox.",
+                payload["local_training_standard"]["summary"],
+            )
             self.assertIn("--dataset.repo_id=physical-ai-agent/train", train_cmd)
             self.assertIn("--dataset.root=_workspace/train", train_cmd)
             self.assertIn("--validation-dataset-repo-id=physical-ai-agent/val", train_cmd)
@@ -682,7 +765,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--policy.push_to_hub=false", train_cmd)
             self.assertIn("--lightning-precision=bf16-mixed", train_cmd)
             self.assertIn("--validation-interval-epochs=1", train_cmd)
-            self.assertIn("--save_freq=420", train_cmd)
+            self.assertIn("--save_freq=42", train_cmd)
             self.assertIn("--so101-image-cache-dir=/tmp/so101-cache/train", train_cmd)
             self.assertIn("--validation-image-cache-dir=/tmp/so101-cache/val", train_cmd)
             self.assertIn("tensorboard_cmd", payload)
@@ -1131,19 +1214,165 @@ class SO101SmolVLAPipelineTest(TestCase):
                     closed_loop_eval_skill_mode=None,
                     closed_loop_task_prompt=None,
                     closed_loop_record_rollout_gif=False,
+                    closed_loop_runner="auto",
+                    qwen_model="qwen3-vl-8b-instruct-mlx",
+                    qwen_base_url=None,
+                    qwen_api_key=None,
+                    qwen_response_json=None,
+                    qwen_plan_json=None,
+                    qwen_object="green cube",
                 ),
                 repo_root=repo_root,
                 run_dir=repo_root / "run",
                 train_output_dir=repo_root / "run/model",
                 dataset_config=resolved,
                 training_args=[],
-                runtime_contract={"closed_loop_mujoco_gl": "egl"},
                 train_pid_file=repo_root / "run/train.pid",
+                runtime_contract={
+                    "runtime_platform": "linux",
+                    "training_device": "cuda",
+                    "lightning_accelerator": "cuda",
+                    "closed_loop_device": "cuda",
+                    "closed_loop_mujoco_gl": "egl",
+                },
             )
             self.assertIn("--closed-loop-eval-skill-mode", progress_cmd)
             self.assertIn("pick_and_place_cube", progress_cmd)
             self.assertIn("--closed-loop-task-prompt", progress_cmd)
             self.assertIn("--closed-loop-record-rollout-gif", progress_cmd)
+
+    def test_training_launcher_resolves_hf_merge_sources_for_train_and_validation(self) -> None:
+        from scripts import start_so101_training
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir) / "repo"
+            cache_root = Path(tmpdir) / "hf_datasets"
+            repo_root.mkdir()
+            config = {
+                "train_dataset": {
+                    "repo_id": "physical-ai-agent/merged",
+                    "root": "_workspace/merged/train",
+                    "hf_merge_sources": [
+                        {
+                            "name": "pick_cube_train",
+                            "repo_id": "physical-ai-agent/source-a",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/pick_cube/train",
+                        },
+                        {
+                            "name": "pick_place_train",
+                            "repo_id": "physical-ai-agent/source-b",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/pick_and_place_cube/train",
+                        },
+                    ],
+                },
+                "validation_dataset": {
+                    "repo_id": "physical-ai-agent/merged-validation",
+                    "root": "_workspace/merged/validation",
+                    "hf_merge_sources": [
+                        {
+                            "name": "pick_cube_validation",
+                            "repo_id": "physical-ai-agent/source-a-validation",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/pick_cube/validation",
+                        },
+                        {
+                            "name": "pick_place_validation",
+                            "repo_id": "physical-ai-agent/source-b-validation",
+                            "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+                            "hf_repo_type": "dataset",
+                            "hf_path_in_repo": "datasets/pick_and_place_cube/validation",
+                        },
+                    ],
+                },
+                "closed_loop": {
+                    "eval_skill_mode": "pick_and_place_cube",
+                    "task_prompt": "Pick up the small red cube and place it on the blue circle.",
+                    "record_rollout_gif": True,
+                },
+            }
+
+            with mock.patch.object(start_so101_training, "_snapshot_download") as snapshot_download:
+                resolved = start_so101_training._resolve_hf_dataset_downloads(
+                    config,
+                    repo_root=repo_root,
+                    cache_root=cache_root,
+                    download=True,
+                )
+            resolved = start_so101_training._prepare_merged_train_dataset(
+                resolved,
+                repo_root=repo_root,
+                python=Path(sys.executable),
+                merge=False,
+            )
+
+            local_repo_dir = cache_root / "mhlee1215__so101-nexus-sim-dataset"
+            merged_root = repo_root / "_workspace/merged/train"
+            validation_merged_root = repo_root / "_workspace/merged/validation"
+            self.assertEqual(snapshot_download.call_count, 4)
+            self.assertEqual(resolved["train_dataset"]["root"], str(merged_root))
+            self.assertEqual(resolved["validation_dataset"]["root"], str(validation_merged_root))
+            self.assertEqual(len(resolved["train_dataset"]["hf_resolved_sources"]), 2)
+            self.assertEqual(len(resolved["validation_dataset"]["hf_resolved_sources"]), 2)
+            self.assertIn(str(local_repo_dir / "datasets/pick_cube/train"), resolved["train_dataset"]["merged_from"])
+            self.assertIn(str(local_repo_dir / "datasets/pick_and_place_cube/train"), resolved["train_dataset"]["merged_from"])
+            self.assertIn(
+                str(local_repo_dir / "datasets/pick_cube/validation"),
+                resolved["validation_dataset"]["merged_from"],
+            )
+            self.assertIn(
+                str(local_repo_dir / "datasets/pick_and_place_cube/validation"),
+                resolved["validation_dataset"]["merged_from"],
+            )
+            self.assertIn("--output-root", resolved["train_dataset"]["merge_command"])
+            self.assertIn("--output-root", resolved["validation_dataset"]["merge_command"])
+
+            train_args = start_so101_training._with_dataset_config([], resolved)
+            self.assertIn(f"--dataset.root={merged_root}", train_args)
+            self.assertIn(f"--validation-dataset-root={validation_merged_root}", train_args)
+
+            resolved["execution_policy"] = "qwen_edge_chain"
+            progress_cmd = start_so101_training._progress_monitor_command(
+                args=argparse.Namespace(
+                    python=Path(sys.executable),
+                    progress_monitor_interval_s=600,
+                    closed_loop_every_epochs=1,
+                    closed_loop_episodes=1,
+                    closed_loop_steps=90,
+                    closed_loop_policy="best_or_periodic",
+                    closed_loop_eval_skill_mode=None,
+                    closed_loop_task_prompt=None,
+                    closed_loop_record_rollout_gif=False,
+                    closed_loop_runner="auto",
+                    qwen_model="qwen3-vl-8b-instruct-mlx",
+                    qwen_base_url=None,
+                    qwen_api_key=None,
+                    qwen_response_json=None,
+                    qwen_plan_json=None,
+                    qwen_object="green cube",
+                ),
+                repo_root=repo_root,
+                run_dir=repo_root / "run",
+                train_output_dir=repo_root / "run/model",
+                dataset_config=resolved,
+                training_args=[],
+                train_pid_file=repo_root / "run/train.pid",
+                runtime_contract={
+                    "runtime_platform": "macos",
+                    "training_device": "mps",
+                    "lightning_accelerator": "mps",
+                    "closed_loop_device": "mps",
+                    "closed_loop_mujoco_gl": "glfw",
+                },
+            )
+            self.assertIn("--closed-loop-runner", progress_cmd)
+            self.assertIn("qwen_chain", progress_cmd)
+            self.assertIn("--qwen-response-json", progress_cmd)
+            self.assertIn("configs/agent/qwen3_so101_tool_planner_mock_response.json", progress_cmd)
 
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (

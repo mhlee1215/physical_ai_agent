@@ -88,7 +88,12 @@ class SamplingAugmentedDataset:
         item[self.config.state_key] = augment_state_tensor(value, self.config)
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self.dataset, name)
+        if name == "dataset":
+            raise AttributeError(name)
+        dataset = self.__dict__.get("dataset")
+        if dataset is None:
+            raise AttributeError(name)
+        return getattr(dataset, name)
 
 
 class PredecodedImageCacheDataset:

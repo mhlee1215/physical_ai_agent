@@ -1,0 +1,31 @@
+{
+  "choices": [
+    {
+      "message": {
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"object\": \"green cube\"}",
+              "name": "move"
+            },
+            "type": "function"
+          },
+          {
+            "function": {
+              "arguments": "{\"object\": \"green cube\"}",
+              "name": "align"
+            },
+            "type": "function"
+          },
+          {
+            "function": {
+              "arguments": "{\"object\": \"green cube\"}",
+              "name": "pick_up"
+            },
+            "type": "function"
+          }
+        ]
+      }
+    }
+  ]
+}

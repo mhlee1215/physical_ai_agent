@@ -95,6 +95,14 @@ paper-facing concepts:
   not authoritative; verify `torch.backends.mps.is_available()` and launch
   MPS training from an unsandboxed/external runtime. Keep deterministic logs,
   TensorBoard events, checkpoints, and monitor artifacts under `_workspace/`.
+- Local SO101 training standard: use
+  `docs/so101_local_training_standard.md` before starting local training. The
+  current standard lane is `primitive training with qwen validation v1`: one
+  SmolVLA checkpoint trained on the three primitive Qwen edge datasets through
+  dataset-config `hf_merge_sources`, macOS runtime outside the sandbox with
+  MPS, and `--num_workers=0` unless multiprocessing has been proven safe for
+  the current dataset wrappers. `scripts/start_so101_training.py` records this
+  standard in every dry-run/start/status payload as `local_training_standard`.
 - User policy: SO101 training, supervised validation, and closed-loop tests
   must stay runnable on both local macOS and Linux/RunPod through the canonical
   launcher. The runtime contract is `macos => mps + MuJoCo glfw` and

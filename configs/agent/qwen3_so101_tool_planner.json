@@ -1,0 +1,31 @@
+{
+  "name": "qwen3_so101_tool_planner",
+  "model": "Qwen/Qwen3-8B",
+  "mode": "openai_compatible_tool_calling",
+  "thinking_mode": "non-thinking",
+  "tool_list_policy": "narrow",
+  "task_template": "pick and lift the {object}",
+  "default_object": "green cube",
+  "expected_order": [
+    "move",
+    "align",
+    "pick_up"
+  ],
+  "tools": [
+    {
+      "fn": "move",
+      "primitive_id": "move_over_cube_edge",
+      "prompt": "Move the gripper above one visible {object} edge."
+    },
+    {
+      "fn": "align",
+      "primitive_id": "align_fixed_jaw_cube_edge",
+      "prompt": "Align the gripper jaws around one visible {object} edge."
+    },
+    {
+      "fn": "pick_up",
+      "primitive_id": "grip_from_edge_cube",
+      "prompt": "Close the gripper on the {object} edge and lift."
+    }
+  ]
+}

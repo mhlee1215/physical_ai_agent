@@ -53,6 +53,12 @@ def main() -> None:
     parser.add_argument("--closed-loop-width", type=int, default=256)
     parser.add_argument("--closed-loop-height", type=int, default=256)
     parser.add_argument(
+        "--closed-loop-runner",
+        choices=["picklift", "qwen_chain"],
+        default="picklift",
+        help="Closed-loop evaluator implementation to run for each scheduled checkpoint.",
+    )
+    parser.add_argument(
         "--mujoco-gl",
         choices=["auto", "glfw", "egl", "osmesa"],
         default="auto",
@@ -65,6 +71,12 @@ def main() -> None:
         default="picklift",
     )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
+    parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
+    parser.add_argument("--qwen-base-url")
+    parser.add_argument("--qwen-api-key")
+    parser.add_argument("--qwen-response-json", type=Path)
+    parser.add_argument("--qwen-plan-json", type=Path)
+    parser.add_argument("--qwen-object", default="green cube")
     parser.add_argument("--closed-loop-subgoal-chain-mode", choices=["off", "fixed", "valid-mask"], default="off")
     parser.add_argument("--closed-loop-subgoal-sequence")
     parser.add_argument("--closed-loop-fixed-subgoal-chunks", type=int, default=1)
@@ -212,12 +224,13 @@ def check_once(args: argparse.Namespace, run_dir: Path) -> None:
             {
                 "kind": "closed_loop_done",
                 "detail": (
-                    f"checkpoint {checkpoint} success={closed_loop_report['success_rate']:.3f} "
-                    f"grasp={closed_loop_report['grasp_rate']:.3f}"
+                    f"checkpoint {checkpoint} "
+                    f"success={_fmt_optional_float(closed_loop_report.get('success_rate'))} "
+                    f"grasp={_fmt_optional_float(closed_loop_report.get('grasp_rate'))}"
                 ),
                 "checkpoint": checkpoint,
-                "success_rate": closed_loop_report["success_rate"],
-                "grasp_rate": closed_loop_report["grasp_rate"],
+                "success_rate": closed_loop_report.get("success_rate"),
+                "grasp_rate": closed_loop_report.get("grasp_rate"),
             },
         )
         _update_loss_summary(run_dir, checkpoint)
@@ -259,6 +272,17 @@ def _run_validation_loss(
 
 
 def _run_closed_loop_eval(
+    args: argparse.Namespace,
+    run_dir: Path,
+    checkpoint: str,
+    policy_path: Path,
+) -> dict[str, Any]:
+    if args.closed_loop_runner == "qwen_chain":
+        return _run_qwen_chain_closed_loop_eval(args, run_dir, checkpoint, policy_path)
+    return _run_picklift_closed_loop_eval(args, run_dir, checkpoint, policy_path)
+
+
+def _run_picklift_closed_loop_eval(
     args: argparse.Namespace,
     run_dir: Path,
     checkpoint: str,
@@ -333,6 +357,59 @@ def _run_closed_loop_eval(
         raise RuntimeError((completed.stderr or completed.stdout or f"closed-loop eval failed: {completed.returncode}")[-2000:])
     report_path = output_dir / "so101_picklift_smolvla_eval_report.json"
     return json.loads(report_path.read_text(encoding="utf-8"))
+
+
+def _run_qwen_chain_closed_loop_eval(
+    args: argparse.Namespace,
+    run_dir: Path,
+    checkpoint: str,
+    policy_path: Path,
+) -> dict[str, Any]:
+    output_dir = run_dir / "closed_loop_evals" / f"qwen_chain_seed{args.closed_loop_seed}_{checkpoint}"
+    cmd = [
+        args.python,
+        str(args.repo_root / "scripts" / "run_so101_qwen_closed_loop_eval.py"),
+        "--task",
+        args.closed_loop_task_prompt or "pick and lift the green cube",
+        "--object",
+        args.qwen_object,
+        "--qwen-model",
+        args.qwen_model,
+        "--policy-path",
+        str(policy_path),
+        "--output-dir",
+        str(output_dir),
+        "--episodes",
+        str(args.closed_loop_episodes),
+        "--seed",
+        str(args.closed_loop_seed),
+        "--device",
+        args.policy_device,
+        "--max-steps-per-primitive",
+        str(args.closed_loop_steps),
+    ]
+    if args.qwen_plan_json:
+        cmd.extend(["--qwen-plan-json", str(args.qwen_plan_json)])
+    elif args.qwen_response_json:
+        cmd.extend(["--qwen-response-json", str(args.qwen_response_json)])
+    elif args.qwen_base_url:
+        cmd.extend(["--qwen-base-url", args.qwen_base_url])
+    else:
+        raise RuntimeError(
+            "qwen_chain closed-loop requires --qwen-response-json, --qwen-plan-json, or --qwen-base-url"
+        )
+    if args.qwen_api_key:
+        cmd.extend(["--qwen-api-key", args.qwen_api_key])
+    if not args.local_files_only:
+        cmd.append("--allow-download")
+    completed = subprocess.run(cmd, cwd=args.repo_root, env=_runtime_env(args), text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError((completed.stderr or completed.stdout or f"Qwen closed-loop eval failed: {completed.returncode}")[-2000:])
+    report_path = output_dir / "qwen_closed_loop_eval_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report.setdefault("eval_skill_mode", "qwen_edge_chain")
+    report.setdefault("task_prompt", args.closed_loop_task_prompt or (report.get("plan") or {}).get("task"))
+    return report
 
 
 def _runtime_env(args: argparse.Namespace) -> dict[str, str]:
@@ -443,6 +520,12 @@ def _float_or_none(value: str | None) -> float | None:
         return float(value) if value is not None else None
     except ValueError:
         return None
+
+
+def _fmt_optional_float(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return f"{float(value):.3f}"
+    return "n/a"
 
 
 def _bytes_to_gb(value: int | None) -> float | None:
@@ -560,6 +643,7 @@ def _append_closed_loop_metric(run_dir: Path, checkpoint: str, report: dict[str,
     row = {
         "step": _checkpoint_to_step(checkpoint),
         "checkpoint": checkpoint,
+        "operation": report.get("operation"),
         "success_rate": report.get("success_rate"),
         "env_success_rate": report.get("env_success_rate"),
         "grasp_rate": report.get("grasp_rate"),

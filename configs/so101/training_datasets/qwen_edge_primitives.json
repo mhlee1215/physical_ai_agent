@@ -1,0 +1,118 @@
+{
+  "name": "qwen_edge_primitives",
+  "description": "Combined SO101 edge primitive training set for one SmolVLA policy controlled by the Qwen edge-chain execution policy.",
+  "scenario": "pick_up_cube",
+  "execution_policy": "qwen_edge_chain",
+  "task": "qwen_edge_primitives",
+  "train_dataset": {
+    "repo_id": "physical-ai-agent/so101-qwen-edge-primitives-train300-ego-wrist-256",
+    "root": "_workspace/so101_lerobot_merged/qwen_edge_primitives_train300_ego_wrist_256",
+    "split": "train",
+    "expected_episodes": 300,
+    "expected_frames": 10148,
+    "hf_merge_sources": [
+      {
+        "name": "move_over_cube_edge_train",
+        "repo_id": "physical-ai-agent/so101-move-over-cube-edge-train100-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/move_over_cube_edge/train",
+        "expected_episodes": 100,
+        "expected_frames": 5200
+      },
+      {
+        "name": "align_fixed_jaw_cube_edge_train",
+        "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-train100-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/align_fixed_jaw_cube_edge/train",
+        "expected_episodes": 100,
+        "expected_frames": 2200
+      },
+      {
+        "name": "grip_from_edge_cube_train",
+        "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-train100-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/grip_from_edge_cube/train",
+        "expected_episodes": 100,
+        "expected_frames": 2748
+      }
+    ]
+  },
+  "validation_dataset": {
+    "repo_id": "physical-ai-agent/so101-qwen-edge-primitives-valid75-ego-wrist-256",
+    "root": "_workspace/so101_lerobot_merged/qwen_edge_primitives_valid75_ego_wrist_256",
+    "split": "validation",
+    "expected_episodes": 75,
+    "expected_frames": 2535,
+    "hf_merge_sources": [
+      {
+        "name": "move_over_cube_edge_val",
+        "repo_id": "physical-ai-agent/so101-move-over-cube-edge-valid25-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/move_over_cube_edge/validation",
+        "expected_episodes": 25,
+        "expected_frames": 1300
+      },
+      {
+        "name": "align_fixed_jaw_cube_edge_val",
+        "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-valid25-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/align_fixed_jaw_cube_edge/validation",
+        "expected_episodes": 25,
+        "expected_frames": 550
+      },
+      {
+        "name": "grip_from_edge_cube_val",
+        "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-valid25-ego-wrist-256",
+        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+        "hf_repo_type": "dataset",
+        "hf_path_in_repo": "datasets/grip_from_edge_cube/validation",
+        "expected_episodes": 25,
+        "expected_frames": 685
+      }
+    ]
+  },
+  "camera_contract": {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam",
+    "observation.images.camera3": "wrist_cam duplicate"
+  },
+  "training": {
+    "batch_size": 32,
+    "num_workers": 4,
+    "policy_repo_id": "mhlee1215/so101-smolvla-qwen-edge-primitives",
+    "policy_push_to_hub": false,
+    "steps_per_epoch": 224,
+    "validation_max_batches": 32
+  },
+  "predecoded_image_cache": {
+    "root_env": "SO101_PREDECODED_CACHE_ROOT",
+    "default_root": "_workspace/so101_image_cache",
+    "train": "qwen_edge_primitives_train300_ego_wrist_256",
+    "validation": "qwen_edge_primitives_valid75_ego_wrist_256"
+  },
+  "tensorboard": {
+    "log_input_images_every_n_steps": 50,
+    "log_input_metadata_every_n_steps": 50
+  },
+  "augmentation": {
+    "state_jitter_std": 0.003,
+    "state_jitter_arm_only": true,
+    "state_dropout_prob": 0.02,
+    "state_dropout_keep_gripper": true,
+    "image_camera_dropout_prob": 0.0,
+    "image_patch_dropout_prob": 0.0,
+    "image_patch_mask_ratio": 0.15,
+    "gpu_image_augmentation": true
+  },
+  "closed_loop": {
+    "scenario": "pick_up_cube",
+    "execution_policy": "qwen_edge_chain",
+    "task_prompt": "pick and lift the green cube",
+    "success_metric": "qwen_edge_chain final success/grasp/lift metrics"
+  }
+}

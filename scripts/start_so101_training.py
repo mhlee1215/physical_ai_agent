@@ -19,6 +19,8 @@ from typing import Any
 DEFAULT_ROOT = Path("_workspace/so101_training")
 DEFAULT_LOCK = DEFAULT_ROOT / "active_training.json"
 DEFAULT_HF_DATASET_CACHE_ROOT = Path("_workspace/hf_datasets")
+LOCAL_TRAINING_STANDARD_DOC = Path("docs/so101_local_training_standard.md")
+LOCAL_TRAINING_STANDARD_NAME = "primitive training with qwen validation v1"
 
 
 def main() -> int:
@@ -107,7 +109,7 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
         default="auto",
         help="Default policy.device and Lightning accelerator when not explicitly forwarded.",
     )
-    parser.add_argument("--closed-loop-every-epochs", type=int, default=10)
+    parser.add_argument("--closed-loop-every-epochs", type=int, default=1)
     parser.add_argument("--closed-loop-episodes", type=int, default=8)
     parser.add_argument("--closed-loop-steps", type=int, default=120)
     parser.add_argument(
@@ -123,6 +125,7 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
         help="Fail fast when --steps/--save_freq would create more monitored checkpoints than this.",
     )
     parser.add_argument("--closed-loop-policy", choices=["off", "periodic", "best_only", "best_or_periodic"], default="periodic")
+    parser.add_argument("--closed-loop-runner", choices=["auto", "picklift", "qwen_chain"], default="auto")
     parser.add_argument(
         "--closed-loop-eval-skill-mode",
         choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
@@ -130,6 +133,12 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--closed-loop-task-prompt")
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
+    parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
+    parser.add_argument("--qwen-base-url")
+    parser.add_argument("--qwen-api-key")
+    parser.add_argument("--qwen-response-json", type=Path)
+    parser.add_argument("--qwen-plan-json", type=Path)
+    parser.add_argument("--qwen-object", default="green cube")
     parser.add_argument("--closed-loop-subgoal-chain-mode", choices=["off", "fixed", "valid-mask"], default="off")
     parser.add_argument("--closed-loop-subgoal-sequence")
     parser.add_argument("--closed-loop-fixed-subgoal-chunks", type=int, default=1)
@@ -198,7 +207,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
             download=not args.dry_run and not args.skip_hf_dataset_download,
             local_files_only=bool(args.hf_local_files_only),
         )
-        dataset_config = _prepare_merged_train_dataset(
+        dataset_config = _prepare_merged_datasets(
             dataset_config,
             repo_root=repo_root,
             python=args.python,
@@ -263,6 +272,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "run_dir": str(run_dir),
         "train_output_dir": str(train_output_dir),
         "lock_file": str(args.lock_file.resolve()),
+        "local_training_standard": _local_training_standard(repo_root),
         "train_cmd": train_cmd,
         "dataset_config": dataset_config,
         "tensorboard_cmd": None if args.no_tensorboard else tensorboard_cmd,
@@ -321,6 +331,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
 
 def status(lock_file: Path) -> dict[str, Any]:
     record = _read_json(lock_file) or {"lock_file": str(lock_file.resolve()), "active": False}
+    record.setdefault("local_training_standard", _local_training_standard(Path(__file__).resolve().parents[1]))
     train = _process_status(record.get("train_pid"))
     tensorboard = _process_status(record.get("tensorboard_pid"))
     dashboard = _process_status(record.get("dashboard_pid"))
@@ -381,6 +392,10 @@ def _human_status(record: dict[str, Any]) -> str:
         lines.append(f"tensorboard_url: {record['tensorboard_url']}")
     if record.get("dashboard_url"):
         lines.append(f"dashboard_url: {record['dashboard_url']}")
+    standard = record.get("local_training_standard")
+    if isinstance(standard, dict):
+        lines.append(f"local_training_standard: {standard.get('name', '-')}")
+        lines.append(f"standard_doc: {standard.get('doc', '-')}")
     logs = record.get("logs") or {}
     if logs.get("train"):
         lines.append(f"train_log: {logs['train']}")
@@ -582,7 +597,7 @@ def _resolve_hf_dataset_source(
     }
 
 
-def _prepare_merged_train_dataset(
+def _prepare_merged_datasets(
     config: dict[str, Any] | None,
     *,
     repo_root: Path,
@@ -593,35 +608,64 @@ def _prepare_merged_train_dataset(
         return config
     if isinstance(config.get("train_datasets"), list) and config["train_datasets"]:
         return config
-    train = config.get("train_dataset")
-    if not isinstance(train, dict):
+    for dataset_key in ("train_dataset", "validation_dataset"):
+        config = _prepare_merged_dataset(
+            config,
+            dataset_key=dataset_key,
+            repo_root=repo_root,
+            python=python,
+            merge=merge,
+        )
+    return config
+
+
+def _prepare_merged_dataset(
+    config: dict[str, Any],
+    *,
+    dataset_key: str,
+    repo_root: Path,
+    python: Path,
+    merge: bool,
+) -> dict[str, Any]:
+    dataset = config.get(dataset_key)
+    if not isinstance(dataset, dict):
         return config
-    sources = train.get("hf_resolved_sources")
+    sources = dataset.get("hf_resolved_sources")
     if not isinstance(sources, list) or not sources:
         return config
-    if "root" not in train or "repo_id" not in train:
-        raise SystemExit("merged train_dataset must define root and repo_id")
-    output_root = _resolve_root_path(repo_root, Path(str(train["root"])))
+    if "root" not in dataset or "repo_id" not in dataset:
+        raise SystemExit(f"merged {dataset_key} must define root and repo_id")
+    output_root = _resolve_root_path(repo_root, Path(str(dataset["root"])))
     shard_roots = [Path(str(source["root"])) for source in sources if isinstance(source, dict) and "root" in source]
     if len(shard_roots) != len(sources):
-        raise SystemExit("merged train_dataset sources must resolve to local roots")
+        raise SystemExit(f"merged {dataset_key} sources must resolve to local roots")
     command = [
         str(python),
         str(repo_root / "scripts" / "merge_so101_lerobot_shards.py"),
         "--output-root",
         str(output_root),
         "--repo-id",
-        str(train["repo_id"]),
+        str(dataset["repo_id"]),
         "--overwrite",
     ]
     for shard_root in shard_roots:
         command.extend(["--shard", str(shard_root)])
-    train["root"] = str(output_root)
-    train["merge_command"] = command
-    train["merged_from"] = [str(path) for path in shard_roots]
+    dataset["root"] = str(output_root)
+    dataset["merge_command"] = command
+    dataset["merged_from"] = [str(path) for path in shard_roots]
     if merge:
         subprocess.run(command, cwd=repo_root, check=True, text=True)
     return config
+
+
+def _prepare_merged_train_dataset(
+    config: dict[str, Any] | None,
+    *,
+    repo_root: Path,
+    python: Path,
+    merge: bool,
+) -> dict[str, Any] | None:
+    return _prepare_merged_datasets(config, repo_root=repo_root, python=python, merge=merge)
 
 
 def _resolve_root_path(repo_root: Path, path: Path) -> Path:
@@ -785,6 +829,8 @@ def _with_validation_schedule(args: list[str], namespace: argparse.Namespace) ->
         return args
     if namespace.validation_interval_steps is not None:
         return [*args, f"--validation-interval-steps={int(namespace.validation_interval_steps)}"]
+    if _closed_loop_policy_name(namespace) != "off":
+        return [*args, f"--validation-interval-epochs={int(namespace.closed_loop_every_epochs)}"]
     if namespace.validation_interval_epochs is not None:
         return [*args, f"--validation-interval-epochs={int(namespace.validation_interval_epochs)}"]
     return args
@@ -826,6 +872,21 @@ def _runtime_contract(namespace: argparse.Namespace, training_args: list[str]) -
         "lightning_accelerator": lightning_accelerator,
         "lightning_devices": lightning_devices,
         "closed_loop_mujoco_gl": mujoco_gl,
+    }
+
+
+def _local_training_standard(repo_root: Path) -> dict[str, Any]:
+    doc = repo_root / LOCAL_TRAINING_STANDARD_DOC
+    return {
+        "name": LOCAL_TRAINING_STANDARD_NAME,
+        "doc": str(doc),
+        "summary": [
+            "Local SO101/SmolVLA training launches outside the Codex sandbox.",
+            "macOS local runtime uses MPS through --runtime-platform macos.",
+            "Use dataset-config hf_merge_sources virtual merge declarations.",
+            "For macOS local training, prefer --num_workers=0 unless multiprocessing is proven safe.",
+            "For Qwen validation v1, scenario=pick_up_cube and execution_policy=qwen_edge_chain.",
+        ],
     }
 
 
@@ -882,7 +943,8 @@ def _validate_monitoring_contract(
     if runtime_contract["runtime_platform"] == "linux" and runtime_contract["training_device"] == "mps":
         errors.append("Linux/RunPod runtime profile cannot use MPS; use --training-device cuda or cpu.")
 
-    if _validation_interval(training_args) <= 0:
+    validation_interval_steps = _validation_interval_steps(dataset_config, training_args)
+    if validation_interval_steps <= 0:
         errors.append("validation cadence must be positive; set --validation-interval-epochs or --validation-interval-steps.")
     if not _has_any_arg(training_args, "validation-dataset-root"):
         errors.append("training command is missing --validation-dataset-root.")
@@ -892,6 +954,11 @@ def _validate_monitoring_contract(
     closed_loop_policy = _closed_loop_policy_name(args)
     if closed_loop_policy == "off":
         errors.append("closed-loop evaluation is disabled; use periodic, best_only, or best_or_periodic.")
+    if closed_loop_policy == "best_only":
+        errors.append(
+            "closed-loop policy best_only can skip validation checkpoints; use periodic or best_or_periodic "
+            "so every validation-loss checkpoint also runs closed-loop."
+        )
     if args.no_progress_monitor:
         errors.append("progress monitor is disabled; it is required for supervised validation and closed-loop metrics.")
     if launch_plan.get("progress_monitor_cmd") is None:
@@ -907,7 +974,8 @@ def _validate_monitoring_contract(
         errors.append("--closed-loop-steps must be positive.")
 
     closed_loop = dataset_config.get("closed_loop") or {}
-    if not args.closed_loop_eval_skill_mode and not (
+    closed_loop_runner = _closed_loop_runner(args, dataset_config)
+    if closed_loop_runner != "qwen_chain" and not args.closed_loop_eval_skill_mode and not (
         isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode")
     ):
         errors.append("closed-loop eval skill mode must be set in config closed_loop.eval_skill_mode or CLI.")
@@ -921,11 +989,21 @@ def _validate_monitoring_contract(
     if save_freq is None:
         errors.append("checkpoint save cadence is missing; set --save_freq or training.steps_per_epoch.")
     elif steps_per_epoch is not None:
-        max_closed_loop_gap = steps_per_epoch * int(args.closed_loop_every_epochs)
-        if save_freq > max_closed_loop_gap:
+        closed_loop_gap = steps_per_epoch * int(args.closed_loop_every_epochs)
+        if save_freq > closed_loop_gap:
             errors.append(
                 f"--save_freq={save_freq} is too sparse for closed-loop cadence; "
-                f"expected <= {max_closed_loop_gap}."
+                f"expected <= {closed_loop_gap}."
+            )
+        if validation_interval_steps != save_freq:
+            errors.append(
+                f"validation cadence ({validation_interval_steps} steps) must match checkpoint save cadence "
+                f"({save_freq} steps) so every validation loss has a checkpoint for closed-loop evaluation."
+            )
+        if save_freq != closed_loop_gap:
+            errors.append(
+                f"checkpoint save cadence ({save_freq} steps) must match closed-loop cadence "
+                f"({closed_loop_gap} steps) so every validation-loss checkpoint runs closed-loop."
             )
         planned_steps = _positive_int_arg(training_args, "steps")
         max_checkpoints = max(1, int(args.max_monitored_checkpoints))
@@ -944,13 +1022,17 @@ def _validate_monitoring_contract(
         raise SystemExit(f"SO101 monitored training contract failed:\n{detail}")
 
 
-def _validation_interval(args: list[str]) -> int:
+def _validation_interval_steps(config: dict[str, Any], args: list[str]) -> int:
     steps = _positive_int_arg(args, "validation-interval-steps") or _positive_int_arg(
         args, "validation-every-n-train-steps"
     )
     if steps is not None:
         return steps
-    return _positive_int_arg(args, "validation-interval-epochs") or 0
+    epochs = _positive_int_arg(args, "validation-interval-epochs")
+    steps_per_epoch = _steps_per_epoch(config, args)
+    if epochs is not None and steps_per_epoch is not None:
+        return epochs * steps_per_epoch
+    return 0
 
 
 def _steps_per_epoch(config: dict[str, Any], training_args: list[str]) -> int | None:
@@ -1006,6 +1088,7 @@ def _progress_monitor_command(
     policy_device = str(_arg_value(training_args, "policy.device") or "auto")
     if policy_device not in {"auto", "cpu", "mps", "cuda"}:
         policy_device = "auto"
+    closed_loop_runner = _closed_loop_runner(args, dataset_config)
     cmd = [
         str(args.python),
         str(repo_root / "scripts" / "monitor_so101_training_dashboard.py"),
@@ -1041,29 +1124,47 @@ def _progress_monitor_command(
         str(args.closed_loop_steps),
         "--mujoco-gl",
         runtime_contract["closed_loop_mujoco_gl"],
+        "--closed-loop-runner",
+        closed_loop_runner,
         "--closed-loop-policy",
         args.closed_loop_policy,
         "--closed-loop-eval-skill-mode",
         _closed_loop_eval_skill_mode(args, dataset_config),
         "--closed-loop-subgoal-chain-mode",
-        args.closed_loop_subgoal_chain_mode,
+        getattr(args, "closed_loop_subgoal_chain_mode", "off"),
         "--closed-loop-fixed-subgoal-chunks",
-        str(args.closed_loop_fixed_subgoal_chunks),
+        str(getattr(args, "closed_loop_fixed_subgoal_chunks", 1)),
         "--closed-loop-valid-mask-threshold",
-        str(args.closed_loop_valid_mask_threshold),
+        str(getattr(args, "closed_loop_valid_mask_threshold", 0.5)),
         "--closed-loop-valid-mask-consecutive",
-        str(args.closed_loop_valid_mask_consecutive),
+        str(getattr(args, "closed_loop_valid_mask_consecutive", 2)),
         "--local-files-only",
     ]
-    if args.closed_loop_subgoal_sequence:
-        cmd.extend(["--closed-loop-subgoal-sequence", args.closed_loop_subgoal_sequence])
-    if args.closed_loop_valid_mask_checkpoint:
-        cmd.extend(["--closed-loop-valid-mask-checkpoint", str(args.closed_loop_valid_mask_checkpoint)])
+    closed_loop_subgoal_sequence = getattr(args, "closed_loop_subgoal_sequence", None)
+    if closed_loop_subgoal_sequence:
+        cmd.extend(["--closed-loop-subgoal-sequence", closed_loop_subgoal_sequence])
+    closed_loop_valid_mask_checkpoint = getattr(args, "closed_loop_valid_mask_checkpoint", None)
+    if closed_loop_valid_mask_checkpoint:
+        cmd.extend(["--closed-loop-valid-mask-checkpoint", str(closed_loop_valid_mask_checkpoint)])
     closed_loop_task_prompt = _closed_loop_task_prompt(args, dataset_config)
     if closed_loop_task_prompt:
         cmd.extend(["--closed-loop-task-prompt", closed_loop_task_prompt])
     if args.closed_loop_record_rollout_gif or _closed_loop_record_rollout_gif(dataset_config):
         cmd.append("--closed-loop-record-rollout-gif")
+    if closed_loop_runner == "qwen_chain":
+        cmd.extend(["--qwen-model", args.qwen_model, "--qwen-object", args.qwen_object])
+        if args.qwen_plan_json:
+            cmd.extend(["--qwen-plan-json", str(args.qwen_plan_json)])
+        elif args.qwen_response_json:
+            cmd.extend(["--qwen-response-json", str(args.qwen_response_json)])
+        else:
+            qwen_response_json = _qwen_response_json(dataset_config)
+            if qwen_response_json:
+                cmd.extend(["--qwen-response-json", str(qwen_response_json)])
+            elif args.qwen_base_url:
+                cmd.extend(["--qwen-base-url", args.qwen_base_url])
+        if args.qwen_api_key:
+            cmd.extend(["--qwen-api-key", args.qwen_api_key])
     return cmd
 
 
@@ -1074,6 +1175,32 @@ def _closed_loop_eval_skill_mode(args: argparse.Namespace, dataset_config: dict[
     if isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode"):
         return str(closed_loop["eval_skill_mode"])
     return "picklift"
+
+
+def _closed_loop_runner(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    if args.closed_loop_runner != "auto":
+        return str(args.closed_loop_runner)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict):
+        if closed_loop.get("runner"):
+            return str(closed_loop["runner"])
+        if closed_loop.get("execution_policy") == "qwen_edge_chain":
+            return "qwen_chain"
+    if dataset_config.get("execution_policy") == "qwen_edge_chain":
+        return "qwen_chain"
+    return "picklift"
+
+
+def _qwen_response_json(dataset_config: dict[str, Any]) -> Path | None:
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("qwen_response_json"):
+        return Path(str(closed_loop["qwen_response_json"]))
+    if (
+        isinstance(closed_loop, dict)
+        and closed_loop.get("execution_policy") == "qwen_edge_chain"
+    ) or dataset_config.get("execution_policy") == "qwen_edge_chain":
+        return Path("configs/agent/qwen3_so101_tool_planner_mock_response.json")
+    return None
 
 
 def _closed_loop_task_prompt(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str | None:

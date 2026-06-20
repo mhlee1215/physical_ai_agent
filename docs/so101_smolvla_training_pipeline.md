@@ -161,9 +161,14 @@ scheduling. Important flags:
 - `--overfit-patience-checkpoints`
 - `--overfit-min-delta`
 
-For active training, supervised validation can run CPU-only after checkpoints.
-Full CUDA closed-loop should run only for new validation-best checkpoints or a
-manual final evaluation.
+For `primitive training with qwen validation v1`, supervised validation loss and
+Qwen-chain closed-loop validation run on the same checkpoint cadence. In the
+standard local setup this means `validation_interval_steps == save_freq ==
+steps_per_epoch` and `closed-loop-every-epochs=1`.
+
+For older expensive CUDA-only closed-loop lanes, best-only or manual final
+evaluation may still be used when the user has not requested per-validation
+closed-loop evidence.
 
 ## Runtime Platforms
 
@@ -179,6 +184,11 @@ training, supervised validation, and closed-loop evaluation:
   `--lightning-devices`, or `--closed-loop-mujoco-gl` remain explicit
   overrides, but monitored training still fails early if validation or
   closed-loop monitoring is disabled.
+
+The local Mac standard is recorded in
+`docs/so101_local_training_standard.md`. Every `scripts/start_so101_training.py`
+dry-run/start/status payload includes `local_training_standard` so future
+training launches see the standard before acting.
 
 Multi-train-split configs should use `train_datasets[]`. The launcher resolves
 each HF subfolder independently and the training script uses a

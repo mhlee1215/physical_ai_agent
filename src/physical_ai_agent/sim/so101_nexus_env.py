@@ -38,7 +38,12 @@ class SO101NexusEnv:
             importlib.import_module("so101_nexus_mujoco")
             gym = importlib.import_module("gymnasium")
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError("SO101-Nexus MuJoCo and Gymnasium are required") from exc
+            raise RuntimeError(
+                "SO101-Nexus MuJoCo and Gymnasium are required. "
+                "Run with the repo virtualenv (`PYTHONPATH=src .venv/bin/python ...`) "
+                "or install local SO101 dependencies with "
+                "`sh scripts/install/local_install.sh --checkpoint 14-15`."
+            ) from exc
 
         self.env_id = env_id
         self._gym = gym

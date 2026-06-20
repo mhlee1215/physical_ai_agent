@@ -35,8 +35,11 @@ Config fields:
   `scripts/start_so101_training.py start` downloads only the configured
   subfolder before training and forwards the resolved local subfolder path as
   `dataset.root`.
-- `train_dataset.hf_merge_sources`: legacy compatibility path. Do not use it
-  for new canonical training configs; use `train_datasets` instead.
+- `train_dataset.hf_merge_sources` and `validation_dataset.hf_merge_sources`:
+  optional lists of HF subfolders to download and compose into the configured
+  roots before training. Use this virtual-merge declaration for combined
+  multi-task runs while keeping each generated/uploaded dataset as a separate
+  HF bundle subfolder.
 - `camera_contract`: human-readable expected model input mapping.
 - `tensorboard`: optional default input logging cadence.
 - `augmentation`: optional train-time sampling augmentation defaults. Supported
@@ -90,15 +93,17 @@ Hugging Face dataset workflow:
    the downloaded subfolder under `_workspace/hf_datasets/` as the effective
    LeRobot root.
 
-For a multi-task run, use `train_datasets` as in
+For a multi-task run, prefer `train_datasets` as in
 `all_hf_train_pick_place_closed_loop.json`; the launcher downloads each source
 subfolder and passes the list to the training script. The training script
 validates schema/count compatibility and samples through a dataset-balanced
 random sampler over the virtual concat dataset, so each source split has the
-same expected sampling probability even when frame counts differ. Physical
-merged roots under
-`_workspace/so101_lerobot_merged/` are fallback/debug artifacts only, not the
-canonical training path.
+same expected sampling probability even when frame counts differ.
+
+For Qwen primitive validation configs such as `qwen_edge_primitives.json`, use
+`hf_merge_sources` for both train and validation splits. The launcher downloads
+each source subfolder, composes the shards, and passes the configured
+train/validation roots to LeRobot.
 
 For local export debugging, `--use-local-dataset-roots` ignores the HF fields
 and forwards the config's `root` values directly. For HF cache debugging,
