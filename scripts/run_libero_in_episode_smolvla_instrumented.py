@@ -104,15 +104,62 @@ def main() -> None:
         choices=(
             "baseline_fallback",
             "progress_proxy_or_baseline",
+            "adaptive_progress_proxy_or_baseline",
             "debug_min_action_norm",
         ),
         default="baseline_fallback",
         help=(
             "baseline_fallback preserves policy-only chunks; progress_proxy_or_baseline "
             "selects a non-baseline chunk only when an observation progress proxy proves "
-            "improvement; debug_min_action_norm is debug-only and not a method selector."
+            "improvement; adaptive_progress_proxy_or_baseline also permits high-absolute-score "
+            "medium-margin switches; debug_min_action_norm is debug-only and not a method selector."
         ),
     )
+    parser.add_argument(
+        "--sequential-substeps-json",
+        type=Path,
+        default=None,
+        help=(
+            "Run a sequential substep policy inside one episode. Each substep "
+            "sets observation['task'] for one 15-step chunk, then a conservative "
+            "semantic verifier decides pass/retry/advance."
+        ),
+    )
+    parser.add_argument(
+        "--sequential-substeps-continue-on-required-fail",
+        action="store_true",
+        help=(
+            "Continue to later substeps after a required substep exhausts attempts. "
+            "The exhausted substep remains non-PASS in the trace."
+        ),
+    )
+    parser.add_argument(
+        "--sequential-lift-assist",
+        action="store_true",
+        help=(
+            "Diagnostic-only: during sequential object_lifted substeps, override "
+            "z/up and gripper-close action components to test grasp/lift bottlenecks."
+        ),
+    )
+    parser.add_argument("--sequential-lift-assist-z", type=float, default=0.6)
+    parser.add_argument("--sequential-lift-assist-gripper", type=float, default=1.0)
+    parser.add_argument(
+        "--sequential-primitive-assist",
+        action="store_true",
+        help=(
+            "Diagnostic-only: for sequential primitive substeps, override XYZ/gripper "
+            "with simple semantic reach, lift, and place actions."
+        ),
+    )
+    parser.add_argument("--sequential-primitive-assist-reach-gain", type=float, default=5.0)
+    parser.add_argument("--sequential-primitive-assist-push-gain", type=float, default=5.0)
+    parser.add_argument("--sequential-primitive-assist-contact-threshold", type=float, default=0.11)
+    parser.add_argument("--sequential-primitive-assist-lift-z", type=float, default=0.8)
+    parser.add_argument("--sequential-primitive-assist-carry-z", type=float, default=0.15)
+    parser.add_argument("--sequential-primitive-assist-release-distance", type=float, default=0.12)
+    parser.add_argument("--sequential-primitive-assist-push-behind-offset", type=float, default=0.08)
+    parser.add_argument("--sequential-primitive-assist-close-gripper", type=float, default=-1.0)
+    parser.add_argument("--sequential-primitive-assist-release-gripper", type=float, default=1.0)
     args, lerobot_args = parser.parse_known_args()
 
     args.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +194,21 @@ def main() -> None:
         ita_selected_candidate_id=args.ita_selected_candidate_id or None,
         ita_candidate_prompts_json=args.ita_candidate_prompts_json,
         ita_selector_strategy=args.ita_selector_strategy,
+        sequential_substeps_json=args.sequential_substeps_json,
+        sequential_substeps_continue_on_required_fail=args.sequential_substeps_continue_on_required_fail,
+        sequential_lift_assist=args.sequential_lift_assist,
+        sequential_lift_assist_z=args.sequential_lift_assist_z,
+        sequential_lift_assist_gripper=args.sequential_lift_assist_gripper,
+        sequential_primitive_assist=args.sequential_primitive_assist,
+        sequential_primitive_assist_reach_gain=args.sequential_primitive_assist_reach_gain,
+        sequential_primitive_assist_push_gain=args.sequential_primitive_assist_push_gain,
+        sequential_primitive_assist_contact_threshold=args.sequential_primitive_assist_contact_threshold,
+        sequential_primitive_assist_lift_z=args.sequential_primitive_assist_lift_z,
+        sequential_primitive_assist_carry_z=args.sequential_primitive_assist_carry_z,
+        sequential_primitive_assist_release_distance=args.sequential_primitive_assist_release_distance,
+        sequential_primitive_assist_push_behind_offset=args.sequential_primitive_assist_push_behind_offset,
+        sequential_primitive_assist_close_gripper=args.sequential_primitive_assist_close_gripper,
+        sequential_primitive_assist_release_gripper=args.sequential_primitive_assist_release_gripper,
     )
     sys.argv = ["lerobot-eval", *lerobot_args]
     lerobot_eval.main()
@@ -179,7 +241,24 @@ def build_instrumented_rollout(
     ita_selected_candidate_id: str | None = None,
     ita_candidate_prompts_json: Path | None = None,
     ita_selector_strategy: str = "baseline_fallback",
+    sequential_substeps_json: Path | None = None,
+    sequential_substeps_continue_on_required_fail: bool = False,
+    sequential_lift_assist: bool = False,
+    sequential_lift_assist_z: float = 0.6,
+    sequential_lift_assist_gripper: float = 1.0,
+    sequential_primitive_assist: bool = False,
+    sequential_primitive_assist_reach_gain: float = 5.0,
+    sequential_primitive_assist_push_gain: float = 5.0,
+    sequential_primitive_assist_contact_threshold: float = 0.11,
+    sequential_primitive_assist_lift_z: float = 0.8,
+    sequential_primitive_assist_carry_z: float = 0.15,
+    sequential_primitive_assist_release_distance: float = 0.12,
+    sequential_primitive_assist_push_behind_offset: float = 0.08,
+    sequential_primitive_assist_close_gripper: float = -1.0,
+    sequential_primitive_assist_release_gripper: float = 1.0,
 ):
+    sequential_substeps = load_sequential_substeps(sequential_substeps_json)
+
     def instrumented_rollout(
         env,
         policy,
@@ -230,6 +309,17 @@ def build_instrumented_rollout(
         ita_method_claim_ready = False
         ita_selector_reason: str | None = None
         ita_progress_proxy_available = False
+        ita_candidate_score_table: list[dict[str, Any]] = []
+        sequential_enabled = bool(sequential_substeps)
+        sequential_action_queue: list[Any] = []
+        sequential_index = 0
+        sequential_attempt = 0
+        sequential_pending_verification = False
+        sequential_previous_state: dict[str, Any] | None = None
+        sequential_active_substep_id: str | None = None
+        sequential_trace: list[dict[str, Any]] = []
+        sequential_completion_count = 0
+        sequential_required_unmet_count = 0
 
         step = 0
         done = np.array([False] * env.num_envs)
@@ -242,12 +332,77 @@ def build_instrumented_rollout(
         )
         check_env_attributes_and_types(env)
         while not np.all(done) and step < max_steps:
+            active_substep = (
+                sequential_substeps[sequential_index]
+                if sequential_enabled and sequential_index < len(sequential_substeps)
+                else None
+            )
             semantic_state = collect_semantic_state(
                 env,
-                target_object_key=target_object_key,
-                receptacle_object_key=receptacle_object_key,
+                target_object_key=active_substep.target_object_key if active_substep else target_object_key,
+                receptacle_object_key=(
+                    active_substep.receptacle_object_key
+                    if active_substep and active_substep.receptacle_object_key
+                    else receptacle_object_key
+                ),
             )
             semantic_history.append(semantic_state)
+            if sequential_enabled and sequential_pending_verification and active_substep is not None:
+                decision = verify_sequential_substep(
+                    active_substep,
+                    semantic_state,
+                    previous_semantic_state=sequential_previous_state,
+                )
+                policy_decision = decide_sequential_substep_next(
+                    decision,
+                    attempt=sequential_attempt,
+                    max_attempts=active_substep.max_attempts,
+                    required=active_substep.required,
+                )
+                event = {
+                    "event": "sequential_substep_verification",
+                    "step": step,
+                    "substep_index": sequential_index,
+                    "substep_id": active_substep.substep_id,
+                    "attempt": sequential_attempt,
+                    "decision": decision,
+                    "policy_decision": policy_decision,
+                }
+                sequential_trace.append(event)
+                if policy_decision["next"] == "advance":
+                    sequential_completion_count += 1
+                    sequential_index += 1
+                    sequential_attempt = 0
+                    sequential_previous_state = None
+                    sequential_active_substep_id = None
+                elif policy_decision["next"] == "retry":
+                    sequential_previous_state = semantic_state
+                else:
+                    if active_substep.required:
+                        sequential_required_unmet_count += 1
+                    sequential_index += 1
+                    sequential_attempt = 0
+                    sequential_previous_state = None
+                    sequential_active_substep_id = None
+                    if active_substep.required and not sequential_substeps_continue_on_required_fail:
+                        done = np.ones_like(done, dtype=bool)
+                sequential_pending_verification = False
+                active_substep = (
+                    sequential_substeps[sequential_index]
+                    if sequential_enabled and sequential_index < len(sequential_substeps) and not np.all(done)
+                    else None
+                )
+                if active_substep is not None:
+                    # Re-read state with the newly active substep keys. Otherwise
+                    # the first attempt of the next substep can compare against
+                    # the previous substep's target/receptacle distance.
+                    semantic_state = collect_semantic_state(
+                        env,
+                        target_object_key=active_substep.target_object_key,
+                        receptacle_object_key=active_substep.receptacle_object_key
+                        if active_substep.receptacle_object_key
+                        else receptacle_object_key,
+                    )
             observation = preprocess_observation(observation)
             if return_observations:
                 all_observations.append(deepcopy(observation))
@@ -259,6 +414,8 @@ def build_instrumented_rollout(
                     observation["task"] = list(env.call("task"))
                 except (AttributeError, NotImplementedError):
                     observation["task"] = [""] * env.num_envs
+            if sequential_enabled and active_substep is not None:
+                observation["task"] = [active_substep.prompt for _ in range(env.num_envs)]
 
             observation = env_preprocessor(observation)
             observation = preprocessor(observation)
@@ -284,10 +441,46 @@ def build_instrumented_rollout(
                 "selector_fallback_used": False,
                 "selector_reason": None,
                 "progress_proxy_available": False,
+                "candidate_score_table": [],
                 "method_claim_ready": False,
                 "limitation": None,
+                "sequential_substeps": {
+                    "enabled": bool(sequential_enabled),
+                    "active_substep_id": active_substep.substep_id if active_substep else None,
+                    "active_substep_index": sequential_index if active_substep else None,
+                    "active_attempt": sequential_attempt,
+                    "queued_actions": len(sequential_action_queue),
+                },
             }
-            if ita_enable and not ita_candidate_generation_done:
+            if sequential_enabled and active_substep is not None and not sequential_action_queue:
+                sequential_attempt += 1
+                sequential_previous_state = semantic_state
+                sequential_active_substep_id = active_substep.substep_id
+                candidate = sample_policy_candidate_chunk(
+                    policy=policy,
+                    observation=observation,
+                    postprocessor=postprocessor,
+                    env_postprocessor=env_postprocessor,
+                    action_key=ACTION,
+                    torch_module=torch,
+                    commit_steps=active_substep.chunk_steps,
+                )
+                sequential_action_queue = list(candidate["actions"])
+                sequential_trace.append(
+                    {
+                        "event": "sequential_substep_chunk_sampled",
+                        "step": step,
+                        "substep_index": sequential_index,
+                        "substep_id": active_substep.substep_id,
+                        "attempt": sequential_attempt,
+                        "prompt": active_substep.prompt,
+                        "chunk_steps": active_substep.chunk_steps,
+                        "sample_source": candidate["source"],
+                        "action_shape": candidate["action_shape"],
+                    }
+                )
+
+            if ita_enable and not sequential_enabled and not ita_candidate_generation_done:
                 decision = build_ita_candidate_decision(
                     policy=policy,
                     observation=observation,
@@ -315,6 +508,7 @@ def build_instrumented_rollout(
                 ita_selector_reason = str(decision.get("selector_reason") or "")
                 ita_progress_proxy_available = bool(decision.get("progress_proxy_available"))
                 ita_method_claim_ready = bool(decision["method_claim_ready"])
+                ita_candidate_score_table = list(decision.get("candidate_score_table") or [])
                 ita_candidate_generation_done = True
                 ita_step_record.update(
                     {
@@ -330,12 +524,34 @@ def build_instrumented_rollout(
                         "selector_fallback_used": decision["selector_fallback_used"],
                         "selector_reason": decision.get("selector_reason"),
                         "progress_proxy_available": decision.get("progress_proxy_available"),
+                        "candidate_score_table": decision.get("candidate_score_table"),
                         "method_claim_ready": decision["method_claim_ready"],
                         "limitation": decision["limitation"],
                     }
                 )
 
-            if ita_enable and ita_action_queue:
+            if sequential_enabled and sequential_action_queue:
+                action = sequential_action_queue.pop(0)
+                ita_step_record.update(
+                    {
+                        "action_source": "sequential_substep_policy_chunk",
+                        "selected_candidate_id": sequential_active_substep_id,
+                        "selected_candidate_applied": True,
+                        "remaining_selected_actions": len(sequential_action_queue),
+                        "selected_action_shape": _shape_list(action),
+                        "sequential_substeps": {
+                            "enabled": True,
+                            "active_substep_id": sequential_active_substep_id,
+                            "active_substep_index": sequential_index,
+                            "active_attempt": sequential_attempt,
+                            "queued_actions": len(sequential_action_queue),
+                        },
+                    }
+                )
+                if not sequential_action_queue:
+                    sequential_pending_verification = True
+                    policy.reset()
+            elif ita_enable and ita_action_queue:
                 action = ita_action_queue.pop(0)
                 ita_selected_candidate_applied = True
                 ita_committed_action_steps += 1
@@ -354,7 +570,15 @@ def build_instrumented_rollout(
                         "selector_fallback_used": ita_selector_fallback_used,
                         "selector_reason": ita_selector_reason,
                         "progress_proxy_available": ita_progress_proxy_available,
+                        "candidate_score_table": ita_candidate_score_table,
                         "method_claim_ready": ita_method_claim_ready,
+                        "sequential_substeps": {
+                            "enabled": bool(sequential_enabled),
+                            "active_substep_id": None,
+                            "active_substep_index": None,
+                            "active_attempt": sequential_attempt,
+                            "queued_actions": len(sequential_action_queue),
+                        },
                     }
                 )
                 if not ita_action_queue and not (
@@ -372,6 +596,53 @@ def build_instrumented_rollout(
             policy_reset_reselected = False
 
             pre_intervention_action_norm = float(torch.linalg.vector_norm(action).item())
+            sequential_lift_assist_type = None
+            sequential_primitive_assist_type = None
+            if sequential_primitive_assist and sequential_enabled and active_substep is not None:
+                action, sequential_primitive_assist_type = sequential_primitive_assist_action(
+                    action,
+                    semantic_state=semantic_state,
+                    verifier_type=getattr(active_substep, "verifier_type", None),
+                    reach_gain=sequential_primitive_assist_reach_gain,
+                    push_gain=sequential_primitive_assist_push_gain,
+                    contact_threshold=sequential_primitive_assist_contact_threshold,
+                    lift_z_command=sequential_primitive_assist_lift_z,
+                    carry_z_command=sequential_primitive_assist_carry_z,
+                    release_distance=sequential_primitive_assist_release_distance,
+                    push_behind_offset=sequential_primitive_assist_push_behind_offset,
+                    close_gripper_command=sequential_primitive_assist_close_gripper,
+                    release_gripper_command=sequential_primitive_assist_release_gripper,
+                )
+                if sequential_primitive_assist_type is not None:
+                    ita_step_record["sequential_primitive_assist"] = {
+                        "applied": True,
+                        "assist_type": sequential_primitive_assist_type,
+                        "active_substep_id": sequential_active_substep_id,
+                        "verifier_type": getattr(active_substep, "verifier_type", None),
+                        "contact_threshold": sequential_primitive_assist_contact_threshold,
+                        "release_distance": sequential_primitive_assist_release_distance,
+                        "push_behind_offset": sequential_primitive_assist_push_behind_offset,
+                        "close_gripper_command": sequential_primitive_assist_close_gripper,
+                        "release_gripper_command": sequential_primitive_assist_release_gripper,
+                    }
+            if (
+                sequential_lift_assist
+                and sequential_enabled
+                and active_substep is not None
+                and getattr(active_substep, "verifier_type", None) == "object_lifted"
+            ):
+                action = sequential_lift_assist_action(
+                    action,
+                    z_command=sequential_lift_assist_z,
+                    gripper_command=sequential_lift_assist_gripper,
+                )
+                sequential_lift_assist_type = "sequential_lift_assist"
+                ita_step_record["sequential_lift_assist"] = {
+                    "applied": True,
+                    "z_command": sequential_lift_assist_z,
+                    "gripper_command": sequential_lift_assist_gripper,
+                    "active_substep_id": sequential_active_substep_id,
+                }
             verifier_triggered, verifier_reason = should_trigger_verifier(
                 step=step,
                 action_norm=pre_intervention_action_norm,
@@ -386,6 +657,10 @@ def build_instrumented_rollout(
                 semantic_distance_threshold=semantic_distance_threshold,
             )
             intervention_type = None
+            if sequential_primitive_assist_type is not None:
+                intervention_type = sequential_primitive_assist_type
+            if sequential_lift_assist_type is not None:
+                intervention_type = sequential_lift_assist_type
             if verifier_triggered and intervention_mode != "none":
                 intervention_type = format_intervention_type(
                     mode=intervention_mode,
@@ -566,7 +841,30 @@ def build_instrumented_rollout(
                         "selector_fallback_used": bool(ita_selector_fallback_used),
                         "selector_reason": ita_selector_reason,
                         "progress_proxy_available": ita_progress_proxy_available,
+                        "ita_candidate_score_table": ita_candidate_score_table,
                         "method_claim_ready": ita_method_claim_ready,
+                        "sequential_substeps_enabled": bool(sequential_enabled),
+                        "sequential_substeps_plan_path": str(sequential_substeps_json) if sequential_substeps_json else None,
+                        "sequential_substeps_total": len(sequential_substeps),
+                        "sequential_substeps_completed": sequential_completion_count,
+                        "sequential_substeps_required_unmet": sequential_required_unmet_count,
+                        "sequential_substeps_continue_on_required_fail": bool(
+                            sequential_substeps_continue_on_required_fail
+                        ),
+                        "sequential_lift_assist": bool(sequential_lift_assist),
+                        "sequential_lift_assist_z": sequential_lift_assist_z,
+                        "sequential_lift_assist_gripper": sequential_lift_assist_gripper,
+                        "sequential_primitive_assist": bool(sequential_primitive_assist),
+                        "sequential_primitive_assist_reach_gain": sequential_primitive_assist_reach_gain,
+                        "sequential_primitive_assist_push_gain": sequential_primitive_assist_push_gain,
+                        "sequential_primitive_assist_contact_threshold": sequential_primitive_assist_contact_threshold,
+                        "sequential_primitive_assist_lift_z": sequential_primitive_assist_lift_z,
+                        "sequential_primitive_assist_carry_z": sequential_primitive_assist_carry_z,
+                        "sequential_primitive_assist_release_distance": sequential_primitive_assist_release_distance,
+                        "sequential_primitive_assist_push_behind_offset": sequential_primitive_assist_push_behind_offset,
+                        "sequential_primitive_assist_close_gripper": sequential_primitive_assist_close_gripper,
+                        "sequential_primitive_assist_release_gripper": sequential_primitive_assist_release_gripper,
+                        "sequential_substep_trace": sequential_trace,
                     },
                     sort_keys=True,
                 )
@@ -580,6 +878,57 @@ def build_instrumented_rollout(
         return ret
 
     return instrumented_rollout
+
+
+def load_sequential_substeps(path: Path | None) -> list[Any]:
+    if path is None:
+        return []
+    from physical_ai_agent.imagine_then_act.sequential_substeps import normalize_substep_plan
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("--sequential-substeps-json must contain a JSON object")
+    return normalize_substep_plan(payload)
+
+
+def verify_sequential_substep(
+    substep: Any,
+    semantic_state: dict[str, Any],
+    *,
+    previous_semantic_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from physical_ai_agent.imagine_then_act.sequential_substeps import verify_substep_completion
+
+    decision = verify_substep_completion(
+        substep,
+        semantic_state,
+        previous_semantic_state=previous_semantic_state,
+    )
+    return asdict(decision)
+
+
+def decide_sequential_substep_next(
+    decision: dict[str, Any],
+    *,
+    attempt: int,
+    max_attempts: int,
+    required: bool,
+) -> dict[str, Any]:
+    from physical_ai_agent.imagine_then_act.sequential_substeps import VerifierDecision, should_retry_or_advance
+
+    return should_retry_or_advance(
+        VerifierDecision(
+            status=str(decision.get("status")),
+            reason=str(decision.get("reason")),
+            score=decision.get("score"),
+            details=decision.get("details") if isinstance(decision.get("details"), dict) else {},
+        ),
+        attempt=attempt,
+        max_attempts=max_attempts,
+        required=required,
+    )
 
 
 def parse_ita_candidate_seeds(raw_value: str) -> list[int]:
@@ -696,7 +1045,10 @@ def build_ita_candidate_decision(
     candidates.append(baseline_candidate)
     should_sample_nonbaseline = bool(forced_candidate_id and forced_candidate_id != "candidate_00_policy_only")
     should_sample_nonbaseline = should_sample_nonbaseline or selector_strategy == "debug_min_action_norm"
-    should_sample_nonbaseline = should_sample_nonbaseline or selector_strategy == "progress_proxy_or_baseline"
+    should_sample_nonbaseline = should_sample_nonbaseline or selector_strategy in {
+        "progress_proxy_or_baseline",
+        "adaptive_progress_proxy_or_baseline",
+    }
     should_sample_nonbaseline = should_sample_nonbaseline or bool(prompt_variants)
     if should_sample_nonbaseline:
         for index, seed in enumerate(seeds[:effective_num_candidates]):
@@ -739,7 +1091,11 @@ def build_ita_candidate_decision(
     baseline_candidate_selected = selected["candidate_id"] == "candidate_00_policy_only"
     selector_fallback_used = baseline_candidate_selected and not forced_candidate_id
     selector_confidence = 0.0
-    if baseline_candidate_selected and selector_strategy in {"baseline_fallback", "progress_proxy_or_baseline"}:
+    if baseline_candidate_selected and selector_strategy in {
+        "baseline_fallback",
+        "progress_proxy_or_baseline",
+        "adaptive_progress_proxy_or_baseline",
+    }:
         selector_confidence = 1.0
     return {
         "candidate_generation_source": selected["source"],
@@ -773,6 +1129,7 @@ def build_ita_candidate_decision(
         "progress_proxy_available": selector_metadata["progress_proxy_available"],
         "baseline_progress_proxy_score": selector_metadata.get("baseline_progress_proxy_score"),
         "selected_progress_proxy_score": selector_metadata.get("selected_progress_proxy_score"),
+        "candidate_score_table": selector_metadata.get("candidate_score_table", []),
         "method_claim_ready": False,
         "limitation": selected["limitation"],
         "candidate_prompts_json": str(candidate_prompts_json) if candidate_prompts_json else None,
@@ -839,25 +1196,72 @@ def compute_observation_progress_proxy(
     target_pos = semantic_state.get("target_pos")
     if not valid_vector3(eef_pos) or not valid_vector3(target_pos):
         return None
-    first_xyz = first_action_xyz(actions[0])
-    if first_xyz is None:
+    action_xyzs = [xyz for action in actions if (xyz := first_action_xyz(action)) is not None]
+    if not action_xyzs:
         return None
     direction = [float(target_pos[index]) - float(eef_pos[index]) for index in range(3)]
     direction_norm = vector_norm(direction)
-    action_norm = vector_norm(first_xyz)
-    if direction_norm <= 1e-9 or action_norm <= 1e-9:
+    if direction_norm <= 1e-9:
         return None
-    cosine = sum(first_xyz[index] * direction[index] for index in range(3)) / (action_norm * direction_norm)
-    # Map [-1, 1] to [0, 1]. This is only a first-chunk reach-progress proxy,
-    # not a success claim; candidate selection still falls back on ties.
-    score = max(0.0, min(1.0, (float(cosine) + 1.0) / 2.0))
+    unit_direction = [value / direction_norm for value in direction]
+    projections: list[float] = []
+    cosines: list[float] = []
+    lateral_norms: list[float] = []
+    action_norms: list[float] = []
+    for xyz in action_xyzs:
+        action_norm = vector_norm(xyz)
+        if action_norm <= 1e-9:
+            projections.append(0.0)
+            cosines.append(0.0)
+            lateral_norms.append(0.0)
+            action_norms.append(0.0)
+            continue
+        projection = sum(float(xyz[index]) * unit_direction[index] for index in range(3))
+        lateral = [
+            float(xyz[index]) - projection * unit_direction[index]
+            for index in range(3)
+        ]
+        projections.append(projection)
+        cosines.append(projection / action_norm)
+        lateral_norms.append(vector_norm(lateral))
+        action_norms.append(action_norm)
+    positive_projection = sum(max(0.0, value) for value in projections)
+    negative_projection = sum(abs(min(0.0, value)) for value in projections)
+    total_action_norm = sum(action_norms)
+    total_lateral_norm = sum(lateral_norms)
+    mean_cosine = sum(cosines) / len(cosines)
+    first_cosine = cosines[0]
+    net_projection = sum(projections)
+    directional_efficiency = positive_projection / total_action_norm if total_action_norm > 1e-9 else 0.0
+    reverse_penalty = negative_projection / total_action_norm if total_action_norm > 1e-9 else 0.0
+    lateral_penalty = total_lateral_norm / total_action_norm if total_action_norm > 1e-9 else 0.0
+    # Score the whole selected chunk rather than only the first xyz action. This
+    # keeps the selector conservative: coherent progress helps, but reverse or
+    # mostly-lateral motion keeps the score near baseline instead of encouraging
+    # brittle one-step lunges.
+    score = (
+        0.45 * max(0.0, min(1.0, (mean_cosine + 1.0) / 2.0))
+        + 0.35 * max(0.0, min(1.0, directional_efficiency))
+        + 0.20 * max(0.0, min(1.0, (first_cosine + 1.0) / 2.0))
+        - 0.15 * max(0.0, min(1.0, reverse_penalty))
+        - 0.10 * max(0.0, min(1.0, lateral_penalty))
+    )
+    score = max(0.0, min(1.0, score))
     return {
         "score": round(score, 6),
-        "source": "observation_eef_to_target_direction_proxy",
-        "cosine_eef_to_target": round(float(cosine), 6),
+        "source": "observation_eef_to_target_chunk_progress_proxy",
+        "first_cosine_eef_to_target": round(float(first_cosine), 6),
+        "mean_cosine_eef_to_target": round(float(mean_cosine), 6),
+        "directional_efficiency": round(float(directional_efficiency), 6),
+        "net_projection": round(float(net_projection), 6),
+        "positive_projection": round(float(positive_projection), 6),
+        "negative_projection": round(float(negative_projection), 6),
+        "reverse_penalty": round(float(reverse_penalty), 6),
+        "lateral_penalty": round(float(lateral_penalty), 6),
+        "chunk_step_count": len(action_xyzs),
         "eef_to_target_dist": semantic_state.get("eef_to_target_dist"),
         "target_object_key": semantic_state.get("target_object_key"),
-        "limitation": "First action xyz is treated as a local Cartesian direction proxy; not full success evidence.",
+        "limitation": "Action xyz chunk is treated as a local Cartesian progress proxy; not full success evidence.",
     }
 
 
@@ -926,7 +1330,12 @@ def choose_ita_candidate_with_metadata(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not candidates:
         raise ValueError("ITA candidate generation produced no candidates")
-    if selector_strategy not in {"baseline_fallback", "progress_proxy_or_baseline", "debug_min_action_norm"}:
+    if selector_strategy not in {
+        "baseline_fallback",
+        "progress_proxy_or_baseline",
+        "adaptive_progress_proxy_or_baseline",
+        "debug_min_action_norm",
+    }:
         raise ValueError(f"unsupported ITA selector strategy: {selector_strategy}")
     if forced_candidate_id:
         for candidate in candidates:
@@ -949,6 +1358,8 @@ def choose_ita_candidate_with_metadata(
                 }
     if selector_strategy == "progress_proxy_or_baseline":
         return choose_progress_proxy_candidate_or_baseline(candidates)
+    if selector_strategy == "adaptive_progress_proxy_or_baseline":
+        return choose_progress_proxy_candidate_or_baseline(candidates, adaptive=True)
     selected = min(candidates, key=lambda candidate: (candidate["score"], candidate["candidate_id"]))
     return selected, {
         "reason": f"{selector_strategy} selected minimum debug action score",
@@ -958,12 +1369,30 @@ def choose_ita_candidate_with_metadata(
     }
 
 
-def choose_progress_proxy_candidate_or_baseline(candidates: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+PROGRESS_PROXY_BASELINE_SWITCH_MARGIN = 0.05
+ADAPTIVE_PROGRESS_PROXY_SWITCH_MARGIN = 0.03
+ADAPTIVE_PROGRESS_PROXY_ABSOLUTE_SCORE = 0.70
+
+
+def choose_progress_proxy_candidate_or_baseline(
+    candidates: list[dict[str, Any]], *, adaptive: bool = False
+) -> tuple[dict[str, Any], dict[str, Any]]:
     baseline = next(
         (candidate for candidate in candidates if candidate["candidate_id"] == "candidate_00_policy_only"),
         candidates[0],
     )
     baseline_score = numeric_progress_proxy_score(baseline)
+    score_table = candidate_progress_proxy_score_table(candidates)
+    compound_guardrail = compound_left_right_assignment_guardrail(candidates)
+    if compound_guardrail:
+        return baseline, {
+            "reason": compound_guardrail,
+            "progress_proxy_available": baseline_score is not None,
+            "baseline_progress_proxy_score": baseline_score,
+            "selected_progress_proxy_score": baseline_score,
+            "compound_objective_guardrail": True,
+            "candidate_score_table": score_table,
+        }
     scored: list[tuple[float, str, dict[str, Any]]] = []
     for candidate in candidates:
         score = numeric_progress_proxy_score(candidate)
@@ -976,6 +1405,7 @@ def choose_progress_proxy_candidate_or_baseline(candidates: list[dict[str, Any]]
             "progress_proxy_available": False,
             "baseline_progress_proxy_score": baseline_score,
             "selected_progress_proxy_score": baseline_score,
+            "candidate_score_table": score_table,
         }
     best_score, _candidate_id, best = max(scored, key=lambda item: (item[0], item[1]))
     if baseline_score is None:
@@ -986,6 +1416,7 @@ def choose_progress_proxy_candidate_or_baseline(candidates: list[dict[str, Any]]
             "progress_proxy_available": True,
             "baseline_progress_proxy_score": baseline_score,
             "selected_progress_proxy_score": baseline_score,
+            "candidate_score_table": score_table,
         }
     if best["candidate_id"] == baseline["candidate_id"]:
         return baseline, {
@@ -993,20 +1424,112 @@ def choose_progress_proxy_candidate_or_baseline(candidates: list[dict[str, Any]]
             "progress_proxy_available": True,
             "baseline_progress_proxy_score": baseline_score,
             "selected_progress_proxy_score": baseline_score,
+            "candidate_score_table": score_table,
         }
-    if best_score <= baseline_score:
+    switch_margin = PROGRESS_PROXY_BASELINE_SWITCH_MARGIN
+    required_score = baseline_score + switch_margin
+    adaptive_margin = ADAPTIVE_PROGRESS_PROXY_SWITCH_MARGIN
+    adaptive_absolute_score = ADAPTIVE_PROGRESS_PROXY_ABSOLUTE_SCORE
+    if adaptive and best_score >= adaptive_absolute_score and best_score >= baseline_score + adaptive_margin:
+        return best, {
+            "reason": (
+                "selected non-baseline candidate because adaptive observation progress proxy "
+                f"cleared medium margin ({adaptive_margin:.3f}) with high absolute score "
+                f"({adaptive_absolute_score:.3f})"
+            ),
+            "progress_proxy_available": True,
+            "baseline_progress_proxy_score": baseline_score,
+            "selected_progress_proxy_score": best_score,
+            "best_nonbaseline_progress_proxy_score": best_score,
+            "baseline_switch_margin": switch_margin,
+            "adaptive_switch_margin": adaptive_margin,
+            "adaptive_absolute_score": adaptive_absolute_score,
+            "candidate_score_table": score_table,
+        }
+    if best_score < required_score:
         return baseline, {
-            "reason": "best non-baseline progress proxy did not beat baseline; kept baseline",
+            "reason": (
+                "best non-baseline progress proxy did not clear the "
+                f"baseline switch margin ({switch_margin:.3f}); kept baseline"
+            ),
             "progress_proxy_available": True,
             "baseline_progress_proxy_score": baseline_score,
             "selected_progress_proxy_score": baseline_score,
+            "best_nonbaseline_progress_proxy_score": best_score,
+            "baseline_switch_margin": switch_margin,
+            "adaptive_switch_margin": adaptive_margin if adaptive else None,
+            "adaptive_absolute_score": adaptive_absolute_score if adaptive else None,
+            "candidate_score_table": score_table,
         }
     return best, {
-        "reason": "selected non-baseline candidate because observation progress proxy beat baseline",
+        "reason": (
+            "selected non-baseline candidate because observation progress proxy "
+            f"cleared baseline switch margin ({switch_margin:.3f})"
+        ),
         "progress_proxy_available": True,
         "baseline_progress_proxy_score": baseline_score,
         "selected_progress_proxy_score": best_score,
+        "baseline_switch_margin": switch_margin,
+        "candidate_score_table": score_table,
     }
+
+
+def compound_left_right_assignment_guardrail(candidates: list[dict[str, Any]]) -> str | None:
+    """Keep baseline for pair-assignment prompts that one-object proxy cannot score.
+
+    Round 15 exposed a concrete failure mode on task4: the candidate prompt
+    describes assigning two objects to left/right targets, while the current
+    progress proxy scores only one target object. In that setting a high local
+    eef-to-object score is not enough evidence to switch away from baseline.
+    """
+    candidate_texts = [
+        normalize_candidate_prompt_text(candidate.get("candidate_prompt"))
+        for candidate in candidates
+        if not candidate.get("is_baseline", False)
+    ]
+    combined = " ".join(text for text in candidate_texts if text)
+    if not combined:
+        return None
+    has_left_right_targets = "left" in combined and "right" in combined
+    has_pair_assignment = any(token in combined for token in (" and ", " both ", " respectively"))
+    if has_left_right_targets and has_pair_assignment:
+        return (
+            "compound left/right assignment detected; current observation progress "
+            "proxy scores only one object, so kept baseline"
+        )
+    return None
+
+
+def normalize_candidate_prompt_text(candidate_prompt: Any) -> str:
+    if isinstance(candidate_prompt, str):
+        return candidate_prompt.lower()
+    if not isinstance(candidate_prompt, dict):
+        return ""
+    fields = (
+        "candidate_prompt",
+        "prompt",
+        "subgoal_text",
+        "target_object",
+        "target_region_or_point",
+        "stop_condition",
+        "strategy_axis",
+    )
+    return " ".join(str(candidate_prompt.get(field, "")) for field in fields).lower()
+
+
+def candidate_progress_proxy_score_table(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for candidate in candidates:
+        details = candidate.get("progress_proxy_details")
+        rows.append(
+            {
+                "candidate_id": candidate.get("candidate_id"),
+                "progress_proxy_score": numeric_progress_proxy_score(candidate),
+                "progress_proxy_source": details.get("source") if isinstance(details, dict) else None,
+                "is_baseline": bool(candidate.get("is_baseline", False)),
+            }
+        )
+    return rows
 
 
 def baseline_progress_proxy_score(candidates: list[dict[str, Any]]) -> float | None:
@@ -1342,6 +1865,227 @@ def semantic_reach_target_action(action: Any, *, semantic_state: dict[str, Any],
     delta = [target_pos[i] - eef_pos[i] for i in range(3)]
     for index, value in enumerate(delta):
         action[:, index] = clamp_scalar(value * gain, -1.0, 1.0)
+    if action.shape[-1] >= 7:
+        action[:, 6] = clamp_scalar(gripper_command, -1.0, 1.0)
+    return action
+
+
+def sequential_lift_assist_action(action: Any, *, z_command: float, gripper_command: float) -> Any:
+    if action.shape[-1] >= 3:
+        action[:, 2] = clamp_scalar(z_command, -1.0, 1.0)
+    if action.shape[-1] >= 7:
+        action[:, 6] = clamp_scalar(gripper_command, -1.0, 1.0)
+    return action
+
+
+def sequential_primitive_assist_action(
+    action: Any,
+    *,
+    semantic_state: dict[str, Any],
+    verifier_type: str | None,
+    reach_gain: float,
+    push_gain: float,
+    contact_threshold: float,
+    lift_z_command: float,
+    carry_z_command: float,
+    release_distance: float,
+    push_behind_offset: float,
+    close_gripper_command: float,
+    release_gripper_command: float,
+) -> tuple[Any, str | None]:
+    if verifier_type == "eef_near_object":
+        return (
+            semantic_reach_target_action(
+                action,
+                semantic_state=semantic_state,
+                gain=reach_gain,
+                gripper_command=release_gripper_command,
+            ),
+            "sequential_primitive_assist_reach",
+        )
+    if verifier_type == "object_lifted":
+        eef_to_target = semantic_state.get("eef_to_target_dist")
+        if eef_to_target is None or float(eef_to_target) > contact_threshold:
+            return (
+                semantic_reach_target_action(
+                    action,
+                    semantic_state=semantic_state,
+                    gain=reach_gain,
+                    gripper_command=close_gripper_command,
+                ),
+                "sequential_primitive_assist_lift_reach",
+            )
+        return (
+            semantic_hold_target_and_lift_action(
+                action,
+                semantic_state=semantic_state,
+                xy_gain=reach_gain,
+                z_command=lift_z_command,
+                gripper_command=close_gripper_command,
+            ),
+            "sequential_primitive_assist_lift_hold",
+        )
+    if verifier_type == "object_in_target":
+        return (
+            semantic_carry_receptacle_action(
+                action,
+                semantic_state=semantic_state,
+                reach_gain=reach_gain,
+                push_gain=push_gain,
+                contact_threshold=contact_threshold,
+                carry_z_command=carry_z_command,
+                release_distance=release_distance,
+                push_behind_offset=push_behind_offset,
+                close_gripper_command=close_gripper_command,
+                release_gripper_command=release_gripper_command,
+            ),
+            "sequential_primitive_assist_place",
+        )
+    return action, None
+
+
+def semantic_hold_target_and_lift_action(
+    action: Any,
+    *,
+    semantic_state: dict[str, Any],
+    xy_gain: float,
+    z_command: float,
+    gripper_command: float,
+) -> Any:
+    target_pos = semantic_state.get("target_pos")
+    eef_pos = semantic_state.get("eef_pos")
+    if target_pos and eef_pos and action.shape[-1] >= 2:
+        action[:, 0] = clamp_scalar((target_pos[0] - eef_pos[0]) * xy_gain, -1.0, 1.0)
+        action[:, 1] = clamp_scalar((target_pos[1] - eef_pos[1]) * xy_gain, -1.0, 1.0)
+    if action.shape[-1] >= 3:
+        action[:, 2] = clamp_scalar(z_command, -1.0, 1.0)
+    if action.shape[-1] >= 7:
+        action[:, 6] = clamp_scalar(gripper_command, -1.0, 1.0)
+    return action
+
+
+def semantic_carry_receptacle_action(
+    action: Any,
+    *,
+    semantic_state: dict[str, Any],
+    reach_gain: float,
+    push_gain: float,
+    contact_threshold: float,
+    carry_z_command: float,
+    release_distance: float,
+    push_behind_offset: float,
+    close_gripper_command: float,
+    release_gripper_command: float,
+) -> Any:
+    target_distance = semantic_state.get("target_to_receptacle_dist")
+    eef_to_target = semantic_state.get("eef_to_target_dist")
+    if target_distance is not None and float(target_distance) <= release_distance:
+        return semantic_place_receptacle_action(
+            action,
+            semantic_state=semantic_state,
+            reach_gain=reach_gain,
+            push_gain=push_gain,
+            contact_threshold=contact_threshold,
+            place_z_command=-0.4,
+            gripper_command=release_gripper_command,
+        )
+    if push_behind_offset <= 0.0:
+        return semantic_recontact_push_receptacle_action(
+            action,
+            semantic_state=semantic_state,
+            reach_gain=reach_gain,
+            push_gain=push_gain,
+            contact_threshold=contact_threshold,
+            z_command=carry_z_command,
+            gripper_command=close_gripper_command,
+        )
+    if eef_to_target is None or float(eef_to_target) > contact_threshold:
+        return semantic_reach_push_behind_action(
+            action,
+            semantic_state=semantic_state,
+            gain=reach_gain,
+            push_behind_offset=push_behind_offset,
+            gripper_command=close_gripper_command,
+        )
+    target_pos = semantic_state.get("target_pos")
+    receptacle_pos = semantic_state.get("receptacle_pos")
+    if not target_pos or not receptacle_pos:
+        return action
+    action[:, 0] = clamp_scalar((receptacle_pos[0] - target_pos[0]) * push_gain, -1.0, 1.0)
+    action[:, 1] = clamp_scalar((receptacle_pos[1] - target_pos[1]) * push_gain, -1.0, 1.0)
+    if action.shape[-1] >= 3:
+        action[:, 2] = clamp_scalar(carry_z_command, -1.0, 1.0)
+    if action.shape[-1] >= 7:
+        action[:, 6] = clamp_scalar(close_gripper_command, -1.0, 1.0)
+    return action
+
+
+def semantic_recontact_push_receptacle_action(
+    action: Any,
+    *,
+    semantic_state: dict[str, Any],
+    reach_gain: float,
+    push_gain: float,
+    contact_threshold: float,
+    z_command: float,
+    gripper_command: float,
+) -> Any:
+    eef_to_target = semantic_state.get("eef_to_target_dist")
+    if eef_to_target is None or float(eef_to_target) > contact_threshold:
+        return semantic_reach_target_action(
+            action,
+            semantic_state=semantic_state,
+            gain=reach_gain,
+            gripper_command=gripper_command,
+        )
+    target_pos = semantic_state.get("target_pos")
+    receptacle_pos = semantic_state.get("receptacle_pos")
+    eef_pos = semantic_state.get("eef_pos")
+    if not target_pos or not receptacle_pos or not eef_pos:
+        return action
+    object_to_goal = [receptacle_pos[0] - target_pos[0], receptacle_pos[1] - target_pos[1]]
+    eef_to_object = [target_pos[0] - eef_pos[0], target_pos[1] - eef_pos[1]]
+    action[:, 0] = clamp_scalar(object_to_goal[0] * push_gain + eef_to_object[0] * reach_gain, -1.0, 1.0)
+    action[:, 1] = clamp_scalar(object_to_goal[1] * push_gain + eef_to_object[1] * reach_gain, -1.0, 1.0)
+    if action.shape[-1] >= 3:
+        action[:, 2] = clamp_scalar(z_command, -1.0, 1.0)
+    if action.shape[-1] >= 7:
+        action[:, 6] = clamp_scalar(gripper_command, -1.0, 1.0)
+    return action
+
+
+def semantic_reach_push_behind_action(
+    action: Any,
+    *,
+    semantic_state: dict[str, Any],
+    gain: float,
+    push_behind_offset: float,
+    gripper_command: float,
+) -> Any:
+    target_pos = semantic_state.get("target_pos")
+    receptacle_pos = semantic_state.get("receptacle_pos")
+    eef_pos = semantic_state.get("eef_pos")
+    if not target_pos or not receptacle_pos or not eef_pos:
+        return semantic_reach_target_action(
+            action,
+            semantic_state=semantic_state,
+            gain=gain,
+            gripper_command=gripper_command,
+        )
+    direction = [receptacle_pos[0] - target_pos[0], receptacle_pos[1] - target_pos[1]]
+    norm = (direction[0] * direction[0] + direction[1] * direction[1]) ** 0.5
+    if norm <= 1e-6:
+        behind = target_pos
+    else:
+        behind = [
+            target_pos[0] - push_behind_offset * direction[0] / norm,
+            target_pos[1] - push_behind_offset * direction[1] / norm,
+            target_pos[2],
+        ]
+    action[:, 0] = clamp_scalar((behind[0] - eef_pos[0]) * gain, -1.0, 1.0)
+    action[:, 1] = clamp_scalar((behind[1] - eef_pos[1]) * gain, -1.0, 1.0)
+    if action.shape[-1] >= 3:
+        action[:, 2] = clamp_scalar((behind[2] - eef_pos[2]) * gain, -1.0, 1.0)
     if action.shape[-1] >= 7:
         action[:, 6] = clamp_scalar(gripper_command, -1.0, 1.0)
     return action

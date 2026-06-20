@@ -41,6 +41,7 @@ from physical_ai_agent.imagine_then_act.risk_probes import (
     sample_policy_vlm_subgoal_candidates,
     select_actual_probe_candidates,
     simulate_mock_env,
+    validate_risk1b_task_relation,
     validate_risk1b_subgoal_records,
 )
 from physical_ai_agent.imagine_then_act.direct_libero_imagination import (
@@ -102,6 +103,34 @@ class RiskProbeTest(TestCase):
             self.assertEqual(metrics.verdict, FAIL)
             self.assertEqual(metrics.min_pairwise_l2, 0.0)
             self.assertIn("identical", metrics.rationale)
+
+    def test_risk1b_relation_validation_rejects_intermediate_motion_prompts(self) -> None:
+        records = [
+            {
+                "subgoal_text": (
+                    "align the white mug with the plate and place the chocolate pudding "
+                    "to the right of the plate"
+                ),
+                "strategy_axis": "pre_contact_alignment",
+                "target_object": "white mug and chocolate pudding",
+                "target_region_or_point": "plate and right of the plate",
+                "stop_condition": (
+                    "white mug is on the plate and chocolate pudding is to the right "
+                    "of the plate"
+                ),
+                "confidence": 0.8,
+            }
+        ]
+
+        errors = validate_risk1b_task_relation(
+            records,
+            "place the white mug on the plate and position the chocolate pudding to the right of the plate",
+        )
+
+        self.assertTrue(
+            any("not only an intermediate approach/alignment" in error for error in errors),
+            errors,
+        )
 
     def test_clone_fidelity_mock_path_matches_committed_path(self) -> None:
         with TemporaryDirectory() as tmpdir:
