@@ -421,6 +421,9 @@ def _index_html() -> str:
     .thumb { border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#fff; }
     .thumb img { width:100%; display:block; aspect-ratio:4/3; object-fit:cover; }
     .thumb .label { padding:5px 7px; color:var(--muted); font-size:12px; }
+    .inline-player { border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#0b1220; margin-bottom:8px; }
+    .inline-player video, .inline-player img { width:100%; display:block; aspect-ratio:4/3; object-fit:contain; background:#0b1220; }
+    .inline-player .label { padding:5px 7px; color:#e5e7eb; font-size:12px; background:#111827; }
     .video-link { display:inline-block; margin-top:8px; color:var(--accent); font-weight:650; }
     .diagnostics { background:#fff; border:1px solid var(--border); border-left:4px solid var(--warn); border-radius:6px; padding:10px; margin-bottom:14px; }
     .diagnostics-head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -849,8 +852,23 @@ def _index_html() -> str:
     }
     function renderRobotMedia(media) {
       if (!media?.robot_frame) return `<div class="placeholder">${media?.reason || "robot frames unavailable"}</div>`;
-      const video = media.iteration_video_gif ? `<a class="video-link" href="${artifactUrl(media.iteration_video_gif)}" target="_blank">open iteration video</a>` : "";
-      return `<div class="thumb"><img src="${artifactUrl(media.robot_frame)}" alt="robot frame"><div class="label">latest robot frame</div></div>${video}`;
+      const player = renderInlineRobotPlayer(media);
+      return `${player}<div class="thumb"><img src="${artifactUrl(media.robot_frame)}" alt="robot frame"><div class="label">latest robot frame</div></div>`;
+    }
+    function renderInlineRobotPlayer(media) {
+      if (media?.iteration_video_mp4) {
+        return `<div class="inline-player">
+          <video controls preload="metadata" playsinline src="${artifactUrl(media.iteration_video_mp4)}"></video>
+          <div class="label">iteration video · mp4</div>
+        </div>`;
+      }
+      if (media?.iteration_video_gif) {
+        return `<div class="inline-player">
+          <img src="${artifactUrl(media.iteration_video_gif)}" alt="iteration video">
+          <div class="label">iteration video · gif</div>
+        </div>`;
+      }
+      return "";
     }
     function firstRawRolloutConfig(steps) {
       for (const row of steps || []) {
