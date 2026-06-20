@@ -75,11 +75,18 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertEqual(manifest["summary"]["loop_tests"], 1)
         self.assertEqual(payload["loop_tests"][0]["validation_loss"], 0.1)
         self.assertEqual(detail["loop_test"]["status_meaning"], "evaluator_completed")
+        self.assertIn("system", detail["loop_test"]["qwen_prompts"])
         timeline = detail["episodes"][0]["timeline"]
         self.assertEqual(timeline[0]["type"], "planner_call")
+        self.assertIn("system_prompt", timeline[0]["policy_input"])
         self.assertIn("tool_call_start", [row["type"] for row in timeline])
         self.assertIn("tool_call_end", [row["type"] for row in timeline])
         self.assertEqual([row["iteration"] for row in timeline if row["type"] == "tool_call_start"], [1, 2])
+        first_tool = next(row for row in timeline if row["type"] == "tool_call_start")
+        self.assertEqual(first_tool["tool_parameters"]["primitive_id"], "move_over_cube_edge")
+        first_step = next(row for row in timeline if row["type"] == "policy_step")
+        self.assertEqual(first_step["policy_output"]["action_chunk"]["used_count"], 1)
+        self.assertIn("generated chunk count was not recorded", first_step["policy_output"]["action_chunk"]["note"])
 
 
 def _record(step: int, fn: str, primitive_id: str) -> dict:

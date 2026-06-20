@@ -11,6 +11,18 @@ from typing import Any
 
 
 SCHEMA_VERSION = "loop-test-analyzer-v0.1"
+DEFAULT_QWEN_SYSTEM_PROMPT = (
+    "You are a robot task planner. Use only the provided tools. "
+    "Plan short SO101 primitive calls for the task. "
+    "Qwen3 non-thinking mode: do not emit hidden reasoning, prose, or markdown. "
+    "Return tool calls only. /no_think"
+)
+DEFAULT_QWEN_USER_PROMPT_TEMPLATE = (
+    "Task: {task}\n"
+    "Target object: {target_object}\n"
+    "Use the narrow SO101 edge-grasp primitive set in order when appropriate: "
+    "move, align, pick_up."
+)
 
 
 def main() -> None:
@@ -103,6 +115,7 @@ def _build_loop_test(
         "episodes_completed": report.get("episodes_completed"),
         "seed": report.get("seed"),
         "qwen_plan": report.get("plan"),
+        "qwen_prompts": _qwen_prompts(report.get("plan") or {}),
         "report_path": str(report_path),
         "source_report_path": str(source_dir / report_path.name) if copy_source else str(report_path),
         "episodes": episode_rows,
@@ -181,8 +194,15 @@ def _timeline_rows(
             "training_step": step,
             "episode": episode_index,
             "policy": {"type": "qwen_chain", "model": plan.get("model"), "thinking_mode": plan.get("thinking_mode")},
-            "policy_input": {"task": plan.get("task")},
-            "policy_output": {"tool_calls": plan.get("calls") or []},
+            "policy_input": {
+                "task": plan.get("task"),
+                "system_prompt": DEFAULT_QWEN_SYSTEM_PROMPT,
+                "user_prompt": DEFAULT_QWEN_USER_PROMPT_TEMPLATE.format(
+                    task=plan.get("task") or "",
+                    target_object=_target_object(plan),
+                ),
+            },
+            "policy_output": {"tool_calls": [_tool_call_payload(call) for call in plan.get("calls") or []]},
             "robot": None,
             "media": {"available": False, "reason": "legacy rollout has no saved frames or videos"},
         }
@@ -228,10 +248,11 @@ def _tool_start_row(iteration: int, record: dict[str, Any], checkpoint: str, ste
         "episode": episode_index,
         "global_step": record.get("global_step"),
         "tool_call": record.get("fn"),
+        "tool_parameters": _tool_parameters_from_record(record),
         "primitive_id": record.get("primitive_id"),
         "policy": {"type": "smolvla", "policy_path": record.get("policy_path")},
         "policy_input": {"prompt": record.get("prompt")},
-        "policy_output": None,
+        "policy_output": {"tool_call": _tool_call_from_record(iteration, record)},
         "robot": None,
         "media": {"available": False, "reason": "legacy rollout has no saved frames or videos"},
     }
@@ -247,6 +268,7 @@ def _policy_step_row(iteration: int, record: dict[str, Any], checkpoint: str, st
         "global_step": record.get("global_step"),
         "primitive_step": record.get("primitive_step"),
         "tool_call": record.get("fn"),
+        "tool_parameters": _tool_parameters_from_record(record),
         "primitive_id": record.get("primitive_id"),
         "policy": {"type": "smolvla", "policy_path": record.get("policy_path")},
         "policy_input": {
@@ -255,7 +277,14 @@ def _policy_step_row(iteration: int, record: dict[str, Any], checkpoint: str, st
             "image_feature_mapping": record.get("image_feature_mapping"),
             "images": {},
         },
-        "policy_output": {"action": record.get("action"), "action_chunk": None},
+        "policy_output": {
+            "action": record.get("action"),
+            "action_chunk": {
+                "generated_count": None,
+                "used_count": 1,
+                "note": "legacy trace stores one selected action per environment step; generated chunk count was not recorded",
+            },
+        },
         "robot": {
             "reward": record.get("reward"),
             "info": record.get("info"),
@@ -284,6 +313,7 @@ def _tool_end_row(
         "episode": episode_index,
         "global_step": record.get("global_step"),
         "tool_call": fn,
+        "tool_parameters": _tool_parameters_from_record(record),
         "primitive_id": primitive_id,
         "policy": None,
         "policy_input": None,
@@ -297,15 +327,82 @@ def _iteration_summary(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for row in timeline:
         if row.get("type") == "tool_call_start":
+            action_steps = [
+                step
+                for step in timeline
+                if step.get("type") == "policy_step" and step.get("iteration") == row.get("iteration")
+            ]
             rows.append(
                 {
                     "iteration": row.get("iteration"),
                     "tool_call": row.get("tool_call"),
+                    "tool_parameters": row.get("tool_parameters"),
                     "primitive_id": row.get("primitive_id"),
                     "start_global_step": row.get("global_step"),
+                    "action_chunk_summary": {
+                        "generated_count": None,
+                        "used_count": len(action_steps),
+                        "recorded_policy_steps": len(action_steps),
+                        "note": "legacy trace does not preserve generated action chunk horizon",
+                    },
                 }
             )
     return rows
+
+
+def _qwen_prompts(plan: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "system": DEFAULT_QWEN_SYSTEM_PROMPT,
+        "user": DEFAULT_QWEN_USER_PROMPT_TEMPLATE.format(
+            task=plan.get("task") or "",
+            target_object=_target_object(plan),
+        ),
+    }
+
+
+def _target_object(plan: dict[str, Any]) -> str:
+    calls = plan.get("calls") or []
+    for call in calls:
+        if isinstance(call, dict) and call.get("object"):
+            return str(call["object"])
+    return "green cube"
+
+
+def _tool_call_payload(call: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "function": call.get("fn"),
+        "parameters": {
+            "object": call.get("object"),
+            "primitive_id": call.get("primitive_id"),
+            "prompt": call.get("prompt"),
+            "max_steps": call.get("max_steps"),
+        },
+        "index": call.get("index"),
+    }
+
+
+def _tool_call_from_record(iteration: int, record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "index": iteration - 1,
+        "function": record.get("fn"),
+        "parameters": _tool_parameters_from_record(record),
+    }
+
+
+def _tool_parameters_from_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "object": _object_from_prompt(record.get("prompt")),
+        "primitive_id": record.get("primitive_id"),
+        "prompt": record.get("prompt"),
+    }
+
+
+def _object_from_prompt(prompt: Any) -> str | None:
+    text = str(prompt or "")
+    for marker in ("green cube", "cube"):
+        if marker in text:
+            return marker
+    return None
 
 
 def _closed_loop_report_paths(run_dir: Path) -> list[Path]:

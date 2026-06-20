@@ -127,7 +127,13 @@ def _index_html() -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Loop Test Analyzer</title>
   <style>
-    :root { color-scheme: light; --border:#d8dde7; --muted:#667085; --bg:#f7f8fb; --ink:#162033; --accent:#0f766e; }
+    :root {
+      color-scheme: light;
+      --border:#d8dde7; --muted:#667085; --bg:#f5f7fb; --ink:#162033;
+      --accent:#0f766e; --accent-soft:#d9f3ef; --policy:#5b4bdb; --policy-soft:#eceafe;
+      --robot:#047857; --robot-soft:#dcfce7; --warn:#b45309; --warn-soft:#fff7ed;
+      --fail:#b42318; --fail-soft:#fee4e2; --ok:#027a48; --ok-soft:#dcfae6;
+    }
     * { box-sizing: border-box; }
     body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
     .app { display: grid; grid-template-columns: 330px minmax(0, 1fr); min-height: 100vh; }
@@ -137,19 +143,33 @@ def _index_html() -> str:
     h2 { font-size: 16px; margin: 0; }
     .summary, .toolbar { display: grid; gap: 8px; margin-bottom: 12px; }
     input, select { width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 8px; background: #fff; }
-    .test { border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 8px 0; cursor: pointer; background: #fff; }
+    .test { border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 8px 0; cursor: pointer; background: #fff; transition: border-color .12s, background .12s; }
+    .test:hover { border-color:#9aa8bd; background:#fbfdff; }
     .test.active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
     .row { display:flex; justify-content:space-between; gap:8px; }
     .muted { color: var(--muted); }
-    .pill { display:inline-block; padding:2px 6px; border:1px solid var(--border); border-radius:999px; font-size:12px; background:#fff; }
+    .pill { display:inline-block; padding:2px 7px; border:1px solid var(--border); border-radius:999px; font-size:12px; background:#fff; }
+    .pill.policy { color:#3f32b8; border-color:#c7c2fb; background:var(--policy-soft); }
+    .pill.robot { color:#067647; border-color:#abefc6; background:var(--robot-soft); }
+    .pill.fail { color:var(--fail); border-color:#fecdca; background:var(--fail-soft); }
+    .pill.warn { color:var(--warn); border-color:#fedf89; background:var(--warn-soft); }
     .header { display:grid; gap:8px; margin-bottom:14px; }
     .metrics { display:flex; gap:8px; flex-wrap:wrap; }
-    .plan { background:#fff; border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:14px; }
+    .plan { background:#fff; border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:14px; border-left:4px solid var(--policy); }
     .timeline { display:grid; gap:10px; }
     .event { display:grid; grid-template-columns:minmax(280px, 0.95fr) minmax(300px, 1.05fr); gap:10px; align-items:stretch; }
     .panel { background:#fff; border:1px solid var(--border); border-radius:6px; padding:10px; min-width:0; }
+    .panel.policy { border-left:4px solid var(--policy); background:linear-gradient(90deg, var(--policy-soft), #fff 26%); }
+    .panel.robot { border-left:4px solid var(--robot); background:linear-gradient(90deg, var(--robot-soft), #fff 26%); }
     .panel h3 { font-size:13px; margin:0 0 8px; }
-    .iteration { margin:16px 0 8px; font-weight:700; color:#344054; }
+    .iteration { margin:16px 0 8px; font-weight:700; color:#344054; display:flex; align-items:center; gap:8px; }
+    .iteration::before { content:""; width:10px; height:10px; border-radius:50%; background:var(--accent); display:inline-block; }
+    details { margin-top:8px; border:1px solid #edf0f5; border-radius:6px; background:#fff; }
+    summary { cursor:pointer; padding:8px 9px; font-weight:650; color:#344054; }
+    details > pre, details > .detail-body { margin:0 8px 8px; }
+    .tool-call { border:1px solid #d9d6fe; background:#fafaff; border-radius:6px; padding:8px; margin-top:8px; }
+    .step-list { display:grid; gap:7px; padding:0 8px 8px; }
+    .step-card { border:1px solid #edf0f5; border-radius:5px; padding:7px; background:#fbfcfe; }
     code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
     pre { white-space: pre-wrap; word-break: break-word; max-height: 230px; overflow:auto; background:#f8fafc; border:1px solid #edf0f5; border-radius:5px; padding:8px; margin:6px 0 0; }
     .placeholder { height:112px; display:grid; place-items:center; border:1px dashed var(--border); border-radius:6px; color:var(--muted); background:#fbfcfe; text-align:center; padding:10px; }
@@ -176,7 +196,7 @@ def _index_html() -> str:
     </main>
   </div>
   <script>
-    let state = { tests: [], active: null };
+    let state = { tests: [], active: null, episode: 0 };
     const el = id => document.getElementById(id);
     const fmt = value => value === null || value === undefined ? "-" : (typeof value === "number" ? value.toFixed(4) : String(value));
     async function loadList() {
@@ -184,7 +204,11 @@ def _index_html() -> str:
       state.tests = data.loop_tests || [];
       el("summary").innerHTML = `<div>${data.summary.loop_tests || 0} loop tests</div><div>latest: ${data.summary.latest_checkpoint || "-"}</div>`;
       renderList();
-      if (state.tests.length) selectTest(state.tests[state.tests.length - 1].loop_test_id);
+      const params = new URLSearchParams(location.search);
+      const requested = params.get("loop");
+      const episode = Number(params.get("episode") || 0);
+      const fallback = state.tests.length ? state.tests[state.tests.length - 1].loop_test_id : null;
+      if (requested || fallback) selectTest(requested || fallback, { episode, replace: true });
     }
     function renderList() {
       const q = el("filter").value.toLowerCase();
@@ -196,13 +220,17 @@ def _index_html() -> str:
       });
       el("tests").innerHTML = rows.map(row => `
         <div class="test ${row.loop_test_id === state.active ? "active" : ""}" onclick="selectTest('${row.loop_test_id}')">
-          <div class="row"><strong>${row.checkpoint}</strong><span class="pill">${row.policy_type}</span></div>
+          <div class="row"><strong>${row.checkpoint}</strong><span class="pill policy">${row.policy_type}</span></div>
           <div class="muted">step ${row.training_step ?? "-"} · val ${fmt(row.validation_loss)}</div>
-          <div class="muted">success ${fmt(row.success_rate)} · ${row.status}</div>
+          <div><span class="pill ${row.success_rate > 0 ? "robot" : "fail"}">success ${fmt(row.success_rate)}</span> <span class="muted">${row.status}</span></div>
         </div>`).join("");
     }
-    async function selectTest(id) {
+    async function selectTest(id, options = {}) {
       state.active = id;
+      state.episode = Number(options.episode || 0);
+      const nextUrl = `?loop=${encodeURIComponent(id)}&episode=${encodeURIComponent(state.episode)}`;
+      if (options.replace) history.replaceState({ loop: id, episode: state.episode }, "", nextUrl);
+      else history.pushState({ loop: id, episode: state.episode }, "", nextUrl);
       renderList();
       const data = await (await fetch(`/api/loop-test?id=${encodeURIComponent(id)}`)).json();
       renderDetail(data);
@@ -210,43 +238,138 @@ def _index_html() -> str:
     function renderDetail(data) {
       if (data.error) { el("detail").textContent = data.error; return; }
       const lt = data.loop_test;
-      const ep = (data.episodes || [])[0] || { timeline: [] };
+      const episodes = data.episodes || [];
+      const ep = episodes[Math.min(state.episode, Math.max(0, episodes.length - 1))] || { timeline: [] };
       el("detail").innerHTML = `
         <div class="header">
           <h2>${lt.policy_label} · ${lt.checkpoint}</h2>
           <div class="metrics">
-            <span class="pill">scenario ${lt.scenario}</span>
+            <span class="pill policy">scenario ${lt.scenario}</span>
             <span class="pill">step ${lt.training_step}</span>
             <span class="pill">val ${fmt(lt.validation_loss)}</span>
-            <span class="pill">success ${fmt(lt.success_rate)}</span>
-            <span class="pill">status means ${lt.status_meaning}</span>
+            <span class="pill ${lt.success_rate > 0 ? "robot" : "fail"}">task success ${fmt(lt.success_rate)}</span>
+            <span class="pill warn">status means ${lt.status_meaning}</span>
           </div>
         </div>
-        ${renderPlan(lt.qwen_plan)}
-        <div class="timeline">${renderTimeline(ep.timeline || [])}</div>`;
+        ${renderPlan(lt)}
+        <div class="timeline">${renderTimeline(groupTimeline(ep.timeline || []))}</div>`;
     }
-    function renderPlan(plan) {
+    function renderPlan(lt) {
+      const plan = lt.qwen_plan;
       if (!plan) return "";
-      return `<div class="plan"><strong>Planner</strong><div class="muted">${plan.model || "-"} · ${plan.task || "-"}</div><pre>${escapeHtml(JSON.stringify(plan.calls || [], null, 2))}</pre></div>`;
+      return `<div class="plan">
+        <strong>Planner</strong>
+        <div class="muted">${plan.model || "-"} · ${plan.task || "-"}</div>
+        <details>
+          <summary>System prompt</summary>
+          <pre>${escapeHtml(lt.qwen_prompts?.system || "not recorded")}</pre>
+        </details>
+        <details open>
+          <summary>Tool calls: function name + parameters</summary>
+          <div class="detail-body">${(plan.calls || []).map(call => renderToolCall(call)).join("")}</div>
+        </details>
+      </div>`;
     }
-    function renderTimeline(rows) {
-      let lastIteration = null;
-      return rows.map(row => {
-        let label = "";
-        if (row.type === "planner_call") label = `<div class="iteration">Planner</div>`;
-        else if (row.type === "tool_call_end") label = `<div class="iteration">Iteration ${row.iteration} end</div>`;
-        else if (row.type === "episode_end") label = `<div class="iteration">Episode end</div>`;
-        else if (row.iteration !== lastIteration) label = `<div class="iteration">Iteration ${row.iteration}</div>`;
-        lastIteration = row.iteration;
-        return label + renderEvent(row);
+    function renderToolCall(call) {
+      return `<div class="tool-call">
+        <div><strong>${escapeHtml(call.fn || call.function || "-")}</strong></div>
+        <pre>${escapeHtml(JSON.stringify({
+          object: call.object ?? call.parameters?.object,
+          primitive_id: call.primitive_id ?? call.parameters?.primitive_id,
+          prompt: call.prompt ?? call.parameters?.prompt,
+          max_steps: call.max_steps ?? call.parameters?.max_steps
+        }, null, 2))}</pre>
+      </div>`;
+    }
+    function groupTimeline(rows) {
+      const groups = [];
+      let current = null;
+      for (const row of rows) {
+        if (row.type === "planner_call") groups.push({ kind: "planner", row });
+        else if (row.type === "tool_call_start") {
+          current = { kind: "iteration", start: row, steps: [], end: null };
+          groups.push(current);
+        } else if (row.type === "policy_step" && current) current.steps.push(row);
+        else if (row.type === "tool_call_end" && current) {
+          current.end = row;
+          current = null;
+        } else if (row.type === "episode_end") groups.push({ kind: "episode_end", row });
+      }
+      return groups;
+    }
+    function renderTimeline(groups) {
+      return groups.map(group => {
+        if (group.kind === "planner") return `<div class="iteration">Planner</div>${renderEvent(group.row)}`;
+        if (group.kind === "episode_end") return `<div class="iteration">Episode end</div>${renderEvent(group.row)}`;
+        return renderIteration(group);
       }).join("");
+    }
+    function renderIteration(group) {
+      const start = group.start || {};
+      const steps = group.steps || [];
+      const rewards = steps.map(row => row.robot?.reward).filter(value => typeof value === "number");
+      const totalReward = rewards.reduce((sum, value) => sum + value, 0);
+      const last = steps[steps.length - 1] || {};
+      const generated = "unknown";
+      const used = steps.length;
+      return `
+        <div class="iteration">Iteration ${start.iteration}: ${escapeHtml(start.tool_call || "-")}</div>
+        <div class="event">
+          <section class="panel policy">
+            <h3>Policy tool call</h3>
+            <div class="metrics">
+              <span class="pill policy">function ${escapeHtml(start.tool_call || "-")}</span>
+              <span class="pill">primitive ${escapeHtml(start.primitive_id || "-")}</span>
+              <span class="pill warn">actions generated ${generated}</span>
+              <span class="pill robot">actions used ${used}</span>
+            </div>
+            <div class="tool-call">
+              <strong>function + parameters</strong>
+              <pre>${escapeHtml(JSON.stringify({ function: start.tool_call, parameters: start.tool_parameters || {} }, null, 2))}</pre>
+            </div>
+            ${start.policy_input?.prompt ? `<div><strong>Prompt</strong><br>${escapeHtml(start.policy_input.prompt)}</div>` : ""}
+            <details>
+              <summary>Action steps (${used})</summary>
+              <div class="step-list">${steps.map(renderActionStep).join("")}</div>
+            </details>
+          </section>
+          <section class="panel robot">
+            <h3>Robot motion</h3>
+            <div class="placeholder">${start.media?.reason || "media unavailable"}</div>
+            <div class="metrics">
+              <span class="pill robot">total reward ${fmt(totalReward)}</span>
+              <span class="pill">last global ${last.global_step ?? "-"}</span>
+              <span class="pill ${last.robot?.info?.success ? "robot" : "fail"}">success ${String(Boolean(last.robot?.info?.success))}</span>
+            </div>
+            <details>
+              <summary>Last robot state</summary>
+              <pre>${escapeHtml(JSON.stringify(last.robot?.info || group.end?.robot?.last_info || {}, null, 2))}</pre>
+            </details>
+          </section>
+        </div>
+        <div class="iteration">Iteration ${start.iteration} end</div>`;
+    }
+    function renderActionStep(row) {
+      return `<div class="step-card">
+        <div class="metrics">
+          <span class="pill">global ${row.global_step ?? "-"}</span>
+          <span class="pill">primitive ${row.primitive_step ?? "-"}</span>
+          <span class="pill robot">reward ${fmt(row.robot?.reward)}</span>
+        </div>
+        <details>
+          <summary>action + motor state</summary>
+          <pre>${escapeHtml(JSON.stringify({ action: row.policy_output?.action, observation: row.policy_input?.observation, info: row.robot?.info }, null, 2))}</pre>
+        </details>
+      </div>`;
     }
     function renderEvent(row) {
       const policy = row.policy_input || row.policy_output || row.policy ? `
         <h3>Policy · ${row.type}</h3>
         <div class="muted">${row.tool_call || ""} ${row.primitive_id || ""}</div>
+        ${row.policy_input?.system_prompt ? `<details><summary>System prompt</summary><pre>${escapeHtml(row.policy_input.system_prompt)}</pre></details>` : ""}
         ${row.policy_input?.prompt ? `<div><strong>Prompt</strong><br>${escapeHtml(row.policy_input.prompt)}</div>` : ""}
-        ${row.policy_output?.action ? `<div><strong>Action</strong><pre>${escapeHtml(JSON.stringify(row.policy_output.action))}</pre></div>` : ""}
+        ${row.policy_output?.tool_calls ? `<details open><summary>Tool calls</summary><div class="detail-body">${row.policy_output.tool_calls.map(renderToolCall).join("")}</div></details>` : ""}
+        ${row.policy_output?.action ? `<details><summary>Action</summary><pre>${escapeHtml(JSON.stringify(row.policy_output.action))}</pre></details>` : ""}
         ${row.policy_input?.observation ? `<div><strong>Motor state</strong><pre>${escapeHtml(JSON.stringify(row.policy_input.observation))}</pre></div>` : ""}
       ` : `<h3>Policy</h3><div class="muted">No policy event</div>`;
       const robot = row.robot ? `
@@ -259,13 +382,18 @@ def _index_html() -> str:
         </div>
         <pre>${escapeHtml(JSON.stringify(row.robot.info || row.robot.last_info || row.robot.final_info || {}, null, 2))}</pre>
       ` : `<h3>Robot motion</h3><div class="placeholder">${row.media?.reason || "waiting for motion data"}</div>`;
-      return `<div class="event"><section class="panel">${policy}</section><section class="panel">${robot}</section></div>`;
+      return `<div class="event"><section class="panel policy">${policy}</section><section class="panel robot">${robot}</section></div>`;
     }
     function escapeHtml(text) {
       return String(text).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[ch]));
     }
     el("filter").addEventListener("input", renderList);
     el("statusFilter").addEventListener("change", renderList);
+    window.addEventListener("popstate", () => {
+      const params = new URLSearchParams(location.search);
+      const id = params.get("loop");
+      if (id) selectTest(id, { episode: Number(params.get("episode") || 0), replace: true });
+    });
     loadList();
   </script>
 </body>

@@ -225,16 +225,24 @@ The analyzer should export:
 
 ### Phase 1: Existing Artifact Viewer
 
-- [ ] Define normalized loop-test manifest schema.
-- [ ] Add converter for current Qwen-chain reports and JSONL traces.
-- [ ] Generate `timeline.jsonl` from existing traces.
-- [ ] Preserve source report paths and trace paths.
-- [ ] Build a minimal local analyzer server.
-- [ ] Show loop tests in left navigation.
-- [ ] Show selected rollout as a two-column timeline.
-- [ ] Show Qwen plan/tool calls and per-step action/state/reward/distance.
-- [ ] Show clear media placeholders when frames/videos are unavailable.
-- [ ] Add unit tests for converter and server payloads.
+- [x] Define normalized loop-test manifest schema.
+- [x] Add converter for current Qwen-chain reports and JSONL traces.
+- [x] Generate `timeline.jsonl` from existing traces.
+- [x] Preserve source report paths and trace paths.
+- [x] Build a minimal local analyzer server.
+- [x] Show loop tests in left navigation.
+- [x] Show selected rollout as a two-column timeline.
+- [x] Show Qwen plan/tool calls and grouped action/state/reward/distance.
+- [x] Show clear media placeholders when frames/videos are unavailable.
+- [x] Add unit tests for converter and server payloads.
+- [x] Add URL deep links for selected loop test and episode.
+- [x] Add collapsible system prompt, tool calls, and action-step details.
+- [x] Add color-coded readability for policy, robot, warning, and failure state.
+
+Phase 1 limitation: legacy traces store one selected action per environment
+step. They do not preserve the full generated action chunk horizon, so the
+viewer shows `actions generated = unknown` and `actions used = recorded steps`.
+Phase 2 must record generated chunk counts directly from the evaluator.
 
 ### Phase 2: Recording Upgrade
 
