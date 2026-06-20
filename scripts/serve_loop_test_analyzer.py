@@ -4,6 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
+import subprocess
+import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -22,6 +27,9 @@ def main() -> None:
     args = parser.parse_args()
 
     export_dir = args.export_dir.resolve()
+    repo_root = Path(__file__).resolve().parents[1]
+    media_job_lock = threading.Lock()
+    media_job: dict[str, Any] = {"status": "idle"}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -37,12 +45,23 @@ def main() -> None:
                 loop_test_id = (query.get("id") or [""])[0]
                 self._send_json(_loop_test_detail(export_dir, loop_test_id))
                 return
+            if parsed.path == "/api/generate-media-status":
+                with media_job_lock:
+                    self._send_json(dict(media_job))
+                return
             if parsed.path == "/artifact":
                 query = parse_qs(parsed.query)
                 self._send_artifact(export_dir, Path((query.get("path") or [""])[0]))
                 return
             if parsed.path == "/vendor/chart.umd.min.js":
                 self._send_vendor_file(Path(__file__).resolve().parents[1] / "third_party" / "chartjs" / "chart.umd.min.js")
+                return
+            self.send_error(404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            if parsed.path == "/api/generate-media":
+                self._start_generate_media_job()
                 return
             self.send_error(404)
 
@@ -84,6 +103,61 @@ def main() -> None:
             self.end_headers()
             self.wfile.write(data)
 
+        def _start_generate_media_job(self) -> None:
+            with media_job_lock:
+                if media_job.get("status") == "running":
+                    self._send_json(dict(media_job))
+                    return
+                generation_root = _media_generation_repo_root(repo_root, export_dir)
+                command = _media_generation_command(generation_root, export_dir)
+                media_job.clear()
+                media_job.update(
+                    {
+                        "status": "running",
+                        "started_at": time.time(),
+                        "command": command,
+                        "repo_root": str(generation_root),
+                        "run_dir": str(export_dir.parent),
+                        "output_dir": str(export_dir),
+                    }
+                )
+
+            def run_job() -> None:
+                env = os.environ.copy()
+                src_path = str(generation_root / "src")
+                env["PYTHONPATH"] = src_path if not env.get("PYTHONPATH") else f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+                try:
+                    completed = subprocess.run(
+                        command,
+                        cwd=generation_root,
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    status = "succeeded" if completed.returncode == 0 else "failed"
+                    result = {
+                        "status": status,
+                        "finished_at": time.time(),
+                        "returncode": completed.returncode,
+                        "stdout": completed.stdout[-4000:],
+                        "stderr": completed.stderr[-4000:],
+                    }
+                except OSError as exc:
+                    result = {
+                        "status": "failed",
+                        "finished_at": time.time(),
+                        "returncode": None,
+                        "stdout": "",
+                        "stderr": str(exc),
+                    }
+                with media_job_lock:
+                    media_job.update(result)
+
+            threading.Thread(target=run_job, name="loop-test-generate-media", daemon=True).start()
+            with media_job_lock:
+                self._send_json(dict(media_job))
+
         def _send_vendor_file(self, path: Path) -> None:
             if not path.is_file():
                 self.send_error(404)
@@ -99,6 +173,36 @@ def main() -> None:
     server = ReusableThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[loop-test-analyzer] serving http://{args.host}:{args.port}/ export_dir={export_dir}", flush=True)
     server.serve_forever()
+
+
+def _media_generation_repo_root(server_repo_root: Path, export_dir: Path) -> Path:
+    for candidate in (export_dir, *export_dir.parents):
+        if (candidate / "scripts" / "build_loop_test_analyzer_export.py").is_file() and (candidate / "src").is_dir():
+            return candidate
+    return server_repo_root
+
+
+def _media_generation_command(repo_root: Path, export_dir: Path, python_executable: str | None = None) -> list[str]:
+    executable = _media_generation_python(repo_root, export_dir, python_executable=python_executable)
+    return [
+        executable,
+        "-B",
+        str(repo_root / "scripts" / "build_loop_test_analyzer_export.py"),
+        "--run-dir",
+        str(export_dir.parent),
+        "--output-dir",
+        str(export_dir),
+        "--copy-source",
+        "--generate-media",
+    ]
+
+
+def _media_generation_python(repo_root: Path, export_dir: Path, python_executable: str | None = None) -> str:
+    for candidate in (export_dir, *export_dir.parents, repo_root):
+        python_path = candidate / ".venv" / "bin" / "python"
+        if python_path.exists():
+            return str(python_path)
+    return python_executable or sys.executable
 
 
 def _loop_tests_payload(export_dir: Path) -> dict[str, Any]:
@@ -158,6 +262,8 @@ def _index_html() -> str:
     h2 { font-size: 16px; margin: 0; }
     .summary, .toolbar { display: grid; gap: 8px; margin-bottom: 12px; }
     input, select { width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 8px; background: #fff; }
+    button { border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; font-weight:650; padding:7px 10px; cursor:pointer; }
+    button:disabled { opacity:.62; cursor:not-allowed; }
     .test { border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 8px 0; cursor: pointer; background: #fff; transition: border-color .12s, background .12s; }
     .test:hover { border-color:#9aa8bd; background:#fbfdff; }
     .test.active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
@@ -170,6 +276,8 @@ def _index_html() -> str:
     .pill.warn { color:var(--warn); border-color:#fedf89; background:var(--warn-soft); }
     .header { display:grid; gap:8px; margin-bottom:14px; }
     .metrics { display:flex; gap:8px; flex-wrap:wrap; }
+    .media-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .media-actions .status { color:var(--muted); }
     .plan { background:#fff; border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:14px; border-left:4px solid var(--policy); }
     .timeline { display:grid; gap:10px; }
     .event { display:grid; grid-template-columns:minmax(280px, 0.95fr) minmax(300px, 1.05fr); gap:10px; align-items:stretch; }
@@ -283,6 +391,10 @@ def _index_html() -> str:
             <span class="pill">val ${fmt(lt.validation_loss)}</span>
             <span class="pill ${lt.success_rate > 0 ? "robot" : "fail"}">task success ${fmt(lt.success_rate)}</span>
             <span class="pill warn">status means ${lt.status_meaning}</span>
+          </div>
+          <div class="media-actions">
+            <button id="generateMediaBtn" onclick="generateMedia()">Generate / refresh media</button>
+            <span id="mediaJobStatus" class="status">frames and videos are generated locally on demand</span>
           </div>
         </div>
           ${renderPlan(lt)}
@@ -415,6 +527,52 @@ def _index_html() -> str:
       ].filter(([, path]) => path);
       if (!links.length) return "";
       return `<details><summary>Raw Qwen payloads</summary><div class="detail-body">${links.map(([label, path]) => `<a class="video-link" href="${artifactUrl(path)}" target="_blank">${escapeHtml(label)}</a>`).join("<br>")}</div></details>`;
+    }
+    async function generateMedia() {
+      const button = el("generateMediaBtn");
+      if (button) button.disabled = true;
+      setMediaJobStatus("starting media export...");
+      try {
+        const data = await (await fetch("/api/generate-media", { method: "POST" })).json();
+        updateMediaJobStatus(data);
+        pollMediaJob();
+      } catch (error) {
+        setMediaJobStatus(`media export request failed: ${error}`);
+        if (button) button.disabled = false;
+      }
+    }
+    async function pollMediaJob() {
+      const data = await (await fetch("/api/generate-media-status")).json();
+      updateMediaJobStatus(data);
+      if (data.status === "running") {
+        setTimeout(pollMediaJob, 1500);
+        return;
+      }
+      const button = el("generateMediaBtn");
+      if (button) button.disabled = false;
+      if (data.status === "succeeded" && state.active) {
+        await selectTest(state.active, { episode: state.episode, replace: true });
+        setMediaJobStatus("media export complete; current loop reloaded");
+      }
+    }
+    function updateMediaJobStatus(data) {
+      if (!data || data.status === "idle") {
+        setMediaJobStatus("frames and videos are generated locally on demand");
+        return;
+      }
+      if (data.status === "running") {
+        setMediaJobStatus(`generating media from raw rollout data...`);
+        return;
+      }
+      if (data.status === "succeeded") {
+        setMediaJobStatus("media export complete");
+        return;
+      }
+      setMediaJobStatus(`media export failed: ${data.stderr || data.returncode || "unknown error"}`);
+    }
+    function setMediaJobStatus(text) {
+      const node = el("mediaJobStatus");
+      if (node) node.textContent = text;
     }
     function renderToolCall(call) {
       return `<div class="tool-call">

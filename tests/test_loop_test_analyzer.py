@@ -111,6 +111,41 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertTrue(first_step["policy_output"]["action_chunk"]["confirmed_in_rollout"])
         self.assertEqual(detail["episodes"][0]["iterations"][0]["action_chunk_summary"]["chunk_count"], 1)
 
+    def test_media_generation_command_uses_export_parent_as_run_dir(self) -> None:
+        repo_root = Path("/repo")
+        export_dir = Path("/run/qwen_edge_primitives/loop_test_analyzer_export")
+        command = server._media_generation_command(repo_root, export_dir, python_executable="/python")
+
+        self.assertEqual(command[0], "/python")
+        self.assertIn(str(repo_root / "scripts" / "build_loop_test_analyzer_export.py"), command)
+        self.assertIn("--copy-source", command)
+        self.assertIn("--generate-media", command)
+        self.assertEqual(command[command.index("--run-dir") + 1], str(export_dir.parent))
+        self.assertEqual(command[command.index("--output-dir") + 1], str(export_dir))
+
+    def test_media_generation_repo_root_prefers_export_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "physical_ai_agent"
+            export_dir = workspace / "_workspace" / "run" / "loop_test_analyzer_export"
+            (workspace / "scripts").mkdir(parents=True)
+            (workspace / "src").mkdir()
+            (workspace / "scripts" / "build_loop_test_analyzer_export.py").write_text("", encoding="utf-8")
+
+            self.assertEqual(server._media_generation_repo_root(Path("/server"), export_dir), workspace)
+
+    def test_media_generation_python_prefers_export_workspace_venv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "physical_ai_agent"
+            export_dir = workspace / "_workspace" / "run" / "loop_test_analyzer_export"
+            python_path = workspace / ".venv" / "bin" / "python"
+            python_path.parent.mkdir(parents=True)
+            python_path.write_text("", encoding="utf-8")
+
+            self.assertEqual(
+                server._media_generation_python(Path("/server"), export_dir, python_executable="/fallback"),
+                str(python_path),
+            )
+
 
 def _record(step: int, fn: str, primitive_id: str) -> dict:
     return {
