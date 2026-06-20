@@ -585,6 +585,8 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--closed-loop-subgoal-chain-mode", constants)
         self.assertIn("--closed-loop-subgoal-sequence", constants)
         self.assertIn("--closed-loop-valid-mask-checkpoint", constants)
+        self.assertIn("--closed-loop-policy-n-action-steps", constants)
+        self.assertIn("--closed-loop-policy-num-steps", constants)
 
     def test_training_monitor_passes_subgoal_chain_flags_to_closed_loop_eval(self) -> None:
         source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
@@ -1374,6 +1376,17 @@ class SO101SmolVLAPipelineTest(TestCase):
                     qwen_response_json=None,
                     qwen_plan_json=None,
                     qwen_object="green cube",
+                    record_loop_artifacts=True,
+                    loop_artifact_width=128,
+                    loop_artifact_height=128,
+                    loop_artifact_fps=12,
+                    loop_artifact_every_n_steps=1,
+                    closed_loop_subgoal_chain_mode="off",
+                    closed_loop_fixed_subgoal_chunks=1,
+                    closed_loop_valid_mask_threshold=0.5,
+                    closed_loop_valid_mask_consecutive=2,
+                    closed_loop_policy_n_action_steps=15,
+                    closed_loop_policy_num_steps=10,
                 ),
                 repo_root=repo_root,
                 run_dir=repo_root / "run",
@@ -1395,6 +1408,10 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--loop-artifact-width", progress_cmd)
             self.assertIn("--qwen-response-json", progress_cmd)
             self.assertIn("configs/agent/qwen3_so101_tool_planner_mock_response.json", progress_cmd)
+            self.assertIn("--policy-n-action-steps", progress_cmd)
+            self.assertIn("15", progress_cmd)
+            self.assertIn("--policy-num-steps", progress_cmd)
+            self.assertIn("10", progress_cmd)
 
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (

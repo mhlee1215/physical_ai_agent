@@ -150,6 +150,8 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--closed-loop-valid-mask-checkpoint", type=Path)
     parser.add_argument("--closed-loop-valid-mask-threshold", type=float, default=0.5)
     parser.add_argument("--closed-loop-valid-mask-consecutive", type=int, default=2)
+    parser.add_argument("--closed-loop-policy-n-action-steps", type=int, default=15)
+    parser.add_argument("--closed-loop-policy-num-steps", type=int, default=10)
     parser.add_argument(
         "--validation-interval-steps",
         type=int,
@@ -1143,11 +1145,15 @@ def _progress_monitor_command(
         str(getattr(args, "closed_loop_valid_mask_threshold", 0.5)),
         "--closed-loop-valid-mask-consecutive",
         str(getattr(args, "closed_loop_valid_mask_consecutive", 2)),
+        "--policy-n-action-steps",
+        str(getattr(args, "closed_loop_policy_n_action_steps", 15)),
+        "--policy-num-steps",
+        str(getattr(args, "closed_loop_policy_num_steps", 10)),
         "--local-files-only",
     ]
     closed_loop_subgoal_sequence = getattr(args, "closed_loop_subgoal_sequence", None)
     if closed_loop_subgoal_sequence:
-        cmd.extend(["--closed-loop-subgoal-sequence", closed_loop_subgoal_sequence])
+        cmd.extend(["--closed-loop-subgoal-sequence", str(closed_loop_subgoal_sequence)])
     closed_loop_valid_mask_checkpoint = getattr(args, "closed_loop_valid_mask_checkpoint", None)
     if closed_loop_valid_mask_checkpoint:
         cmd.extend(["--closed-loop-valid-mask-checkpoint", str(closed_loop_valid_mask_checkpoint)])
