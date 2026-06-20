@@ -146,6 +146,46 @@ class LoopTestAnalyzerTest(unittest.TestCase):
                 str(python_path),
             )
 
+    def test_media_job_status_round_trips_in_export_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir) / "export"
+            payload = {"status": "running", "progress": {"percent": 12.5}}
+
+            server._save_media_job_status(export_dir, payload)
+
+            self.assertEqual(server._load_media_job_status(export_dir), payload)
+
+    def test_media_artifact_progress_counts_generated_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "run"
+            export_dir = run_dir / "loop_test_analyzer_export"
+            report_dir = run_dir / "closed_loop_evals" / "qwen_chain_seed98100_000224"
+            episode_dir = export_dir / "loop_tests" / "qwen_chain_000224" / "episodes" / "episode_000" / "media"
+            report_dir.mkdir(parents=True)
+            trace_path = report_dir / "trace.jsonl"
+            trace_path.write_text(json.dumps(_record(0, "move", "move_over_cube_edge")) + "\n", encoding="utf-8")
+            (report_dir / "qwen_closed_loop_eval_report.json").write_text(
+                json.dumps({"episodes": [{"trace_path": str(trace_path)}]}),
+                encoding="utf-8",
+            )
+            for folder, name in [
+                ("policy_inputs", "step_0000_egocentric_cam.png"),
+                ("policy_inputs", "step_0000_wrist_cam.png"),
+                ("robot_frames", "step_0000_top_down.png"),
+                ("videos", "iteration_01_move.gif"),
+            ]:
+                path = episode_dir / folder / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("x", encoding="utf-8")
+
+            progress = server._media_artifact_progress(export_dir)
+
+            self.assertEqual(progress["source_rollout_records"], 1)
+            self.assertEqual(progress["expected_png_files"], 3)
+            self.assertEqual(progress["png_files"], 3)
+            self.assertEqual(progress["gif_files"], 1)
+            self.assertEqual(progress["percent"], 100.0)
+
 
 def _record(step: int, fn: str, primitive_id: str) -> dict:
     return {

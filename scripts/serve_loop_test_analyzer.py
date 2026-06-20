@@ -15,6 +15,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
+MEDIA_JOB_STATUS_FILENAME = ".generate_media_status.json"
+
+
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
@@ -29,7 +32,12 @@ def main() -> None:
     export_dir = args.export_dir.resolve()
     repo_root = Path(__file__).resolve().parents[1]
     media_job_lock = threading.Lock()
-    media_job: dict[str, Any] = {"status": "idle"}
+    media_job: dict[str, Any] = _load_media_job_status(export_dir)
+    if media_job.get("status") == "running":
+        media_job["status"] = "interrupted"
+        media_job["finished_at"] = time.time()
+        media_job["stderr"] = "Previous media generation server stopped before recording completion."
+        _save_media_job_status(export_dir, media_job)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -47,7 +55,9 @@ def main() -> None:
                 return
             if parsed.path == "/api/generate-media-status":
                 with media_job_lock:
-                    self._send_json(dict(media_job))
+                    if media_job.get("status") == "idle":
+                        media_job.update(_load_media_job_status(export_dir))
+                    self._send_json(_with_media_progress(export_dir, dict(media_job)))
                 return
             if parsed.path == "/artifact":
                 query = parse_qs(parsed.query)
@@ -115,12 +125,18 @@ def main() -> None:
                     {
                         "status": "running",
                         "started_at": time.time(),
+                        "finished_at": None,
                         "command": command,
                         "repo_root": str(generation_root),
                         "run_dir": str(export_dir.parent),
                         "output_dir": str(export_dir),
+                        "server_pid": os.getpid(),
+                        "progress": _media_artifact_progress(export_dir),
+                        "stdout": "",
+                        "stderr": "",
                     }
                 )
+                _save_media_job_status(export_dir, media_job)
 
             def run_job() -> None:
                 env = os.environ.copy()
@@ -142,6 +158,7 @@ def main() -> None:
                         "returncode": completed.returncode,
                         "stdout": completed.stdout[-4000:],
                         "stderr": completed.stderr[-4000:],
+                        "progress": _media_artifact_progress(export_dir),
                     }
                 except OSError as exc:
                     result = {
@@ -150,13 +167,15 @@ def main() -> None:
                         "returncode": None,
                         "stdout": "",
                         "stderr": str(exc),
+                        "progress": _media_artifact_progress(export_dir),
                     }
                 with media_job_lock:
                     media_job.update(result)
+                    _save_media_job_status(export_dir, media_job)
 
             threading.Thread(target=run_job, name="loop-test-generate-media", daemon=True).start()
             with media_job_lock:
-                self._send_json(dict(media_job))
+                self._send_json(_with_media_progress(export_dir, dict(media_job)))
 
         def _send_vendor_file(self, path: Path) -> None:
             if not path.is_file():
@@ -203,6 +222,103 @@ def _media_generation_python(repo_root: Path, export_dir: Path, python_executabl
         if python_path.exists():
             return str(python_path)
     return python_executable or sys.executable
+
+
+def _media_job_status_path(export_dir: Path) -> Path:
+    return export_dir / MEDIA_JOB_STATUS_FILENAME
+
+
+def _load_media_job_status(export_dir: Path) -> dict[str, Any]:
+    path = _media_job_status_path(export_dir)
+    if not path.is_file():
+        return {"status": "idle"}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"status": "idle"}
+    if not isinstance(payload, dict):
+        return {"status": "idle"}
+    return payload
+
+
+def _save_media_job_status(export_dir: Path, payload: dict[str, Any]) -> None:
+    path = _media_job_status_path(export_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _with_media_progress(export_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("status") == "running":
+        payload["progress"] = _media_artifact_progress(export_dir)
+        _save_media_job_status(export_dir, payload)
+    elif payload.get("progress") is None:
+        payload["progress"] = _media_artifact_progress(export_dir)
+    return payload
+
+
+def _media_artifact_progress(export_dir: Path) -> dict[str, Any]:
+    run_dir = export_dir.parent
+    total_records = _source_rollout_record_count(run_dir)
+    expected_png_files = total_records * 3 if total_records else 0
+    media_root = export_dir / "loop_tests"
+    png_files = _count_files(media_root, "*.png")
+    gif_files = _count_files(media_root, "*.gif")
+    mp4_files = _count_files(media_root, "*.mp4")
+    expected = expected_png_files or png_files
+    percent = None
+    if expected:
+        percent = min(100.0, round((png_files / expected) * 100.0, 1))
+    stage = "waiting"
+    if png_files:
+        stage = "rendering frames"
+    if gif_files or mp4_files:
+        stage = "encoding videos"
+    if percent == 100.0:
+        stage = "finalizing export"
+    return {
+        "stage": stage,
+        "percent": percent,
+        "source_rollout_records": total_records,
+        "expected_png_files": expected_png_files,
+        "png_files": png_files,
+        "gif_files": gif_files,
+        "mp4_files": mp4_files,
+    }
+
+
+def _source_rollout_record_count(run_dir: Path) -> int:
+    total = 0
+    for report_path in sorted((run_dir / "closed_loop_evals").glob("**/*_report.json")):
+        report = _read_json_safely(report_path)
+        for episode in report.get("episodes") or []:
+            trace_path = Path(episode.get("trace_path") or "")
+            if not trace_path.is_file():
+                trace_path = report_path.parent / trace_path.name
+            total += _count_jsonl_records(trace_path)
+    return total
+
+
+def _read_json_safely(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _count_jsonl_records(path: Path) -> int:
+    try:
+        return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    except OSError:
+        return 0
+
+
+def _count_files(root: Path, pattern: str) -> int:
+    if not root.exists():
+        return 0
+    return sum(1 for path in root.rglob(pattern) if path.is_file())
 
 
 def _loop_tests_payload(export_dir: Path) -> dict[str, Any]:
@@ -279,6 +395,10 @@ def _index_html() -> str:
     .metrics { display:flex; gap:8px; flex-wrap:wrap; }
     .media-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .media-actions .status { color:var(--muted); }
+    .media-progress { display:grid; gap:5px; min-width:min(420px, 100%); flex:1 1 280px; }
+    .progress-track { width:100%; height:8px; border-radius:999px; background:#e9edf5; overflow:hidden; border:1px solid #dfe5ef; }
+    .progress-bar { height:100%; width:0%; background:linear-gradient(90deg, var(--accent), #22c55e); transition:width .25s ease; }
+    .progress-meta { display:flex; gap:8px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
     .plan { background:#fff; border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:14px; border-left:4px solid var(--policy); }
     .timeline { display:grid; gap:10px; }
     .event { display:grid; grid-template-columns:minmax(280px, 0.95fr) minmax(300px, 1.05fr); gap:10px; align-items:stretch; }
@@ -396,7 +516,11 @@ def _index_html() -> str:
           </div>
           <div class="media-actions">
             <button id="generateMediaBtn" onclick="generateMedia()">Generate / refresh media</button>
-            <span id="mediaJobStatus" class="status">frames and videos are generated locally on demand</span>
+            <div class="media-progress">
+              <span id="mediaJobStatus" class="status">frames and videos are generated locally on demand</span>
+              <div class="progress-track"><div id="mediaJobProgressBar" class="progress-bar"></div></div>
+              <div id="mediaJobProgressMeta" class="progress-meta"></div>
+            </div>
           </div>
         </div>
           ${renderPlan(lt)}
@@ -404,6 +528,7 @@ def _index_html() -> str:
         <div class="timeline">${renderTimeline(groupTimeline(ep.timeline || []))}</div>`;
       state.currentEpisode = ep;
       renderDiagnosticCharts(ep);
+      refreshMediaJobStatus();
     }
     function renderDiagnostics(ep) {
       const rows = (ep.timeline || []).filter(row => row.type === "policy_step");
@@ -557,20 +682,59 @@ def _index_html() -> str:
         setMediaJobStatus("media export complete; current loop reloaded");
       }
     }
+    async function refreshMediaJobStatus() {
+      try {
+        const data = await (await fetch("/api/generate-media-status")).json();
+        updateMediaJobStatus(data);
+        if (data.status === "running") pollMediaJob();
+      } catch (error) {
+        setMediaJobStatus(`media status unavailable: ${error}`);
+      }
+    }
     function updateMediaJobStatus(data) {
+      updateMediaProgress(data?.progress || null);
+      const button = el("generateMediaBtn");
+      if (button) button.disabled = data?.status === "running";
       if (!data || data.status === "idle") {
-        setMediaJobStatus("frames and videos are generated locally on demand");
+        if (typeof data?.progress?.percent === "number" && data.progress.percent >= 100) {
+          setMediaJobStatus("media already available; generate again to refresh");
+        } else {
+          setMediaJobStatus("frames and videos are generated locally on demand");
+        }
         return;
       }
       if (data.status === "running") {
-        setMediaJobStatus(`generating media from raw rollout data...`);
+        const stage = data.progress?.stage || "generating media";
+        const percent = typeof data.progress?.percent === "number" ? ` ${data.progress.percent.toFixed(1)}%` : "";
+        setMediaJobStatus(`${stage}${percent}`);
         return;
       }
       if (data.status === "succeeded") {
         setMediaJobStatus("media export complete");
         return;
       }
+      if (data.status === "interrupted") {
+        setMediaJobStatus(`media export interrupted: ${data.stderr || "server stopped before completion"}`);
+        return;
+      }
       setMediaJobStatus(`media export failed: ${data.stderr || data.returncode || "unknown error"}`);
+    }
+    function updateMediaProgress(progress) {
+      const bar = el("mediaJobProgressBar");
+      const meta = el("mediaJobProgressMeta");
+      if (!bar || !meta) return;
+      const percent = typeof progress?.percent === "number" ? progress.percent : 0;
+      bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      if (!progress) {
+        meta.textContent = "";
+        return;
+      }
+      const expected = progress.expected_png_files || "-";
+      meta.innerHTML = `
+        <span>frames ${progress.png_files ?? 0}/${expected}</span>
+        <span>gif ${progress.gif_files ?? 0}</span>
+        <span>mp4 ${progress.mp4_files ?? 0}</span>
+        <span>records ${progress.source_rollout_records ?? "-"}</span>`;
     }
     function setMediaJobStatus(text) {
       const node = el("mediaJobStatus");
