@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import shutil
+import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,6 +62,9 @@ def build_export(run_dir: Path, output_dir: Path, *, copy_source: bool = False) 
         },
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_summary_tables(output_dir, loop_tests)
+    _write_standalone_report(output_dir, manifest)
+    _write_zip_bundle(output_dir)
     return manifest
 
 
@@ -81,6 +86,7 @@ def _build_loop_test(
     if copy_source:
         source_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(report_path, source_dir / report_path.name)
+        _copy_qwen_artifacts(report_path.parent, source_dir)
 
     episode_rows = []
     for episode in report.get("episodes") or []:
@@ -116,6 +122,7 @@ def _build_loop_test(
         "seed": report.get("seed"),
         "qwen_plan": report.get("plan"),
         "qwen_prompts": _qwen_prompts(report.get("plan") or {}),
+        "qwen_raw": _qwen_raw_paths(source_dir if copy_source else report_path.parent),
         "report_path": str(report_path),
         "source_report_path": str(source_dir / report_path.name) if copy_source else str(report_path),
         "episodes": episode_rows,
@@ -156,7 +163,15 @@ def _write_episode_timeline(
     if copy_source and trace_path.exists():
         shutil.copy2(trace_path, source_dir / trace_path.name)
     records = _read_jsonl(trace_path)
-    timeline = _timeline_rows(records, report, checkpoint, step, episode_index)
+    timeline = _timeline_rows(
+        records,
+        report,
+        checkpoint,
+        step,
+        episode_index,
+        episode_dir=episode_dir,
+        copy_source=copy_source,
+    )
     timeline_path = episode_dir / "timeline.jsonl"
     timeline_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in timeline) + "\n", encoding="utf-8")
     episode_manifest = {
@@ -184,6 +199,9 @@ def _timeline_rows(
     checkpoint: str,
     step: int | None,
     episode_index: int,
+    *,
+    episode_dir: Path,
+    copy_source: bool,
 ) -> list[dict[str, Any]]:
     plan = report.get("plan") or {}
     rows: list[dict[str, Any]] = [
@@ -219,7 +237,18 @@ def _timeline_rows(
             current_key = key
             rows.append(_tool_start_row(iteration, record, report, checkpoint, step, episode_index))
         primitive_step_counts[key] += 1
-        rows.append(_policy_step_row(iteration, record, report, checkpoint, step, episode_index))
+        rows.append(
+            _policy_step_row(
+                iteration,
+                record,
+                report,
+                checkpoint,
+                step,
+                episode_index,
+                episode_dir=episode_dir,
+                copy_source=copy_source,
+            )
+        )
     if current_key is not None and records:
         rows.append(_tool_end_row(iteration, current_key, records[-1], checkpoint, step, episode_index))
     rows.append(
@@ -277,6 +306,9 @@ def _policy_step_row(
     checkpoint: str,
     step: int | None,
     episode_index: int,
+    *,
+    episode_dir: Path,
+    copy_source: bool,
 ) -> dict[str, Any]:
     rollout_config = _rollout_config_for_record(record, report)
     contract = _action_chunk_contract(rollout_config)
@@ -284,6 +316,7 @@ def _policy_step_row(
     used_per_chunk = _int_or_none(contract.get("used_per_chunk"))
     chunk_index = primitive_step // used_per_chunk if primitive_step is not None and used_per_chunk else None
     chunk_step_index = primitive_step % used_per_chunk if primitive_step is not None and used_per_chunk else None
+    media = _media_payload(record, episode_dir=episode_dir, copy_source=copy_source)
     return {
         "type": "policy_step",
         "iteration": iteration,
@@ -317,7 +350,7 @@ def _policy_step_row(
             "terminated": record.get("terminated"),
             "truncated": record.get("truncated"),
         },
-        "media": {"available": False, "reason": "legacy rollout has no saved frames or videos"},
+        "media": media,
         "source": {"record": record},
     }
 
@@ -486,6 +519,79 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
+def _copy_qwen_artifacts(report_dir: Path, source_dir: Path) -> None:
+    qwen_dir = report_dir / "qwen"
+    if not qwen_dir.exists():
+        return
+    target = source_dir / "qwen"
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(qwen_dir, target)
+
+
+def _qwen_raw_paths(root: Path) -> dict[str, str | None]:
+    qwen_dir = root / "qwen"
+    return {
+        "manifest_path": str(qwen_dir / "qwen_artifacts_manifest.json")
+        if (qwen_dir / "qwen_artifacts_manifest.json").exists()
+        else None,
+        "request_path": str(qwen_dir / "qwen_raw_request.json")
+        if (qwen_dir / "qwen_raw_request.json").exists()
+        else None,
+        "response_path": str(qwen_dir / "qwen_raw_response.json")
+        if (qwen_dir / "qwen_raw_response.json").exists()
+        else None,
+        "plan_path": str(qwen_dir / "qwen_plan.json") if (qwen_dir / "qwen_plan.json").exists() else None,
+    }
+
+
+def _media_payload(record: dict[str, Any], *, episode_dir: Path, copy_source: bool) -> dict[str, Any]:
+    source = record.get("media") if isinstance(record.get("media"), dict) else {}
+    if not source:
+        return {"available": False, "reason": "legacy rollout has no saved frames or videos"}
+    media_root = episode_dir / "media"
+    policy_images = {
+        str(name): _copy_media_path(path, media_root / "policy_inputs", copy_source=copy_source)
+        for name, path in (source.get("policy_input_images") or {}).items()
+        if path
+    }
+    robot_frame = _copy_media_path(source.get("robot_frame"), media_root / "robot_frames", copy_source=copy_source)
+    iteration_video_gif = _copy_media_path(
+        source.get("iteration_video_gif"),
+        media_root / "videos",
+        copy_source=copy_source,
+    )
+    iteration_video_mp4 = _copy_media_path(
+        source.get("iteration_video_mp4"),
+        media_root / "videos",
+        copy_source=copy_source,
+    )
+    available = bool(policy_images or robot_frame or iteration_video_gif or iteration_video_mp4)
+    return {
+        "available": available,
+        "reason": None if available else "no saved media paths in trace",
+        "policy_input_images": policy_images,
+        "robot_frame": robot_frame,
+        "iteration_video_gif": iteration_video_gif,
+        "iteration_video_mp4": iteration_video_mp4,
+    }
+
+
+def _copy_media_path(path_value: Any, target_dir: Path, *, copy_source: bool) -> str | None:
+    if not path_value:
+        return None
+    path = Path(str(path_value))
+    if not path.exists():
+        return str(path)
+    if not copy_source:
+        return str(path)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / path.name
+    if path.resolve() != target.resolve():
+        shutil.copy2(path, target)
+    return str(target)
+
+
 def _qwen_prompts(plan: dict[str, Any]) -> dict[str, Any]:
     return {
         "system": DEFAULT_QWEN_SYSTEM_PROMPT,
@@ -588,6 +694,112 @@ def _checkpoint_to_step(checkpoint: str) -> int | None:
         return int(checkpoint)
     except ValueError:
         return None
+
+
+def _write_summary_tables(output_dir: Path, loop_tests: list[dict[str, Any]]) -> None:
+    metrics_path = output_dir / "joined_metrics.csv"
+    with metrics_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "loop_test_id",
+                "checkpoint",
+                "training_step",
+                "scenario",
+                "policy_type",
+                "validation_loss",
+                "success_rate",
+                "status",
+                "episodes_completed",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows({key: row.get(key) for key in writer.fieldnames} for row in loop_tests)
+
+    episode_rows = []
+    primitive_rows = []
+    for row in loop_tests:
+        detail = _read_json(Path(row["manifest_path"]))
+        for episode in detail.get("episodes") or []:
+            episode_rows.append(
+                {
+                    "loop_test_id": detail.get("loop_test_id"),
+                    "checkpoint": detail.get("checkpoint"),
+                    "episode": episode.get("episode_index"),
+                    "final_success": episode.get("final_success"),
+                    "total_reward": episode.get("total_reward"),
+                    "steps": episode.get("steps"),
+                    "final_tcp_to_target_dist": (episode.get("final_info") or {}).get("tcp_to_target_dist"),
+                }
+            )
+            for iteration in episode.get("iterations") or []:
+                summary = iteration.get("action_chunk_summary") or {}
+                primitive_rows.append(
+                    {
+                        "loop_test_id": detail.get("loop_test_id"),
+                        "checkpoint": detail.get("checkpoint"),
+                        "episode": episode.get("episode_index"),
+                        "iteration": iteration.get("iteration"),
+                        "tool_call": iteration.get("tool_call"),
+                        "primitive_id": iteration.get("primitive_id"),
+                        "executed_action_steps": summary.get("executed_action_steps"),
+                        "chunk_count": summary.get("chunk_count"),
+                        "generated_count": summary.get("generated_count"),
+                        "used_per_chunk": summary.get("used_per_chunk"),
+                        "confirmed_in_rollout": summary.get("confirmed_in_rollout"),
+                    }
+                )
+
+    _write_csv(output_dir / "episode_summary.csv", episode_rows)
+    _write_csv(output_dir / "primitive_summary.csv", primitive_rows)
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    fieldnames = sorted({key for row in rows for key in row}) if rows else ["empty"]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _write_standalone_report(output_dir: Path, manifest: dict[str, Any]) -> None:
+    rows = manifest.get("loop_tests") or []
+    table_rows = "\n".join(
+        "<tr>"
+        f"<td>{_html(row.get('loop_test_id'))}</td>"
+        f"<td>{_html(row.get('checkpoint'))}</td>"
+        f"<td>{_html(row.get('training_step'))}</td>"
+        f"<td>{_html(row.get('validation_loss'))}</td>"
+        f"<td>{_html(row.get('success_rate'))}</td>"
+        f"<td>{_html(row.get('status'))}</td>"
+        "</tr>"
+        for row in rows
+    )
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Loop Test Analyzer Export</title>
+<style>body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:24px;line-height:1.45}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #d8dde7;padding:6px 8px;text-align:left}}th{{background:#f5f7fb}}</style>
+</head><body>
+<h1>Loop Test Analyzer Export</h1>
+<p>Generated at {_html(manifest.get('generated_at'))}. Loop tests: {_html(len(rows))}.</p>
+<table><thead><tr><th>Loop</th><th>Checkpoint</th><th>Step</th><th>Val loss</th><th>Success</th><th>Status</th></tr></thead><tbody>{table_rows}</tbody></table>
+</body></html>"""
+    (output_dir / "standalone_report.html").write_text(html, encoding="utf-8")
+
+
+def _html(value: Any) -> str:
+    text = str(value)
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _write_zip_bundle(output_dir: Path) -> None:
+    zip_path = output_dir / "loop_test_analyzer_export.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for path in output_dir.rglob("*"):
+            if path == zip_path or not path.is_file():
+                continue
+            bundle.write(path, path.relative_to(output_dir))
 
 
 if __name__ == "__main__":

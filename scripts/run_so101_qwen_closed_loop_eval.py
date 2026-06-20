@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from physical_ai_agent.agent_core.qwen_so101_closed_loop import (
+    LoopArtifactConfig,
     parse_primitive_policy_routes,
     resolve_policy_routes,
     run_closed_loop_plan,
@@ -52,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps-per-primitive", type=int, default=None)
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--policy-num-steps", type=int, default=10)
+    parser.add_argument("--record-loop-artifacts", action="store_true")
+    parser.add_argument("--artifact-width", type=int, default=128)
+    parser.add_argument("--artifact-height", type=int, default=128)
+    parser.add_argument("--artifact-fps", type=int, default=12)
+    parser.add_argument("--artifact-every-n-steps", type=int, default=1)
     parser.add_argument(
         "--plan-only",
         action="store_true",
@@ -63,7 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    plan = _load_or_build_plan(args)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    plan, qwen_artifacts = _load_or_build_plan(args)
+    _write_qwen_artifacts(args.output_dir, qwen_artifacts, plan)
     primitive_policy_paths = parse_primitive_policy_routes(args.primitive_policy)
     if args.plan_only:
         routes = resolve_policy_routes(
@@ -90,22 +98,36 @@ def main() -> None:
             max_steps_per_primitive=args.max_steps_per_primitive,
             policy_n_action_steps=args.policy_n_action_steps,
             policy_num_steps=args.policy_num_steps,
+            artifact_config=LoopArtifactConfig(
+                enabled=bool(args.record_loop_artifacts),
+                width=int(args.artifact_width),
+                height=int(args.artifact_height),
+                fps=int(args.artifact_fps),
+                every_n_steps=int(args.artifact_every_n_steps),
+            ),
         )
     print(json.dumps(report, indent=2, sort_keys=True))
     if args.require_pass and report["status"] not in {"passed", "planned"}:
         sys.exit(1)
 
 
-def _load_or_build_plan(args: argparse.Namespace) -> SO101ToolPlan:
+def _load_or_build_plan(args: argparse.Namespace) -> tuple[SO101ToolPlan, dict[str, object]]:
     if args.qwen_plan_json:
-        return _plan_from_dict(json.loads(args.qwen_plan_json.read_text(encoding="utf-8")))
-    qwen_client, _source = _qwen_client(
+        payload = json.loads(args.qwen_plan_json.read_text(encoding="utf-8"))
+        return _plan_from_dict(payload), {"source": "qwen_plan_json", "plan_json": payload}
+    qwen_client, source = _qwen_client(
         qwen_base_url=args.qwen_base_url,
         qwen_response_json=args.qwen_response_json,
         qwen_api_key=args.qwen_api_key,
     )
-    planner = QwenSO101ToolPlanner(client=qwen_client, model=args.qwen_model)
-    return planner.plan(task=args.task, target_object=args.object)
+    recording_client = RecordingQwenClient(qwen_client)
+    planner = QwenSO101ToolPlanner(client=recording_client, model=args.qwen_model)
+    plan = planner.plan(task=args.task, target_object=args.object)
+    return plan, {
+        "source": source,
+        "request": recording_client.last_request,
+        "response": recording_client.last_response,
+    }
 
 
 def _qwen_client(
@@ -136,6 +158,94 @@ class SavedQwenResponseClient:
     ) -> dict:
         del model, messages, tools, tool_choice, temperature
         return json.loads(self.response_path.read_text(encoding="utf-8"))
+
+
+class RecordingQwenClient:
+    def __init__(self, client: ChatToolClient) -> None:
+        self.client = client
+        self.last_request: dict | None = None
+        self.last_response: dict | None = None
+
+    def create_tool_plan(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        tools: list[dict],
+        tool_choice: str,
+        temperature: float,
+    ) -> dict:
+        self.last_request = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "temperature": temperature,
+        }
+        response = self.client.create_tool_plan(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+        )
+        self.last_response = response
+        return response
+
+
+def _write_qwen_artifacts(output_dir: Path, artifacts: dict[str, object], plan: SO101ToolPlan) -> None:
+    qwen_dir = output_dir / "qwen"
+    qwen_dir.mkdir(parents=True, exist_ok=True)
+    (qwen_dir / "qwen_artifacts_manifest.json").write_text(
+        json.dumps(
+            {
+                "source": artifacts.get("source"),
+                "request_path": str(qwen_dir / "qwen_raw_request.json")
+                if artifacts.get("request") is not None
+                else None,
+                "response_path": str(qwen_dir / "qwen_raw_response.json")
+                if artifacts.get("response") is not None
+                else None,
+                "plan_path": str(qwen_dir / "qwen_plan.json"),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    if artifacts.get("request") is not None:
+        (qwen_dir / "qwen_raw_request.json").write_text(
+            json.dumps(artifacts["request"], indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    if artifacts.get("response") is not None:
+        (qwen_dir / "qwen_raw_response.json").write_text(
+            json.dumps(artifacts["response"], indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    (qwen_dir / "qwen_plan.json").write_text(
+        json.dumps({"plan": plan_to_serializable(plan)}, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def plan_to_serializable(plan: SO101ToolPlan) -> dict:
+    return {
+        "task": plan.task,
+        "model": plan.model,
+        "thinking_mode": plan.thinking_mode,
+        "calls": [
+            {
+                "index": call.index,
+                "fn": call.fn,
+                "object": call.object,
+                "primitive_id": call.primitive_id,
+                "prompt": call.prompt,
+                "max_steps": call.max_steps,
+            }
+            for call in plan.calls
+        ],
+    }
 
 
 def _plan_from_dict(payload: dict) -> SO101ToolPlan:

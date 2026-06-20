@@ -361,6 +361,11 @@ class SO101SmolVLAPipelineTest(TestCase):
                 closed_loop_steps=2,
                 policy_n_action_steps=15,
                 policy_num_steps=10,
+                record_loop_artifacts=True,
+                loop_artifact_width=128,
+                loop_artifact_height=128,
+                loop_artifact_fps=12,
+                loop_artifact_every_n_steps=1,
                 local_files_only=True,
                 mujoco_gl="glfw",
             )
@@ -401,6 +406,8 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(captured_cmd[captured_cmd.index("--policy-n-action-steps") + 1], "15")
         self.assertIn("--policy-num-steps", captured_cmd)
         self.assertEqual(captured_cmd[captured_cmd.index("--policy-num-steps") + 1], "10")
+        self.assertIn("--record-loop-artifacts", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--artifact-width") + 1], "128")
 
     def test_virtual_merge_concat_dataset_len_is_sum(self) -> None:
         from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset

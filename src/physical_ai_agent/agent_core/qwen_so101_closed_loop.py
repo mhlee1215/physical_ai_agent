@@ -23,6 +23,15 @@ BatchBuilder = Callable[..., tuple[dict[str, Any], dict[str, str]]]
 
 
 @dataclass(frozen=True)
+class LoopArtifactConfig:
+    enabled: bool = False
+    width: int = 128
+    height: int = 128
+    fps: int = 12
+    every_n_steps: int = 1
+
+
+@dataclass(frozen=True)
 class PrimitivePolicyRoute:
     primitive_id: str
     policy_path: str
@@ -99,6 +108,7 @@ def run_closed_loop_plan(
     max_steps_per_primitive: int | None = None,
     policy_n_action_steps: int | None = 15,
     policy_num_steps: int | None = 10,
+    artifact_config: LoopArtifactConfig | None = None,
     env_factory: EnvFactory = SO101NexusEnv,
     policy_loader: PolicyLoader = _load_pretrained_policy,
     batch_builder: BatchBuilder = _build_batch_for_policy,
@@ -136,6 +146,7 @@ def run_closed_loop_plan(
                     max_steps_per_primitive=max_steps_per_primitive,
                     policy_n_action_steps=policy_n_action_steps,
                     policy_num_steps=policy_num_steps,
+                    artifact_config=artifact_config or LoopArtifactConfig(),
                     batch_builder=batch_builder,
                 )
             )
@@ -192,12 +203,15 @@ def _run_episode(
     max_steps_per_primitive: int | None,
     policy_n_action_steps: int | None,
     policy_num_steps: int | None,
+    artifact_config: LoopArtifactConfig,
     batch_builder: BatchBuilder,
 ) -> dict[str, Any]:
     env = env_factory(env_id, None)
     trace_path = output_dir / f"qwen_closed_loop_episode_{episode:03d}.jsonl"
+    episode_media_dir = output_dir / "media" / f"episode_{episode:03d}"
     records = []
     primitive_summaries = []
+    renderers = _make_renderers_or_none(env, artifact_config)
     total_reward = 0.0
     final_info: dict[str, Any] = {}
     terminated = False
@@ -229,22 +243,45 @@ def _run_episode(
                 policy.reset()
             primitive_records = 0
             primitive_reward = 0.0
+            primitive_frame_paths: list[str] = []
+            primitive_row_indexes: list[int] = []
             step_budget = (
                 min(int(call.max_steps), int(max_steps_per_primitive))
                 if max_steps_per_primitive is not None
                 else int(call.max_steps)
             )
             for primitive_step in range(step_budget):
+                record_media = _should_record_media(artifact_config, primitive_step)
+                camera_pixels = _render_policy_cameras(env, renderers) if renderers else {}
+                policy_input_images = (
+                    _write_policy_input_images(
+                        camera_pixels=camera_pixels,
+                        episode_media_dir=episode_media_dir,
+                        global_step=global_step,
+                    )
+                    if record_media
+                    else {}
+                )
                 batch, image_feature_mapping = batch_builder(
                     policy,
                     obs,
-                    camera_pixels={},
+                    camera_pixels=camera_pixels,
                     instruction=call.prompt,
                     local_files_only=local_files_only,
                 )
                 raw_action = policy.select_action(batch)
                 action = _clip_action(_action_to_float_list(raw_action), action_dim)
                 obs, reward, terminated, truncated, info = env.step(action)
+                robot_frame_path = (
+                    _write_robot_frame(
+                        env=env,
+                        renderers=renderers,
+                        episode_media_dir=episode_media_dir,
+                        global_step=global_step,
+                    )
+                    if record_media
+                    else None
+                )
                 final_info = dict(info)
                 total_reward += float(reward)
                 primitive_reward += float(reward)
@@ -264,12 +301,29 @@ def _run_episode(
                     "truncated": bool(truncated),
                     "info": _jsonable_info(info),
                     "image_feature_mapping": image_feature_mapping,
+                    "media": {
+                        "policy_input_images": policy_input_images,
+                        "robot_frame": robot_frame_path,
+                    },
                 }
+                primitive_row_indexes.append(len(records))
+                if robot_frame_path:
+                    primitive_frame_paths.append(robot_frame_path)
                 records.append(row)
                 primitive_records += 1
                 global_step += 1
                 if terminated or truncated:
                     break
+            primitive_videos = _write_primitive_videos(
+                frame_paths=primitive_frame_paths,
+                episode_media_dir=episode_media_dir,
+                primitive_id=call.primitive_id,
+                iteration=len(primitive_summaries) + 1,
+                fps=artifact_config.fps,
+            )
+            if primitive_videos:
+                for row_index in primitive_row_indexes:
+                    records[row_index].setdefault("media", {}).update(primitive_videos)
             primitive_summaries.append(
                 {
                     "fn": call.fn,
@@ -281,11 +335,13 @@ def _run_episode(
                     "reward": primitive_reward,
                     "terminated": bool(terminated),
                     "truncated": bool(truncated),
+                    "media": primitive_videos,
                 }
             )
             if terminated or truncated:
                 break
     finally:
+        _close_renderers(renderers)
         env.close()
 
     trace_path.write_text(
@@ -304,6 +360,7 @@ def _run_episode(
         "final_success": _success_from_info(final_info),
         "primitive_summaries": primitive_summaries,
         "trace_path": str(trace_path),
+        "media_root": str(episode_media_dir) if artifact_config.enabled else None,
     }
 
 
@@ -375,6 +432,132 @@ def _success_from_info(info: dict[str, Any]) -> bool | None:
         if key in info:
             return bool(info[key])
     return None
+
+
+def _should_record_media(config: LoopArtifactConfig, primitive_step: int) -> bool:
+    return bool(config.enabled) and primitive_step % max(1, int(config.every_n_steps)) == 0
+
+
+def _raw_env(env: Any) -> Any:
+    return getattr(env, "env", env)
+
+
+def _make_renderers_or_none(env: Any, config: LoopArtifactConfig) -> dict[str, Any]:
+    if not config.enabled:
+        return {}
+    try:
+        import mujoco
+
+        raw_env = _raw_env(env)
+        return {
+            "egocentric_cam": mujoco.Renderer(raw_env.unwrapped.model, height=config.height, width=config.width),
+            "wrist_cam": mujoco.Renderer(raw_env.unwrapped.model, height=config.height, width=config.width),
+            "top_down": mujoco.Renderer(raw_env.unwrapped.model, height=config.height, width=config.width),
+        }
+    except Exception:
+        return {}
+
+
+def _render_policy_cameras(env: Any, renderers: dict[str, Any]) -> dict[str, Any]:
+    from physical_ai_agent.sim.so101_camera_input import _make_camera, postprocess_camera_frame
+
+    raw_env = _raw_env(env)
+    pixels = {}
+    for camera_name in ("egocentric_cam", "wrist_cam"):
+        renderer = renderers.get(camera_name)
+        if renderer is None:
+            continue
+        renderer.update_scene(raw_env.unwrapped.data, camera=_make_camera(raw_env, camera_name))
+        pixels[camera_name] = postprocess_camera_frame(camera_name, renderer.render())
+    return pixels
+
+
+def _render_robot_frame(env: Any, renderers: dict[str, Any]) -> Any | None:
+    from physical_ai_agent.sim.so101_camera_input import _make_camera
+
+    raw_env = _raw_env(env)
+    camera_name = "top_down" if "top_down" in renderers else "egocentric_cam"
+    renderer = renderers.get(camera_name)
+    if renderer is None:
+        return None
+    renderer.update_scene(raw_env.unwrapped.data, camera=_make_camera(raw_env, camera_name))
+    return renderer.render()
+
+
+def _write_policy_input_images(
+    *,
+    camera_pixels: dict[str, Any],
+    episode_media_dir: Path,
+    global_step: int,
+) -> dict[str, str]:
+    out: dict[str, str] = {}
+    input_dir = episode_media_dir / "policy_inputs"
+    for camera_name, pixels in camera_pixels.items():
+        path = input_dir / f"step_{global_step:04d}_{camera_name}.png"
+        _write_image(path, pixels)
+        out[camera_name] = str(path)
+    return out
+
+
+def _write_robot_frame(
+    *,
+    env: Any,
+    renderers: dict[str, Any],
+    episode_media_dir: Path,
+    global_step: int,
+) -> str | None:
+    frame = _render_robot_frame(env, renderers)
+    if frame is None:
+        return None
+    path = episode_media_dir / "robot_frames" / f"step_{global_step:04d}_top_down.png"
+    _write_image(path, frame)
+    return str(path)
+
+
+def _write_primitive_videos(
+    *,
+    frame_paths: list[str],
+    episode_media_dir: Path,
+    primitive_id: str,
+    iteration: int,
+    fps: int,
+) -> dict[str, str]:
+    if not frame_paths:
+        return {}
+    try:
+        import imageio.v2 as imageio
+
+        frames = [imageio.imread(path) for path in frame_paths]
+        video_dir = episode_media_dir / "videos"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        stem = f"iteration_{iteration:02d}_{primitive_id}"
+        gif_path = video_dir / f"{stem}.gif"
+        mp4_path = video_dir / f"{stem}.mp4"
+        imageio.mimsave(gif_path, frames, fps=max(1, int(fps)))
+        imageio.mimsave(mp4_path, frames, fps=max(1, int(fps)))
+        return {"iteration_video_gif": str(gif_path), "iteration_video_mp4": str(mp4_path)}
+    except Exception:
+        return {}
+
+
+def _write_image(path: Path, image: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import imageio.v2 as imageio
+
+        imageio.imwrite(path, image)
+    except Exception:
+        from PIL import Image
+
+        Image.fromarray(image).save(path)
+
+
+def _close_renderers(renderers: dict[str, Any]) -> None:
+    for renderer in renderers.values():
+        try:
+            renderer.close()
+        except Exception:
+            pass
 
 
 def _action_to_float_list(value: Any) -> list[float]:

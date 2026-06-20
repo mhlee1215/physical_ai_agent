@@ -265,6 +265,10 @@ the SmolVLA action chunk contract:
 - [ ] Save robot multi-view frames per step.
 - [ ] Save per-iteration videos.
 - [ ] Save raw Qwen request/response payloads.
+- [x] Save Qwen-chain policy input images per step.
+- [x] Save Qwen-chain robot frames per step.
+- [x] Save Qwen-chain per-iteration videos.
+- [x] Save Qwen-chain raw request/response payloads.
 - [x] Save Qwen-chain action chunk metadata.
 - [ ] Save raw predicted action chunks when evaluator exposes them.
 - [ ] Emit normalized manifest directly from evaluator.
@@ -284,6 +288,11 @@ the SmolVLA action chunk contract:
 - [ ] Add iteration summaries.
 - [ ] Add export-to-HTML.
 - [ ] Add downloadable zip bundle from the UI.
+- [x] Add distance/reward/action charts for analyzer detail view.
+- [x] Add first-pass failure heuristics.
+- [x] Add primitive/action-chunk iteration summaries.
+- [x] Add standalone HTML export.
+- [x] Add generated zip bundle.
 
 ## First Implementation Slice
 

@@ -173,6 +173,15 @@ def _index_html() -> str:
     code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
     pre { white-space: pre-wrap; word-break: break-word; max-height: 230px; overflow:auto; background:#f8fafc; border:1px solid #edf0f5; border-radius:5px; padding:8px; margin:6px 0 0; }
     .placeholder { height:112px; display:grid; place-items:center; border:1px dashed var(--border); border-radius:6px; color:var(--muted); background:#fbfcfe; text-align:center; padding:10px; }
+    .thumb-row { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin:8px 0; }
+    .thumb { border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#fff; }
+    .thumb img { width:100%; display:block; aspect-ratio:4/3; object-fit:cover; }
+    .thumb .label { padding:5px 7px; color:var(--muted); font-size:12px; }
+    .video-link { display:inline-block; margin-top:8px; color:var(--accent); font-weight:650; }
+    .diagnostics { background:#fff; border:1px solid var(--border); border-left:4px solid var(--warn); border-radius:6px; padding:10px; margin-bottom:14px; }
+    .chart-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin-top:8px; }
+    .chart { border:1px solid #edf0f5; border-radius:6px; padding:8px; background:#fbfcfe; }
+    .chart svg { width:100%; height:96px; display:block; }
     @media (max-width: 850px) { .app { grid-template-columns: 1fr; } aside { border-right:0; border-bottom:1px solid var(--border); max-height:45vh; } .event { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -251,8 +260,49 @@ def _index_html() -> str:
             <span class="pill warn">status means ${lt.status_meaning}</span>
           </div>
         </div>
-        ${renderPlan(lt)}
+          ${renderPlan(lt)}
+        ${renderDiagnostics(ep)}
         <div class="timeline">${renderTimeline(groupTimeline(ep.timeline || []))}</div>`;
+    }
+    function renderDiagnostics(ep) {
+      const rows = (ep.timeline || []).filter(row => row.type === "policy_step");
+      if (!rows.length) return "";
+      const rewards = rows.map(row => Number(row.robot?.reward || 0));
+      const dists = rows.map(row => row.robot?.info?.tcp_to_target_dist).filter(value => typeof value === "number");
+      const action0 = rows.map(row => row.policy_output?.action?.[0]).filter(value => typeof value === "number");
+      const finalInfo = ep.final_info || {};
+      const heuristics = [];
+      if (ep.final_success === false) heuristics.push("task did not reach success");
+      if (typeof finalInfo.tcp_to_target_dist === "number" && finalInfo.tcp_to_target_dist > 0.08) heuristics.push(`final distance high: ${finalInfo.tcp_to_target_dist.toFixed(3)}`);
+      const endedByMaxSteps = rows.length === Number(ep.steps || rows.length);
+      if (endedByMaxSteps && ep.final_success === false) heuristics.push("rollout consumed full planned horizon");
+      return `<section class="diagnostics">
+        <strong>Diagnostics</strong>
+        <div class="metrics">${heuristics.map(item => `<span class="pill warn">${escapeHtml(item)}</span>`).join("") || `<span class="pill robot">no obvious failure heuristic</span>`}</div>
+        <div class="chart-grid">
+          ${renderSparkChart("reward", rewards, "#047857")}
+          ${renderSparkChart("tcp distance", dists, "#b45309")}
+          ${renderSparkChart("action[0]", action0, "#5b4bdb")}
+        </div>
+      </section>`;
+    }
+    function renderSparkChart(label, values, color) {
+      if (!values.length) return `<div class="chart"><div class="muted">${escapeHtml(label)} unavailable</div></div>`;
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = max - min || 1;
+      const points = values.map((value, index) => {
+        const x = values.length === 1 ? 0 : (index / (values.length - 1)) * 100;
+        const y = 88 - ((value - min) / span) * 76;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      }).join(" ");
+      return `<div class="chart">
+        <div class="row"><strong>${escapeHtml(label)}</strong><span class="muted">${fmt(values[values.length - 1])}</span></div>
+        <svg viewBox="0 0 100 96" preserveAspectRatio="none">
+          <polyline fill="none" stroke="${color}" stroke-width="2.5" points="${points}"></polyline>
+        </svg>
+        <div class="row muted"><span>min ${fmt(min)}</span><span>max ${fmt(max)}</span></div>
+      </div>`;
     }
     function renderPlan(lt) {
       const plan = lt.qwen_plan;
@@ -268,7 +318,17 @@ def _index_html() -> str:
           <summary>Tool calls: function name + parameters</summary>
           <div class="detail-body">${(plan.calls || []).map(call => renderToolCall(call)).join("")}</div>
         </details>
+        ${renderQwenRawLinks(lt.qwen_raw || {})}
       </div>`;
+    }
+    function renderQwenRawLinks(raw) {
+      const links = [
+        ["Raw request", raw.request_path],
+        ["Raw response", raw.response_path],
+        ["Parsed plan", raw.plan_path]
+      ].filter(([, path]) => path);
+      if (!links.length) return "";
+      return `<details><summary>Raw Qwen payloads</summary><div class="detail-body">${links.map(([label, path]) => `<a class="video-link" href="${artifactUrl(path)}" target="_blank">${escapeHtml(label)}</a>`).join("<br>")}</div></details>`;
     }
     function renderToolCall(call) {
       return `<div class="tool-call">
@@ -310,6 +370,8 @@ def _index_html() -> str:
       const rewards = steps.map(row => row.robot?.reward).filter(value => typeof value === "number");
       const totalReward = rewards.reduce((sum, value) => sum + value, 0);
       const last = steps[steps.length - 1] || {};
+      const firstMedia = steps.find(row => row.media?.available)?.media || {};
+      const lastMedia = [...steps].reverse().find(row => row.media?.available)?.media || firstMedia;
       const contract = start.policy_output?.action_chunk_contract || steps[0]?.policy_output?.action_chunk || {};
       const generated = contract.generated_count ?? "unknown";
       const usedPerChunk = contract.used_per_chunk ?? "unknown";
@@ -330,6 +392,7 @@ def _index_html() -> str:
               <span class="pill">executed env actions ${steps.length}</span>
             </div>
             <div class="muted">${escapeHtml(contract.note || "")}</div>
+            ${renderPolicyInputImages(firstMedia.policy_input_images || {})}
             <div class="tool-call">
               <strong>function + parameters</strong>
               <pre>${escapeHtml(JSON.stringify({ function: start.tool_call, parameters: start.tool_parameters || {} }, null, 2))}</pre>
@@ -352,7 +415,7 @@ def _index_html() -> str:
           </section>
           <section class="panel robot">
             <h3>Robot motion</h3>
-            <div class="placeholder">${start.media?.reason || "media unavailable"}</div>
+            ${renderRobotMedia(lastMedia)}
             <div class="metrics">
               <span class="pill robot">total reward ${fmt(totalReward)}</span>
               <span class="pill">last global ${last.global_step ?? "-"}</span>
@@ -365,6 +428,18 @@ def _index_html() -> str:
           </section>
         </div>
         <div class="iteration">Iteration ${start.iteration} end</div>`;
+    }
+    function renderPolicyInputImages(images) {
+      const entries = Object.entries(images || {});
+      if (!entries.length) return `<div class="placeholder">policy input images unavailable</div>`;
+      return `<div class="thumb-row">${entries.map(([name, path]) => `
+        <div class="thumb"><img src="${artifactUrl(path)}" alt="${escapeHtml(name)}"><div class="label">${escapeHtml(name)}</div></div>
+      `).join("")}</div>`;
+    }
+    function renderRobotMedia(media) {
+      if (!media?.robot_frame) return `<div class="placeholder">${media?.reason || "robot frames unavailable"}</div>`;
+      const video = media.iteration_video_gif ? `<a class="video-link" href="${artifactUrl(media.iteration_video_gif)}" target="_blank">open iteration video</a>` : "";
+      return `<div class="thumb"><img src="${artifactUrl(media.robot_frame)}" alt="robot frame"><div class="label">latest robot frame</div></div>${video}`;
     }
     function groupActionChunks(steps) {
       const byChunk = new Map();
@@ -406,6 +481,8 @@ def _index_html() -> str:
         </div>
         <details>
           <summary>action + motor state</summary>
+          ${renderPolicyInputImages(row.media?.policy_input_images || {})}
+          ${row.media?.robot_frame ? `<div class="thumb"><img src="${artifactUrl(row.media.robot_frame)}" alt="robot frame"><div class="label">robot frame</div></div>` : ""}
           <pre>${escapeHtml(JSON.stringify({ action: row.policy_output?.action, observation: row.policy_input?.observation, info: row.robot?.info }, null, 2))}</pre>
         </details>
       </div>`;
@@ -434,6 +511,9 @@ def _index_html() -> str:
     }
     function escapeHtml(text) {
       return String(text).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[ch]));
+    }
+    function artifactUrl(path) {
+      return `/artifact?path=${encodeURIComponent(path)}`;
     }
     el("filter").addEventListener("input", renderList);
     el("statusFilter").addEventListener("change", renderList);
