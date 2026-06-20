@@ -2,69 +2,74 @@
   "name": "all_hf_train_pick_place_closed_loop",
   "description": "SO101 combined HF training set over all uploaded train splits; supervised validation and closed-loop test use pick-and-place.",
   "task": "multi_task_pick_place_closed_loop",
-  "train_dataset": {
-    "repo_id": "physical-ai-agent/so101-all-train400-ego-wrist-256",
-    "root": "_workspace/so101_lerobot_merged/all_hf_train400_ego_wrist_256",
-    "split": "train",
-    "expected_episodes": 400,
-    "expected_frames": 47835,
-    "hf_merge_sources": [
-      {
-        "name": "pick_cube_train",
-        "repo_id": "physical-ai-agent/so101-pick-cube-train50-ego-wrist-256",
-        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
-        "hf_repo_type": "dataset",
-        "hf_path_in_repo": "datasets/pick_cube/train",
-        "expected_episodes": 50,
-        "expected_frames": 4598
-      },
-      {
-        "name": "pick_and_place_cube_train",
-        "repo_id": "physical-ai-agent/so101-pick-and-place-cube-train50-ego-wrist-256",
-        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
-        "hf_repo_type": "dataset",
-        "hf_path_in_repo": "datasets/pick_and_place_cube/train",
-        "expected_episodes": 50,
-        "expected_frames": 14601
-      },
-      {
-        "name": "pick_cube_grip_focus_train",
-        "repo_id": "physical-ai-agent/so101-pick-cube-grip-focus-train50-ego-wrist-256",
-        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
-        "hf_repo_type": "dataset",
-        "hf_path_in_repo": "datasets/pick_cube_grip_focus/train",
-        "expected_episodes": 50,
-        "expected_frames": 3197
-      },
-      {
-        "name": "pick_and_place_cube_grip_focus_train",
-        "repo_id": "physical-ai-agent/so101-pick-and-place-cube-grip-focus-train50-ego-wrist-256",
-        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
-        "hf_repo_type": "dataset",
-        "hf_path_in_repo": "datasets/pick_and_place_cube_grip_focus/train",
-        "expected_episodes": 50,
-        "expected_frames": 13260
-      },
-      {
-        "name": "move_over_cube_train",
-        "repo_id": "physical-ai-agent/so101-move-over-cube-train100-ego-wrist-256",
-        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
-        "hf_repo_type": "dataset",
-        "hf_path_in_repo": "datasets/move_over_cube/train",
-        "expected_episodes": 100,
-        "expected_frames": 5000
-      },
-      {
-        "name": "pick_from_top_cube_train",
-        "repo_id": "physical-ai-agent/so101-pick-from-top-cube-train100-ego-wrist-256",
-        "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
-        "hf_repo_type": "dataset",
-        "hf_path_in_repo": "datasets/pick_from_top_cube/train",
-        "expected_episodes": 100,
-        "expected_frames": 7179
-      }
-    ]
-  },
+  "train_datasets": [
+    {
+      "name": "pick_cube_train",
+      "repo_id": "physical-ai-agent/so101-pick-cube-train50-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200",
+      "split": "train",
+      "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+      "hf_repo_type": "dataset",
+      "hf_path_in_repo": "datasets/pick_cube/train",
+      "expected_episodes": 50,
+      "expected_frames": 4598
+    },
+    {
+      "name": "pick_and_place_cube_train",
+      "repo_id": "physical-ai-agent/so101-pick-and-place-cube-train50-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/pick_and_place_cube_train50_ego_wrist_256_seed99000",
+      "split": "train",
+      "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+      "hf_repo_type": "dataset",
+      "hf_path_in_repo": "datasets/pick_and_place_cube/train",
+      "expected_episodes": 50,
+      "expected_frames": 14601
+    },
+    {
+      "name": "pick_cube_grip_focus_train",
+      "repo_id": "physical-ai-agent/so101-pick-cube-grip-focus-train50-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/pick_cube_grip_focus_train50_ego_wrist_256_seed104000",
+      "split": "train",
+      "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+      "hf_repo_type": "dataset",
+      "hf_path_in_repo": "datasets/pick_cube_grip_focus/train",
+      "expected_episodes": 50,
+      "expected_frames": 3197
+    },
+    {
+      "name": "pick_and_place_cube_grip_focus_train",
+      "repo_id": "physical-ai-agent/so101-pick-and-place-cube-grip-focus-train50-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/pick_and_place_cube_grip_focus_train50_ego_wrist_256_seed106000",
+      "split": "train",
+      "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+      "hf_repo_type": "dataset",
+      "hf_path_in_repo": "datasets/pick_and_place_cube_grip_focus/train",
+      "expected_episodes": 50,
+      "expected_frames": 13260
+    },
+    {
+      "name": "move_over_cube_train",
+      "repo_id": "physical-ai-agent/so101-move-over-cube-train100-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_over_cube_train100_ego_wrist_256_seed110000",
+      "split": "train",
+      "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+      "hf_repo_type": "dataset",
+      "hf_path_in_repo": "datasets/move_over_cube/train",
+      "expected_episodes": 100,
+      "expected_frames": 5000
+    },
+    {
+      "name": "pick_from_top_cube_train",
+      "repo_id": "physical-ai-agent/so101-pick-from-top-cube-train100-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/pick_from_top_cube_train100_ego_wrist_256_seed112000",
+      "split": "train",
+      "hf_repo_id": "mhlee1215/so101-nexus-sim-dataset",
+      "hf_repo_type": "dataset",
+      "hf_path_in_repo": "datasets/pick_from_top_cube/train",
+      "expected_episodes": 100,
+      "expected_frames": 7179
+    }
+  ],
   "validation_dataset": {
     "repo_id": "physical-ai-agent/so101-pick-and-place-cube-valid24-ego-wrist-256",
     "root": "_workspace/so101_lerobot/pick_and_place_cube_valid24_ego_wrist_256_seed102000",
@@ -92,7 +97,14 @@
   "predecoded_image_cache": {
     "root_env": "SO101_PREDECODED_CACHE_ROOT",
     "default_root": "_workspace/so101_image_cache",
-    "train": "all_hf_train400_ego_wrist_256",
+    "train": {
+      "pick_cube_train": "pick_cube_train50_ego_wrist_256_seed98200",
+      "pick_and_place_cube_train": "pick_and_place_cube_train50_ego_wrist_256_seed99000",
+      "pick_cube_grip_focus_train": "pick_cube_grip_focus_train50_ego_wrist_256_seed104000",
+      "pick_and_place_cube_grip_focus_train": "pick_and_place_cube_grip_focus_train50_ego_wrist_256_seed106000",
+      "move_over_cube_train": "move_over_cube_train100_ego_wrist_256_seed110000",
+      "pick_from_top_cube_train": "pick_from_top_cube_train100_ego_wrist_256_seed112000"
+    },
     "validation": "pick_and_place_cube_valid24_ego_wrist_256_seed102000"
   },
   "tensorboard": {

@@ -2,6 +2,7 @@
 
 import argparse
 import dataclasses
+import json
 import logging
 import os
 import shutil
@@ -41,6 +42,11 @@ from physical_ai_agent.lerobot_sampling_augmentation import (
     augment_batch_on_device,
     write_sampling_augmentation_report,
 )
+from physical_ai_agent.so101_lerobot_concat import (
+    LeRobotConcatDataset,
+    validate_compatible_lerobot_datasets,
+    validate_lerobot_dataset_infos,
+)
 
 
 def main() -> None:
@@ -70,6 +76,7 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--so101-action-prefix-loss-steps", type=int, default=0)
     parser.add_argument("--so101-action-prefix-loss-weight", type=float, default=1.0)
     parser.add_argument("--so101-image-cache-dir", type=Path)
+    parser.add_argument("--train-datasets-json")
     parser.add_argument("--validation-image-cache-dir", type=Path)
     parser.add_argument("--so101-augmentation-report", type=Path)
     parser.add_argument("--tensorboard-log-dir", type=Path)
@@ -164,7 +171,7 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     torch.backends.cuda.matmul.allow_tf32 = True
 
     augmentation = SamplingAugmentationConfig.from_env()
-    dataset = _make_dataset(cfg, augmentation)
+    dataset = _make_dataset(cfg, augmentation, wrapper_args)
     policy = make_policy(cfg=cfg.policy, ds_meta=dataset.meta, rename_map=cfg.rename_map)
     if cfg.peft is not None:
         policy = policy.wrap_with_peft(peft_cli_overrides=dataclasses.asdict(cfg.peft))
@@ -294,7 +301,14 @@ def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig) -> Path:
     )
 
 
-def _make_dataset(cfg: TrainPipelineConfig, augmentation: SamplingAugmentationConfig) -> Any:
+def _make_dataset(
+    cfg: TrainPipelineConfig,
+    augmentation: SamplingAugmentationConfig,
+    wrapper_args: argparse.Namespace,
+) -> Any:
+    entries = _train_dataset_entries(wrapper_args)
+    if entries:
+        return _make_concat_train_dataset(cfg, augmentation, entries)
     dataset = make_dataset(cfg)
     cache_dir = os.environ.get("SO101_IMAGE_CACHE_DIR")
     if cache_dir:
@@ -302,6 +316,61 @@ def _make_dataset(cfg: TrainPipelineConfig, augmentation: SamplingAugmentationCo
     if augmentation.enabled and not augmentation.gpu_image_augmentation:
         dataset = SamplingAugmentedDataset(dataset, augmentation)
     return dataset
+
+
+def _train_dataset_entries(wrapper_args: argparse.Namespace) -> list[dict[str, Any]]:
+    if not wrapper_args.train_datasets_json:
+        return []
+    try:
+        entries = json.loads(wrapper_args.train_datasets_json)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--train-datasets-json must be valid JSON: {exc}") from exc
+    if not isinstance(entries, list):
+        raise SystemExit("--train-datasets-json must be a JSON list")
+    result = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"--train-datasets-json[{index}] must be an object")
+        result.append(dict(entry))
+    return result
+
+
+def _make_concat_train_dataset(
+    cfg: TrainPipelineConfig,
+    augmentation: SamplingAugmentationConfig,
+    entries: list[dict[str, Any]],
+) -> Any:
+    summary = validate_lerobot_dataset_infos(entries)
+    print(
+        "Virtual train_datasets: "
+        f"datasets={summary['dataset_count']} "
+        f"episodes={summary['total_episodes']} "
+        f"frames={summary['total_frames']}",
+        flush=True,
+    )
+    datasets = []
+    names = []
+    for index, entry in enumerate(entries):
+        name = str(entry.get("name") or entry.get("repo_id") or f"train_dataset_{index}")
+        repo_id = str(entry.get("repo_id") or cfg.dataset.repo_id)
+        root = Path(str(entry["root"]))
+        metadata = LeRobotDatasetMetadata(repo_id, root=root)
+        delta_timestamps = resolve_delta_timestamps(cfg.policy, metadata)
+        dataset = LeRobotDataset(
+            repo_id,
+            root=root,
+            delta_timestamps=delta_timestamps,
+            video_backend=cfg.dataset.video_backend,
+        )
+        cache_dir = entry.get("image_cache_dir")
+        if cache_dir:
+            dataset = PredecodedImageCacheDataset(dataset, Path(str(cache_dir)))
+        if augmentation.enabled and not augmentation.gpu_image_augmentation:
+            dataset = SamplingAugmentedDataset(dataset, augmentation)
+        datasets.append(dataset)
+        names.append(name)
+    validate_compatible_lerobot_datasets(datasets)
+    return LeRobotConcatDataset(datasets, names=names)
 
 
 def _make_processors(cfg: TrainPipelineConfig, dataset: Any, policy: Any) -> tuple[Any, Any]:
@@ -338,7 +407,21 @@ def _make_processors(cfg: TrainPipelineConfig, dataset: Any, policy: Any) -> tup
 
 
 def _make_dataloader(cfg: TrainPipelineConfig, dataset: Any) -> torch.utils.data.DataLoader:
-    if hasattr(cfg.policy, "drop_n_last_frames"):
+    if getattr(dataset, "requires_dataset_balanced_sampler", False):
+        sampler = dataset.make_dataset_balanced_sampler(num_samples=len(dataset))
+        shuffle = False
+        logging.info(
+            "Using dataset-balanced random sampler for %s train datasets: lengths=%s",
+            len(getattr(dataset, "source_lengths", [])),
+            getattr(dataset, "source_lengths", []),
+        )
+        print(
+            "Train sampler: dataset_balanced_random "
+            f"datasets={len(getattr(dataset, 'source_lengths', []))} "
+            f"lengths={getattr(dataset, 'source_lengths', [])}",
+            flush=True,
+        )
+    elif hasattr(cfg.policy, "drop_n_last_frames") and not getattr(dataset, "disable_episode_aware_sampler", False):
         sampler = EpisodeAwareSampler(
             dataset.meta.episodes["dataset_from_index"],
             dataset.meta.episodes["dataset_to_index"],

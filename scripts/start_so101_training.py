@@ -139,6 +139,12 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--qwen-response-json", type=Path)
     parser.add_argument("--qwen-plan-json", type=Path)
     parser.add_argument("--qwen-object", default="green cube")
+    parser.add_argument("--closed-loop-subgoal-chain-mode", choices=["off", "fixed", "valid-mask"], default="off")
+    parser.add_argument("--closed-loop-subgoal-sequence")
+    parser.add_argument("--closed-loop-fixed-subgoal-chunks", type=int, default=1)
+    parser.add_argument("--closed-loop-valid-mask-checkpoint", type=Path)
+    parser.add_argument("--closed-loop-valid-mask-threshold", type=float, default=0.5)
+    parser.add_argument("--closed-loop-valid-mask-consecutive", type=int, default=2)
     parser.add_argument(
         "--validation-interval-steps",
         type=int,
@@ -451,7 +457,29 @@ def _resolve_hf_dataset_downloads(
     updated = copy.deepcopy(config)
     resolved_cache_root = cache_root if cache_root.is_absolute() else repo_root / cache_root
     downloads: list[dict[str, Any]] = []
+    train_datasets = updated.get("train_datasets")
+    if isinstance(train_datasets, list) and train_datasets:
+        for source_index, dataset in enumerate(train_datasets):
+            if not isinstance(dataset, dict):
+                raise SystemExit(f"dataset config train_datasets[{source_index}] must be an object")
+            resolved_source = _resolve_hf_dataset_source(
+                dataset,
+                fallback=updated,
+                repo_root=repo_root,
+                resolved_cache_root=resolved_cache_root,
+                dataset_key="train_datasets",
+                source_index=source_index,
+                download=download,
+                local_files_only=local_files_only,
+            )
+            resolved_root = Path(resolved_source["source"]["root"])
+            dataset.update(resolved_source["source"])
+            dataset["root"] = str(resolved_root)
+            dataset["hf_resolved_root"] = str(resolved_root)
+            downloads.append(resolved_source["download_record"])
     for dataset_key in ("train_dataset", "validation_dataset"):
+        if dataset_key == "train_dataset" and isinstance(train_datasets, list) and train_datasets:
+            continue
         dataset = updated.get(dataset_key)
         if not isinstance(dataset, dict):
             continue
@@ -515,7 +543,12 @@ def _resolve_hf_dataset_source(
     hf_repo_id = source.get("hf_repo_id") or fallback.get("hf_repo_id")
     hf_path = source.get("hf_path_in_repo")
     if not hf_repo_id or not hf_path:
-        label = dataset_key if source_index is None else f"{dataset_key}.hf_merge_sources[{source_index}]"
+        if source_index is None:
+            label = dataset_key
+        elif dataset_key == "train_datasets":
+            label = f"train_datasets[{source_index}]"
+        else:
+            label = f"{dataset_key}.hf_merge_sources[{source_index}]"
         raise SystemExit(f"dataset config {label} must define both hf_repo_id and hf_path_in_repo")
     hf_repo_type = str(source.get("hf_repo_type") or fallback.get("hf_repo_type") or "dataset")
     hf_revision = str(source.get("hf_revision") or fallback.get("hf_revision") or "")
@@ -572,6 +605,8 @@ def _prepare_merged_datasets(
     merge: bool,
 ) -> dict[str, Any] | None:
     if not config:
+        return config
+    if isinstance(config.get("train_datasets"), list) and config["train_datasets"]:
         return config
     for dataset_key in ("train_dataset", "validation_dataset"):
         config = _prepare_merged_dataset(
@@ -658,7 +693,8 @@ def _hf_local_repo_dir(cache_root: Path, repo_id: str, revision: str = "") -> Pa
 def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list[str]:
     if not config:
         return args
-    train = _required_mapping(config, "train_dataset")
+    train_datasets = _train_dataset_entries(config)
+    train = _required_mapping(config, "train_dataset") if not train_datasets else _required_train_dataset_entry(train_datasets[0], 0)
     validation = config.get("validation_dataset") or {}
     if not isinstance(validation, dict):
         raise SystemExit("dataset config validation_dataset must be an object")
@@ -666,6 +702,8 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list
     updated = [*args]
     updated = _ensure_arg(updated, "dataset.repo_id", str(train["repo_id"]))
     updated = _ensure_arg(updated, "dataset.root", str(train["root"]))
+    if train_datasets:
+        updated = _ensure_arg(updated, "train-datasets-json", json.dumps(train_datasets, sort_keys=True))
     if validation:
         if "repo_id" in validation:
             updated = _ensure_arg(updated, "validation-dataset-repo-id", str(validation["repo_id"]))
@@ -691,6 +729,8 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list
         ("train", "so101-image-cache-dir"),
         ("validation", "validation-image-cache-dir"),
     ):
+        if name == "train" and train_datasets:
+            continue
         if name in cache:
             updated = _ensure_arg(updated, cli_name, str(_resolve_cache_dir(cache, name)))
     tensorboard = config.get("tensorboard") or {}
@@ -721,6 +761,51 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list
     ):
         if name in augmentation:
             updated = _ensure_boolean_optional_arg(updated, cli_name, value=bool(augmentation[name]))
+    return updated
+
+
+def _train_dataset_entries(config: dict[str, Any]) -> list[dict[str, Any]]:
+    entries = config.get("train_datasets")
+    if entries is None:
+        return []
+    if not isinstance(entries, list) or not entries:
+        raise SystemExit("dataset config train_datasets must be a non-empty list when provided")
+    result = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"dataset config train_datasets[{index}] must be an object")
+        required = _required_train_dataset_entry(entry, index)
+        result.append(required)
+    return _with_train_dataset_cache_dirs(config, result)
+
+
+def _required_train_dataset_entry(entry: dict[str, Any], index: int) -> dict[str, Any]:
+    missing = [name for name in ("repo_id", "root") if not entry.get(name)]
+    if missing:
+        raise SystemExit(f"dataset config train_datasets[{index}] missing keys: {', '.join(missing)}")
+    return dict(entry)
+
+
+def _with_train_dataset_cache_dirs(config: dict[str, Any], entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cache = config.get("predecoded_image_cache") or {}
+    if not isinstance(cache, dict):
+        raise SystemExit("dataset config predecoded_image_cache must be an object")
+    if not cache:
+        return entries
+    train_cache = cache.get("train")
+    if train_cache is None and not cache.get("default_root") and not cache.get("root_env"):
+        return entries
+    updated = []
+    for index, entry in enumerate(entries):
+        item = dict(entry)
+        if "image_cache_dir" not in item:
+            cache_name = None
+            if isinstance(train_cache, dict):
+                cache_name = train_cache.get(str(item.get("name") or ""))
+            if not cache_name:
+                cache_name = str(item.get("name") or Path(str(item["root"])).name)
+            item["image_cache_dir"] = str(_resolve_cache_value(cache, str(cache_name)))
+        updated.append(item)
     return updated
 
 
@@ -1045,8 +1130,22 @@ def _progress_monitor_command(
         args.closed_loop_policy,
         "--closed-loop-eval-skill-mode",
         _closed_loop_eval_skill_mode(args, dataset_config),
+        "--closed-loop-subgoal-chain-mode",
+        getattr(args, "closed_loop_subgoal_chain_mode", "off"),
+        "--closed-loop-fixed-subgoal-chunks",
+        str(getattr(args, "closed_loop_fixed_subgoal_chunks", 1)),
+        "--closed-loop-valid-mask-threshold",
+        str(getattr(args, "closed_loop_valid_mask_threshold", 0.5)),
+        "--closed-loop-valid-mask-consecutive",
+        str(getattr(args, "closed_loop_valid_mask_consecutive", 2)),
         "--local-files-only",
     ]
+    closed_loop_subgoal_sequence = getattr(args, "closed_loop_subgoal_sequence", None)
+    if closed_loop_subgoal_sequence:
+        cmd.extend(["--closed-loop-subgoal-sequence", closed_loop_subgoal_sequence])
+    closed_loop_valid_mask_checkpoint = getattr(args, "closed_loop_valid_mask_checkpoint", None)
+    if closed_loop_valid_mask_checkpoint:
+        cmd.extend(["--closed-loop-valid-mask-checkpoint", str(closed_loop_valid_mask_checkpoint)])
     closed_loop_task_prompt = _closed_loop_task_prompt(args, dataset_config)
     if closed_loop_task_prompt:
         cmd.extend(["--closed-loop-task-prompt", closed_loop_task_prompt])
@@ -1146,32 +1245,47 @@ def _cache_build_commands(
     if not isinstance(cache, dict):
         return []
     commands: list[list[str]] = []
-    for split, dataset_key in (("train", "train_dataset"), ("validation", "validation_dataset")):
+    train_datasets = _train_dataset_entries(config) if config.get("train_datasets") is not None else []
+    if train_datasets:
+        for dataset in train_datasets:
+            if "image_cache_dir" in dataset:
+                commands.append(_cache_build_command(python, repo_root, dataset, Path(str(dataset["image_cache_dir"]))))
+    else:
+        dataset = config.get("train_dataset") or {}
+        if "train" in cache and isinstance(dataset, dict) and "root" in dataset and "repo_id" in dataset:
+            commands.append(_cache_build_command(python, repo_root, dataset, _resolve_cache_dir(cache, "train")))
+    for split, dataset_key in (("validation", "validation_dataset"),):
         dataset = config.get(dataset_key) or {}
         if split not in cache or not isinstance(dataset, dict):
             continue
         if "root" not in dataset or "repo_id" not in dataset:
             continue
         cache_dir = _resolve_cache_dir(cache, split)
-        commands.append(
-            [
-                str(python),
-                str(repo_root / "scripts" / "build_so101_predecoded_image_cache.py"),
-                "--dataset-root",
-                str(dataset["root"]),
-                "--dataset-repo-id",
-                str(dataset["repo_id"]),
-                "--cache-dir",
-                str(cache_dir),
-            ]
-        )
+        commands.append(_cache_build_command(python, repo_root, dataset, cache_dir))
     return commands
+
+
+def _cache_build_command(python: Path, repo_root: Path, dataset: dict[str, Any], cache_dir: Path) -> list[str]:
+    return [
+        str(python),
+        str(repo_root / "scripts" / "build_so101_predecoded_image_cache.py"),
+        "--dataset-root",
+        str(dataset["root"]),
+        "--dataset-repo-id",
+        str(dataset["repo_id"]),
+        "--cache-dir",
+        str(cache_dir),
+    ]
 
 
 def _resolve_cache_dir(cache: dict[str, Any], split: str) -> Path:
     value = cache.get(split)
     if value is None:
         raise SystemExit(f"dataset config predecoded_image_cache missing {split}")
+    return _resolve_cache_value(cache, str(value))
+
+
+def _resolve_cache_value(cache: dict[str, Any], value: str) -> Path:
     path = Path(str(value))
     if path.is_absolute():
         return path

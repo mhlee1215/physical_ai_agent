@@ -20,7 +20,14 @@ PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
 Config fields:
 
 - `train_dataset.repo_id`, `train_dataset.root`: forwarded to LeRobot as
-  `--dataset.repo_id` and `--dataset.root`.
+  `--dataset.repo_id` and `--dataset.root` for legacy single-train-split
+  configs.
+- `train_datasets`: preferred multi-train-split schema. Each entry defines a
+  LeRobot train split with `name`, `repo_id`, `root`, optional HF bundle fields,
+  and optional `expected_episodes` / `expected_frames`. When present, this list
+  takes priority over `train_dataset`; the launcher resolves each HF subfolder
+  independently and the training script uses a virtual `ConcatDataset` instead
+  of physically merging shards.
 - `validation_dataset.repo_id`, `validation_dataset.root`: forwarded as
   validation dataset args.
 - `train_dataset.hf_repo_id`, `train_dataset.hf_path_in_repo`, and matching
@@ -86,10 +93,17 @@ Hugging Face dataset workflow:
    the downloaded subfolder under `_workspace/hf_datasets/` as the effective
    LeRobot root.
 
-For a multi-task run, use `hf_merge_sources` as in
-`all_hf_train_pick_place_closed_loop.json` and `qwen_edge_primitives.json`; the
-launcher downloads each source subfolder, composes the shards, and passes the
-configured train/validation roots to LeRobot.
+For a multi-task run, prefer `train_datasets` as in
+`all_hf_train_pick_place_closed_loop.json`; the launcher downloads each source
+subfolder and passes the list to the training script. The training script
+validates schema/count compatibility and samples through a dataset-balanced
+random sampler over the virtual concat dataset, so each source split has the
+same expected sampling probability even when frame counts differ.
+
+For Qwen primitive validation configs such as `qwen_edge_primitives.json`, use
+`hf_merge_sources` for both train and validation splits. The launcher downloads
+each source subfolder, composes the shards, and passes the configured
+train/validation roots to LeRobot.
 
 For local export debugging, `--use-local-dataset-roots` ignores the HF fields
 and forwards the config's `root` values directly. For HF cache debugging,

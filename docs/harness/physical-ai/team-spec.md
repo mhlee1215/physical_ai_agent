@@ -298,6 +298,10 @@ policy is:
   and let the training launcher download exactly that subfolder before training.
   A tarball can still be used as a temporary fallback transfer artifact, but the
   HF dataset bundle plus repo manifests are the durable source of truth.
+- Multi-train-split SO101 configs must use `train_datasets[]` and virtual
+  LeRobot concat at training time. Do not physically merge train shards into a
+  canonical `_workspace/so101_lerobot_merged/*` root for normal training.
+  Physical merged roots are fallback/debug artifacts only.
 - RunPod experiment-data lifecycle is download, verify, then delete. Past
   remote experiment results are not required. For every new RunPod teacher
   dataset, validation dataset, predecoded cache, checkpoint, rollout video,
