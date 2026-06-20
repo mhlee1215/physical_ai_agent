@@ -222,6 +222,14 @@ policy is:
   Launch local MPS training through that unsandboxed path, while writing logs,
   TensorBoard events, checkpoints, monitor JSONL, and closed-loop artifacts
   under `_workspace/` so Codex can inspect and report them afterward.
+- Local SO101 training must consult `docs/so101_local_training_standard.md`
+  before launch. The current local standard lane is `primitive training with
+  qwen validation v1`: one SmolVLA checkpoint trained on the three primitive
+  Qwen edge datasets through dataset-config `hf_merge_sources`, macOS runtime
+  outside the sandbox with MPS, and `--num_workers=0` unless multiprocessing has
+  been proven safe for the current dataset wrappers. The canonical launcher
+  records this as `local_training_standard` in every dry-run/start/status
+  payload so training agents see the standard before acting.
 - SO101 training, supervised validation, and closed-loop tests must remain
   runnable on both macOS local and Linux/RunPod through
   `scripts/start_so101_training.py`. The launcher runtime contract is:

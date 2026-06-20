@@ -139,6 +139,10 @@ PYTHONPATH=src .venv/bin/python scripts/run_so101_qwen_closed_loop_eval.py \
 
 Canonical name: `primitive training with qwen validation v1`.
 
+Local Mac runs must follow the standard in
+`docs/so101_local_training_standard.md`. The launcher records that standard in
+each dry-run/start/status payload as `local_training_standard`.
+
 For `scenario=pick_up_cube` and `execution_policy=qwen_edge_chain`, train one
 SmolVLA checkpoint on the three primitive datasets together:
 

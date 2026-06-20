@@ -504,6 +504,15 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
             train_cmd = payload["train_cmd"]
+            self.assertEqual(
+                payload["local_training_standard"]["name"],
+                "primitive training with qwen validation v1",
+            )
+            self.assertTrue(payload["local_training_standard"]["doc"].endswith("docs/so101_local_training_standard.md"))
+            self.assertIn(
+                "Local SO101/SmolVLA training launches outside the Codex sandbox.",
+                payload["local_training_standard"]["summary"],
+            )
             self.assertIn("--dataset.repo_id=physical-ai-agent/train", train_cmd)
             self.assertIn("--dataset.root=_workspace/train", train_cmd)
             self.assertIn("--validation-dataset-repo-id=physical-ai-agent/val", train_cmd)

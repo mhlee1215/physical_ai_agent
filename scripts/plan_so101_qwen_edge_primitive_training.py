@@ -10,6 +10,7 @@ from typing import Any
 
 
 CONFIG = Path("configs/so101/training_datasets/qwen_edge_primitives.json")
+LOCAL_STANDARD_DOC = Path("docs/so101_local_training_standard.md")
 PLAN_NAME = "primitive training with qwen validation v1"
 
 
@@ -61,6 +62,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "execution_policy": "qwen_edge_chain",
         "training_policy": "single_smolvla_checkpoint_trained_on_three_primitive_datasets",
         "runtime_platform": runtime,
+        "local_training_standard_doc": str(LOCAL_STANDARD_DOC),
         "dataset_config": str(CONFIG),
         "primitive_datasets": [
             source["name"] for source in config["train_dataset"]["hf_merge_sources"]

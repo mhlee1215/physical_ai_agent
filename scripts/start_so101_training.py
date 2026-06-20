@@ -19,6 +19,8 @@ from typing import Any
 DEFAULT_ROOT = Path("_workspace/so101_training")
 DEFAULT_LOCK = DEFAULT_ROOT / "active_training.json"
 DEFAULT_HF_DATASET_CACHE_ROOT = Path("_workspace/hf_datasets")
+LOCAL_TRAINING_STANDARD_DOC = Path("docs/so101_local_training_standard.md")
+LOCAL_TRAINING_STANDARD_NAME = "primitive training with qwen validation v1"
 
 
 def main() -> int:
@@ -257,6 +259,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "run_dir": str(run_dir),
         "train_output_dir": str(train_output_dir),
         "lock_file": str(args.lock_file.resolve()),
+        "local_training_standard": _local_training_standard(repo_root),
         "train_cmd": train_cmd,
         "dataset_config": dataset_config,
         "tensorboard_cmd": None if args.no_tensorboard else tensorboard_cmd,
@@ -375,6 +378,10 @@ def _human_status(record: dict[str, Any]) -> str:
         lines.append(f"tensorboard_url: {record['tensorboard_url']}")
     if record.get("dashboard_url"):
         lines.append(f"dashboard_url: {record['dashboard_url']}")
+    standard = record.get("local_training_standard")
+    if isinstance(standard, dict):
+        lines.append(f"local_training_standard: {standard.get('name', '-')}")
+        lines.append(f"standard_doc: {standard.get('doc', '-')}")
     logs = record.get("logs") or {}
     if logs.get("train"):
         lines.append(f"train_log: {logs['train']}")
@@ -770,6 +777,21 @@ def _runtime_contract(namespace: argparse.Namespace, training_args: list[str]) -
         "lightning_accelerator": lightning_accelerator,
         "lightning_devices": lightning_devices,
         "closed_loop_mujoco_gl": mujoco_gl,
+    }
+
+
+def _local_training_standard(repo_root: Path) -> dict[str, Any]:
+    doc = repo_root / LOCAL_TRAINING_STANDARD_DOC
+    return {
+        "name": LOCAL_TRAINING_STANDARD_NAME,
+        "doc": str(doc),
+        "summary": [
+            "Local SO101/SmolVLA training launches outside the Codex sandbox.",
+            "macOS local runtime uses MPS through --runtime-platform macos.",
+            "Use dataset-config hf_merge_sources virtual merge declarations.",
+            "For macOS local training, prefer --num_workers=0 unless multiprocessing is proven safe.",
+            "For Qwen validation v1, scenario=pick_up_cube and execution_policy=qwen_edge_chain.",
+        ],
     }
 
 

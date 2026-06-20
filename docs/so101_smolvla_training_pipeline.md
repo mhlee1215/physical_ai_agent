@@ -140,6 +140,11 @@ training, supervised validation, and closed-loop evaluation:
   overrides, but monitored training still fails early if validation or
   closed-loop monitoring is disabled.
 
+The local Mac standard is recorded in
+`docs/so101_local_training_standard.md`. Every `scripts/start_so101_training.py`
+dry-run/start/status payload includes `local_training_standard` so future
+training launches see the standard before acting.
+
 Before launching a long run, inspect the dry-run `runtime_contract`:
 
 ```bash
