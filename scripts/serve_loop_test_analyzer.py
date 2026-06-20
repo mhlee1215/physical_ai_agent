@@ -418,6 +418,7 @@ def _index_html() -> str:
     pre { white-space: pre-wrap; word-break: break-word; max-height: 230px; overflow:auto; background:#f8fafc; border:1px solid #edf0f5; border-radius:5px; padding:8px; margin:6px 0 0; }
     .placeholder { height:112px; display:grid; place-items:center; border:1px dashed var(--border); border-radius:6px; color:var(--muted); background:#fbfcfe; text-align:center; padding:10px; }
     .thumb-row { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin:8px 0; }
+    .robot-camera-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px; margin:8px 0; }
     .thumb { border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#fff; }
     .thumb img { width:100%; display:block; aspect-ratio:4/3; object-fit:cover; }
     .thumb .label { padding:5px 7px; color:var(--muted); font-size:12px; }
@@ -829,7 +830,7 @@ def _index_html() -> str:
           </section>
           <section class="panel robot">
             <h3>Robot motion</h3>
-            ${renderRobotMedia(lastMedia)}
+            ${renderRobotMedia(lastMedia, last.policy_input?.image_feature_mapping || {})}
             <div class="metrics">
               <span class="pill robot">total reward ${fmt(totalReward)}</span>
               <span class="pill">last global ${last.global_step ?? "-"}</span>
@@ -850,10 +851,11 @@ def _index_html() -> str:
         <div class="thumb"><img src="${artifactUrl(path)}" alt="${escapeHtml(name)}"><div class="label">${escapeHtml(name)}</div></div>
       `).join("")}</div>`;
     }
-    function renderRobotMedia(media) {
+    function renderRobotMedia(media, imageFeatureMapping = {}) {
       if (!media?.robot_frame) return `<div class="placeholder">${media?.reason || "robot frames unavailable"}</div>`;
       const player = renderInlineRobotPlayer(media);
-      return `${player}<div class="thumb"><img src="${artifactUrl(media.robot_frame)}" alt="robot frame"><div class="label">latest robot frame</div></div>`;
+      const policyCameras = renderRobotPolicyCameras(media.policy_input_images || {}, imageFeatureMapping);
+      return `${player}${policyCameras}<div class="thumb"><img src="${artifactUrl(media.robot_frame)}" alt="robot frame"><div class="label">top_down · latest robot frame</div></div>`;
     }
     function renderInlineRobotPlayer(media) {
       if (media?.iteration_video_mp4) {
@@ -868,6 +870,35 @@ def _index_html() -> str:
           <div class="label">iteration video · gif</div>
         </div>`;
       }
+      return "";
+    }
+    function renderRobotPolicyCameras(images, imageFeatureMapping) {
+      const entries = robotCameraEntries(images, imageFeatureMapping);
+      if (!entries.length) return "";
+      return `<div class="robot-camera-grid">${entries.map(entry => `
+        <div class="thumb">
+          <img src="${artifactUrl(entry.path)}" alt="${escapeHtml(entry.feature)}">
+          <div class="label">${escapeHtml(entry.feature)} · ${escapeHtml(entry.cameraName)}</div>
+        </div>
+      `).join("")}</div>`;
+    }
+    function robotCameraEntries(images, imageFeatureMapping) {
+      const features = ["observation.images.camera1", "observation.images.camera2"];
+      const entries = [];
+      for (const feature of features) {
+        const cameraName = imageFeatureMapping?.[feature] || defaultCameraNameForFeature(feature);
+        const path = images?.[cameraName];
+        if (path) entries.push({ feature: feature.replace("observation.images.", ""), cameraName, path });
+      }
+      const seen = new Set(entries.map(entry => entry.path));
+      for (const [cameraName, path] of Object.entries(images || {})) {
+        if (!seen.has(path)) entries.push({ feature: "extra", cameraName, path });
+      }
+      return entries;
+    }
+    function defaultCameraNameForFeature(feature) {
+      if (feature.endsWith("camera1")) return "egocentric_cam";
+      if (feature.endsWith("camera2")) return "wrist_cam";
       return "";
     }
     function firstRawRolloutConfig(steps) {
