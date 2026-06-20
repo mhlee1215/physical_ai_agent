@@ -149,6 +149,40 @@ scripts/export_so101_pickplace_teacher_rollouts_lerobot.py \
 Default `--recovery-steps=0` preserves legacy exports. New train data should
 turn it on.
 
+## Evaluation Taxonomy
+
+Closed-loop evaluation records must separate the task scenario from the
+execution policy. A scenario names what the robot must accomplish; an execution
+policy names how the system tries to accomplish it.
+
+Use these SO101 scenario names for training and evaluation tables:
+
+- `pick_up_cube`: grasp the visible cube and lift it up.
+- `pick_from_top_cube`: start above the visible cube, then grasp and lift.
+- `pick_place_cube`: pick up the small red cube and place it on the blue circle.
+- `move_over_cube`: move the gripper over the visible cube.
+
+Use these execution-policy names separately from the scenario:
+
+- `single_smolvla`: one SmolVLA checkpoint runs the whole scenario.
+- `fixed_chain`: a hand-specified primitive chain, such as
+  `move_over_cube -> pick_from_top_cube`.
+- `valid_mask_chain`: a primitive chain that switches subgoals using the
+  optional valid-mask head.
+- `qwen_edge_chain`: Qwen plans the edge-grasp primitive chain
+  `move -> align -> pick_up`, and SmolVLA primitive checkpoints execute robot
+  actions.
+
+Do not list `qwen_edge_chain` as a scenario. It is an execution policy/planner
+policy for a scenario such as `pick_up_cube`. A closed-loop row should therefore
+look like:
+
+```text
+scenario=pick_up_cube
+execution_policy=qwen_edge_chain
+dataset_or_checkpoint=<primitive checkpoint set>
+```
+
 ## Evaluation Schedule
 
 Use `scripts/monitor_so101_training_dashboard.py` for validation and closed-loop

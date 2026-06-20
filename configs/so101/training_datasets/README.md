@@ -41,6 +41,9 @@ Config fields:
   multi-task runs while keeping each generated/uploaded dataset as a separate
   HF bundle subfolder.
 - `camera_contract`: human-readable expected model input mapping.
+- `prompt_contract`: human-readable expected language-instruction contract.
+  Current SO101 skill exports should keep per-episode color/shape prompts
+  derived from target-object metadata, not a single generic task string.
 - `tensorboard`: optional default input logging cadence.
 - `augmentation`: optional train-time sampling augmentation defaults. Supported
   fields are `state_jitter_std`, `state_jitter_arm_only`,
@@ -124,6 +127,10 @@ Dataset checksums:
   primitive datasets. These skill datasets, such as `move_over_cube` and
   `pick_from_top_cube`, must not replace the full-task datasets unless the user
   explicitly approves that change.
+- `docs/so101_fixed_jaw_edge_chain_dataset.md` defines the fixed-jaw edge
+  primitive chain: `move_over_cube_edge -> align_fixed_jaw_cube_edge ->
+  grip_from_edge_cube`. Preserve the documented start/end pose handoff
+  contract unless the user explicitly approves a change.
 - `export_recipes.json` plus `scripts/export_so101_training_datasets.py`
   records the pre-export trajectory generation material for every current
   split. Commit recipes, contracts, tests, and checksum manifests; keep raw
@@ -137,6 +144,11 @@ Dataset checksums:
 - Required `camera1` pose is the hardware-aligned egocentric view:
   `lookat=[0.245, 0.11, 0.035]`, `distance=0.63`, `azimuth=270`,
   `elevation=-82`, `rotation_degrees=90`.
+- Skill datasets use episode-specific prompts. The export report should say
+  `task_generation="episode-specific color/shape prompt from target object metadata"`,
+  and episode summaries should include `object_color`, `object_shape`, and
+  `target_object`. Do not simplify those prompts without explicit user
+  approval.
 - Re-export all current full-task and skill-primitive datasets after changing
   the approved camera pose:
 

@@ -27,6 +27,7 @@ TEMP_DATASET_PATTERNS = [
     "smoke_*",
     "*diverse*",
     "*shape*",
+    "*fixed_jaw*preview*",
 ]
 CAMERA_KEYS = [
     "observation.images.camera1",

@@ -8,12 +8,14 @@ from typing import Any
 
 import numpy as np
 
+from evaluate_so101_picklift_image_policy import detect_colored_object
 from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE, _make_camera, postprocess_camera_frame
 from physical_ai_agent.sim.so101_live_viewer import _cartesian_error_controller_action
 from train_so101_wrist_ego_picklift_policy import sweep_until_visible
 from train_so101_wrist_ego_visual_servo import (
     WristEgoServoConfig,
     _current_qpos,
+    _grasp_candidate_specs,
     _make_policy_renderers,
     _make_teacher_renderers,
     _restore_sim_state,
@@ -30,6 +32,22 @@ SKILL_TASKS = {
     "pick_cube": TASK,
     "move_over_cube": "Move the gripper over the visible cube.",
     "pick_from_top_cube": "From above the visible cube, grasp it and lift it up.",
+    "move_over_cube_edge": "Move the static finger pad above one visible cube edge.",
+    "align_fixed_jaw_cube_edge": "Align the static finger pad with one visible cube edge.",
+    "grip_from_edge_cube": "Keep the static finger pad at the cube edge, close the gripper, and lift.",
+}
+COLOR_SHAPE_SKILL_TASK_TEMPLATES = {
+    "pick_cube": "Grasp the visible {color} {shape} and lift it up.",
+    "move_over_cube": "Move the gripper over the visible {color} {shape}.",
+    "pick_from_top_cube": "From above the visible {color} {shape}, grasp it and lift it up.",
+    "move_over_cube_edge": "Move the static finger pad above one visible {color} {shape} edge.",
+    "align_fixed_jaw_cube_edge": "Align the static finger pad with one visible {color} {shape} edge.",
+    "grip_from_edge_cube": "Keep the static finger pad at the {color} {shape} edge, close the gripper, and lift.",
+}
+FIXED_JAW_SKILL_MODES = {
+    "move_over_cube_edge",
+    "align_fixed_jaw_cube_edge",
+    "grip_from_edge_cube",
 }
 STATE_NAMES = [
     "shoulder_pan",
@@ -246,7 +264,7 @@ def export_teacher_rollouts(
 
     if skill_mode not in SKILL_TASKS:
         raise ValueError(f"unknown skill_mode: {skill_mode}")
-    task = SKILL_TASKS[skill_mode]
+    task_template = COLOR_SHAPE_SKILL_TASK_TEMPLATES[skill_mode]
 
     config = WristEgoServoConfig(width=width, height=height)
     env = make_high_contrast_picklift_env()
@@ -263,6 +281,9 @@ def export_teacher_rollouts(
         while exported < episodes and attempted < episodes * max_attempt_multiplier:
             attempted += 1
             env.reset(seed=candidate_seed)
+            reset_home_qpos = _current_qpos(env).astype(np.float32)
+            target_object = _target_object_metadata(env)
+            episode_task = _format_skill_task(skill_mode, target_object)
             candidate_seed += 1
             teacher_visible = object_visible_to_teacher(env, teacher_renderers, config=config)
             visible, search_steps = sweep_until_visible(env, policy_renderers, max_sweeps=config.max_sweeps)
@@ -270,13 +291,23 @@ def export_teacher_rollouts(
             if not visible:
                 skipped.append({"seed": candidate_seed - 1, "reason": "not_visible_after_sweep"})
                 continue
-            candidates = make_teacher_targets(env)
-            if skill_mode in {"move_over_cube", "pick_from_top_cube"}:
+            if skill_mode in FIXED_JAW_SKILL_MODES:
+                candidates = _make_fast_fixed_jaw_teacher_targets(env)
+            else:
+                candidates = make_teacher_targets(env)
+            if skill_mode in {"move_over_cube", "pick_from_top_cube", *FIXED_JAW_SKILL_MODES}:
                 candidates = [
                     candidate
                     for candidate in candidates
                     if str(candidate["meta"].get("mode")) == "overhead"
                 ]
+            if skill_mode in FIXED_JAW_SKILL_MODES:
+                candidates = _filter_fixed_jaw_move_candidates_in_policy_view(
+                    env,
+                    renderers=policy_renderers,
+                    candidates=candidates,
+                    move_target_z_offset=move_target_z_offset,
+                )
             if not candidates:
                 skipped.append({"seed": candidate_seed - 1, "reason": "no_successful_teacher_candidate"})
                 continue
@@ -299,7 +330,7 @@ def export_teacher_rollouts(
                 start_mode=start_mode,
                 near_gripper_joint_std=near_gripper_joint_std,
                 skill_mode=skill_mode,
-                task=task,
+                task=episode_task,
                 episode_index=exported,
                 random_start_joint_std=random_start_joint_std,
                 move_success_tcp_dist=move_success_tcp_dist,
@@ -314,7 +345,13 @@ def export_teacher_rollouts(
                 pick_start_min_actual_abs_y=pick_start_min_actual_abs_y,
                 pick_start_min_actual_z=pick_start_min_actual_z,
                 include_camera3_duplicate=include_camera3_duplicate,
+                reset_home_qpos=reset_home_qpos,
             )
+            summary["task"] = episode_task
+            summary["task_template"] = task_template
+            summary["target_object"] = target_object
+            summary["object_color"] = target_object["color"]
+            summary["object_shape"] = target_object["shape"]
             if summary["success"]:
                 dataset.save_episode()
                 exported += 1
@@ -345,7 +382,9 @@ def export_teacher_rollouts(
         "operation": "export_so101_teacher_rollouts_lerobot",
         "root": str(root),
         "repo_id": repo_id,
-        "task": task,
+        "task": task_template,
+        "task_template": task_template,
+        "task_generation": "episode-specific color/shape prompt from target object metadata",
         "skill_mode": skill_mode,
         "requested_episodes": episodes,
         "exported_episodes": exported,
@@ -384,7 +423,7 @@ def export_teacher_rollouts(
             **({"observation.images.camera3": "wrist_cam duplicate"} if include_camera3_duplicate else {}),
             "observation.state": "SO101 qpos/control state",
             "action": "SO101 qpos target action",
-            "task": task,
+            "task": "episode-specific color/shape prompt",
         },
         "official_camera_contract": {
             "dataset": "SO101 egocentric+wrist visual-student dataset aligned to the local real-hardware policy cameras",
@@ -445,6 +484,7 @@ def _write_teacher_episode(
     pick_start_min_actual_abs_y: float,
     pick_start_min_actual_z: float,
     include_camera3_duplicate: bool,
+    reset_home_qpos: np.ndarray | None = None,
 ) -> dict[str, Any]:
     if teacher_style == "legacy":
         return _write_legacy_teacher_episode(
@@ -459,6 +499,7 @@ def _write_teacher_episode(
             best_meta=best_meta,
             task=task,
             include_camera3_duplicate=include_camera3_duplicate,
+            reset_home_qpos=reset_home_qpos,
         )
 
     if skill_mode == "move_over_cube":
@@ -508,6 +549,29 @@ def _write_teacher_episode(
             include_camera3_duplicate=include_camera3_duplicate,
         )
 
+    if skill_mode in FIXED_JAW_SKILL_MODES:
+        return _write_fixed_jaw_edge_episode(
+            dataset=dataset,
+            env=env,
+            renderers=renderers,
+            q_open=q_open,
+            seed=seed,
+            search_steps=search_steps,
+            teacher_visible=teacher_visible,
+            best_meta=best_meta,
+            skill_mode=skill_mode,
+            approach_steps=approach_steps,
+            settle_steps=settle_steps,
+            close_steps=close_steps,
+            lift_steps=lift_steps,
+            episode_index=episode_index,
+            random_start_joint_std=random_start_joint_std,
+            move_target_z_offset=move_target_z_offset,
+            task=task,
+            include_camera3_duplicate=include_camera3_duplicate,
+            reset_home_qpos=reset_home_qpos,
+        )
+
     return _write_staged_teacher_episode(
         dataset=dataset,
         env=env,
@@ -526,6 +590,202 @@ def _write_teacher_episode(
         task=task,
         include_camera3_duplicate=include_camera3_duplicate,
     )
+
+
+def _target_object_metadata(env: Any) -> dict[str, Any]:
+    unwrapped = env.unwrapped
+    objects = list(getattr(getattr(unwrapped, "config", None), "objects", []) or [])
+    target_index = int(getattr(unwrapped, "_target_slot_idx", 0) or 0)
+    obj = objects[target_index] if 0 <= target_index < len(objects) else None
+    color = str(getattr(obj, "color", "") or "").strip().lower()
+    shape = _object_shape_name(obj)
+
+    if not color:
+        description = str(getattr(unwrapped, "_task_description", "") or "").lower()
+        for candidate in ("red", "blue", "green", "yellow", "orange", "purple", "black", "white"):
+            if candidate in description:
+                color = candidate
+                break
+    if not color:
+        color = "visible"
+
+    return {
+        "target_slot_index": target_index,
+        "color": color,
+        "shape": shape,
+        "description": f"{color} {shape}".strip(),
+        "source": "env.unwrapped.config.objects[target_slot_index]",
+    }
+
+
+def _object_shape_name(obj: Any) -> str:
+    if obj is None:
+        return "object"
+    class_name = type(obj).__name__.lower()
+    if "cube" in class_name:
+        return "cube"
+    if "cylinder" in class_name:
+        return "cylinder"
+    if "sphere" in class_name or "ball" in class_name:
+        return "sphere"
+    shape = str(getattr(obj, "shape", "") or "").strip().lower()
+    return shape or "object"
+
+
+def _format_skill_task(skill_mode: str, target_object: dict[str, Any]) -> str:
+    template = COLOR_SHAPE_SKILL_TASK_TEMPLATES[skill_mode]
+    return template.format(
+        color=target_object["color"],
+        shape=target_object["shape"],
+    )
+
+
+def _make_fast_fixed_jaw_teacher_targets(env: Any) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    specs = [
+        spec
+        for spec in _grasp_candidate_specs(env)
+        if str(spec.get("grasp_mode")) == "overhead"
+    ]
+    for spec in specs:
+        try:
+            q_open, solve_meta = _solve_fixed_jaw_edge_qpos_variant(env, spec)
+        except Exception:
+            continue
+        meta = {
+            "mode": str(spec["grasp_mode"]),
+            "candidate_mode": str(spec["mode"]),
+            "axis": [float(value) for value in np.asarray(spec["axis"], dtype=float)],
+            "gap": float(spec["gap"]),
+            "z_offset": float(spec["z_offset"]),
+            "open_value": float(spec["open_value"]),
+            "success_step": None,
+            "score": -float(solve_meta["cost"]) - 0.0005 * float(spec["candidate_index"]),
+            "candidate_index": int(spec["candidate_index"]),
+            "candidate_attempts": len(specs),
+            "mode_successes": None,
+            "fast_preview_candidate": True,
+            "fast_preview_source": "fixed_jaw_edge_ik",
+            "fixed_jaw_solver": True,
+            **solve_meta,
+        }
+        candidates.append({"q_open": q_open.astype(float), "q_lift": q_open.astype(float), "meta": meta})
+    return candidates
+
+
+def _filter_fixed_jaw_move_candidates_in_policy_view(
+    env: Any,
+    *,
+    renderers: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    move_target_z_offset: float,
+) -> list[dict[str, Any]]:
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    snapshot = _snapshot_sim_state(env)
+    try:
+        for candidate in candidates:
+            meta = dict(candidate["meta"])
+            q_edge = _make_fixed_jaw_edge_qpos(env, np.asarray(candidate["q_open"], dtype=np.float32), meta)
+            q_above = _make_fixed_jaw_above_qpos(env, q_edge, meta, move_target_z_offset=move_target_z_offset)
+            q_above[-1] = float(env.action_space.low[-1])
+            _set_qpos(env, q_above)
+            visibility = _policy_camera_visibility(env, renderers)
+            wrist = visibility["camera2"]
+            if not bool(wrist["visible"]) or not bool(wrist["centered"]):
+                continue
+            center_distance = float(wrist["center_distance"] or 0.0)
+            meta["preselected_policy_camera_visibility"] = visibility
+            meta["score"] = float(meta.get("score", 0.0)) - center_distance
+            selected = dict(candidate)
+            selected["meta"] = meta
+            ranked.append((float(meta["score"]), selected))
+    finally:
+        _restore_sim_state(env, snapshot)
+    return [candidate for _score, candidate in sorted(ranked, key=lambda item: item[0], reverse=True)]
+
+
+def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[np.ndarray, dict[str, float]]:
+    import mujoco
+    from scipy.optimize import least_squares
+
+    unwrapped = env.unwrapped
+    model = unwrapped.model
+    data = unwrapped.data
+    joint_addrs = [model.jnt_qposadr[jid] for jid in unwrapped._joint_ids]
+    low = np.asarray(env.action_space.low, dtype=float)
+    high = np.asarray(env.action_space.high, dtype=float)
+    static_pad = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "static_finger_pad")
+    moving_pad = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "moving_finger_pad")
+    obj_geom_id = int(unwrapped._obj_geom_id)
+    obj_pos = np.asarray(data.geom_xpos[obj_geom_id], dtype=float).copy()
+    cube_half_extent = float(max(model.geom_size[obj_geom_id][0], model.geom_size[obj_geom_id][1]))
+    q_seed = np.asarray([data.qpos[addr] for addr in joint_addrs], dtype=float)
+    axis = np.asarray(spec["axis"], dtype=float)
+    axis[2] = 0.0
+    axis = axis / max(1e-6, float(np.linalg.norm(axis)))
+    gap = float(spec["gap"])
+    z_offset = float(spec["z_offset"])
+    open_value = float(spec["open_value"])
+    desired_static = obj_pos - axis * (cube_half_extent + 0.002) + np.asarray([0.0, 0.0, z_offset])
+    desired_moving = desired_static + axis * gap
+    desired_center = 0.5 * (desired_static + desired_moving)
+
+    def set_qpos(qpos: np.ndarray) -> None:
+        for addr, value in zip(joint_addrs, qpos):
+            data.qpos[addr] = value
+        data.ctrl[unwrapped._actuator_ids] = np.clip(qpos, low, high)
+        mujoco.mj_forward(model, data)
+
+    def residual(arm_qpos: np.ndarray) -> np.ndarray:
+        qpos = np.concatenate([arm_qpos, np.asarray([open_value])])
+        set_qpos(qpos)
+        static_pos = data.geom_xpos[static_pad]
+        moving_pos = data.geom_xpos[moving_pad]
+        center = 0.5 * (static_pos + moving_pos)
+        return np.concatenate(
+            [
+                (static_pos - desired_static) * 28.0,
+                (moving_pos - desired_moving) * 10.0,
+                (center - desired_center) * 6.0,
+                (arm_qpos - q_seed[:5]) * 0.025,
+            ]
+        )
+
+    starts = [
+        q_seed[:5],
+        np.asarray([-0.5, 0.4, 0.1, 0.5, -1.3]),
+        np.asarray([0.0, 0.55, -0.25, 0.85, 1.2]),
+        np.asarray([0.6, 0.2, 0.2, 0.6, -1.0]),
+        np.asarray([-0.8, 0.2, 0.2, 0.6, -1.0]),
+        np.asarray([0.0, -0.15, 0.85, -0.75, 0.0]),
+    ]
+    best: tuple[float, np.ndarray] | None = None
+    for start in starts:
+        result = least_squares(
+            residual,
+            np.clip(start, low[:5], high[:5]),
+            bounds=(low[:5], high[:5]),
+            max_nfev=140,
+        )
+        cost = float(np.linalg.norm(residual(result.x)))
+        candidate = np.concatenate([result.x, np.asarray([open_value])])
+        if best is None or cost < best[0]:
+            best = (cost, candidate)
+    assert best is not None
+    qpos = np.clip(best[1], low, high)
+    set_qpos(qpos)
+    static_delta = np.asarray(data.geom_xpos[static_pad] - data.geom_xpos[obj_geom_id], dtype=float)
+    target_delta = desired_static - obj_pos
+    return qpos.astype(np.float32), {
+        "cost": float(best[0]),
+        "static_edge_xy_error": float(np.linalg.norm((static_delta - target_delta)[:2])),
+        "static_delta_x": float(static_delta[0]),
+        "static_delta_y": float(static_delta[1]),
+        "static_delta_z": float(static_delta[2]),
+        "target_delta_x": float(target_delta[0]),
+        "target_delta_y": float(target_delta[1]),
+        "target_delta_z": float(target_delta[2]),
+    }
 
 
 def _write_legacy_teacher_episode(
@@ -991,6 +1251,249 @@ def _write_pick_from_top_cube_episode(
     }
 
 
+def _write_fixed_jaw_edge_episode(
+    *,
+    dataset: Any,
+    env: Any,
+    renderers: dict[str, Any],
+    q_open: np.ndarray,
+    seed: int,
+    search_steps: int,
+    teacher_visible: bool,
+    best_meta: dict[str, Any],
+    skill_mode: str,
+    approach_steps: int,
+    settle_steps: int,
+    close_steps: int,
+    lift_steps: int,
+    episode_index: int,
+    random_start_joint_std: float,
+    move_target_z_offset: float,
+    task: str,
+    include_camera3_duplicate: bool,
+    reset_home_qpos: np.ndarray | None,
+) -> dict[str, Any]:
+    q_edge = _make_fixed_jaw_edge_qpos(env, q_open, best_meta)
+    q_above = _make_fixed_jaw_above_qpos(env, q_edge, best_meta, move_target_z_offset=move_target_z_offset)
+    q_edge[-1] = _open_gripper_value(env)
+    q_above[-1] = _open_gripper_value(env)
+
+    if skill_mode == "move_over_cube_edge":
+        q_start = _make_home_closed_start_qpos(env, reset_home_qpos)
+        q_above = q_above.copy()
+        q_above[-1] = float(env.action_space.low[-1])
+        phases = [("move", q_start, q_above, max(1, int(approach_steps))), ("settle", q_above, q_above, max(0, int(settle_steps)))]
+        success_kind = "edge_above"
+    elif skill_mode == "align_fixed_jaw_cube_edge":
+        q_above = q_above.copy()
+        q_above[-1] = float(env.action_space.low[-1])
+        q_start = q_above.copy()
+        q_edge = q_edge.copy()
+        q_edge[-1] = _open_gripper_value(env)
+        phases = [("align", q_start, q_edge, max(1, int(approach_steps))), ("settle", q_edge, q_edge, max(0, int(settle_steps)))]
+        success_kind = "edge_contact"
+    elif skill_mode == "grip_from_edge_cube":
+        q_start = q_edge.copy()
+        q_close = q_edge.copy()
+        q_close[-1] = float(env.action_space.low[-1])
+        phases = [
+            ("settle", q_start, q_start, max(0, int(settle_steps))),
+            ("close", q_start, q_close, max(1, int(close_steps))),
+            ("lift", q_close, None, max(1, int(lift_steps))),
+        ]
+        success_kind = "pick_success"
+    else:
+        raise ValueError(f"unknown fixed jaw skill mode: {skill_mode}")
+
+    _set_qpos(env, q_start)
+    start_static_edge_error = _static_finger_edge_error(env, best_meta)
+    start_policy_camera_visibility = _policy_camera_visibility(env, renderers)
+    info: dict[str, Any] = env.unwrapped._get_info()
+    frames = 0
+    success_step = None
+    phase_counts: dict[str, int] = {phase[0]: 0 for phase in phases}
+    action_deltas: list[float] = []
+    previous_action: np.ndarray | None = None
+    q_lift = q_start.copy()
+
+    def add_step(action: np.ndarray, phase: str) -> bool:
+        nonlocal frames, info, success_step, previous_action
+        action = np.clip(np.asarray(action, dtype=np.float32), env.action_space.low, env.action_space.high)
+        dataset.add_frame(
+            _make_lerobot_frame(
+                env=env,
+                renderers=renderers,
+                action=action,
+                task=task,
+                include_camera3_duplicate=include_camera3_duplicate,
+            )
+        )
+        frames += 1
+        phase_counts[phase] += 1
+        if previous_action is not None:
+            action_deltas.append(float(np.linalg.norm(action[:5] - previous_action[:5])))
+        previous_action = action.copy()
+        _obs, _reward, terminated, truncated, info = env.step(np.asarray(action, dtype=float))
+        if bool(info.get("success", False)) and success_step is None:
+            success_step = frames
+        return bool(info.get("success", False)) or bool(terminated) or bool(truncated)
+
+    for phase, start, target, steps in phases:
+        for index in range(max(0, int(steps))):
+            if target is None:
+                action = np.asarray(_cartesian_error_controller_action(env, np.asarray([0.0, 0.0, 0.12])), dtype=np.float32)
+                action[-1] = float(env.action_space.low[-1])
+                q_lift = np.clip(action, env.action_space.low, env.action_space.high).astype(np.float32)
+            else:
+                alpha = (index + 1) / float(max(1, int(steps)))
+                alpha = 0.5 - 0.5 * float(np.cos(np.pi * alpha))
+                action = (1.0 - alpha) * start + alpha * target
+            if add_step(action, phase):
+                break
+        if bool(info.get("success", False)):
+            break
+
+    final_static_edge_error = _static_finger_edge_error(env, best_meta)
+    final_tcp_to_obj_delta = _tcp_to_object_delta(env)
+    final_policy_camera_visibility = _policy_camera_visibility(env, renderers)
+    if success_kind == "pick_success":
+        task_success = bool(info.get("success", False))
+    elif success_kind == "edge_above":
+        start_camera1 = start_policy_camera_visibility["camera1"]
+        wrist = final_policy_camera_visibility["camera2"]
+        task_success = bool(
+            final_static_edge_error["xy_error"] <= 0.025
+            and final_tcp_to_obj_delta[2] >= 0.035
+            and start_camera1["visible"]
+            and start_camera1["centered"]
+            and wrist["visible"]
+            and wrist["centered"]
+        )
+    else:
+        task_success = bool(final_static_edge_error["xy_error"] <= 0.015)
+    success = task_success
+
+    return {
+        "seed": seed,
+        "frames": frames,
+        "success": success,
+        "success_step": success_step if task_success and success_kind == "pick_success" else (frames if task_success else None),
+        "task_success": task_success,
+        "search_steps": search_steps,
+        "teacher_visible_in_any_camera": bool(teacher_visible),
+        "best_meta": best_meta,
+        "final_info": {
+            "is_grasped": bool(info.get("is_grasped", False)),
+            "lift_height": float(info.get("lift_height", 0.0)),
+            "tcp_to_obj_dist": float(info.get("tcp_to_obj_dist", 0.0)),
+        },
+        "q_start": [float(value) for value in q_start],
+        "q_edge": [float(value) for value in q_edge],
+        "q_above": [float(value) for value in q_above],
+        "q_lift": [float(value) for value in q_lift],
+        "start_static_edge_error": start_static_edge_error,
+        "final_static_edge_error": final_static_edge_error,
+        "start_policy_camera_visibility": start_policy_camera_visibility,
+        "final_policy_camera_visibility": final_policy_camera_visibility,
+        "wrist_roll_start": float(q_start[4]) if len(q_start) > 4 else None,
+        "wrist_roll_edge": float(q_edge[4]) if len(q_edge) > 4 else None,
+        "wrist_roll_delta_to_edge": float(abs(float(q_start[4]) - float(q_edge[4]))) if len(q_start) > 4 and len(q_edge) > 4 else None,
+        "final_tcp_to_obj_delta": [float(value) for value in final_tcp_to_obj_delta],
+        "teacher_style": "staged_fixed_jaw_skill",
+        "skill_mode": skill_mode,
+        "fixed_jaw_reference": "static_finger_pad",
+        "phase_counts": phase_counts,
+        "mean_action_delta": float(np.mean(action_deltas)) if action_deltas else 0.0,
+        "max_action_delta": float(np.max(action_deltas)) if action_deltas else 0.0,
+    }
+
+
+def _make_fixed_jaw_edge_qpos(env: Any, q_open: np.ndarray, best_meta: dict[str, Any]) -> np.ndarray:
+    q_open = np.clip(np.asarray(q_open, dtype=np.float32), env.action_space.low, env.action_space.high)
+    q_open[-1] = _open_gripper_value(env)
+    if bool(best_meta.get("fixed_jaw_solver", False)):
+        return q_open.astype(np.float32)
+    snapshot = _snapshot_sim_state(env)
+    try:
+        _set_qpos(env, q_open)
+        model = env.unwrapped.model
+        data = env.unwrapped.data
+        obj_geom_id = int(env.unwrapped._obj_geom_id)
+        static_geom_id = model.geom("static_finger_pad").id
+        current_delta = np.asarray(data.geom_xpos[static_geom_id] - data.geom_xpos[obj_geom_id], dtype=float)
+        target_delta = _fixed_jaw_target_delta(env, best_meta, z_value=float(current_delta[2]))
+        offset = target_delta - current_delta
+    finally:
+        _restore_sim_state(env, snapshot)
+    q_edge = _offset_qpos_by_cartesian(env, q_open, offset, steps=40)
+    q_edge[-1] = _open_gripper_value(env)
+    return np.clip(q_edge, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
+def _make_fixed_jaw_above_qpos(
+    env: Any,
+    q_edge: np.ndarray,
+    best_meta: dict[str, Any],
+    *,
+    move_target_z_offset: float,
+) -> np.ndarray:
+    if bool(best_meta.get("fixed_jaw_solver", False)) and "open_value" in best_meta:
+        spec = {
+            "grasp_mode": str(best_meta.get("mode", "overhead")),
+            "mode": str(best_meta.get("candidate_mode", best_meta.get("mode", "overhead"))),
+            "axis": list(best_meta.get("axis", [0.0, 1.0, 0.0])),
+            "gap": float(best_meta.get("gap", 0.034)),
+            "z_offset": float(best_meta.get("z_offset", 0.0)) + float(move_target_z_offset),
+            "open_value": float(best_meta.get("open_value", _open_gripper_value(env))),
+            "candidate_index": int(best_meta.get("candidate_index", 0)),
+        }
+        try:
+            q_above, _solve_meta = _solve_fixed_jaw_edge_qpos_variant(env, spec)
+            q_above[-1] = _open_gripper_value(env)
+            return np.clip(q_above, env.action_space.low, env.action_space.high).astype(np.float32)
+        except Exception:
+            pass
+    q_above = _offset_qpos_by_cartesian(env, q_edge, np.asarray([0.0, 0.0, float(move_target_z_offset)]))
+    q_above[-1] = _open_gripper_value(env)
+    return np.clip(q_above, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
+def _fixed_jaw_target_delta(env: Any, best_meta: dict[str, Any], *, z_value: float) -> np.ndarray:
+    model = env.unwrapped.model
+    obj_geom_id = int(env.unwrapped._obj_geom_id)
+    cube_half_extent = float(max(model.geom_size[obj_geom_id][0], model.geom_size[obj_geom_id][1]))
+    axis = np.asarray(best_meta.get("axis", [0.0, 1.0, 0.0]), dtype=float)
+    axis[2] = 0.0
+    norm = float(np.linalg.norm(axis[:2]))
+    if norm < 1e-6:
+        axis = np.asarray([0.0, 1.0, 0.0], dtype=float)
+    else:
+        axis = axis / norm
+    target_delta = -axis * (cube_half_extent + 0.002)
+    target_delta[2] = float(z_value)
+    return target_delta
+
+
+def _static_finger_edge_error(env: Any, best_meta: dict[str, Any]) -> dict[str, float]:
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    obj_geom_id = int(env.unwrapped._obj_geom_id)
+    static_geom_id = model.geom("static_finger_pad").id
+    current_delta = np.asarray(data.geom_xpos[static_geom_id] - data.geom_xpos[obj_geom_id], dtype=float)
+    target_delta = _fixed_jaw_target_delta(env, best_meta, z_value=float(current_delta[2]))
+    delta = current_delta - target_delta
+    return {
+        "xy_error": float(np.linalg.norm(delta[:2])),
+        "z_error": float(delta[2]),
+        "static_delta_x": float(current_delta[0]),
+        "static_delta_y": float(current_delta[1]),
+        "static_delta_z": float(current_delta[2]),
+        "target_delta_x": float(target_delta[0]),
+        "target_delta_y": float(target_delta[1]),
+        "target_delta_z": float(target_delta[2]),
+    }
+
+
 def _open_gripper_value(env: Any) -> float:
     return float(env.action_space.high[-1])
 
@@ -1067,6 +1570,35 @@ def _make_near_gripper_qpos(env: Any, q_open: np.ndarray, *, seed: int, joint_st
     return np.clip(target, env.action_space.low, env.action_space.high).astype(np.float32)
 
 
+def _make_roll_misaligned_fixed_jaw_qpos(
+    env: Any,
+    *,
+    q_edge: np.ndarray,
+    q_above: np.ndarray,
+    seed: int,
+    episode_index: int,
+) -> np.ndarray:
+    rng = np.random.default_rng(int(seed) + 61403)
+    target = np.asarray(q_above, dtype=np.float32).copy()
+    edge = np.asarray(q_edge, dtype=np.float32)
+    if target.shape[0] > 4 and edge.shape[0] > 4:
+        roll_offsets = np.asarray([0.45, -0.45, 0.62, -0.62, 0.32, -0.32], dtype=np.float32)
+        offset = float(roll_offsets[int(episode_index) % len(roll_offsets)] + rng.normal(0.0, 0.04))
+        target[4] = float(edge[4] + offset)
+    target[-1] = _open_gripper_value(env)
+    return np.clip(target, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
+def _make_home_closed_start_qpos(env: Any, reset_home_qpos: np.ndarray | None) -> np.ndarray:
+    if reset_home_qpos is None:
+        qpos = _current_qpos(env).astype(np.float32)
+    else:
+        qpos = np.asarray(reset_home_qpos, dtype=np.float32).copy()
+    qpos = np.clip(qpos, env.action_space.low, env.action_space.high).astype(np.float32)
+    qpos[-1] = float(env.action_space.low[-1])
+    return qpos
+
+
 def _offset_qpos_by_cartesian(env: Any, qpos: np.ndarray, offset: np.ndarray, *, steps: int = 10) -> np.ndarray:
     snapshot = _snapshot_sim_state(env)
     try:
@@ -1126,6 +1658,44 @@ def _make_lerobot_frame(
 def _render_camera(env: Any, renderer: Any, camera_name: str) -> np.ndarray:
     renderer.update_scene(env.unwrapped.data, camera=_make_camera(env, camera_name))
     return postprocess_camera_frame(camera_name, renderer.render()).astype(np.uint8)
+
+
+def _policy_camera_visibility(env: Any, renderers: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        "camera1": _object_visibility_in_camera(env, renderers["egocentric_cam"], "egocentric_cam"),
+        "camera2": _object_visibility_in_camera(env, renderers["wrist_cam"], "wrist_cam"),
+    }
+
+
+def _object_visibility_in_camera(env: Any, renderer: Any, camera_name: str) -> dict[str, Any]:
+    image = _render_camera(env, renderer, camera_name)
+    detection = detect_colored_object(image)
+    height, width = image.shape[:2]
+    if detection is None:
+        return {
+            "camera_name": camera_name,
+            "visible": False,
+            "centered": False,
+            "centroid": None,
+            "normalized_centroid": None,
+            "area": 0,
+            "bbox": None,
+            "center_distance": None,
+        }
+    u, v = [float(value) for value in detection["centroid"]]
+    norm_u = u / float(max(1, width - 1))
+    norm_v = v / float(max(1, height - 1))
+    centered = bool(0.12 <= norm_u <= 0.88 and 0.12 <= norm_v <= 0.88)
+    return {
+        "camera_name": camera_name,
+        "visible": True,
+        "centered": centered,
+        "centroid": [u, v],
+        "normalized_centroid": [float(norm_u), float(norm_v)],
+        "area": int(detection.get("area", 0)),
+        "bbox": detection.get("bbox"),
+        "center_distance": float(np.linalg.norm(np.asarray([norm_u - 0.5, norm_v - 0.5], dtype=float))),
+    }
 
 
 def _lerobot_features(
