@@ -21,6 +21,14 @@ agentic SmolVLA development environment.
   launch the calibration script, observe prompts, verify the resulting files,
   and record `operator`, but should not describe itself as having physically
   calibrated the arm.
+- Terminal policy: do not open a new Terminal window for routine real-SO-100
+  work. Use the current Codex command path for non-interactive camera checks,
+  analysis, report generation, tests, and helper scripts whenever permissions
+  allow. The calibration script is the canonical exception because the user
+  performs an interactive physical procedure. External Terminal use is also
+  allowed only for documented macOS camera/TCC, GUI, or runtime-permission
+  boundaries, and must write deterministic logs/artifacts under
+  `_workspace/real_so100/`.
 - Canonical home pose was defined by the user from the live physical robot
   state on 2026-06-07. Do not infer home pose from camera appearance or
   calibration midpoints. Use

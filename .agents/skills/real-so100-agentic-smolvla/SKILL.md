@@ -58,6 +58,12 @@ docs/real_so100_smolvla_execution_comparison_2026_06_07.md
 - Calibration is performed by the user/operator. Codex may launch the
   calibration script, verify outputs, and record metadata, but must not claim
   that Codex physically performed calibration.
+- Avoid opening new Terminal windows for real SO-100 work except for
+  interactive calibration or a documented macOS permission/runtime boundary.
+  Prefer the current Codex command path for camera checks, report generation,
+  tests, metadata inspection, and non-interactive helpers when permissions
+  allow. If an external Terminal is required, write logs/artifacts under
+  `_workspace/real_so100/` and state the reason in the report.
 
 ## Safety and Execution Gate
 
