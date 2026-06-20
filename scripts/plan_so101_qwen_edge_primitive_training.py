@@ -147,6 +147,8 @@ def _train_command(
         f"--steps={int(steps)}",
         f"--save_freq={int(save_freq)}",
     ]
+    if runtime == "macos":
+        argv.append("--num_workers=0")
     return _shell(argv)
 
 
