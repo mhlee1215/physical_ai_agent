@@ -48,6 +48,31 @@ Do **not** claim:
 - The method trains a new VLA model.
 - The VLM judge determines benchmark success.
 - Oracle simulator-clone imagination is already deployable on a real robot.
+- Native SmolVLA `noise=` provides useful candidate diversity.
+
+## Evidence To Fill
+
+## Evidence Governance
+
+Evaluation Results Manager is active:
+
+- Thread: `019eb3e5-a8fa-7d01-b1bd-ee52d73319cc`
+- Name: `평가 결과 관리자`
+
+Do not use any evaluation result as paper evidence unless the Evaluation
+Results Manager classifies it as paper-ready, or explicitly diagnostic-only
+with claim boundaries. If a metric or claim is needed, ask the Evaluation
+Results Manager or PM instead of inferring from raw reports.
+
+Safe current stance:
+
+- Risk1-0 native noise: diagnostic WARN baseline.
+- Risk1-A template prompt portfolio: candidate-generation PASS only, not
+  selection or benchmark success.
+- Risk1-B: pending/blocked until Evaluation Results Manager classifies the
+  actual Qwen chain result.
+- Risk2 scoped evidence: separate; do not overstate.
+- Risk5: WARN/proxy-only.
 
 ## Evidence To Fill
 
@@ -59,8 +84,15 @@ Do **not** claim:
   - Use this as motivation/control context, not as the main novelty.
 - Imagine-then-act evidence:
   - TODO: add simulator-clone candidate rollout, rendered outcome images, VLM/rule/oracle selector scores, and committed-environment success results.
+- Risk1 native-noise diversity:
+  - Tested on RunPod/LIBERO at commit `6308f6e86...`.
+  - Explicit seeded noise reached `smolvla.predict_action_chunk`.
+  - Candidate chunks were real policy-generated chunks.
+  - Diversity remained weak: `mean_normalized_pairwise_l2=0.048124`, `min_pairwise_l2=0.0`, `selected_vs_policy_l2=0.0`, `mean_pairwise_cosine_distance=0.001218`.
+  - Status: WARN, not PASS.
 
 The new main idea is pre-execution chunk selection, not post-failure retry. Keep retry-budget results as a baseline/control only if they help interpret cost and success.
+Do not build the method claim on native SmolVLA noise alone. Prefer external proposal generation around a frozen VLA: structured post-policy perturbation, subgoal/instruction portfolios, or MPPI/CEM-style sampling around the nominal SmolVLA chunk.
 
 ## Related Work Buckets
 
@@ -99,3 +131,8 @@ make fonts
 ```
 
 RSS asks for embedded fonts and no page numbers.
+
+## Draft Sections
+
+- Abstract / Introduction / Related Work draft:
+  `drafts/abstract_intro_related_work_2026_06_10.md`

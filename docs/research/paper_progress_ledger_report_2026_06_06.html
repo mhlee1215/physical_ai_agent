@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Paper Progress Ledger</title>
+  <style>
+    :root { --ink:#172018; --panel:#fffaf0; --line:#d1bd91; --green:#2f7d59; --red:#b13f31; --gold:#ad7c1d; --blue:#326b8a; --muted:#65705f; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Avenir Next", "Trebuchet MS", sans-serif; color:var(--ink); background:radial-gradient(circle at 10% 8%, rgba(50,107,138,.16), transparent 30%), radial-gradient(circle at 88% 8%, rgba(47,125,89,.16), transparent 28%), linear-gradient(135deg,#fcf5e4,#ead7ad); }
+    header { padding:44px clamp(18px,5vw,72px) 24px; }
+    h1 { max-width:1120px; margin:0; font-size:clamp(38px,6vw,78px); line-height:.94; letter-spacing:-.06em; }
+    .lead { max-width:980px; color:var(--muted); font-size:clamp(17px,2vw,22px); line-height:1.45; margin-top:18px; }
+    main { padding:0 clamp(18px,5vw,72px) 70px; }
+    .banner,.card { background:rgba(255,250,240,.88); border:1px solid var(--line); border-radius:24px; padding:18px; box-shadow:0 18px 52px rgba(48,35,10,.11); }
+    .banner { max-width:1180px; margin-bottom:20px; display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .banner b { font-size:25px; display:block; margin-bottom:8px; }
+    .banner span,.card p { color:var(--muted); line-height:1.43; }
+    .grid { max-width:1180px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+    .card { min-height:220px; position:relative; overflow:hidden; }
+    .card:before { content:""; position:absolute; right:-42px; top:-42px; width:120px; height:120px; border-radius:999px; background:currentColor; opacity:.08; }
+    .tag { display:inline-block; padding:6px 10px; border-radius:999px; background:var(--ink); color:#fff9e8; font-size:12px; font-weight:800; }
+    h2 { margin:15px 0 8px; font-size:23px; letter-spacing:-.025em; }
+    code { background:rgba(23,32,24,.08); padding:2px 5px; border-radius:6px; }
+    .ok { color:var(--green); } .bad { color:var(--red); } .warn { color:var(--gold); } .info { color:var(--blue); }
+    footer { max-width:1180px; color:var(--muted); margin-top:30px; }
+    a { color:#245f83; text-decoration:none; border-bottom:1px solid rgba(36,95,131,.32); }
+    @media (max-width:920px) { .banner,.grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Paper Progress Ledger</h1>
+    <p class="lead">Claim-by-claim status for the Agentic Lightweight VLA paper direction. This ledger separates supported claims, diagnostic-only evidence, and blocked Tier O evidence.</p>
+  </header>
+  <main>
+    <section class="banner">
+      <div><b class="ok">Adopted thesis</b><span>Agentic lightweight VLA control with verifier/retry and spatial-cue ablations.</span></div>
+      <div><b class="bad">Rejected thesis</b><span>Oracle Point Overlay as a standalone novel visual prompting method.</span></div>
+    </section>
+    <section class="grid">
+      <article class="card ok"><span class="tag">1</span><h2>SmolVLA base target</h2><p>Supported as a lightweight deployment-oriented VLA motivation. Needs controlled baseline numbers next.</p></article>
+      <article class="card ok"><span class="tag">2</span><h2>Overlay novelty risk</h2><p>Supported by related-work scan: VP-VLA, TraceVLA, AVP, RoboPoint, AffordVLA, CoA-VLA, CLIPort, VoxPoser.</p></article>
+      <article class="card ok"><span class="tag">3</span><h2>Actual-sim RGB exists</h2><p>10+ actual simulator RGB samples are available across fallback, heuristic, temporal, and readiness-gap reports.</p></article>
+      <article class="card bad"><span class="tag">4</span><h2>Tier O still blocked</h2><p>No current artifact has 10 same-step actual RGB + real pose + real camera + projected overlay samples.</p></article>
+      <article class="card warn"><span class="tag">5</span><h2>Codepath diagnostic passes</h2><p>Actual RGB + synthetic metadata diagnostic reaches <code>projected_object_pose</code> on 12/12 samples. Not Tier O.</p></article>
+      <article class="card warn"><span class="tag">6</span><h2>Mac renderer blocker</h2><p>Zero-action probe blocks at <code>vk::createInstanceUnique: ErrorIncompatibleDriver</code>. SmolVLA readiness itself reports true.</p></article>
+      <article class="card ok"><span class="tag">7</span><h2>Cheap probe ready</h2><p><code>scripts/run_actual_sim_true_oracle_probe_cp24.sh</code> isolates renderer/env metadata capture without SmolVLA loading.</p></article>
+      <article class="card ok"><span class="tag">8</span><h2>Two-stage remote path ready</h2><p>Probe-first, policy-second handoff exists and avoids debugging SmolVLA before renderer metadata passes.</p></article>
+      <article class="card warn"><span class="tag">9</span><h2>Two-stage importer ready</h2><p><code>two_stage_summary.json</code> can be converted to HTML + manifest and shown on the dashboard.</p></article>
+      <article class="card bad"><span class="tag">10</span><h2>Agentic success not proven</h2><p>No current artifact proves verifier/retry improves environment success. This remains the main experiment.</p></article>
+      <article class="card info"><span class="tag">11</span><h2>Next evidence</h2><p>Run two-stage gate in renderer-capable Linux/GPU environment and import the summary.</p></article>
+      <article class="card info"><span class="tag">12</span><h2>After Tier O</h2><p>Run experiment matrix: policy-only, overlay-only, agentic-only, agentic+overlay, oracle upper bound.</p></article>
+    </section>
+    <footer>Companion Markdown: <a href="./paper_progress_ledger_2026_06_06.md">paper_progress_ledger_2026_06_06.md</a>.</footer>
+  </main>
+</body>
+</html>
