@@ -386,8 +386,8 @@ def _index_html() -> str:
             <div class="metrics">
               <span class="pill policy">function ${escapeHtml(start.tool_call || "-")}</span>
               <span class="pill">primitive ${escapeHtml(start.primitive_id || "-")}</span>
-              <span class="pill ${confirmed ? "robot" : "warn"}">n_action_steps ${usedPerChunk}</span>
-              <span class="pill warn">generated per chunk ${generated}</span>
+              <span class="pill ${confirmed ? "robot" : "warn"}">used per chunk (n_action_steps) ${usedPerChunk}</span>
+              <span class="pill warn">generated horizon (chunk_size) ${generated}</span>
               <span class="pill robot">${chunks.length} ${chunkLabel}</span>
               <span class="pill">executed env actions ${steps.length}</span>
             </div>
@@ -461,8 +461,8 @@ def _index_html() -> str:
       return `<div class="step-card">
         <div class="metrics">
           <span class="pill policy">chunk ${chunk.chunkIndex + 1}</span>
-          <span class="pill warn">generated ${generated}</span>
-          <span class="pill robot">used ${rows.length} / ${expected}</span>
+          <span class="pill warn">chunk_size ${generated}</span>
+          <span class="pill robot">used actions ${rows.length} / n_action_steps ${expected}</span>
           <span class="pill">global ${first.global_step ?? "-"}-${last.global_step ?? "-"}</span>
         </div>
         <details>
