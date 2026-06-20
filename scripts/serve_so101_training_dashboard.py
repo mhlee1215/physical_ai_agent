@@ -652,7 +652,7 @@ def _index_html(run_dir: Path) -> str:
       ).join("");
       document.getElementById("closedLoopNote").textContent = latestClosed.checkpoint
         ? `latest closed-loop checkpoint: ${{latestClosed.checkpoint}}`
-        : "closed-loop validation will run every 5 epochs after checkpoint save";
+        : "closed-loop validation will run on each scheduled validation checkpoint";
       renderClosedLoopArtifacts(data.closed_loop_artifacts || []);
       document.getElementById("monitor").innerHTML = (data.monitor_events || []).slice(-8).reverse().map(row =>
         `<tr><td>${{row.checked_at_local ?? row.checked_at_utc ?? "-"}}</td><td>${{row.kind ?? "-"}}</td><td>${{row.detail ?? row.checkpoint ?? "-"}}</td></tr>`

@@ -208,10 +208,12 @@ policy is:
   crash recovery. A pruner may delete older non-best checkpoints after each save.
 - Run supervised validation loss after checkpoint saves, preferably CPU-only so
   the GPU training process can continue.
-- Do not run full closed-loop validation at every checkpoint. Closed-loop
-  rollouts are expensive and can slow or interrupt training; run them when a
-  checkpoint becomes the new validation-best checkpoint, or for an explicit user
-  request. Best-only closed-loop takes precedence over a coarse epoch interval.
+- For the local `primitive training with qwen validation v1` lane, every
+  validation-loss checkpoint must also run the Qwen-chain closed-loop test.
+  Keep `validation_interval_steps == save_freq == steps_per_epoch` and
+  `closed-loop-every-epochs=1` unless the user explicitly changes this lane.
+- For older/general expensive closed-loop lanes, best-only closed-loop may still
+  be used when the user has not requested per-validation closed-loop evidence.
 - If full closed-loop validation needs the GPU, pause or finish the training
   step/checkpoint first, run the rollout, then resume from the latest checkpoint.
 - Smoke closed-loop runs may be recorded separately in the dashboard, but they

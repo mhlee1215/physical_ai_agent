@@ -121,9 +121,14 @@ scheduling. Important flags:
 - `--overfit-patience-checkpoints`
 - `--overfit-min-delta`
 
-For active training, supervised validation can run CPU-only after checkpoints.
-Full CUDA closed-loop should run only for new validation-best checkpoints or a
-manual final evaluation.
+For `primitive training with qwen validation v1`, supervised validation loss and
+Qwen-chain closed-loop validation run on the same checkpoint cadence. In the
+standard local setup this means `validation_interval_steps == save_freq ==
+steps_per_epoch` and `closed-loop-every-epochs=1`.
+
+For older expensive CUDA-only closed-loop lanes, best-only or manual final
+evaluation may still be used when the user has not requested per-validation
+closed-loop evidence.
 
 ## Runtime Platforms
 
