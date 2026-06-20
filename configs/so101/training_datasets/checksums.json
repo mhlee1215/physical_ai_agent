@@ -1,6 +1,294 @@
 {
   "algorithm": "sha256",
   "datasets": {
+    "align_fixed_jaw_cube_edge_train": {
+      "audit_sha256": "4e705c2cc468f01ee75687dc4e53c17052f200753ca26b551d671b59b0ab6f1d",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "e4719158d3cdafc9641266d284982a075a92006f937772c8770e734277f8bedc",
+      "episodes": 100,
+      "export_report_sha256": "280813e15c884d0455dfaca264f5b5a3a9e3f6b1bc7509cdc1c2df1a7cde01f2",
+      "file_count": 7,
+      "frames": 2200,
+      "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-train100-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_train100_ego_wrist_256_seed117000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 61769496,
+      "task": "Align the static finger pad with one visible {color} {shape} edge."
+    },
+    "align_fixed_jaw_cube_edge_val": {
+      "audit_sha256": "4737e15d561e5d388e46c372575540bab11fde1b83c965015aadef4b902f17a4",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "b8185c0bb1cf2fcd4a8f77ec4408247336d06d28c3d4c8e86b27543e38d8bb88",
+      "episodes": 25,
+      "export_report_sha256": "647f2701a955b56612dcd9cc68af19791668dec69a624d424eaacfd7c48465ec",
+      "file_count": 7,
+      "frames": 550,
+      "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-valid25-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_valid25_ego_wrist_256_seed118000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 15210375,
+      "task": "Align the static finger pad with one visible {color} {shape} edge."
+    },
+    "grip_from_edge_cube_train": {
+      "audit_sha256": "f50804b1212bdd0d69bca7f16a162edbcd3adf4e54cd648265e15da676f9a57e",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "703d2b64c050b8fa4bb40e45c3e92353b80f287c2e91c15ed3b517c2774c7d21",
+      "episodes": 100,
+      "export_report_sha256": "7a350f7e040d5b88d3590ec629c6cb0c14ceabd647a93db4f36009ec84859d75",
+      "file_count": 7,
+      "frames": 2748,
+      "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-train100-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/grip_from_edge_cube_train100_ego_wrist_256_seed119000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 74854152,
+      "task": "Keep the static finger pad at the {color} {shape} edge, close the gripper, and lift."
+    },
+    "grip_from_edge_cube_val": {
+      "audit_sha256": "af7dcd8abfa92a77de3d4f42dd6545532119998002310e69291dcc79ffefe77e",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "e12a09d6bf23dae0fc7cddc6c19f0f1a0207fab69ed563f8be0c12945d82f3ec",
+      "episodes": 25,
+      "export_report_sha256": "1481d3f53b5e8cab7cdf215b767f331074a75282ff2e028672fc4903ca41bb85",
+      "file_count": 7,
+      "frames": 685,
+      "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-valid25-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/grip_from_edge_cube_valid25_ego_wrist_256_seed120000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 17980951,
+      "task": "Keep the static finger pad at the {color} {shape} edge, close the gripper, and lift."
+    },
+    "move_over_cube_edge_train": {
+      "audit_sha256": "2ed68c1fe245af6c88c6989318f51e86775056546d55c5eb5922c710f841af1c",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "6ae1f4daf35ff7d61c63879e2e2a764e670ae9d79aaa3c6e6dd4b787991f5e6a",
+      "episodes": 100,
+      "export_report_sha256": "5b6ac83b9500467f3d95e69e6e58b3ae257251254949075817311e1c6fcae099",
+      "file_count": 8,
+      "frames": 5200,
+      "repo_id": "physical-ai-agent/so101-move-over-cube-edge-train100-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_over_cube_edge_train100_ego_wrist_256_seed115000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 184508427,
+      "task": "Move the static finger pad above one visible {color} {shape} edge."
+    },
+    "move_over_cube_edge_val": {
+      "audit_sha256": "5bbdc0108d868f2981b3f7a6f81dfe257d9f6a04d643f7018e6b59429d393c4c",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "d34ea09bc1e6036e44936eeac95b1b851519b581650b256a0bcdb1fbeaf89b9d",
+      "episodes": 25,
+      "export_report_sha256": "1718499c3f32ef3a1028e1379bde56874c6613a5d5eee579d12fa20c9a42d7ea",
+      "file_count": 7,
+      "frames": 1300,
+      "repo_id": "physical-ai-agent/so101-move-over-cube-edge-valid25-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_over_cube_edge_valid25_ego_wrist_256_seed116000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 44169941,
+      "task": "Move the static finger pad above one visible {color} {shape} edge."
+    },
     "move_over_cube_train": {
       "audit_sha256": "2fa6183b861e1b75f66b6eb0d7dedac0abf33f34c9a4f8a41de68d5dfcd94b1c",
       "camera_contract": {

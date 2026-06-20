@@ -23,7 +23,12 @@
     },
     "image_shape_chw": [3, 256, 256],
     "state_shape": [6],
-    "action_shape": [6]
+    "action_shape": [6],
+    "prompt_contract": {
+      "task_generation": "episode-specific color/shape prompt from target object metadata",
+      "must_not_change_without_user_approval": true,
+      "required_episode_summary_fields": ["task", "task_template", "target_object", "object_color", "object_shape"]
+    }
   },
   "datasets": {
     "move_over_cube": {
@@ -51,6 +56,51 @@
       "validation": {
         "repo_id": "physical-ai-agent/so101-pick-from-top-cube-valid25-ego-wrist-256",
         "root": "_workspace/so101_lerobot/pick_from_top_cube_valid25_ego_wrist_256_seed113000",
+        "expected_episodes": 25
+      }
+    },
+    "move_over_cube_edge": {
+      "task": "move_over_cube_edge",
+      "description": "Start from home with the gripper fully closed, move the static finger pad above one visible cube edge, and end with the cube centered in wrist view for the next primitive.",
+      "start_mode": "home_closed",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-move-over-cube-edge-train100-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/move_over_cube_edge_train100_ego_wrist_256_seed115000",
+        "expected_episodes": 100
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-move-over-cube-edge-valid25-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/move_over_cube_edge_valid25_ego_wrist_256_seed116000",
+        "expected_episodes": 25
+      }
+    },
+    "align_fixed_jaw_cube_edge": {
+      "task": "align_fixed_jaw_cube_edge",
+      "description": "Start from the move_over_cube_edge final pose, open and align the static finger pad to one visible cube edge, and end at the grip_from_edge_cube start pose.",
+      "start_mode": "fixed_jaw_above_cube_edge",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-train100-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_train100_ego_wrist_256_seed117000",
+        "expected_episodes": 100
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-valid25-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_valid25_ego_wrist_256_seed118000",
+        "expected_episodes": 25
+      }
+    },
+    "grip_from_edge_cube": {
+      "task": "grip_from_edge_cube",
+      "description": "Start from the align_fixed_jaw_cube_edge final pose, keep the static finger pad at the cube edge, close the gripper, and lift the cube.",
+      "start_mode": "fixed_jaw_at_cube_edge_open",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-train100-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/grip_from_edge_cube_train100_ego_wrist_256_seed119000",
+        "expected_episodes": 100
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-valid25-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/grip_from_edge_cube_valid25_ego_wrist_256_seed120000",
         "expected_episodes": 25
       }
     }

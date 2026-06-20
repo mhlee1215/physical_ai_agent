@@ -321,6 +321,126 @@
         "pick_start_min_actual_z": 0.05,
         "max_attempt_multiplier": 30
       }
+    },
+    {
+      "name": "move_over_cube_edge_train",
+      "contract": "skill_dataset_contract",
+      "dataset": "move_over_cube_edge",
+      "split": "train",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/move_over_cube_edge_train100_ego_wrist_256_seed115000",
+      "repo_id": "physical-ai-agent/so101-move-over-cube-edge-train100-ego-wrist-256",
+      "episodes": 100,
+      "seed": 115000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "move_over_cube_edge",
+        "approach_steps": 48,
+        "settle_steps": 4,
+        "move_target_z_offset": 0.06,
+        "random_start_joint_std": 0.18,
+        "max_attempt_multiplier": 250
+      }
+    },
+    {
+      "name": "move_over_cube_edge_val",
+      "contract": "skill_dataset_contract",
+      "dataset": "move_over_cube_edge",
+      "split": "validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/move_over_cube_edge_valid25_ego_wrist_256_seed116000",
+      "repo_id": "physical-ai-agent/so101-move-over-cube-edge-valid25-ego-wrist-256",
+      "episodes": 25,
+      "seed": 116000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "move_over_cube_edge",
+        "approach_steps": 48,
+        "settle_steps": 4,
+        "move_target_z_offset": 0.06,
+        "random_start_joint_std": 0.18,
+        "max_attempt_multiplier": 250
+      }
+    },
+    {
+      "name": "align_fixed_jaw_cube_edge_train",
+      "contract": "skill_dataset_contract",
+      "dataset": "align_fixed_jaw_cube_edge",
+      "split": "train",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_train100_ego_wrist_256_seed117000",
+      "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-train100-ego-wrist-256",
+      "episodes": 100,
+      "seed": 117000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "align_fixed_jaw_cube_edge",
+        "approach_steps": 18,
+        "settle_steps": 4,
+        "move_target_z_offset": 0.06,
+        "max_attempt_multiplier": 250
+      }
+    },
+    {
+      "name": "align_fixed_jaw_cube_edge_val",
+      "contract": "skill_dataset_contract",
+      "dataset": "align_fixed_jaw_cube_edge",
+      "split": "validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_valid25_ego_wrist_256_seed118000",
+      "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-valid25-ego-wrist-256",
+      "episodes": 25,
+      "seed": 118000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "align_fixed_jaw_cube_edge",
+        "approach_steps": 18,
+        "settle_steps": 4,
+        "move_target_z_offset": 0.06,
+        "max_attempt_multiplier": 250
+      }
+    },
+    {
+      "name": "grip_from_edge_cube_train",
+      "contract": "skill_dataset_contract",
+      "dataset": "grip_from_edge_cube",
+      "split": "train",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/grip_from_edge_cube_train100_ego_wrist_256_seed119000",
+      "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-train100-ego-wrist-256",
+      "episodes": 100,
+      "seed": 119000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "grip_from_edge_cube",
+        "approach_steps": 18,
+        "settle_steps": 4,
+        "close_steps": 18,
+        "lift_steps": 30,
+        "move_target_z_offset": 0.06,
+        "max_attempt_multiplier": 300
+      }
+    },
+    {
+      "name": "grip_from_edge_cube_val",
+      "contract": "skill_dataset_contract",
+      "dataset": "grip_from_edge_cube",
+      "split": "validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/grip_from_edge_cube_valid25_ego_wrist_256_seed120000",
+      "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-valid25-ego-wrist-256",
+      "episodes": 25,
+      "seed": 120000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "grip_from_edge_cube",
+        "approach_steps": 18,
+        "settle_steps": 4,
+        "close_steps": 18,
+        "lift_steps": 30,
+        "move_target_z_offset": 0.06,
+        "max_attempt_multiplier": 300
+      }
     }
   ]
 }
