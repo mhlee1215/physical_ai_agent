@@ -26,8 +26,10 @@ def main() -> None:
     parser.add_argument("--runtime-platform", choices=["auto", "macos", "linux"], default="auto")
     parser.add_argument("--base-train-config", default="<base_smolvla_train_config.json>")
     parser.add_argument("--steps", type=int, default=50000)
-    parser.add_argument("--validation-interval-steps", type=int, default=300)
-    parser.add_argument("--save-every-epochs", type=int, default=5)
+    parser.add_argument("--save-every-epochs", type=int, default=1)
+    parser.add_argument("--closed-loop-every-epochs", type=int, default=1)
+    parser.add_argument("--closed-loop-smoke-episodes", type=int, default=1)
+    parser.add_argument("--closed-loop-smoke-steps", type=int, default=90)
     parser.add_argument("--qwen-base-url", default="http://127.0.0.1:1234/v1")
     parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
     parser.add_argument("--eval-episodes", type=int, default=8)
@@ -54,6 +56,8 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     checkpoint = run_dir / "model" / "checkpoints" / "last" / "pretrained_model"
     steps_per_epoch = int(config["training"]["steps_per_epoch"])
     save_freq = steps_per_epoch * max(1, int(args.save_every_epochs))
+    validation_interval_steps = save_freq
+    max_monitored_checkpoints = max(1, (int(args.steps) + save_freq - 1) // save_freq)
 
     return {
         "operation": "plan_so101_qwen_edge_primitive_training",
@@ -85,8 +89,12 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             run_dir=run_dir,
             base_train_config=args.base_train_config,
             steps=args.steps,
-            validation_interval_steps=args.validation_interval_steps,
+            validation_interval_steps=validation_interval_steps,
             save_freq=save_freq,
+            closed_loop_every_epochs=args.closed_loop_every_epochs,
+            closed_loop_smoke_episodes=args.closed_loop_smoke_episodes,
+            closed_loop_smoke_steps=args.closed_loop_smoke_steps,
+            max_monitored_checkpoints=max_monitored_checkpoints,
             runtime=runtime,
         ),
         "expected_checkpoint": str(checkpoint),
@@ -116,6 +124,10 @@ def _train_command(
     steps: int,
     validation_interval_steps: int,
     save_freq: int,
+    closed_loop_every_epochs: int,
+    closed_loop_smoke_episodes: int,
+    closed_loop_smoke_steps: int,
+    max_monitored_checkpoints: int,
     runtime: str,
 ) -> str:
     argv = [
@@ -131,17 +143,19 @@ def _train_command(
         "--runtime-platform",
         runtime,
         "--closed-loop-policy",
-        "best_only",
+        "best_or_periodic",
         "--closed-loop-every-epochs",
-        "999",
+        str(int(closed_loop_every_epochs)),
         "--closed-loop-episodes",
-        "1",
+        str(int(closed_loop_smoke_episodes)),
         "--closed-loop-steps",
-        "1",
+        str(int(closed_loop_smoke_steps)),
         "--closed-loop-eval-skill-mode",
         "picklift",
         "--closed-loop-task-prompt",
         "pick and lift the green cube",
+        "--max-monitored-checkpoints",
+        str(int(max_monitored_checkpoints)),
         "--validation-interval-steps",
         str(int(validation_interval_steps)),
         "--",

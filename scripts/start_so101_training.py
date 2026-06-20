@@ -109,7 +109,7 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
         default="auto",
         help="Default policy.device and Lightning accelerator when not explicitly forwarded.",
     )
-    parser.add_argument("--closed-loop-every-epochs", type=int, default=10)
+    parser.add_argument("--closed-loop-every-epochs", type=int, default=1)
     parser.add_argument("--closed-loop-episodes", type=int, default=8)
     parser.add_argument("--closed-loop-steps", type=int, default=120)
     parser.add_argument(
@@ -737,6 +737,8 @@ def _with_validation_schedule(args: list[str], namespace: argparse.Namespace) ->
         return args
     if namespace.validation_interval_steps is not None:
         return [*args, f"--validation-interval-steps={int(namespace.validation_interval_steps)}"]
+    if _closed_loop_policy_name(namespace) != "off":
+        return [*args, f"--validation-interval-epochs={int(namespace.closed_loop_every_epochs)}"]
     if namespace.validation_interval_epochs is not None:
         return [*args, f"--validation-interval-epochs={int(namespace.validation_interval_epochs)}"]
     return args
@@ -849,7 +851,8 @@ def _validate_monitoring_contract(
     if runtime_contract["runtime_platform"] == "linux" and runtime_contract["training_device"] == "mps":
         errors.append("Linux/RunPod runtime profile cannot use MPS; use --training-device cuda or cpu.")
 
-    if _validation_interval(training_args) <= 0:
+    validation_interval_steps = _validation_interval_steps(dataset_config, training_args)
+    if validation_interval_steps <= 0:
         errors.append("validation cadence must be positive; set --validation-interval-epochs or --validation-interval-steps.")
     if not _has_any_arg(training_args, "validation-dataset-root"):
         errors.append("training command is missing --validation-dataset-root.")
@@ -859,6 +862,11 @@ def _validate_monitoring_contract(
     closed_loop_policy = _closed_loop_policy_name(args)
     if closed_loop_policy == "off":
         errors.append("closed-loop evaluation is disabled; use periodic, best_only, or best_or_periodic.")
+    if closed_loop_policy == "best_only":
+        errors.append(
+            "closed-loop policy best_only can skip validation checkpoints; use periodic or best_or_periodic "
+            "so every validation-loss checkpoint also runs closed-loop."
+        )
     if args.no_progress_monitor:
         errors.append("progress monitor is disabled; it is required for supervised validation and closed-loop metrics.")
     if launch_plan.get("progress_monitor_cmd") is None:
@@ -888,11 +896,21 @@ def _validate_monitoring_contract(
     if save_freq is None:
         errors.append("checkpoint save cadence is missing; set --save_freq or training.steps_per_epoch.")
     elif steps_per_epoch is not None:
-        max_closed_loop_gap = steps_per_epoch * int(args.closed_loop_every_epochs)
-        if save_freq > max_closed_loop_gap:
+        closed_loop_gap = steps_per_epoch * int(args.closed_loop_every_epochs)
+        if save_freq > closed_loop_gap:
             errors.append(
                 f"--save_freq={save_freq} is too sparse for closed-loop cadence; "
-                f"expected <= {max_closed_loop_gap}."
+                f"expected <= {closed_loop_gap}."
+            )
+        if validation_interval_steps != save_freq:
+            errors.append(
+                f"validation cadence ({validation_interval_steps} steps) must match checkpoint save cadence "
+                f"({save_freq} steps) so every validation loss has a checkpoint for closed-loop evaluation."
+            )
+        if save_freq != closed_loop_gap:
+            errors.append(
+                f"checkpoint save cadence ({save_freq} steps) must match closed-loop cadence "
+                f"({closed_loop_gap} steps) so every validation-loss checkpoint runs closed-loop."
             )
         planned_steps = _positive_int_arg(training_args, "steps")
         max_checkpoints = max(1, int(args.max_monitored_checkpoints))
@@ -911,13 +929,17 @@ def _validate_monitoring_contract(
         raise SystemExit(f"SO101 monitored training contract failed:\n{detail}")
 
 
-def _validation_interval(args: list[str]) -> int:
+def _validation_interval_steps(config: dict[str, Any], args: list[str]) -> int:
     steps = _positive_int_arg(args, "validation-interval-steps") or _positive_int_arg(
         args, "validation-every-n-train-steps"
     )
     if steps is not None:
         return steps
-    return _positive_int_arg(args, "validation-interval-epochs") or 0
+    epochs = _positive_int_arg(args, "validation-interval-epochs")
+    steps_per_epoch = _steps_per_epoch(config, args)
+    if epochs is not None and steps_per_epoch is not None:
+        return epochs * steps_per_epoch
+    return 0
 
 
 def _steps_per_epoch(config: dict[str, Any], training_args: list[str]) -> int | None:

@@ -39,6 +39,15 @@ explicitly chooses another experiment.
 - Qwen routes `move -> align -> pick_up`; SmolVLA produces robot actions.
 - The final Qwen validation command should route all primitive prompts to the
   same trained checkpoint with `--policy-path`.
+- Do not use sentinel values such as `--closed-loop-every-epochs=999` to
+  effectively disable training-time closed-loop checks.
+- For the current local lane, every validation-loss checkpoint must also run a
+  closed-loop test. Keep `validation_interval_steps == save_freq ==
+  steps_per_epoch * closed_loop_every_epochs`.
+- Because validation loss is computed every epoch in this lane, checkpoint save
+  and closed-loop test cadence must also be every epoch.
+- Use `--closed-loop-policy periodic` or `--closed-loop-policy best_or_periodic`;
+  do not use `best_only`, because it can skip non-best validation checkpoints.
 
 ## Required Launcher Behavior
 

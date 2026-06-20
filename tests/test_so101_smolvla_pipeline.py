@@ -402,7 +402,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("auto", payload["gpu_monitor_cmd"])
             self.assertIn("--train-pid-file", payload["gpu_monitor_cmd"])
 
-    def test_single_training_launcher_defaults_to_epoch_validation(self) -> None:
+    def test_single_training_launcher_defaults_validation_to_closed_loop_cadence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             completed = subprocess.run(
                 [
@@ -427,6 +427,24 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
             self.assertIn("--validation-interval-epochs=1", payload["train_cmd"])
+
+    def test_qwen_edge_merge_normalizes_legacy_static_finger_prompts(self) -> None:
+        from scripts.merge_so101_lerobot_shards import _normalize_task_prompt
+
+        self.assertEqual(
+            _normalize_task_prompt("Move the static finger pad above one visible green cube edge."),
+            "Move the gripper above one visible green cube edge.",
+        )
+        self.assertEqual(
+            _normalize_task_prompt("Align the static finger pad with one visible red cube edge."),
+            "Align the gripper jaws around one visible red cube edge.",
+        )
+        self.assertEqual(
+            _normalize_task_prompt(
+                "Keep the static finger pad at the blue cube edge, close the gripper, and lift."
+            ),
+            "Close the gripper on the blue cube edge and lift.",
+        )
 
     def test_single_training_launcher_dataset_config_injects_dataset_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -522,7 +540,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--policy.push_to_hub=false", train_cmd)
             self.assertIn("--lightning-precision=bf16-mixed", train_cmd)
             self.assertIn("--validation-interval-epochs=1", train_cmd)
-            self.assertIn("--save_freq=420", train_cmd)
+            self.assertIn("--save_freq=42", train_cmd)
             self.assertIn("--so101-image-cache-dir=/tmp/so101-cache/train", train_cmd)
             self.assertIn("--validation-image-cache-dir=/tmp/so101-cache/val", train_cmd)
             self.assertIn("tensorboard_cmd", payload)
