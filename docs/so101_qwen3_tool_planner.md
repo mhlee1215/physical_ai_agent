@@ -134,3 +134,45 @@ PYTHONPATH=src .venv/bin/python scripts/run_so101_qwen_closed_loop_eval.py \
   --plan-only \
   --require-pass
 ```
+
+## Primitive Dataset Training Plan
+
+For `scenario=pick_up_cube` and `execution_policy=qwen_edge_chain`, train one
+SmolVLA checkpoint on the three primitive datasets together:
+
+```text
+move_over_cube_edge/train
+align_fixed_jaw_cube_edge/train
+grip_from_edge_cube/train
+```
+
+This is not three independent policies. The combined dataset config is:
+
+```text
+configs/so101/training_datasets/qwen_edge_primitives.json
+```
+
+Generate the concrete run plan:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/plan_so101_qwen_edge_primitive_training.py \
+  --runtime-platform linux \
+  --base-train-config <base_smolvla_train_config.json> \
+  --steps 50000 \
+  --output _workspace/so101_qwen_edge_training/plan.json
+```
+
+The plan contains:
+
+- one train command over the merged primitive train set;
+- one validation-merge command for the three primitive validation splits;
+- one final closed-loop command that routes every Qwen primitive prompt to the
+  same trained checkpoint with `--policy-path`.
+
+The final evaluation row should be recorded as:
+
+```text
+scenario=pick_up_cube
+execution_policy=qwen_edge_chain
+training_policy=single_smolvla_checkpoint_trained_on_three_primitive_datasets
+```
