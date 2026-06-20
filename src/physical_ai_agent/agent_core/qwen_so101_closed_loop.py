@@ -25,6 +25,7 @@ BatchBuilder = Callable[..., tuple[dict[str, Any], dict[str, str]]]
 @dataclass(frozen=True)
 class LoopArtifactConfig:
     enabled: bool = False
+    render_media: bool = False
     width: int = 128
     height: int = 128
     fps: int = 12
@@ -174,6 +175,7 @@ def run_closed_loop_plan(
         "policy_routes": [asdict(route) for route in policy_routes],
         "policy_metadata": policy_metadata,
         "policy_rollout_config": _merged_policy_rollout_config(policy_metadata),
+        "loop_artifact_config": asdict(artifact_config or LoopArtifactConfig()),
         "episodes": episodes_out,
         "report_path": str(output_dir / "qwen_closed_loop_eval_report.json"),
     }
@@ -251,7 +253,7 @@ def _run_episode(
                 else int(call.max_steps)
             )
             for primitive_step in range(step_budget):
-                record_media = _should_record_media(artifact_config, primitive_step)
+                record_media = _should_render_media(artifact_config, primitive_step)
                 camera_pixels = _render_policy_cameras(env, renderers) if renderers else {}
                 policy_input_images = (
                     _write_policy_input_images(
@@ -304,6 +306,15 @@ def _run_episode(
                     "media": {
                         "policy_input_images": policy_input_images,
                         "robot_frame": robot_frame_path,
+                        "render_mode": "inline" if record_media else "deferred",
+                    },
+                    "render_replay": {
+                        "env_id": env_id,
+                        "seed": seed,
+                        "artifact_width": artifact_config.width,
+                        "artifact_height": artifact_config.height,
+                        "artifact_fps": artifact_config.fps,
+                        "artifact_every_n_steps": artifact_config.every_n_steps,
                     },
                 }
                 primitive_row_indexes.append(len(records))
@@ -360,7 +371,7 @@ def _run_episode(
         "final_success": _success_from_info(final_info),
         "primitive_summaries": primitive_summaries,
         "trace_path": str(trace_path),
-        "media_root": str(episode_media_dir) if artifact_config.enabled else None,
+        "media_root": str(episode_media_dir) if artifact_config.render_media else None,
     }
 
 
@@ -434,8 +445,8 @@ def _success_from_info(info: dict[str, Any]) -> bool | None:
     return None
 
 
-def _should_record_media(config: LoopArtifactConfig, primitive_step: int) -> bool:
-    return bool(config.enabled) and primitive_step % max(1, int(config.every_n_steps)) == 0
+def _should_render_media(config: LoopArtifactConfig, primitive_step: int) -> bool:
+    return bool(config.enabled and config.render_media) and primitive_step % max(1, int(config.every_n_steps)) == 0
 
 
 def _raw_env(env: Any) -> Any:
@@ -443,7 +454,7 @@ def _raw_env(env: Any) -> Any:
 
 
 def _make_renderers_or_none(env: Any, config: LoopArtifactConfig) -> dict[str, Any]:
-    if not config.enabled:
+    if not (config.enabled and config.render_media):
         return {}
     try:
         import mujoco

@@ -32,20 +32,56 @@ def main() -> None:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--copy-source", action="store_true")
+    parser.add_argument("--generate-media", action="store_true")
+    parser.add_argument("--media-width", type=int, default=128)
+    parser.add_argument("--media-height", type=int, default=128)
+    parser.add_argument("--media-fps", type=int, default=12)
+    parser.add_argument("--media-every-n-steps", type=int, default=1)
     args = parser.parse_args()
 
-    manifest = build_export(args.run_dir, args.output_dir, copy_source=args.copy_source)
+    manifest = build_export(
+        args.run_dir,
+        args.output_dir,
+        copy_source=args.copy_source,
+        generate_media=args.generate_media,
+        media_width=args.media_width,
+        media_height=args.media_height,
+        media_fps=args.media_fps,
+        media_every_n_steps=args.media_every_n_steps,
+    )
     print(json.dumps({"manifest_path": str(args.output_dir / "manifest.json"), **manifest["summary"]}, indent=2))
 
 
-def build_export(run_dir: Path, output_dir: Path, *, copy_source: bool = False) -> dict[str, Any]:
+def build_export(
+    run_dir: Path,
+    output_dir: Path,
+    *,
+    copy_source: bool = False,
+    generate_media: bool = False,
+    media_width: int = 128,
+    media_height: int = 128,
+    media_fps: int = 12,
+    media_every_n_steps: int = 1,
+) -> dict[str, Any]:
     run_dir = run_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     validations = _validation_by_checkpoint(run_dir)
     loop_tests = []
     for report_path in _closed_loop_report_paths(run_dir):
         report = _read_json(report_path)
-        loop_test = _build_loop_test(run_dir, output_dir, report_path, report, validations, copy_source=copy_source)
+        loop_test = _build_loop_test(
+            run_dir,
+            output_dir,
+            report_path,
+            report,
+            validations,
+            copy_source=copy_source,
+            generate_media=generate_media,
+            media_width=media_width,
+            media_height=media_height,
+            media_fps=media_fps,
+            media_every_n_steps=media_every_n_steps,
+        )
         loop_tests.append(loop_test)
     loop_tests.sort(key=lambda row: (row.get("training_step") or -1, row.get("checkpoint") or ""))
 
@@ -76,6 +112,11 @@ def _build_loop_test(
     validations: dict[str, dict[str, Any]],
     *,
     copy_source: bool,
+    generate_media: bool,
+    media_width: int,
+    media_height: int,
+    media_fps: int,
+    media_every_n_steps: int,
 ) -> dict[str, Any]:
     checkpoint = _checkpoint_from_report_path(report_path)
     step = _checkpoint_to_step(checkpoint)
@@ -99,6 +140,11 @@ def _build_loop_test(
                 checkpoint=checkpoint,
                 step=step,
                 copy_source=copy_source,
+                generate_media=generate_media,
+                media_width=media_width,
+                media_height=media_height,
+                media_fps=media_fps,
+                media_every_n_steps=media_every_n_steps,
             )
         )
 
@@ -155,6 +201,11 @@ def _write_episode_timeline(
     checkpoint: str,
     step: int | None,
     copy_source: bool,
+    generate_media: bool,
+    media_width: int,
+    media_height: int,
+    media_fps: int,
+    media_every_n_steps: int,
 ) -> dict[str, Any]:
     episode_index = int(episode.get("episode") or 0)
     episode_dir = loop_dir / "episodes" / f"episode_{episode_index:03d}"
@@ -163,6 +214,17 @@ def _write_episode_timeline(
     if copy_source and trace_path.exists():
         shutil.copy2(trace_path, source_dir / trace_path.name)
     records = _read_jsonl(trace_path)
+    if generate_media:
+        records = _generate_media_for_records(
+            records=records,
+            report=report,
+            episode=episode,
+            episode_dir=episode_dir,
+            width=media_width,
+            height=media_height,
+            fps=media_fps,
+            every_n_steps=media_every_n_steps,
+        )
     timeline = _timeline_rows(
         records,
         report,
@@ -590,6 +652,135 @@ def _copy_media_path(path_value: Any, target_dir: Path, *, copy_source: bool) ->
     if path.resolve() != target.resolve():
         shutil.copy2(path, target)
     return str(target)
+
+
+def _generate_media_for_records(
+    *,
+    records: list[dict[str, Any]],
+    report: dict[str, Any],
+    episode: dict[str, Any],
+    episode_dir: Path,
+    width: int,
+    height: int,
+    fps: int,
+    every_n_steps: int,
+) -> list[dict[str, Any]]:
+    if not records:
+        return records
+    try:
+        import mujoco
+
+        from physical_ai_agent.sim.so101_camera_input import _make_camera, postprocess_camera_frame
+        from physical_ai_agent.sim.so101_nexus_env import SO101NexusEnv
+    except Exception:
+        return records
+
+    env_id = str(report.get("env_id") or (records[0].get("render_replay") or {}).get("env_id") or "MuJoCoReach-v1")
+    seed = int(episode.get("seed") or report.get("seed") or (records[0].get("render_replay") or {}).get("seed") or 0)
+    media_root = episode_dir / "media"
+    env = None
+    renderers: dict[str, Any] = {}
+    generated = [dict(record) for record in records]
+    primitive_frames: dict[tuple[Any, Any], list[str]] = defaultdict(list)
+    try:
+        env = SO101NexusEnv(env_id, None)
+        raw_env = getattr(env, "env", env)
+        renderers = {
+            name: mujoco.Renderer(raw_env.unwrapped.model, height=int(height), width=int(width))
+            for name in ("egocentric_cam", "wrist_cam", "top_down")
+        }
+        env.reset(seed=seed)
+        for index, record in enumerate(generated):
+            global_step = _int_or_none(record.get("global_step")) or index
+            primitive_step = _int_or_none(record.get("primitive_step")) or 0
+            should_render = primitive_step % max(1, int(every_n_steps)) == 0
+            media = dict(record.get("media") or {})
+            media["render_mode"] = "generated_local" if should_render else media.get("render_mode", "deferred")
+            if should_render:
+                policy_images = {}
+                for camera_name in ("egocentric_cam", "wrist_cam"):
+                    renderer = renderers[camera_name]
+                    renderer.update_scene(raw_env.unwrapped.data, camera=_make_camera(raw_env, camera_name))
+                    pixels = postprocess_camera_frame(camera_name, renderer.render())
+                    path = media_root / "policy_inputs" / f"step_{global_step:04d}_{camera_name}.png"
+                    _write_image(path, pixels)
+                    policy_images[camera_name] = str(path)
+                media["policy_input_images"] = policy_images
+
+            env.step(record.get("action") or [])
+
+            if should_render:
+                renderer = renderers["top_down"]
+                renderer.update_scene(raw_env.unwrapped.data, camera=_make_camera(raw_env, "top_down"))
+                frame_path = media_root / "robot_frames" / f"step_{global_step:04d}_top_down.png"
+                _write_image(frame_path, renderer.render())
+                media["robot_frame"] = str(frame_path)
+                primitive_key = (record.get("primitive_id"), record.get("fn"))
+                primitive_frames[primitive_key].append(str(frame_path))
+            record["media"] = media
+
+        videos_by_primitive = _write_generated_primitive_videos(
+            primitive_frames=primitive_frames,
+            media_root=media_root,
+            fps=fps,
+        )
+        for record in generated:
+            videos = videos_by_primitive.get((record.get("primitive_id"), record.get("fn")))
+            if videos:
+                record.setdefault("media", {}).update(videos)
+    except Exception:
+        return records
+    finally:
+        for renderer in renderers.values():
+            try:
+                renderer.close()
+            except Exception:
+                pass
+        if env is not None:
+            env.close()
+    return generated
+
+
+def _write_generated_primitive_videos(
+    *,
+    primitive_frames: dict[tuple[Any, Any], list[str]],
+    media_root: Path,
+    fps: int,
+) -> dict[tuple[Any, Any], dict[str, str]]:
+    try:
+        import imageio.v2 as imageio
+    except Exception:
+        return {}
+    out = {}
+    videos_dir = media_root / "videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    for index, (key, frame_paths) in enumerate(primitive_frames.items(), start=1):
+        if not frame_paths:
+            continue
+        frames = [imageio.imread(path) for path in frame_paths]
+        primitive_id = str(key[0] or "primitive")
+        stem = f"iteration_{index:02d}_{primitive_id}"
+        gif_path = videos_dir / f"{stem}.gif"
+        mp4_path = videos_dir / f"{stem}.mp4"
+        imageio.mimsave(gif_path, frames, fps=max(1, int(fps)))
+        imageio.mimsave(mp4_path, frames, fps=max(1, int(fps)))
+        out[key] = {
+            "iteration_video_gif": str(gif_path),
+            "iteration_video_mp4": str(mp4_path),
+        }
+    return out
+
+
+def _write_image(path: Path, image: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import imageio.v2 as imageio
+
+        imageio.imwrite(path, image)
+    except Exception:
+        from PIL import Image
+
+        Image.fromarray(image).save(path)
 
 
 def _qwen_prompts(plan: dict[str, Any]) -> dict[str, Any]:

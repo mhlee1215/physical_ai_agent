@@ -54,6 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--policy-num-steps", type=int, default=10)
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--render-loop-media",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Render PNG/MP4 media during the rollout. Default records replay metadata only.",
+    )
     parser.add_argument("--artifact-width", type=int, default=128)
     parser.add_argument("--artifact-height", type=int, default=128)
     parser.add_argument("--artifact-fps", type=int, default=12)
@@ -100,6 +106,7 @@ def main() -> None:
             policy_num_steps=args.policy_num_steps,
             artifact_config=LoopArtifactConfig(
                 enabled=bool(args.record_loop_artifacts),
+                render_media=bool(args.render_loop_media),
                 width=int(args.artifact_width),
                 height=int(args.artifact_height),
                 fps=int(args.artifact_fps),
