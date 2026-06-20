@@ -11,6 +11,7 @@ from typing import Any
 
 CONFIG = Path("configs/so101/training_datasets/qwen_edge_primitives.json")
 LOCAL_STANDARD_DOC = Path("docs/so101_local_training_standard.md")
+QWEN_MOCK_RESPONSE = Path("configs/agent/qwen3_so101_tool_planner_mock_response.json")
 PLAN_NAME = "primitive training with qwen validation v1"
 
 
@@ -144,6 +145,8 @@ def _train_command(
         runtime,
         "--closed-loop-policy",
         "best_or_periodic",
+        "--closed-loop-runner",
+        "qwen_chain",
         "--closed-loop-every-epochs",
         str(int(closed_loop_every_epochs)),
         "--closed-loop-episodes",
@@ -154,6 +157,8 @@ def _train_command(
         "picklift",
         "--closed-loop-task-prompt",
         "pick and lift the green cube",
+        "--qwen-response-json",
+        str(QWEN_MOCK_RESPONSE),
         "--max-monitored-checkpoints",
         str(int(max_monitored_checkpoints)),
         "--validation-interval-steps",

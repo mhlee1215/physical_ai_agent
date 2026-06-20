@@ -77,33 +77,31 @@ SO101_EDGE_TOOLS: tuple[SO101ToolSpec, ...] = (
     SO101ToolSpec(
         name="move",
         description=(
-            "Move the robot from its current pose until the static finger pad is above "
+            "Move the robot from its current pose until the gripper is above "
             "one visible edge of the target cube. Use this before alignment."
         ),
         primitive_id="move_over_cube_edge",
-        prompt_template="Move the static finger pad above one visible {object} edge.",
+        prompt_template="Move the gripper above one visible {object} edge.",
         max_steps=90,
     ),
     SO101ToolSpec(
         name="align",
         description=(
-            "Refine the pose so the static finger pad is aligned with one visible edge "
+            "Refine the pose so the gripper jaws are aligned around one visible edge "
             "of the target cube. Use this after move and before pick_up."
         ),
         primitive_id="align_fixed_jaw_cube_edge",
-        prompt_template="Align the static finger pad with one visible {object} edge.",
+        prompt_template="Align the gripper jaws around one visible {object} edge.",
         max_steps=75,
     ),
     SO101ToolSpec(
         name="pick_up",
         description=(
-            "Keep the static finger pad at the target cube edge, close the gripper, "
+            "Keep the gripper at the target cube edge, close the gripper, "
             "grasp the cube, and lift it."
         ),
         primitive_id="grip_from_edge_cube",
-        prompt_template=(
-            "Keep the static finger pad at the {object} edge, close the gripper, and lift."
-        ),
+        prompt_template="Close the gripper on the {object} edge and lift.",
         max_steps=90,
     ),
 )

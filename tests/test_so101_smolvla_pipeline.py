@@ -323,6 +323,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("important/closed_loop_success_rate", constants)
 
     def test_training_monitor_uses_macos_safe_mujoco_gl(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
         import monitor_so101_training_dashboard as monitor
 
         with mock.patch.dict(os.environ, {"MUJOCO_GL": "egl", "PYOPENGL_PLATFORM": "egl"}, clear=False):
@@ -337,6 +338,61 @@ class SO101SmolVLAPipelineTest(TestCase):
             with mock.patch("platform.system", return_value="Darwin"):
                 self.assertEqual(monitor._mujoco_render_env("egl"), ("egl", "egl"))
                 self.assertEqual(monitor._mujoco_render_env("glfw"), ("glfw", None))
+
+    def test_training_monitor_qwen_chain_runner_reads_qwen_report(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        import monitor_so101_training_dashboard as monitor
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "run"
+            args = argparse.Namespace(
+                python=sys.executable,
+                repo_root=Path.cwd(),
+                closed_loop_task_prompt="pick and lift the green cube",
+                qwen_object="green cube",
+                qwen_model="qwen3-vl-8b-instruct-mlx",
+                qwen_plan_json=None,
+                qwen_response_json=Path("configs/agent/qwen3_so101_tool_planner_mock_response.json"),
+                qwen_base_url=None,
+                qwen_api_key=None,
+                closed_loop_episodes=1,
+                closed_loop_seed=98100,
+                policy_device="cpu",
+                closed_loop_steps=2,
+                local_files_only=True,
+                mujoco_gl="glfw",
+            )
+
+            def fake_run(cmd, cwd, env, text, capture_output, check):
+                del cwd, env, text, capture_output, check
+                output_dir = Path(cmd[cmd.index("--output-dir") + 1])
+                output_dir.mkdir(parents=True)
+                (output_dir / "qwen_closed_loop_eval_report.json").write_text(
+                    json.dumps(
+                        {
+                            "operation": "so101_qwen_closed_loop_eval",
+                            "status": "passed",
+                            "success_rate": 1.0,
+                            "episodes": [{"final_success": True}],
+                            "plan": {"task": "pick and lift the green cube"},
+                            "report_path": str(output_dir / "qwen_closed_loop_eval_report.json"),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return argparse.Namespace(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(monitor.subprocess, "run", side_effect=fake_run):
+                report = monitor._run_qwen_chain_closed_loop_eval(
+                    args,
+                    run_dir,
+                    "000224",
+                    Path("/tmp/policy"),
+                )
+
+        self.assertEqual(report["operation"], "so101_qwen_closed_loop_eval")
+        self.assertEqual(report["success_rate"], 1.0)
+        self.assertEqual(report["eval_skill_mode"], "qwen_edge_chain")
 
     def test_single_training_launcher_is_canonical_and_lock_guarded(self) -> None:
         source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
@@ -1006,6 +1062,13 @@ class SO101SmolVLAPipelineTest(TestCase):
                     closed_loop_eval_skill_mode=None,
                     closed_loop_task_prompt=None,
                     closed_loop_record_rollout_gif=False,
+                    closed_loop_runner="auto",
+                    qwen_model="qwen3-vl-8b-instruct-mlx",
+                    qwen_base_url=None,
+                    qwen_api_key=None,
+                    qwen_response_json=None,
+                    qwen_plan_json=None,
+                    qwen_object="green cube",
                 ),
                 repo_root=repo_root,
                 run_dir=repo_root / "run",
@@ -1025,6 +1088,45 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("pick_and_place_cube", progress_cmd)
             self.assertIn("--closed-loop-task-prompt", progress_cmd)
             self.assertIn("--closed-loop-record-rollout-gif", progress_cmd)
+
+            resolved["execution_policy"] = "qwen_edge_chain"
+            progress_cmd = start_so101_training._progress_monitor_command(
+                args=argparse.Namespace(
+                    python=Path(sys.executable),
+                    progress_monitor_interval_s=600,
+                    closed_loop_every_epochs=1,
+                    closed_loop_episodes=1,
+                    closed_loop_steps=90,
+                    closed_loop_policy="best_or_periodic",
+                    closed_loop_eval_skill_mode=None,
+                    closed_loop_task_prompt=None,
+                    closed_loop_record_rollout_gif=False,
+                    closed_loop_runner="auto",
+                    qwen_model="qwen3-vl-8b-instruct-mlx",
+                    qwen_base_url=None,
+                    qwen_api_key=None,
+                    qwen_response_json=None,
+                    qwen_plan_json=None,
+                    qwen_object="green cube",
+                ),
+                repo_root=repo_root,
+                run_dir=repo_root / "run",
+                train_output_dir=repo_root / "run/model",
+                dataset_config=resolved,
+                training_args=[],
+                train_pid_file=repo_root / "run/train.pid",
+                runtime_contract={
+                    "runtime_platform": "macos",
+                    "training_device": "mps",
+                    "lightning_accelerator": "mps",
+                    "closed_loop_device": "mps",
+                    "closed_loop_mujoco_gl": "glfw",
+                },
+            )
+            self.assertIn("--closed-loop-runner", progress_cmd)
+            self.assertIn("qwen_chain", progress_cmd)
+            self.assertIn("--qwen-response-json", progress_cmd)
+            self.assertIn("configs/agent/qwen3_so101_tool_planner_mock_response.json", progress_cmd)
 
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (

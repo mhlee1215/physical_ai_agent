@@ -125,6 +125,7 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
         help="Fail fast when --steps/--save_freq would create more monitored checkpoints than this.",
     )
     parser.add_argument("--closed-loop-policy", choices=["off", "periodic", "best_only", "best_or_periodic"], default="periodic")
+    parser.add_argument("--closed-loop-runner", choices=["auto", "picklift", "qwen_chain"], default="auto")
     parser.add_argument(
         "--closed-loop-eval-skill-mode",
         choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
@@ -132,6 +133,12 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--closed-loop-task-prompt")
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
+    parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
+    parser.add_argument("--qwen-base-url")
+    parser.add_argument("--qwen-api-key")
+    parser.add_argument("--qwen-response-json", type=Path)
+    parser.add_argument("--qwen-plan-json", type=Path)
+    parser.add_argument("--qwen-object", default="green cube")
     parser.add_argument(
         "--validation-interval-steps",
         type=int,
@@ -882,7 +889,8 @@ def _validate_monitoring_contract(
         errors.append("--closed-loop-steps must be positive.")
 
     closed_loop = dataset_config.get("closed_loop") or {}
-    if not args.closed_loop_eval_skill_mode and not (
+    closed_loop_runner = _closed_loop_runner(args, dataset_config)
+    if closed_loop_runner != "qwen_chain" and not args.closed_loop_eval_skill_mode and not (
         isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode")
     ):
         errors.append("closed-loop eval skill mode must be set in config closed_loop.eval_skill_mode or CLI.")
@@ -995,6 +1003,7 @@ def _progress_monitor_command(
     policy_device = str(_arg_value(training_args, "policy.device") or "auto")
     if policy_device not in {"auto", "cpu", "mps", "cuda"}:
         policy_device = "auto"
+    closed_loop_runner = _closed_loop_runner(args, dataset_config)
     cmd = [
         str(args.python),
         str(repo_root / "scripts" / "monitor_so101_training_dashboard.py"),
@@ -1030,6 +1039,8 @@ def _progress_monitor_command(
         str(args.closed_loop_steps),
         "--mujoco-gl",
         runtime_contract["closed_loop_mujoco_gl"],
+        "--closed-loop-runner",
+        closed_loop_runner,
         "--closed-loop-policy",
         args.closed_loop_policy,
         "--closed-loop-eval-skill-mode",
@@ -1041,6 +1052,20 @@ def _progress_monitor_command(
         cmd.extend(["--closed-loop-task-prompt", closed_loop_task_prompt])
     if args.closed_loop_record_rollout_gif or _closed_loop_record_rollout_gif(dataset_config):
         cmd.append("--closed-loop-record-rollout-gif")
+    if closed_loop_runner == "qwen_chain":
+        cmd.extend(["--qwen-model", args.qwen_model, "--qwen-object", args.qwen_object])
+        if args.qwen_plan_json:
+            cmd.extend(["--qwen-plan-json", str(args.qwen_plan_json)])
+        elif args.qwen_response_json:
+            cmd.extend(["--qwen-response-json", str(args.qwen_response_json)])
+        else:
+            qwen_response_json = _qwen_response_json(dataset_config)
+            if qwen_response_json:
+                cmd.extend(["--qwen-response-json", str(qwen_response_json)])
+            elif args.qwen_base_url:
+                cmd.extend(["--qwen-base-url", args.qwen_base_url])
+        if args.qwen_api_key:
+            cmd.extend(["--qwen-api-key", args.qwen_api_key])
     return cmd
 
 
@@ -1051,6 +1076,32 @@ def _closed_loop_eval_skill_mode(args: argparse.Namespace, dataset_config: dict[
     if isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode"):
         return str(closed_loop["eval_skill_mode"])
     return "picklift"
+
+
+def _closed_loop_runner(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    if args.closed_loop_runner != "auto":
+        return str(args.closed_loop_runner)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict):
+        if closed_loop.get("runner"):
+            return str(closed_loop["runner"])
+        if closed_loop.get("execution_policy") == "qwen_edge_chain":
+            return "qwen_chain"
+    if dataset_config.get("execution_policy") == "qwen_edge_chain":
+        return "qwen_chain"
+    return "picklift"
+
+
+def _qwen_response_json(dataset_config: dict[str, Any]) -> Path | None:
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("qwen_response_json"):
+        return Path(str(closed_loop["qwen_response_json"]))
+    if (
+        isinstance(closed_loop, dict)
+        and closed_loop.get("execution_policy") == "qwen_edge_chain"
+    ) or dataset_config.get("execution_policy") == "qwen_edge_chain":
+        return Path("configs/agent/qwen3_so101_tool_planner_mock_response.json")
+    return None
 
 
 def _closed_loop_task_prompt(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str | None:

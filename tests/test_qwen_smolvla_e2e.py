@@ -75,7 +75,7 @@ class QwenSmolVLAE2ETest(unittest.TestCase):
         self.assertEqual(captured["observation"], [0.0, 0.1, 0.2])
         self.assertEqual(captured["action_dim"], 6)
         self.assertIn("validated SO101 primitive chain", captured["task_prompt"])
-        self.assertIn("Move the static finger pad above one visible green cube edge.", captured["task_prompt"])
+        self.assertIn("Move the gripper above one visible green cube edge.", captured["task_prompt"])
 
     def test_real_qwen_plan_drives_real_smolvla_so101_rollout(self) -> None:
         if os.environ.get("RUN_QWEN_SMOLVLA_E2E") != "1":

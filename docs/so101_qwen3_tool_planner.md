@@ -13,9 +13,9 @@ prompts:
 
 | Function | Primitive dataset | Policy prompt |
 | --- | --- | --- |
-| `move` | `move_over_cube_edge` | `Move the static finger pad above one visible {object} edge.` |
-| `align` | `align_fixed_jaw_cube_edge` | `Align the static finger pad with one visible {object} edge.` |
-| `pick_up` | `grip_from_edge_cube` | `Keep the static finger pad at the {object} edge, close the gripper, and lift.` |
+| `move` | `move_over_cube_edge` | `Move the gripper above one visible {object} edge.` |
+| `align` | `align_fixed_jaw_cube_edge` | `Align the gripper jaws around one visible {object} edge.` |
+| `pick_up` | `grip_from_edge_cube` | `Close the gripper on the {object} edge and lift.` |
 
 ## Contract
 
@@ -174,6 +174,12 @@ The plan contains:
   `hf_merge_sources`;
 - launcher-managed `hf_merge_sources` resolution for both train and validation,
   without a separate manual pre-merge command;
+- training-time closed-loop validation with `--closed-loop-runner qwen_chain`,
+  `--closed-loop-every-epochs 1`, `--validation-interval-steps <steps_per_epoch>`,
+  and `--save_freq <steps_per_epoch>`, so Qwen chain closed-loop metrics are
+  computed at the same checkpoint timing as validation loss;
+- a saved Qwen mock response for training-time closed-loop replay, so Qwen does
+  not need to be live for every epoch monitor pass;
 - one final Qwen validation command that routes every Qwen primitive prompt to the
   same trained checkpoint with `--policy-path`.
 

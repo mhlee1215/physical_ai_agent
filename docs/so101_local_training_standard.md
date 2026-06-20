@@ -48,6 +48,14 @@ explicitly chooses another experiment.
   and closed-loop test cadence must also be every epoch.
 - Use `--closed-loop-policy periodic` or `--closed-loop-policy best_or_periodic`;
   do not use `best_only`, because it can skip non-best validation checkpoints.
+- For Qwen primitive training, the training-time closed-loop monitor must use
+  `--closed-loop-runner qwen_chain` so the `pick_up_cube` scenario is evaluated
+  through the Qwen `move -> align -> pick_up` chain, not the legacy single-skill
+  picklift smoke evaluator.
+- The training-time Qwen chain should default to the saved mock response
+  `configs/agent/qwen3_so101_tool_planner_mock_response.json` so the epoch
+  validation/closed-loop cadence is not blocked when LM Studio or Qwen is not
+  running. Use live Qwen for the final/current-best validation command.
 
 ## Required Launcher Behavior
 

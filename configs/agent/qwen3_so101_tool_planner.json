@@ -15,17 +15,17 @@
     {
       "fn": "move",
       "primitive_id": "move_over_cube_edge",
-      "prompt": "Move the static finger pad above one visible {object} edge."
+      "prompt": "Move the gripper above one visible {object} edge."
     },
     {
       "fn": "align",
       "primitive_id": "align_fixed_jaw_cube_edge",
-      "prompt": "Align the static finger pad with one visible {object} edge."
+      "prompt": "Align the gripper jaws around one visible {object} edge."
     },
     {
       "fn": "pick_up",
       "primitive_id": "grip_from_edge_cube",
-      "prompt": "Keep the static finger pad at the {object} edge, close the gripper, and lift."
+      "prompt": "Close the gripper on the {object} edge and lift."
     }
   ]
 }
