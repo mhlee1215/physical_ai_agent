@@ -318,6 +318,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
 
 def status(lock_file: Path) -> dict[str, Any]:
     record = _read_json(lock_file) or {"lock_file": str(lock_file.resolve()), "active": False}
+    record.setdefault("local_training_standard", _local_training_standard(Path(__file__).resolve().parents[1]))
     train = _process_status(record.get("train_pid"))
     tensorboard = _process_status(record.get("tensorboard_pid"))
     dashboard = _process_status(record.get("dashboard_pid"))
