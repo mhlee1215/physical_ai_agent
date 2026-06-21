@@ -12,8 +12,6 @@ def main() -> None:
 
     if "--iterations" not in sys.argv:
         sys.argv.extend(["--iterations", "1"])
-    if "--skip-validation" not in sys.argv:
-        sys.argv.append("--skip-validation")
     run_once()
 
 

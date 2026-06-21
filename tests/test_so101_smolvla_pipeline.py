@@ -737,7 +737,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertEqual(loop_cmd[loop_cmd.index("--closed-loop-episodes") + 1], "10")
             self.assertIn("--iterations", loop_cmd)
             self.assertIn("1", loop_cmd)
-            self.assertIn("--skip-validation", loop_cmd)
+            self.assertNotIn("--skip-validation", loop_cmd)
             self.assertTrue(any("run_so101_training_loop_test.py" in part for part in loop_cmd))
             self.assertFalse(any("monitor_so101_training_dashboard.py" in part for part in loop_cmd))
 

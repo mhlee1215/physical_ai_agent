@@ -1328,7 +1328,7 @@ def _post_checkpoint_loop_command(progress_monitor_cmd: list[str] | None) -> lis
         if part.endswith("monitor_so101_training_dashboard.py"):
             cmd[index] = str(Path(part).with_name("run_so101_training_loop_test.py"))
             break
-    cmd.extend(["--iterations", "1", "--skip-validation"])
+    cmd.extend(["--iterations", "1"])
     return cmd
 
 
