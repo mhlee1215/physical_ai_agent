@@ -381,6 +381,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                 closed_loop_valid_mask_threshold=0.5,
                 closed_loop_valid_mask_consecutive=2,
                 record_loop_artifacts=True,
+                render_loop_media=True,
                 loop_artifact_width=128,
                 loop_artifact_height=128,
                 loop_artifact_fps=12,
@@ -428,6 +429,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--valid-mask-checkpoint", captured_cmd)
         self.assertEqual(captured_cmd[captured_cmd.index("--valid-mask-checkpoint") + 1], "/tmp/valid_mask_head.pt")
         self.assertIn("--record-loop-artifacts", captured_cmd)
+        self.assertIn("--render-loop-media", captured_cmd)
         self.assertEqual(captured_cmd[captured_cmd.index("--artifact-width") + 1], "128")
 
     def test_virtual_merge_concat_dataset_len_is_sum(self) -> None:
@@ -1409,6 +1411,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     qwen_plan_json=None,
                     qwen_object="green cube",
                     record_loop_artifacts=True,
+                    render_loop_media=True,
                     loop_artifact_width=128,
                     loop_artifact_height=128,
                     loop_artifact_fps=12,
@@ -1438,6 +1441,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--closed-loop-runner", progress_cmd)
             self.assertIn("qwen_chain", progress_cmd)
             self.assertIn("--record-loop-artifacts", progress_cmd)
+            self.assertIn("--render-loop-media", progress_cmd)
             self.assertIn("--loop-artifact-width", progress_cmd)
             self.assertIn("--qwen-response-json", progress_cmd)
             self.assertIn("configs/agent/qwen3_so101_tool_planner_mock_response.json", progress_cmd)
@@ -1478,6 +1482,27 @@ class SO101SmolVLAPipelineTest(TestCase):
                 self.assertEqual(augmentation["image_camera_dropout_prob"], 0.0)
                 self.assertEqual(augmentation["image_patch_dropout_prob"], 0.0)
                 self.assertNotIn("action_dropout_prob", augmentation)
+
+    def test_training_launcher_forces_zero_workers_for_local_macos(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        import start_so101_training
+
+        config = {
+            "train_dataset": {
+                "repo_id": "physical-ai-agent/train",
+                "root": "_workspace/train",
+            },
+            "training": {
+                "num_workers": 4,
+                "batch_size": 32,
+            },
+        }
+
+        macos_args = start_so101_training._with_dataset_config([], config, runtime_platform="macos")
+        linux_args = start_so101_training._with_dataset_config([], config, runtime_platform="linux")
+
+        self.assertIn("--num_workers=0", macos_args)
+        self.assertIn("--num_workers=4", linux_args)
 
     def test_so101_dataset_configs_use_approved_egocentric_camera1(self) -> None:
         for config_path in (

@@ -72,6 +72,7 @@ def main() -> None:
     )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--loop-artifact-width", type=int, default=128)
     parser.add_argument("--loop-artifact-height", type=int, default=128)
     parser.add_argument("--loop-artifact-fps", type=int, default=12)
@@ -409,6 +410,7 @@ def _run_qwen_chain_closed_loop_eval(
         cmd.extend(
             [
                 "--record-loop-artifacts",
+                "--render-loop-media" if args.render_loop_media else "--no-render-loop-media",
                 "--artifact-width",
                 str(args.loop_artifact_width),
                 "--artifact-height",

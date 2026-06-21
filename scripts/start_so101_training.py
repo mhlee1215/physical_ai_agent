@@ -134,6 +134,7 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--closed-loop-task-prompt")
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--loop-artifact-width", type=int, default=128)
     parser.add_argument("--loop-artifact-height", type=int, default=128)
     parser.add_argument("--loop-artifact-fps", type=int, default=12)
@@ -221,7 +222,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
             merge=not args.dry_run,
         )
     training_args = _forwarded_args(args.training_args, passthrough)
-    training_args = _with_dataset_config(training_args, dataset_config)
+    training_args = _with_dataset_config(training_args, dataset_config, runtime_platform=args.runtime_platform)
     training_args = _with_validation_schedule(training_args, args)
     training_args = _with_checkpoint_schedule(training_args, dataset_config, args)
     runtime_contract = _runtime_contract(args, training_args)
@@ -697,7 +698,7 @@ def _hf_local_repo_dir(cache_root: Path, repo_id: str, revision: str = "") -> Pa
     return cache_root / safe_repo
 
 
-def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list[str]:
+def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runtime_platform: str = "auto") -> list[str]:
     if not config:
         return args
     train_datasets = _train_dataset_entries(config)
@@ -726,7 +727,10 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list
         ("lightning_precision", "lightning-precision"),
     ):
         if name in training:
-            updated = _ensure_arg(updated, cli_name, str(training[name]))
+            value = training[name]
+            if name == "num_workers" and runtime_platform == "macos":
+                value = 0
+            updated = _ensure_arg(updated, cli_name, str(value))
     if "policy_push_to_hub" in training:
         updated = _ensure_arg(updated, "policy.push_to_hub", str(bool(training["policy_push_to_hub"])).lower())
     cache = config.get("predecoded_image_cache") or {}
@@ -1173,6 +1177,7 @@ def _progress_monitor_command(
         cmd.extend(
             [
                 "--record-loop-artifacts",
+                "--render-loop-media" if args.render_loop_media else "--no-render-loop-media",
                 "--loop-artifact-width",
                 str(args.loop_artifact_width),
                 "--loop-artifact-height",

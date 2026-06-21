@@ -67,6 +67,25 @@ The valid-mask training script now accepts:
 so it can reuse the SO101 predecoded image cache instead of repeatedly decoding
 images.
 
+### Rollout Media Flag Propagation
+
+The launcher already had `--record-loop-artifacts`, but the closed-loop monitor
+did not have a separate media-rendering switch. The launcher and monitor now
+both expose `--render-loop-media` and forward it to the Qwen closed-loop runner
+with the rollout artifact settings.
+
+### Resume Runtime Fixes
+
+The first resume attempt exposed two launch bugs:
+
+- `scripts/lerobot_train_so101_lightning.py` did not parse
+  `--so101-image-affine-degrees` or `--so101-image-affine-translate`, even
+  though the dataset config and launcher emitted those options.
+- Local macOS training inherited `num_workers=4` from the shared dataset config,
+  which broke predecoded-cache loading under spawn multiprocessing. The launcher
+  now forces `num_workers=0` when `--runtime-platform macos` is selected, matching
+  `docs/so101_local_training_standard.md`.
+
 ## Evidence
 
 Predecoded caches were rebuilt locally for the current Qwen-edge train/val
@@ -123,6 +142,12 @@ PYTHONPATH=src .venv/bin/python -B -m unittest discover \
 PYTHONPATH=src .venv/bin/python -B -m unittest discover \
   -s tests \
   -p 'test_so101_valid_mask.py'
+
+PYTHONPATH=src python3 -B -m unittest \
+  tests.test_so101_smolvla_pipeline.SO101SmolVLAPipelineTest.test_training_launcher_forces_zero_workers_for_local_macos \
+  tests.test_so101_smolvla_pipeline.SO101SmolVLAPipelineTest.test_training_monitor_qwen_chain_runner_reads_qwen_report \
+  tests.test_so101_smolvla_pipeline.SO101SmolVLAPipelineTest.test_training_launcher_resolves_hf_merge_sources_for_train_and_validation \
+  tests.test_so101_smolvla_pipeline.SO101SmolVLAPipelineTest.test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout
 ```
 
 The default `python3` test path skipped Torch-dependent augmentation tests when
