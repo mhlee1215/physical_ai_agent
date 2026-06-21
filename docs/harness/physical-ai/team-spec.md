@@ -223,6 +223,8 @@ policy is:
   the training loop must invoke loop tests directly after checkpoint/evaluation
   events through the one-shot `scripts/run_so101_training_loop_test.py`
   entrypoint.
+- Whenever TensorBoard is started or reported, include both the local URL and
+  the same-Wi-Fi mobile TensorBoard URL.
 - SO101 training-time closed-loop validation must run exactly 10 episodes by
   default. Keep `--closed-loop-episodes 10` in both launcher and monitor
   command paths; use any other count only for an explicitly labeled one-off

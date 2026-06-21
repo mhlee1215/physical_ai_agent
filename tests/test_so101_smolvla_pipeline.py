@@ -660,6 +660,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--validation-interval-steps=10", train_cmd)
             self.assertTrue(any(str(part).startswith("--output_dir=") for part in train_cmd))
             self.assertIn("tensorboard_cmd", payload)
+            self.assertIn("mobile_tensorboard_url", payload)
             self.assertIsNone(payload["dashboard_cmd"])
             self.assertIsNone(payload["gpu_monitor_cmd"])
             self.assertIsNone(payload["progress_monitor_cmd"])

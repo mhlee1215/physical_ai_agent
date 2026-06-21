@@ -128,6 +128,8 @@ paper-facing concepts:
   run logdir. Closed-loop tests must be invoked from the training process after
   checkpoint/evaluation events through `scripts/run_so101_training_loop_test.py`,
   not by a separate polling monitor.
+- User policy: whenever TensorBoard is started or reported, provide both the
+  local URL and the same-Wi-Fi mobile TensorBoard URL.
 - User policy: Qwen-chain SO101 loop tests must use the valid-mask termination
   head, not fixed-length primitive execution. Provide
   `closed_loop.valid_mask_checkpoint` in dataset config or

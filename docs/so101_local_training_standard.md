@@ -40,6 +40,8 @@ explicitly chooses another experiment.
   alternate TensorBoard, or ad hoc polling service unless the user explicitly
   asks for that one-off tool. If the TensorBoard view is stale or wrong, stop
   and restart only the TensorBoard process attached to the current run logdir.
+  Always report both the local TensorBoard URL and the same-Wi-Fi mobile
+  TensorBoard URL.
 - Training, supervised evaluation, and loop test are all mandatory. The training
   process owns the sequence; do not use an external polling monitor as the
   default mechanism for discovering checkpoints or triggering loop tests.

@@ -6,8 +6,10 @@ import copy
 import json
 import os
 import platform
+import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -317,6 +319,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "cache_build_cmds": cache_build_cmds,
         "runtime_contract": runtime_contract,
         "tensorboard_url": f"http://127.0.0.1:{args.tensorboard_port}/" if enable_tensorboard else None,
+        "mobile_tensorboard_url": _mobile_url(args.tensorboard_port) if enable_tensorboard else None,
         "dashboard_url": f"http://127.0.0.1:{args.dashboard_port}/" if enable_dashboard else None,
     }
     _validate_monitoring_contract(
@@ -384,6 +387,10 @@ def status(lock_file: Path) -> dict[str, Any]:
     record["active"] = any(
         bool(process.get("alive")) for process in (train, tensorboard, dashboard, gpu_monitor, progress_monitor)
     )
+    if record.get("tensorboard_url") and not record.get("mobile_tensorboard_url"):
+        port = _url_port(str(record["tensorboard_url"]))
+        if port is not None:
+            record["mobile_tensorboard_url"] = _mobile_url(port)
     return record
 
 
@@ -429,6 +436,8 @@ def _human_status(record: dict[str, Any]) -> str:
     ]
     if record.get("tensorboard_url"):
         lines.append(f"tensorboard_url: {record['tensorboard_url']}")
+    if record.get("mobile_tensorboard_url"):
+        lines.append(f"mobile_tensorboard_url: {record['mobile_tensorboard_url']}")
     if record.get("dashboard_url"):
         lines.append(f"dashboard_url: {record['dashboard_url']}")
     standard = record.get("local_training_standard")
@@ -439,6 +448,70 @@ def _human_status(record: dict[str, Any]) -> str:
     if logs.get("train"):
         lines.append(f"train_log: {logs['train']}")
     return "\n".join(lines)
+
+
+def _mobile_url(port: int) -> str | None:
+    host = _lan_ip_address()
+    if not host:
+        return None
+    return f"http://{host}:{int(port)}/"
+
+
+def _url_port(url: str) -> int | None:
+    try:
+        tail = url.rsplit(":", 1)[1]
+        return int(tail.split("/", 1)[0])
+    except (IndexError, ValueError):
+        return None
+
+
+def _lan_ip_address() -> str | None:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return str(sock.getsockname()[0])
+    except OSError:
+        pass
+    for interface in ("en0", "en1"):
+        try:
+            completed = subprocess.run(
+                ["ipconfig", "getifaddr", interface],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+        except OSError:
+            continue
+        host = completed.stdout.strip()
+        if completed.returncode == 0 and host and not host.startswith("127."):
+            return host
+    host = _ifconfig_lan_ip()
+    if host:
+        return host
+    try:
+        host = socket.gethostbyname(socket.gethostname())
+    except OSError:
+        return None
+    if host.startswith("127."):
+        return None
+    return host
+
+
+def _ifconfig_lan_ip() -> str | None:
+    try:
+        completed = subprocess.run(["ifconfig"], check=False, text=True, capture_output=True)
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    blocks = re.split(r"\n(?=\S)", completed.stdout)
+    for block in blocks:
+        if "status: active" not in block:
+            continue
+        match = re.search(r"\binet (192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[0-1])\.\d+\.\d+)\b", block)
+        if match:
+            return match.group(1)
+    return None
 
 
 def _process_line(process: Any) -> str:

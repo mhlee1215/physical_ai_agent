@@ -143,6 +143,8 @@ Durable SO101 fine-tuning contract:
   process and one TensorBoard process. Extra dashboards, GPU monitors, progress
   monitors, watchers, alternate TensorBoards, or polling helpers require an
   explicit user request;
+- TensorBoard reports must include both the local URL and the same-Wi-Fi mobile
+  URL;
 - do not use teacher-action dropout in behavior cloning;
 - action chunk jitter is handled through explicit predicted-action temporal
   smoothness loss or inference-time temporal ensembling/chunk smoothing, not by
