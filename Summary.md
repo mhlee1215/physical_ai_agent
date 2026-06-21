@@ -64,10 +64,10 @@ paper-facing concepts:
 - Checkpoint retention policy for this lane is validation-best checkpoint plus
   one latest checkpoint for crash recovery. Do not keep every checkpoint unless
   the user explicitly asks for archival storage.
-- Supervised validation loss may run after checkpoint save on CPU. Closed-loop
-  evaluation is intentionally sparse: run it only when a checkpoint becomes the
-  new validation-best candidate, or for explicit manual checks, and avoid
-  overlapping full CUDA closed-loop rollouts with active GPU training.
+- Supervised validation loss and closed-loop evaluation are mandatory parts of
+  the SO101 training lane. The training process should own the sequence:
+  train, run supervised evaluation, save checkpoint, then run the scheduled
+  loop test. Do not replace this with an external polling monitor.
 - Current observed best validation checkpoint is `001490` (`val_loss=0.083125`).
   Checkpoint `002682` saved and validated but did not improve
   (`val_loss=0.139522`), so training was stopped as likely overfitting.
@@ -103,11 +103,12 @@ paper-facing concepts:
   MPS, and `--num_workers=0` unless multiprocessing has been proven safe for
   the current dataset wrappers. `scripts/start_so101_training.py` records this
   standard in every dry-run/start/status payload as `local_training_standard`.
-- User policy: SO101 training, supervised validation, and closed-loop tests
-  must stay runnable on both local macOS and Linux/RunPod through the canonical
-  launcher. The runtime contract is `macos => mps + MuJoCo glfw` and
-  `linux/RunPod => cuda + MuJoCo egl`; dry-run both profiles or run the targeted
-  command-contract tests before treating a training PR as ready.
+- User policy: SO101 training, supervised evaluation, and loop test are all
+  mandatory. They must stay runnable on both local macOS and Linux/RunPod
+  through the canonical launcher. The runtime contract is
+  `macos => mps + MuJoCo glfw` and `linux/RunPod => cuda + MuJoCo egl`; dry-run
+  both profiles or run the targeted command-contract tests before treating a
+  training PR as ready.
 - User policy: SO101 loop tests must record analyzer artifacts by default.
   Qwen-chain loop validation should preserve raw Qwen request/response payloads,
   rollout `policy_rollout_config`, action-chunk metadata, and seed/action/state
@@ -118,6 +119,15 @@ paper-facing concepts:
 - User policy: SO101 training-time closed-loop validation must run exactly 10
   episodes by default. Keep `--closed-loop-episodes 10` in launcher and monitor
   paths unless the user explicitly asks for a labeled one-off smoke/debug count.
+- User policy: local SO101 training visibility must use one TensorBoard process
+  only. The default launcher surface is exactly the training process plus one
+  TensorBoard process. Do not start extra dashboards, GPU monitors, progress
+  monitors, watchers, alternate TensorBoards, or ad hoc polling services unless
+  the user explicitly asks for that one-off tool. If the TensorBoard view is
+  stale or wrong, stop and restart only that TensorBoard process for the current
+  run logdir. Closed-loop tests must be invoked from the training process after
+  checkpoint/evaluation events through `scripts/run_so101_training_loop_test.py`,
+  not by a separate polling monitor.
 - User policy: Qwen-chain SO101 loop tests must use the valid-mask termination
   head, not fixed-length primitive execution. Provide
   `closed_loop.valid_mask_checkpoint` in dataset config or

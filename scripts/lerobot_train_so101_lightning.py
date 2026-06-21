@@ -93,6 +93,13 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--validation-batch-size", type=int)
     parser.add_argument("--validation-num-workers", type=int, default=0)
     parser.add_argument(
+        "--post-checkpoint-loop-command-json",
+        help=(
+            "JSON argv list to run inside the training loop immediately after "
+            "a checkpoint is saved. Used for mandatory one-shot closed-loop tests."
+        ),
+    )
+    parser.add_argument(
         "--validation-every-n-train-steps",
         type=int,
         help="Deprecated alias for --validation-interval-steps.",
@@ -235,6 +242,7 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         save_freq=int(cfg.save_freq),
         enabled=bool(cfg.save_checkpoint),
         initial_step=resume_step,
+        post_checkpoint_loop_command=_post_checkpoint_loop_command(wrapper_args),
     )
     callbacks.append(checkpoint_callback)
     log_every_n_steps = wrapper_args.lightning_log_every_n_steps or max(1, int(cfg.log_freq))
@@ -283,6 +291,18 @@ def _import_tensorboard_logger() -> Any:
     except ModuleNotFoundError:
         from pytorch_lightning.loggers import TensorBoardLogger
     return TensorBoardLogger
+
+
+def _post_checkpoint_loop_command(args: argparse.Namespace) -> list[str] | None:
+    if not args.post_checkpoint_loop_command_json:
+        return None
+    try:
+        command = json.loads(args.post_checkpoint_loop_command_json)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--post-checkpoint-loop-command-json must be a JSON list: {exc}") from exc
+    if not isinstance(command, list) or not command or not all(isinstance(part, str) for part in command):
+        raise SystemExit("--post-checkpoint-loop-command-json must be a non-empty JSON list of strings")
+    return list(command)
 
 
 def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig) -> Path:
@@ -875,6 +895,7 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             save_freq: int,
             enabled: bool,
             initial_step: int,
+            post_checkpoint_loop_command: list[str] | None,
         ) -> None:
             super().__init__()
             self.cfg = cfg
@@ -884,6 +905,7 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             self.save_freq = max(1, int(save_freq))
             self.enabled = enabled
             self.initial_step = max(0, int(initial_step))
+            self.post_checkpoint_loop_command = list(post_checkpoint_loop_command or [])
             self.saved_steps: set[int] = set()
 
         def on_train_batch_end(
@@ -925,6 +947,18 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
                 )
                 update_last_checkpoint(checkpoint_dir)
             self.saved_steps.add(step)
+            self._run_post_checkpoint_loop_test(checkpoint_dir=checkpoint_dir, step=step)
+
+        def _run_post_checkpoint_loop_test(self, *, checkpoint_dir: Path, step: int) -> None:
+            if not self.post_checkpoint_loop_command:
+                return
+            env = {
+                **os.environ,
+                "SO101_CHECKPOINT_DIR": str(checkpoint_dir),
+                "SO101_CHECKPOINT_STEP": str(step),
+            }
+            print(f"Running closed-loop test after checkpoint step {step}", flush=True)
+            subprocess.run(self.post_checkpoint_loop_command, check=True, env=env)
 
     return LeRobotCheckpointCallback(**kwargs)
 

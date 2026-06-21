@@ -34,6 +34,18 @@ explicitly chooses another experiment.
 
 ## Evaluation
 
+- Local training visibility must use one TensorBoard process only. The default
+  launcher surface is exactly the training process plus one TensorBoard process.
+  Do not start extra dashboard, GPU monitor, progress monitor, watcher,
+  alternate TensorBoard, or ad hoc polling service unless the user explicitly
+  asks for that one-off tool. If the TensorBoard view is stale or wrong, stop
+  and restart only the TensorBoard process attached to the current run logdir.
+- Training, supervised evaluation, and loop test are all mandatory. The training
+  process owns the sequence; do not use an external polling monitor as the
+  default mechanism for discovering checkpoints or triggering loop tests.
+  Checkpoint-triggered loop tests use the one-shot
+  `scripts/run_so101_training_loop_test.py` entrypoint from inside the training
+  callback.
 - `pick_up_cube` is the scenario.
 - `qwen_edge_chain` is the execution/validation policy.
 - Qwen routes `move -> align -> pick_up`; SmolVLA produces robot actions.

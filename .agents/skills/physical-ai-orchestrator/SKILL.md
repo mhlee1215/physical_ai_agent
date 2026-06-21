@@ -133,9 +133,16 @@ Durable SO101 fine-tuning contract:
   `state_jitter_std=0.003`, `state_dropout_prob=0.02`,
   `image_patch_mask_ratio=0.15`, `gpu_image_augmentation=true`;
 - validation and closed-loop test inputs remain unaugmented;
+- SO101 training, supervised evaluation, and loop test are mandatory phases;
+  the training process owns the sequence and invokes loop tests directly after
+  checkpoint/evaluation events;
 - training-time SO101 closed-loop validation defaults to exactly 10 episodes;
   keep `--closed-loop-episodes 10` unless the user explicitly requests a
   labeled one-off smoke/debug count;
+- local SO101 training launches default to exactly two processes: the training
+  process and one TensorBoard process. Extra dashboards, GPU monitors, progress
+  monitors, watchers, alternate TensorBoards, or polling helpers require an
+  explicit user request;
 - do not use teacher-action dropout in behavior cloning;
 - action chunk jitter is handled through explicit predicted-action temporal
   smoothness loss or inference-time temporal ensembling/chunk smoothing, not by

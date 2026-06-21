@@ -206,12 +206,23 @@ policy is:
 
 - Keep only the validation-best checkpoint plus one latest checkpoint needed for
   crash recovery. A pruner may delete older non-best checkpoints after each save.
-- Run supervised validation loss after checkpoint saves, preferably CPU-only so
-  the GPU training process can continue.
+- SO101 training, supervised evaluation, and loop test are all mandatory phases.
+  The canonical flow is owned by the training process: train, run supervised
+  evaluation, save checkpoint, then run the scheduled loop test.
 - For the local `primitive training with qwen validation v1` lane, every
   validation-loss checkpoint must also run the Qwen-chain closed-loop test.
   Keep `validation_interval_steps == save_freq == steps_per_epoch` and
   `closed-loop-every-epochs=1` unless the user explicitly changes this lane.
+- Local SO101 training visibility must use one TensorBoard process only. The
+  default launcher surface is exactly the training process plus one TensorBoard
+  process. Do not start extra dashboard, GPU monitor, progress monitor, watcher,
+  alternate TensorBoard, or ad hoc polling service unless the user explicitly
+  asks for that one-off tool. If the TensorBoard view is stale or wrong, stop
+  and restart only that TensorBoard process for the current run logdir. Do not
+  use an external polling monitor to discover checkpoints in the default lane;
+  the training loop must invoke loop tests directly after checkpoint/evaluation
+  events through the one-shot `scripts/run_so101_training_loop_test.py`
+  entrypoint.
 - SO101 training-time closed-loop validation must run exactly 10 episodes by
   default. Keep `--closed-loop-episodes 10` in both launcher and monitor
   command paths; use any other count only for an explicitly labeled one-off

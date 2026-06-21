@@ -269,6 +269,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--validation-interval-steps", constants)
         self.assertIn("--validation-interval-epochs", constants)
         self.assertIn("--validation-every-n-train-steps", constants)
+        self.assertIn("--post-checkpoint-loop-command-json", constants)
         self.assertIn("--log-input-images-every-n-steps", constants)
         self.assertIn("--log-input-metadata-every-n-steps", constants)
         self.assertIn("--so101-action-prefix-loss-steps", constants)
@@ -579,6 +580,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--dataset-config", constants)
         self.assertIn("--validation-interval-steps", constants)
         self.assertIn("--validation-interval-epochs", constants)
+        self.assertIn("run_so101_training_loop_test.py", constants)
 
     def test_closed_loop_eval_exposes_optional_subgoal_valid_mask_chain(self) -> None:
         source = Path("scripts/evaluate_so101_picklift_smolvla_policy.py").read_text(encoding="utf-8")
@@ -658,14 +660,9 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--validation-interval-steps=10", train_cmd)
             self.assertTrue(any(str(part).startswith("--output_dir=") for part in train_cmd))
             self.assertIn("tensorboard_cmd", payload)
-            self.assertIn("dashboard_cmd", payload)
-            self.assertIn("gpu_monitor_cmd", payload)
-            self.assertTrue(
-                any("log_gpu_metrics_tensorboard.py" in part for part in payload["gpu_monitor_cmd"])
-            )
-            self.assertIn("--backend", payload["gpu_monitor_cmd"])
-            self.assertIn("auto", payload["gpu_monitor_cmd"])
-            self.assertIn("--train-pid-file", payload["gpu_monitor_cmd"])
+            self.assertIsNone(payload["dashboard_cmd"])
+            self.assertIsNone(payload["gpu_monitor_cmd"])
+            self.assertIsNone(payload["progress_monitor_cmd"])
 
     def test_single_training_launcher_defaults_validation_to_closed_loop_cadence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -733,9 +730,15 @@ class SO101SmolVLAPipelineTest(TestCase):
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
-            progress_cmd = payload["progress_monitor_cmd"]
-            self.assertIn("--closed-loop-episodes", progress_cmd)
-            self.assertEqual(progress_cmd[progress_cmd.index("--closed-loop-episodes") + 1], "10")
+            loop_cmd = payload["post_checkpoint_loop_cmd"]
+            self.assertIsNone(payload["progress_monitor_cmd"])
+            self.assertIn("--closed-loop-episodes", loop_cmd)
+            self.assertEqual(loop_cmd[loop_cmd.index("--closed-loop-episodes") + 1], "10")
+            self.assertIn("--iterations", loop_cmd)
+            self.assertIn("1", loop_cmd)
+            self.assertIn("--skip-validation", loop_cmd)
+            self.assertTrue(any("run_so101_training_loop_test.py" in part for part in loop_cmd))
+            self.assertFalse(any("monitor_so101_training_dashboard.py" in part for part in loop_cmd))
 
     def test_qwen_edge_merge_normalizes_legacy_static_finger_prompts(self) -> None:
         from scripts.merge_so101_lerobot_shards import _normalize_task_prompt
@@ -846,7 +849,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--dataset.root=_workspace/train", train_cmd)
             self.assertIn("--validation-dataset-repo-id=physical-ai-agent/val", train_cmd)
             self.assertIn("--validation-dataset-root=_workspace/val", train_cmd)
-            self.assertIn("--num_workers=4", train_cmd)
+            self.assertIn("--num_workers=0", train_cmd)
             self.assertIn("--policy.repo_id=mhlee1215/test-policy", train_cmd)
             self.assertIn("--policy.push_to_hub=false", train_cmd)
             self.assertIn("--lightning-precision=bf16-mixed", train_cmd)
@@ -855,12 +858,11 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--so101-image-cache-dir=/tmp/so101-cache/train", train_cmd)
             self.assertIn("--validation-image-cache-dir=/tmp/so101-cache/val", train_cmd)
             self.assertIn("tensorboard_cmd", payload)
-            self.assertIn("progress_monitor_cmd", payload)
-            self.assertIn("--closed-loop-eval-skill-mode", payload["progress_monitor_cmd"])
-            self.assertIn("pick_from_top_cube", payload["progress_monitor_cmd"])
-            self.assertIn("--mujoco-gl", payload["progress_monitor_cmd"])
-            self.assertIn("glfw", payload["progress_monitor_cmd"])
-            self.assertIn("--closed-loop-task-prompt", payload["progress_monitor_cmd"])
+            self.assertIsNone(payload["dashboard_cmd"])
+            self.assertIsNone(payload["gpu_monitor_cmd"])
+            self.assertIsNone(payload["progress_monitor_cmd"])
+            self.assertIsNotNone(payload["post_checkpoint_loop_cmd"])
+            self.assertIn("--post-checkpoint-loop-command-json", train_cmd)
             self.assertEqual(payload["runtime_contract"]["runtime_platform"], "macos")
             self.assertEqual(payload["runtime_contract"]["training_device"], "mps")
             self.assertEqual(payload["runtime_contract"]["closed_loop_mujoco_gl"], "glfw")
@@ -946,8 +948,65 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertEqual(payload["runtime_contract"]["closed_loop_mujoco_gl"], "egl")
             self.assertIn("--policy.device=cuda", payload["train_cmd"])
             self.assertIn("--lightning-accelerator=cuda", payload["train_cmd"])
+            self.assertIsNone(payload["progress_monitor_cmd"])
+            self.assertIsNotNone(payload["post_checkpoint_loop_cmd"])
+
+    def test_single_training_launcher_enables_progress_monitor_only_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "dataset_config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "train_dataset": {
+                            "repo_id": "physical-ai-agent/train",
+                            "root": "_workspace/train",
+                        },
+                        "validation_dataset": {
+                            "repo_id": "physical-ai-agent/val",
+                            "root": "_workspace/val",
+                        },
+                        "training": {
+                            "steps_per_epoch": 42,
+                            "policy_push_to_hub": False,
+                        },
+                        "closed_loop": {
+                            "eval_skill_mode": "pick_from_top_cube",
+                            "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--with-progress-monitor",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--dataset-config",
+                    str(config),
+                    "--runtime-platform",
+                    "linux",
+                    "--",
+                    "--policy.type=smolvla",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
             self.assertIn("--mujoco-gl", payload["progress_monitor_cmd"])
             self.assertIn("egl", payload["progress_monitor_cmd"])
+            self.assertIn("--closed-loop-episodes", payload["progress_monitor_cmd"])
+            self.assertIn("10", payload["progress_monitor_cmd"])
 
     def test_single_training_launcher_can_use_local_dataset_roots_for_debugging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1043,7 +1102,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("SO101 monitored training contract failed", completed.stderr)
             self.assertIn("validation_dataset", completed.stderr)
-            self.assertIn("closed-loop eval skill mode", completed.stderr)
+            self.assertIn("validation-dataset-root", completed.stderr)
 
     def test_single_training_launcher_fails_fast_when_checkpoint_cadence_is_too_dense(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

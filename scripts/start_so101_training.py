@@ -63,9 +63,28 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tensorboard-port", type=int, default=6006)
     parser.add_argument("--dashboard-port", type=int, default=8767)
     parser.add_argument("--no-tensorboard", action="store_true")
-    parser.add_argument("--no-dashboard", action="store_true")
-    parser.add_argument("--no-gpu-monitor", action="store_true")
-    parser.add_argument("--no-progress-monitor", action="store_true")
+    parser.add_argument(
+        "--with-dashboard",
+        action="store_true",
+        help="Start the legacy local dashboard. Off by default; use only when explicitly requested.",
+    )
+    parser.add_argument(
+        "--with-gpu-monitor",
+        action="store_true",
+        help="Start the TensorBoard GPU/system metrics helper. Off by default; use only when explicitly requested.",
+    )
+    parser.add_argument(
+        "--with-progress-monitor",
+        action="store_true",
+        help="Start the closed-loop progress monitor. Off by default; use only when explicitly requested.",
+    )
+    parser.add_argument("--no-dashboard", action="store_true", help="Deprecated no-op: dashboard is off by default.")
+    parser.add_argument("--no-gpu-monitor", action="store_true", help="Deprecated no-op: GPU monitor is off by default.")
+    parser.add_argument(
+        "--no-progress-monitor",
+        action="store_true",
+        help="Deprecated no-op: progress monitor is off by default.",
+    )
     parser.add_argument(
         "--allow-incomplete-monitoring",
         action="store_true",
@@ -273,7 +292,14 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         runtime_contract=runtime_contract,
         train_pid_file=train_pid_file,
     )
+    post_checkpoint_loop_cmd = _post_checkpoint_loop_command(progress_monitor_cmd)
+    if post_checkpoint_loop_cmd is not None:
+        train_cmd.extend(["--post-checkpoint-loop-command-json", json.dumps(post_checkpoint_loop_cmd)])
     cache_build_cmds = _cache_build_commands(args.python, repo_root, dataset_config)
+    enable_tensorboard = not args.no_tensorboard
+    enable_dashboard = bool(args.with_dashboard) and not args.no_dashboard
+    enable_gpu_monitor = bool(args.with_gpu_monitor) and not args.no_gpu_monitor
+    enable_progress_monitor = bool(args.with_progress_monitor) and not args.no_progress_monitor
 
     launch_plan = {
         "operation": "start_so101_training",
@@ -283,14 +309,15 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "local_training_standard": _local_training_standard(repo_root),
         "train_cmd": train_cmd,
         "dataset_config": dataset_config,
-        "tensorboard_cmd": None if args.no_tensorboard else tensorboard_cmd,
-        "dashboard_cmd": None if args.no_dashboard else dashboard_cmd,
-        "gpu_monitor_cmd": None if args.no_gpu_monitor else gpu_monitor_cmd,
-        "progress_monitor_cmd": None if args.no_progress_monitor else progress_monitor_cmd,
+        "tensorboard_cmd": tensorboard_cmd if enable_tensorboard else None,
+        "dashboard_cmd": dashboard_cmd if enable_dashboard else None,
+        "gpu_monitor_cmd": gpu_monitor_cmd if enable_gpu_monitor else None,
+        "progress_monitor_cmd": progress_monitor_cmd if enable_progress_monitor else None,
+        "post_checkpoint_loop_cmd": post_checkpoint_loop_cmd,
         "cache_build_cmds": cache_build_cmds,
         "runtime_contract": runtime_contract,
-        "tensorboard_url": None if args.no_tensorboard else f"http://127.0.0.1:{args.tensorboard_port}/",
-        "dashboard_url": None if args.no_dashboard else f"http://127.0.0.1:{args.dashboard_port}/",
+        "tensorboard_url": f"http://127.0.0.1:{args.tensorboard_port}/" if enable_tensorboard else None,
+        "dashboard_url": f"http://127.0.0.1:{args.dashboard_port}/" if enable_dashboard else None,
     }
     _validate_monitoring_contract(
         args=args,
@@ -307,12 +334,16 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     _run_cache_builds(cache_build_cmds, log_dir=log_dir, cwd=repo_root)
     train = _popen(train_cmd, log_dir / "train.log", cwd=repo_root)
     train_pid_file.write_text(str(train.pid) + "\n", encoding="utf-8")
-    tensorboard = None if args.no_tensorboard else _popen(tensorboard_cmd, log_dir / "tensorboard.log", cwd=repo_root)
-    dashboard = None if args.no_dashboard else _popen(dashboard_cmd, log_dir / "dashboard.log", cwd=repo_root)
-    gpu_monitor = None if args.no_gpu_monitor else _popen(gpu_monitor_cmd, log_dir / "gpu_monitor.log", cwd=repo_root)
+    tensorboard = (
+        _popen(tensorboard_cmd, log_dir / "tensorboard.log", cwd=repo_root) if enable_tensorboard else None
+    )
+    dashboard = _popen(dashboard_cmd, log_dir / "dashboard.log", cwd=repo_root) if enable_dashboard else None
+    gpu_monitor = (
+        _popen(gpu_monitor_cmd, log_dir / "gpu_monitor.log", cwd=repo_root) if enable_gpu_monitor else None
+    )
     progress_monitor = (
         None
-        if args.no_progress_monitor or progress_monitor_cmd is None
+        if not enable_progress_monitor or progress_monitor_cmd is None
         else _popen(progress_monitor_cmd, log_dir / "progress_monitor.log", cwd=repo_root)
     )
     record = {
@@ -964,6 +995,31 @@ def _validate_monitoring_contract(
     if not _has_any_arg(training_args, "validation-dataset-repo-id"):
         errors.append("training command is missing --validation-dataset-repo-id.")
 
+    steps_per_epoch = _steps_per_epoch(dataset_config, training_args)
+    save_freq = _positive_int_arg(training_args, "save_freq") or _positive_int_arg(training_args, "save-freq")
+    if save_freq is not None:
+        planned_steps = _positive_int_arg(training_args, "steps")
+        max_checkpoints = max(1, int(args.max_monitored_checkpoints))
+        if planned_steps is not None:
+            planned_checkpoints = (planned_steps + save_freq - 1) // save_freq
+            if planned_checkpoints > max_checkpoints:
+                errors.append(
+                    f"--steps={planned_steps} and --save_freq={save_freq} would create "
+                    f"about {planned_checkpoints} checkpoints; expected <= {max_checkpoints}. "
+                    "Increase --save_freq, lower --steps, or raise --max-monitored-checkpoints "
+                    "only when disk capacity is confirmed."
+                )
+
+    loop_test_enabled = (
+        launch_plan.get("post_checkpoint_loop_cmd") is not None
+        or launch_plan.get("progress_monitor_cmd") is not None
+    )
+    if not loop_test_enabled:
+        if errors:
+            detail = "\n".join(f"- {error}" for error in errors)
+            raise SystemExit(f"SO101 monitored training contract failed:\n{detail}")
+        return
+
     closed_loop_policy = _closed_loop_policy_name(args)
     if closed_loop_policy == "off":
         errors.append("closed-loop evaluation is disabled; use periodic, best_only, or best_or_periodic.")
@@ -972,13 +1028,10 @@ def _validate_monitoring_contract(
             "closed-loop policy best_only can skip validation checkpoints; use periodic or best_or_periodic "
             "so every validation-loss checkpoint also runs closed-loop."
         )
-    if args.no_progress_monitor:
-        errors.append("progress monitor is disabled; it is required for supervised validation and closed-loop metrics.")
-    if launch_plan.get("progress_monitor_cmd") is None:
-        errors.append("progress monitor command is missing.")
     progress_monitor_cmd = launch_plan.get("progress_monitor_cmd") or []
-    if "--mujoco-gl" not in progress_monitor_cmd:
-        errors.append("progress monitor command is missing --mujoco-gl for platform-specific closed-loop rendering.")
+    loop_test_cmd = launch_plan.get("post_checkpoint_loop_cmd") or progress_monitor_cmd
+    if "--mujoco-gl" not in loop_test_cmd:
+        errors.append("loop test command is missing --mujoco-gl for platform-specific closed-loop rendering.")
     if int(args.closed_loop_every_epochs) <= 0:
         errors.append("--closed-loop-every-epochs must be positive.")
     if int(args.closed_loop_episodes) <= 0:
@@ -1000,10 +1053,8 @@ def _validate_monitoring_contract(
             "--closed-loop-valid-mask-checkpoint."
         )
 
-    steps_per_epoch = _steps_per_epoch(dataset_config, training_args)
     if steps_per_epoch is None:
         errors.append("training.steps_per_epoch or --steps-per-epoch is required for closed-loop scheduling.")
-    save_freq = _positive_int_arg(training_args, "save_freq") or _positive_int_arg(training_args, "save-freq")
     if save_freq is None:
         errors.append("checkpoint save cadence is missing; set --save_freq or training.steps_per_epoch.")
     elif steps_per_epoch is not None:
@@ -1023,17 +1074,6 @@ def _validate_monitoring_contract(
                 f"checkpoint save cadence ({save_freq} steps) must match closed-loop cadence "
                 f"({closed_loop_gap} steps) so every validation-loss checkpoint runs closed-loop."
             )
-        planned_steps = _positive_int_arg(training_args, "steps")
-        max_checkpoints = max(1, int(args.max_monitored_checkpoints))
-        if planned_steps is not None:
-            planned_checkpoints = (planned_steps + save_freq - 1) // save_freq
-            if planned_checkpoints > max_checkpoints:
-                errors.append(
-                    f"--steps={planned_steps} and --save_freq={save_freq} would create "
-                    f"about {planned_checkpoints} checkpoints; expected <= {max_checkpoints}. "
-                    "Increase --save_freq, lower --steps, or raise --max-monitored-checkpoints "
-                    "only when disk capacity is confirmed."
-                )
 
     if errors:
         detail = "\n".join(f"- {error}" for error in errors)
@@ -1177,15 +1217,15 @@ def _progress_monitor_command(
         cmd.extend(
             [
                 "--record-loop-artifacts",
-                "--render-loop-media" if args.render_loop_media else "--no-render-loop-media",
+                "--render-loop-media" if getattr(args, "render_loop_media", False) else "--no-render-loop-media",
                 "--loop-artifact-width",
-                str(args.loop_artifact_width),
+                str(getattr(args, "loop_artifact_width", 128)),
                 "--loop-artifact-height",
-                str(args.loop_artifact_height),
+                str(getattr(args, "loop_artifact_height", 128)),
                 "--loop-artifact-fps",
-                str(args.loop_artifact_fps),
+                str(getattr(args, "loop_artifact_fps", 12)),
                 "--loop-artifact-every-n-steps",
-                str(args.loop_artifact_every_n_steps),
+                str(getattr(args, "loop_artifact_every_n_steps", 1)),
             ]
         )
     else:
@@ -1204,6 +1244,18 @@ def _progress_monitor_command(
                 cmd.extend(["--qwen-base-url", args.qwen_base_url])
         if args.qwen_api_key:
             cmd.extend(["--qwen-api-key", args.qwen_api_key])
+    return cmd
+
+
+def _post_checkpoint_loop_command(progress_monitor_cmd: list[str] | None) -> list[str] | None:
+    if not progress_monitor_cmd:
+        return None
+    cmd = [*progress_monitor_cmd]
+    for index, part in enumerate(cmd):
+        if part.endswith("monitor_so101_training_dashboard.py"):
+            cmd[index] = str(Path(part).with_name("run_so101_training_loop_test.py"))
+            break
+    cmd.extend(["--iterations", "1", "--skip-validation"])
     return cmd
 
 
