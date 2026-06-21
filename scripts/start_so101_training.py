@@ -110,7 +110,7 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
         help="Default policy.device and Lightning accelerator when not explicitly forwarded.",
     )
     parser.add_argument("--closed-loop-every-epochs", type=int, default=1)
-    parser.add_argument("--closed-loop-episodes", type=int, default=8)
+    parser.add_argument("--closed-loop-episodes", type=int, default=10)
     parser.add_argument("--closed-loop-steps", type=int, default=120)
     parser.add_argument(
         "--closed-loop-mujoco-gl",

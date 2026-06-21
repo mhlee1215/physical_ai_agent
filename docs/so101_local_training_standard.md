@@ -52,6 +52,10 @@ explicitly chooses another experiment.
   `--closed-loop-runner qwen_chain` so the `pick_up_cube` scenario is evaluated
   through the Qwen `move -> align -> pick_up` chain, not the legacy single-skill
   picklift smoke evaluator.
+- Training-time closed-loop tests must always run exactly 10 episodes by
+  default. Keep `--closed-loop-episodes 10` for launcher and monitor defaults;
+  use a different count only when the user explicitly requests a labeled
+  one-off run.
 - Loop tests must record analyzer artifacts by default. Keep
   `--record-loop-artifacts` enabled for Qwen-chain validation so every loop test
   preserves raw Qwen payloads, rollout config, action-chunk metadata, and the

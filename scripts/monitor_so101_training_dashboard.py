@@ -47,7 +47,7 @@ def main() -> None:
     parser.add_argument("--train-pid-file", type=Path)
     parser.add_argument("--closed-loop-every-epochs", type=int, default=10)
     parser.add_argument("--steps-per-epoch", type=int, default=138)
-    parser.add_argument("--closed-loop-episodes", type=int, default=24)
+    parser.add_argument("--closed-loop-episodes", type=int, default=10)
     parser.add_argument("--closed-loop-steps", type=int, default=160)
     parser.add_argument("--closed-loop-seed", type=int, default=98100)
     parser.add_argument("--closed-loop-width", type=int, default=256)

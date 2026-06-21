@@ -693,6 +693,50 @@ class SO101SmolVLAPipelineTest(TestCase):
             payload = json.loads(completed.stdout)
             self.assertIn("--validation-interval-epochs=1", payload["train_cmd"])
 
+    def test_training_closed_loop_episode_defaults_are_ten(self) -> None:
+        start_source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
+        monitor_source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+        standard = Path("docs/so101_local_training_standard.md").read_text(encoding="utf-8")
+
+        self.assertIn('parser.add_argument("--closed-loop-episodes", type=int, default=10)', start_source)
+        self.assertIn('parser.add_argument("--closed-loop-episodes", type=int, default=10)', monitor_source)
+        self.assertIn("closed-loop tests must always run exactly 10 episodes", standard)
+
+    def test_dataset_config_launcher_defaults_closed_loop_to_ten_episodes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--use-local-dataset-roots",
+                    "--dataset-config",
+                    "configs/so101/training_datasets/qwen_edge_primitives.json",
+                    "--runtime-platform",
+                    "macos",
+                    "--training-device",
+                    "mps",
+                    "--",
+                    "--config_path=_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/qwen_edge_primitives/model/checkpoints/003136/pretrained_model/train_config.json",
+                    "--steps=224",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            progress_cmd = payload["progress_monitor_cmd"]
+            self.assertIn("--closed-loop-episodes", progress_cmd)
+            self.assertEqual(progress_cmd[progress_cmd.index("--closed-loop-episodes") + 1], "10")
+
     def test_qwen_edge_merge_normalizes_legacy_static_finger_prompts(self) -> None:
         from scripts.merge_so101_lerobot_shards import _normalize_task_prompt
 
