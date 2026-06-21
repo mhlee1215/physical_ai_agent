@@ -248,6 +248,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     training_args = _with_checkpoint_schedule(training_args, dataset_config, args)
     runtime_contract = _runtime_contract(args, training_args)
     training_args = _with_runtime_contract(training_args, runtime_contract)
+    training_args = _with_resume_checkpoint(training_args, train_output_dir)
     train_cmd = [
         str(args.python),
         str(repo_root / "scripts" / "lerobot_train_so101_lightning.py"),
@@ -543,6 +544,48 @@ def _ensure_boolean_optional_arg(args: list[str], name: str, *, value: bool) -> 
     if any(arg == flag or arg == no_flag for arg in args):
         return args
     return [*args, flag if value else no_flag]
+
+
+def _with_resume_checkpoint(args: list[str], train_output_dir: Path) -> list[str]:
+    if not _truthy_arg(args, "resume"):
+        return args
+    if _arg_present(args, "so101-resume-checkpoint-path"):
+        return args
+    checkpoint = _latest_resume_checkpoint(train_output_dir / "checkpoints")
+    if checkpoint is None:
+        return args
+    return [*args, f"--so101-resume-checkpoint-path={checkpoint}"]
+
+
+def _arg_present(args: list[str], name: str) -> bool:
+    prefix = f"--{name}="
+    flag = f"--{name}"
+    return any(arg == flag or arg.startswith(prefix) for arg in args)
+
+
+def _truthy_arg(args: list[str], name: str) -> bool:
+    flag = f"--{name}"
+    prefix = f"{flag}="
+    for index, arg in enumerate(args):
+        if arg == flag:
+            if index + 1 >= len(args) or args[index + 1].startswith("--"):
+                return True
+            return str(args[index + 1]).lower() in {"1", "true", "yes", "on"}
+        if arg.startswith(prefix):
+            return arg.split("=", 1)[1].lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _latest_resume_checkpoint(checkpoint_root: Path) -> Path | None:
+    last_path = checkpoint_root / "last"
+    if last_path.exists():
+        return last_path
+    if not checkpoint_root.exists():
+        return None
+    candidates = [path for path in checkpoint_root.iterdir() if path.is_dir() and path.name.isdigit()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: int(path.name))
 
 
 def _load_dataset_config(path: Path | None, *, repo_root: Path) -> dict[str, Any] | None:

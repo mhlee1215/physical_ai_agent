@@ -93,6 +93,15 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--validation-batch-size", type=int)
     parser.add_argument("--validation-num-workers", type=int, default=0)
     parser.add_argument(
+        "--so101-resume-checkpoint-path",
+        type=Path,
+        help=(
+            "SO101 wrapper resume checkpoint directory. This is kept separate "
+            "from the LeRobot CLI because some installed LeRobot versions expose "
+            "cfg.checkpoint_path in config but not as an argparse flag."
+        ),
+    )
+    parser.add_argument(
         "--post-checkpoint-loop-command-json",
         help=(
             "JSON argv list to run inside the training loop immediately after "
@@ -190,7 +199,7 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     optimizer, scheduler = make_optimizer_and_scheduler(cfg, policy)
     resume_step = 0
     if cfg.resume:
-        checkpoint_path = _resolve_resume_checkpoint_path(cfg)
+        checkpoint_path = _resolve_resume_checkpoint_path(cfg, wrapper_args)
         resume_step, optimizer, scheduler = load_training_state(checkpoint_path, optimizer, scheduler)
         logging.info("Resumed LeRobot training state from %s at step %s", checkpoint_path, resume_step)
         print(f"Resumed LeRobot training state from {checkpoint_path} at step {resume_step}", flush=True)
@@ -305,7 +314,9 @@ def _post_checkpoint_loop_command(args: argparse.Namespace) -> list[str] | None:
     return list(command)
 
 
-def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig) -> Path:
+def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace) -> Path:
+    if wrapper_args.so101_resume_checkpoint_path is not None:
+        return Path(wrapper_args.so101_resume_checkpoint_path)
     if cfg.checkpoint_path is not None:
         return Path(cfg.checkpoint_path)
     checkpoint_root = Path(cfg.output_dir) / "checkpoints"

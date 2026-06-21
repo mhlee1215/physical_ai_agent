@@ -691,6 +691,36 @@ class SO101SmolVLAPipelineTest(TestCase):
             payload = json.loads(completed.stdout)
             self.assertIn("--validation-interval-epochs=1", payload["train_cmd"])
 
+    def test_single_training_launcher_resumes_from_current_run_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "run"
+            last_checkpoint = run_dir / "model" / "checkpoints" / "last"
+            last_checkpoint.mkdir(parents=True)
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(run_dir),
+                    "--",
+                    "--dataset.repo_id=physical-ai-agent/test",
+                    "--policy.type=smolvla",
+                    "--resume=true",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertIn(f"--so101-resume-checkpoint-path={last_checkpoint.resolve()}", payload["train_cmd"])
+
     def test_training_closed_loop_episode_defaults_are_ten(self) -> None:
         start_source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
         monitor_source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
