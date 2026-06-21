@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import TestCase, mock
 
 from physical_ai_agent.so101_smolvla_pipeline import (
+    SO101AugmentationContract,
     SO101DatasetManifest,
     SO101TrainingSchedule,
     SmolVLASO101Contract,
@@ -22,6 +23,21 @@ from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE
 
 
 class SO101SmolVLAPipelineTest(TestCase):
+    def test_default_augmentation_contract_matches_training_configs(self) -> None:
+        contract = SO101AugmentationContract()
+
+        self.assertEqual(contract.validate(), [])
+        self.assertEqual(contract.state_jitter_std, 0.003)
+        self.assertEqual(contract.state_dropout_prob, 0.02)
+        self.assertEqual(contract.image_camera_dropout_prob, 0.0)
+        self.assertEqual(contract.image_patch_dropout_prob, 0.0)
+        self.assertEqual(contract.image_patch_mask_ratio, 0.15)
+        self.assertEqual(contract.image_affine_degrees, 5.0)
+        self.assertEqual(contract.image_affine_translate, 0.05)
+        self.assertTrue(contract.run_after_batch_to_device)
+        self.assertIn("cuda", contract.prefer_device_backends)
+        self.assertIn("mps", contract.prefer_device_backends)
+
     def test_train_config_matches_smolvla_so101_contract(self) -> None:
         contract = SmolVLASO101Contract()
         config = {
@@ -737,6 +753,8 @@ class SO101SmolVLAPipelineTest(TestCase):
                             "image_camera_dropout_prob": 0.04,
                             "image_patch_dropout_prob": 0.05,
                             "image_patch_mask_ratio": 0.15,
+                            "image_affine_degrees": 5.0,
+                            "image_affine_translate": 0.05,
                             "gpu_image_augmentation": True,
                         },
                     }
@@ -819,6 +837,8 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--so101-image-camera-dropout-prob=0.04", train_cmd)
             self.assertIn("--so101-image-patch-dropout-prob=0.05", train_cmd)
             self.assertIn("--so101-image-patch-mask-ratio=0.15", train_cmd)
+            self.assertIn("--so101-image-affine-degrees=5.0", train_cmd)
+            self.assertIn("--so101-image-affine-translate=0.05", train_cmd)
             self.assertIn("--so101-gpu-image-augmentation", train_cmd)
             self.assertFalse(any("action-dropout" in arg for arg in train_cmd))
             self.assertEqual(payload["dataset_config"]["train_dataset"]["repo_id"], "physical-ai-agent/train")
@@ -1444,6 +1464,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             Path("configs/so101/training_datasets/move_over_cube.json"),
             Path("configs/so101/training_datasets/pick_from_top_cube.json"),
             Path("configs/so101/training_datasets/all_hf_train_pick_place_closed_loop.json"),
+            Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
         ):
             with self.subTest(config=str(config_path)):
                 config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -1451,6 +1472,8 @@ class SO101SmolVLAPipelineTest(TestCase):
                 self.assertEqual(augmentation["state_jitter_std"], 0.003)
                 self.assertEqual(augmentation["state_dropout_prob"], 0.02)
                 self.assertEqual(augmentation["image_patch_mask_ratio"], 0.15)
+                self.assertEqual(augmentation["image_affine_degrees"], 5.0)
+                self.assertEqual(augmentation["image_affine_translate"], 0.05)
                 self.assertTrue(augmentation["gpu_image_augmentation"])
                 self.assertEqual(augmentation["image_camera_dropout_prob"], 0.0)
                 self.assertEqual(augmentation["image_patch_dropout_prob"], 0.0)
@@ -1578,7 +1601,10 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("state_jitter_std=0.003", docs)
         self.assertIn("state_dropout_prob=0.02", docs)
         self.assertIn("image_patch_mask_ratio=0.15", docs)
+        self.assertIn("image_affine_degrees=5.0", docs)
+        self.assertIn("image_affine_translate=0.05", docs)
         self.assertIn("gpu_image_augmentation=true", docs)
+        self.assertIn("CUDA and MPS", docs)
         self.assertIn("Validation and closed-loop test", docs)
         self.assertIn("teacher-action dropout", docs)
         self.assertIn("temporal smoothness loss", docs)

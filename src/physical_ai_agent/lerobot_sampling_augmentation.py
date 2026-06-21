@@ -16,6 +16,8 @@ class SamplingAugmentationConfig:
     image_camera_dropout_prob: float = 0.0
     image_patch_dropout_prob: float = 0.0
     image_patch_mask_ratio: float = 0.0
+    image_affine_degrees: float = 0.0
+    image_affine_translate: float = 0.0
     gpu_image_augmentation: bool = False
     state_key: str = "observation.state"
     action_key: str = "action"
@@ -38,6 +40,8 @@ class SamplingAugmentationConfig:
         image_camera_dropout_prob = float(os.environ.get("SO101_IMAGE_CAMERA_DROPOUT_PROB", "0.0"))
         image_patch_dropout_prob = float(os.environ.get("SO101_IMAGE_PATCH_DROPOUT_PROB", "0.0"))
         image_patch_mask_ratio = float(os.environ.get("SO101_IMAGE_PATCH_MASK_RATIO", "0.0"))
+        image_affine_degrees = float(os.environ.get("SO101_IMAGE_AFFINE_DEGREES", "0.0"))
+        image_affine_translate = float(os.environ.get("SO101_IMAGE_AFFINE_TRANSLATE", "0.0"))
         state_dropout_keep_gripper = os.environ.get("SO101_STATE_DROPOUT_KEEP_GRIPPER", "1") not in {
             "0",
             "false",
@@ -51,6 +55,8 @@ class SamplingAugmentationConfig:
             image_camera_dropout_prob=image_camera_dropout_prob,
             image_patch_dropout_prob=image_patch_dropout_prob,
             image_patch_mask_ratio=image_patch_mask_ratio,
+            image_affine_degrees=image_affine_degrees,
+            image_affine_translate=image_affine_translate,
             gpu_image_augmentation=gpu_image_augmentation,
             enabled=(
                 state_jitter_std > 0.0
@@ -58,6 +64,8 @@ class SamplingAugmentationConfig:
                 or image_camera_dropout_prob > 0.0
                 or image_patch_dropout_prob > 0.0
                 or image_patch_mask_ratio > 0.0
+                or image_affine_degrees > 0.0
+                or image_affine_translate > 0.0
                 or gpu_image_augmentation
             ),
         )
@@ -267,7 +275,7 @@ def _augment_images_on_device(batch: dict[str, Any], config: SamplingAugmentatio
         image = _patch_dropout(image)
         image = _color_jitter(image)
         image = _sharpness_jitter(image)
-        image = _affine_jitter(image, F)
+        image = _affine_jitter(image, F, config)
         image = _patch_mask_ratio(image, config.image_patch_mask_ratio)
         batch[key] = image.to(value.dtype).clamp(0.0, 1.0)
 
@@ -379,18 +387,22 @@ def _sharpness_jitter(image: Any) -> Any:
     return (blurred + (image - blurred) * factor).clamp(0.0, 1.0)
 
 
-def _affine_jitter(image: Any, functional: Any) -> Any:
+def _affine_jitter(image: Any, functional: Any, config: SamplingAugmentationConfig) -> Any:
     import math
     import torch
 
+    max_degrees = float(config.image_affine_degrees)
+    max_translate = float(config.image_affine_translate)
+    if max_degrees <= 0.0 and max_translate <= 0.0:
+        return image
     batch_size, _channels, height, width = image.shape
     device = image.device
     dtype = image.dtype
-    degrees = (torch.rand(batch_size, device=device, dtype=dtype) * 10.0 - 5.0) * (math.pi / 180.0)
+    degrees = (torch.rand(batch_size, device=device, dtype=dtype) * (2.0 * max_degrees) - max_degrees) * (math.pi / 180.0)
     cos = torch.cos(degrees)
     sin = torch.sin(degrees)
-    translate_x = torch.rand(batch_size, device=device, dtype=dtype) * 0.10 - 0.05
-    translate_y = torch.rand(batch_size, device=device, dtype=dtype) * 0.10 - 0.05
+    translate_x = torch.rand(batch_size, device=device, dtype=dtype) * (2.0 * max_translate) - max_translate
+    translate_y = torch.rand(batch_size, device=device, dtype=dtype) * (2.0 * max_translate) - max_translate
     theta = torch.zeros((batch_size, 2, 3), device=device, dtype=dtype)
     theta[:, 0, 0] = cos
     theta[:, 0, 1] = -sin

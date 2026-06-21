@@ -84,6 +84,29 @@ class SamplingAugmentationTest(unittest.TestCase):
         self.assertGreater(int((image == 0.0).sum().item()), 0)
         self.assertLess(int((image == 0.0).sum().item()), image.numel())
 
+    @unittest.skipIf(torch is None, "torch is not installed in this Python environment")
+    def test_affine_augmentation_runs_on_input_device(self) -> None:
+        device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+        image = torch.zeros((1, 3, 32, 32), dtype=torch.float32, device=device)
+        image[:, :, 8:24, 8:24] = 1.0
+        batch = {"observation.images.camera1": image.clone()}
+
+        torch.manual_seed(123)
+        augment_batch_on_device(
+            batch,
+            SamplingAugmentationConfig(
+                image_affine_degrees=5.0,
+                image_affine_translate=0.05,
+                gpu_image_augmentation=True,
+                enabled=True,
+            ),
+        )
+
+        augmented = batch["observation.images.camera1"]
+        self.assertEqual(augmented.device.type, device.type)
+        self.assertEqual(tuple(augmented.shape), tuple(image.shape))
+        self.assertFalse(torch.equal(augmented.cpu(), image.cpu()))
+
 
 if __name__ == "__main__":
     unittest.main()

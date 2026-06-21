@@ -758,6 +758,8 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None) -> list
         ("image_camera_dropout_prob", "so101-image-camera-dropout-prob"),
         ("image_patch_dropout_prob", "so101-image-patch-dropout-prob"),
         ("image_patch_mask_ratio", "so101-image-patch-mask-ratio"),
+        ("image_affine_degrees", "so101-image-affine-degrees"),
+        ("image_affine_translate", "so101-image-affine-translate"),
     ):
         if name in augmentation:
             updated = _ensure_arg(updated, cli_name, str(augmentation[name]))

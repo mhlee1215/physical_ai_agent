@@ -57,10 +57,12 @@ class SO101AugmentationContract:
     prefer_device_backends: tuple[str, ...] = ("cuda", "mps")
     image_color_jitter: bool = True
     image_affine_jitter: bool = True
-    image_camera_dropout_prob: float = 0.05
+    image_affine_degrees: float = 5.0
+    image_affine_translate: float = 0.05
+    image_camera_dropout_prob: float = 0.0
     image_patch_dropout_prob: float = 0.0
     image_patch_mask_ratio: float = 0.15
-    state_jitter_std: float = 0.01
+    state_jitter_std: float = 0.003
     state_dropout_prob: float = 0.02
     state_dropout_keep_gripper: bool = True
     run_after_batch_to_device: bool = True
@@ -78,6 +80,10 @@ class SO101AugmentationContract:
                 errors.append(f"{name} must be in [0, 1), got {value}")
         if self.state_jitter_std < 0.0:
             errors.append(f"state_jitter_std must be non-negative, got {self.state_jitter_std}")
+        if self.image_affine_degrees < 0.0:
+            errors.append(f"image_affine_degrees must be non-negative, got {self.image_affine_degrees}")
+        if self.image_affine_translate < 0.0:
+            errors.append(f"image_affine_translate must be non-negative, got {self.image_affine_translate}")
         if "cuda" not in self.prefer_device_backends and "mps" not in self.prefer_device_backends:
             errors.append("prefer_device_backends must include cuda or mps")
         return errors

@@ -26,7 +26,8 @@ adding SO101 sample-time controls:
 
 - predecoded image cache via `--so101-image-cache-dir`;
 - GPU/MPS-side image augmentation via `--so101-gpu-image-augmentation`;
-- image color, sharpness, affine jitter;
+- image color, sharpness, and affine jitter with
+  `--so101-image-affine-degrees` / `--so101-image-affine-translate`;
 - camera-level image dropout with `--so101-image-camera-dropout-prob`;
 - patch image dropout with `--so101-image-patch-dropout-prob`;
 - patch-ratio image masking with `--so101-image-patch-mask-ratio`;
@@ -50,6 +51,8 @@ explicitly overrides it:
   "image_camera_dropout_prob": 0.0,
   "image_patch_dropout_prob": 0.0,
   "image_patch_mask_ratio": 0.15,
+  "image_affine_degrees": 5.0,
+  "image_affine_translate": 0.05,
   "gpu_image_augmentation": true
 }
 ```
@@ -58,6 +61,11 @@ explicitly overrides it:
 training image sample. It is distinct from legacy `image_patch_dropout_prob`,
 which only masks one random patch for selected samples and should stay `0.0`
 unless a specific ablation requires it.
+
+`image_affine_degrees` and `image_affine_translate` apply a small random affine
+transform after the image batch is on the training device. The implementation
+uses Torch `affine_grid` / `grid_sample` on the current tensor device, so CUDA
+and MPS use the same augmentation path.
 
 ## Action Smoothness
 

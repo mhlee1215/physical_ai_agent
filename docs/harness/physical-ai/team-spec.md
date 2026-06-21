@@ -259,9 +259,12 @@ policy is:
 - SO101 SmolVLA training configs must enable moderate train-time augmentation
   by default. The current moderate preset is `state_jitter_std=0.003`,
   `state_dropout_prob=0.02`, `image_patch_mask_ratio=0.15`,
+  `image_affine_degrees=5.0`, `image_affine_translate=0.05`,
   `gpu_image_augmentation=true`, `image_camera_dropout_prob=0.0`, and
-  `image_patch_dropout_prob=0.0`. Validation and closed-loop test inputs stay
-  unaugmented. Do not use teacher-action dropout in BC runs.
+  `image_patch_dropout_prob=0.0`. Affine augmentation must run on the training
+  device tensor path so CUDA and MPS are both supported. Validation and
+  closed-loop test inputs stay unaugmented. Do not use teacher-action dropout in
+  BC runs.
 - If SO101 action chunks look jittery, handle it as action smoothness, not data
   augmentation. Preferred training-side regularization is an explicit temporal
   smoothness loss on predicted action chunks, for example
