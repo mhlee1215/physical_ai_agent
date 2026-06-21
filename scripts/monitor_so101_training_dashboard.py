@@ -697,7 +697,10 @@ def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: d
     except Exception:
         return
 
-    log_dir = run_dir / "tensorboard" / "so101_smolvla"
+    # Keep loop-test writers out of the main training run. TensorBoard can merge
+    # multiple event writers under one run in confusing ways, which hides or
+    # de-emphasizes the main train/val loss traces.
+    log_dir = run_dir / "tensorboard" / "so101_closed_loop"
     step = int(row.get("step") or 0)
     with SummaryWriter(log_dir=str(log_dir)) as writer:
         for key in ("success_rate", "grasp_rate", "episodes", "duration_s"):

@@ -771,6 +771,12 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertTrue(any("run_so101_training_loop_test.py" in part for part in loop_cmd))
             self.assertFalse(any("monitor_so101_training_dashboard.py" in part for part in loop_cmd))
 
+    def test_closed_loop_tensorboard_uses_separate_run(self) -> None:
+        source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+
+        self.assertIn('run_dir / "tensorboard" / "so101_closed_loop"', source)
+        self.assertNotIn('log_dir = run_dir / "tensorboard" / "so101_smolvla"', source)
+
     def test_qwen_edge_merge_normalizes_legacy_static_finger_prompts(self) -> None:
         from scripts.merge_so101_lerobot_shards import _normalize_task_prompt
 
