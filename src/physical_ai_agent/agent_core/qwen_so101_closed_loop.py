@@ -110,6 +110,7 @@ def run_closed_loop_plan(
     policy_n_action_steps: int | None = 15,
     policy_num_steps: int | None = 10,
     artifact_config: LoopArtifactConfig | None = None,
+    env_config: dict[str, Any] | None = None,
     env_factory: EnvFactory = SO101NexusEnv,
     policy_loader: PolicyLoader = _load_pretrained_policy,
     batch_builder: BatchBuilder = _build_batch_for_policy,
@@ -148,6 +149,7 @@ def run_closed_loop_plan(
                     policy_n_action_steps=policy_n_action_steps,
                     policy_num_steps=policy_num_steps,
                     artifact_config=artifact_config or LoopArtifactConfig(),
+                    env_config=env_config or {},
                     batch_builder=batch_builder,
                 )
             )
@@ -167,6 +169,12 @@ def run_closed_loop_plan(
         "blocker": blocker,
         "duration_s": round(perf_counter() - started, 4),
         "env_id": env_id,
+        "env_config": env_config or {},
+        "camera_contract": {
+            "observation.images.camera1": "egocentric_cam",
+            "observation.images.camera2": "wrist_cam",
+            "observation.images.camera3": "wrist_cam duplicate",
+        },
         "seed": seed,
         "episodes_requested": int(episodes),
         "episodes_completed": len(episodes_out),
@@ -206,6 +214,7 @@ def _run_episode(
     policy_n_action_steps: int | None,
     policy_num_steps: int | None,
     artifact_config: LoopArtifactConfig,
+    env_config: dict[str, Any],
     batch_builder: BatchBuilder,
 ) -> dict[str, Any]:
     env = env_factory(env_id, None)
@@ -254,7 +263,8 @@ def _run_episode(
             )
             for primitive_step in range(step_budget):
                 record_media = _should_render_media(artifact_config, primitive_step)
-                camera_pixels = _render_policy_cameras(env, renderers) if renderers else {}
+                camera_pixels = _render_policy_cameras(env, renderers)
+                _require_policy_cameras(camera_pixels)
                 policy_input_images = (
                     _write_policy_input_images(
                         camera_pixels=camera_pixels,
@@ -303,6 +313,7 @@ def _run_episode(
                     "truncated": bool(truncated),
                     "info": _jsonable_info(info),
                     "image_feature_mapping": image_feature_mapping,
+                    "policy_input_camera_names": sorted(camera_pixels),
                     "media": {
                         "policy_input_images": policy_input_images,
                         "robot_frame": robot_frame_path,
@@ -310,6 +321,7 @@ def _run_episode(
                     },
                     "render_replay": {
                         "env_id": env_id,
+                        "env_config": env_config,
                         "seed": seed,
                         "artifact_width": artifact_config.width,
                         "artifact_height": artifact_config.height,
@@ -454,17 +466,17 @@ def _raw_env(env: Any) -> Any:
 
 
 def _make_renderers_or_none(env: Any, config: LoopArtifactConfig) -> dict[str, Any]:
-    if not (config.enabled and config.render_media):
-        return {}
     try:
         import mujoco
 
         raw_env = _raw_env(env)
-        return {
+        renderers = {
             "egocentric_cam": mujoco.Renderer(raw_env.unwrapped.model, height=config.height, width=config.width),
             "wrist_cam": mujoco.Renderer(raw_env.unwrapped.model, height=config.height, width=config.width),
-            "top_down": mujoco.Renderer(raw_env.unwrapped.model, height=config.height, width=config.width),
         }
+        if config.enabled and config.render_media:
+            renderers["top_down"] = mujoco.Renderer(raw_env.unwrapped.model, height=config.height, width=config.width)
+        return renderers
     except Exception:
         return {}
 
@@ -481,6 +493,15 @@ def _render_policy_cameras(env: Any, renderers: dict[str, Any]) -> dict[str, Any
         renderer.update_scene(raw_env.unwrapped.data, camera=_make_camera(raw_env, camera_name))
         pixels[camera_name] = postprocess_camera_frame(camera_name, renderer.render())
     return pixels
+
+
+def _require_policy_cameras(camera_pixels: dict[str, Any]) -> None:
+    missing = [name for name in ("egocentric_cam", "wrist_cam") if name not in camera_pixels]
+    if missing:
+        raise RuntimeError(
+            "closed-loop policy camera render failed; refusing to evaluate SmolVLA with blank "
+            f"visual inputs. missing={missing}"
+        )
 
 
 def _render_robot_frame(env: Any, renderers: dict[str, Any]) -> Any | None:
