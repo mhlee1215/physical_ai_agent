@@ -133,6 +133,9 @@ Durable SO101 fine-tuning contract:
   `state_jitter_std=0.003`, `state_dropout_prob=0.02`,
   `image_patch_mask_ratio=0.15`, `gpu_image_augmentation=true`;
 - validation and closed-loop test inputs remain unaugmented;
+- training-time SO101 closed-loop validation defaults to exactly 10 episodes;
+  keep `--closed-loop-episodes 10` unless the user explicitly requests a
+  labeled one-off smoke/debug count;
 - do not use teacher-action dropout in behavior cloning;
 - action chunk jitter is handled through explicit predicted-action temporal
   smoothness loss or inference-time temporal ensembling/chunk smoothing, not by

@@ -115,6 +115,9 @@ paper-facing concepts:
   should not render PNG/MP4 media by default; generate frames/videos locally
   from saved traces when inspection needs them. Disable recording only for
   explicitly labeled lightweight smoke/debug runs, not for validation evidence.
+- User policy: SO101 training-time closed-loop validation must run exactly 10
+  episodes by default. Keep `--closed-loop-episodes 10` in launcher and monitor
+  paths unless the user explicitly asks for a labeled one-off smoke/debug count.
 - User policy: Qwen-chain SO101 loop tests must use the valid-mask termination
   head, not fixed-length primitive execution. Provide
   `closed_loop.valid_mask_checkpoint` in dataset config or

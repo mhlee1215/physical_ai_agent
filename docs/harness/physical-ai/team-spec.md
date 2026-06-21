@@ -212,6 +212,10 @@ policy is:
   validation-loss checkpoint must also run the Qwen-chain closed-loop test.
   Keep `validation_interval_steps == save_freq == steps_per_epoch` and
   `closed-loop-every-epochs=1` unless the user explicitly changes this lane.
+- SO101 training-time closed-loop validation must run exactly 10 episodes by
+  default. Keep `--closed-loop-episodes 10` in both launcher and monitor
+  command paths; use any other count only for an explicitly labeled one-off
+  smoke/debug run requested by the user.
 - All SO101 loop tests must record analyzer artifacts by default. For
   Qwen-chain closed-loop tests this means raw Qwen request/response payloads,
   rollout `policy_rollout_config`, action-chunk metadata, and seed/action/state
