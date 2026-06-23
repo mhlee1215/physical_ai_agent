@@ -123,6 +123,11 @@ Official RViz reference copied from the upstream repo:
 The implemented path does not graft the 320 gripper onto the 280 MuJoCo arm.
 Instead, `--model-profile 320-m5-2022-gripper` imports the official 320 arm
 URDF tree and converts the official Collada meshes to OBJ for MuJoCo on macOS.
+For the 320 arm links, the converter intentionally uses raw Collada geometry
+vertices instead of baking the Collada `visual_scene` transforms; baking those
+scene transforms and then applying URDF origins again visibly separated the arm
+parts.
+
 The raw upstream mimic-linkage gripper is replaced with a MuJoCo functional
 friction-contact gripper at the official 320 flange: short slide jaws with
 high-friction finger pads, MuJoCo elliptic friction cones, a higher-iteration
@@ -146,9 +151,11 @@ The verified 320 M5 2022 friction-contact gripper smoke reached
 `min_tcp_to_cube_dist=0.0369`, `gripper_cube_contacts=7`, and
 `gripper_cube_contact_pads=2` in 88 steps. This is still a simplified MuJoCo
 functional gripper, not the raw official mimic-linkage gripper and not
-calibrated hardware force closure, but the cube lift is now produced by
-finger-pad contact friction rather than by directly attaching the cube to the
-gripper or by a surrounding form-closure cage.
+calibrated hardware force closure. The arm assembly no longer has the previous
+large part-separation artifact, but the end-effector remains a functional
+stand-in rather than a finished official gripper assembly. The cube lift is now
+produced by finger-pad contact friction rather than by directly attaching the
+cube to the gripper or by a surrounding form-closure cage.
 
 Representative 320 M5 2022 friction-contact gripper frames:
 

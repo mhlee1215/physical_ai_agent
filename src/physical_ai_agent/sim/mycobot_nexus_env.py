@@ -892,7 +892,11 @@ def _build_official_320_nexus_scene_model(
     obj_dir = scene_path.parent / "official_320_m5_2022_meshes"
     obj_dir.mkdir(parents=True, exist_ok=True)
     for name in OFFICIAL_320_LINK_NAMES:
-        _convert_collada_mesh_to_obj(mesh_root / f"{name}.dae", obj_dir / f"{name}.obj")
+        _convert_collada_mesh_to_obj(
+            mesh_root / f"{name}.dae",
+            obj_dir / f"{name}.obj",
+            bake_visual_scene=False,
+        )
 
     urdf = ET.parse(urdf_path).getroot()
     link_visuals = _urdf_link_visuals(urdf)
@@ -1285,7 +1289,12 @@ def _prepare_official_gripper_obj_assets(mesh_dir: Path, output_root: Path) -> P
     return obj_dir
 
 
-def _convert_collada_mesh_to_obj(dae_path: Path, obj_path: Path) -> None:
+def _convert_collada_mesh_to_obj(
+    dae_path: Path,
+    obj_path: Path,
+    *,
+    bake_visual_scene: bool = True,
+) -> None:
     root = ET.parse(dae_path).getroot()
     namespace = {"c": root.tag.partition("}")[0].strip("{")}
     unit = root.find("c:asset/c:unit", namespace)
@@ -1299,18 +1308,19 @@ def _convert_collada_mesh_to_obj(dae_path: Path, obj_path: Path) -> None:
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
 
-    for scene in root.findall(".//c:library_visual_scenes/c:visual_scene", namespace):
-        for node in scene.findall("c:node", namespace):
-            _append_collada_node_instances(
-                node,
-                namespace,
-                geometries,
-                library_nodes,
-                _identity_matrix4(),
-                scale,
-                vertices,
-                faces,
-            )
+    if bake_visual_scene:
+        for scene in root.findall(".//c:library_visual_scenes/c:visual_scene", namespace):
+            for node in scene.findall("c:node", namespace):
+                _append_collada_node_instances(
+                    node,
+                    namespace,
+                    geometries,
+                    library_nodes,
+                    _identity_matrix4(),
+                    scale,
+                    vertices,
+                    faces,
+                )
 
     if not vertices:
         for mesh_vertices, mesh_faces in geometries.values():
