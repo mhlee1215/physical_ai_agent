@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,6 +69,32 @@ class MyCobotRosTeacherPocTest(unittest.TestCase):
             extract_action_vector(record, fallback=[0.0] * 7),
             [0.1 * i for i in range(7)],
         )
+
+    def test_mac_runner_script_creates_checked_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "mac_poc"
+            result = subprocess.run(
+                [
+                    "sh",
+                    "scripts/run_mycobot_ros_teacher_poc_mac.sh",
+                ],
+                check=True,
+                cwd=Path(__file__).resolve().parents[1],
+                env={
+                    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                    "PYTHON": "/usr/bin/python3",
+                    "ROOT": str(root),
+                    "FRAMES": "3",
+                    "WIDTH": "24",
+                    "HEIGHT": "24",
+                },
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertIn("mac_poc_status=passed", result.stdout)
+            report = json.loads((root / "report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["frames"], 3)
 
 
 if __name__ == "__main__":

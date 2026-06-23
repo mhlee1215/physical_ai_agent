@@ -292,7 +292,7 @@ def extract_joint_vector(record: dict[str, Any]) -> list[float]:
         raise ValueError("joint_state.position must be a list")
     if not isinstance(names, list):
         raise ValueError("joint_state.name must be a list when provided")
-    by_name = {str(name): float(value) for name, value in zip(names, positions, strict=False)}
+    by_name = {str(name): float(value) for name, value in zip(names, positions)}
     if all(name in by_name for name in JOINT_NAMES):
         return [float(by_name[name]) for name in JOINT_NAMES]
     if len(positions) < len(JOINT_NAMES):
@@ -313,7 +313,7 @@ def extract_action_vector(record: dict[str, Any], *, fallback: list[float]) -> l
         if not isinstance(positions, list):
             raise ValueError("action dict must include positions")
         by_name = {
-            str(name): float(value) for name, value in zip(names, positions, strict=False)
+            str(name): float(value) for name, value in zip(names, positions)
         }
         if all(name in by_name for name in JOINT_NAMES):
             return [float(by_name[name]) for name in JOINT_NAMES]

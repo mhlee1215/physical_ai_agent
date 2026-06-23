@@ -19,12 +19,38 @@ That makes it a better teacher-data starting point than the thin
 
 ## POC Artifact
 
-Run:
+Mac-local one-command smoke:
+
+```bash
+sh scripts/run_mycobot_ros_teacher_poc_mac.sh
+```
+
+This writes `_workspace/mycobot_ros_teacher_poc_mac/report.json` and checks
+that the frame rows and placeholder images exist. It uses only the Python
+standard library and does not require ROS, Gazebo, MoveIt, MuJoCo, or LeRobot on
+the Mac.
+
+To override the output path or size:
+
+```bash
+ROOT=_workspace/mycobot_ros_teacher_poc_mac_small \
+FRAMES=4 WIDTH=32 HEIGHT=24 \
+sh scripts/run_mycobot_ros_teacher_poc_mac.sh
+```
+
+Direct exporter run:
 
 ```bash
 PYTHONPATH=. python3 scripts/export_mycobot_ros_teacher_poc.py \
   --root _workspace/mycobot_ros_teacher_poc \
   --overwrite
+```
+
+When a ROS/Gazebo JSONL trace is available:
+
+```bash
+INPUT_TRACE=_workspace/mycobot_ros_trace/joint_and_action_trace.jsonl \
+sh scripts/run_mycobot_ros_teacher_poc_mac.sh
 ```
 
 The script writes:
