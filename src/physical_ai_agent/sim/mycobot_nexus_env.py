@@ -22,6 +22,10 @@ MYCOBOT_TEACHER_JOINT_NAMES = [
     *MYCOBOT_MODEL_JOINT_NAMES,
     "gripper_controller",
 ]
+GRIPPER_JOINT_NAMES = ["left_finger_slide", "right_finger_slide"]
+TASK_CUBE_BODY = "task_cube_body"
+TASK_CUBE_GEOM = "task_cube"
+TCP_SITE = "mycobot_tcp_site"
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,11 @@ class MyCobotNexusSmokeResult:
     final_tcp_to_cube_dist: float
     min_tcp_to_cube_dist: float
     approach_improved: bool
+    initial_cube_z: float
+    final_cube_z: float
+    cube_lifted: bool
+    gripper_cube_contacts: int
+    grasp_success: bool
     trace_path: str
     frame_path: str
     report_path: str
@@ -98,6 +107,11 @@ class MyCobotNexusEnv:
         self._step = 0
         self._qpos_indices = _joint_qpos_indices(mujoco, self.model)
         self._dof_indices = _joint_dof_indices(mujoco, self.model)
+        self._gripper_qpos_indices = _named_joint_qpos_indices(
+            mujoco,
+            self.model,
+            GRIPPER_JOINT_NAMES,
+        )
         self._low, self._high = _joint_ranges(self.model, self._qpos_indices)
         self.action_dim = len(MYCOBOT_TEACHER_JOINT_NAMES)
         self.observation_dim = len(MYCOBOT_TEACHER_JOINT_NAMES) + 3
@@ -108,8 +122,9 @@ class MyCobotNexusEnv:
         neutral = _neutral_qpos(seed=seed, low=self._low, high=self._high)
         for qpos_index, value in zip(self._qpos_indices, neutral, strict=True):
             self.data.qpos[qpos_index] = value
+        self._set_gripper(command=1.0)
         self._mujoco.mj_forward(self.model, self.data)
-        return self._observation(gripper=0.0), self._info(gripper=0.0)
+        return self._observation(gripper=1.0), self._info(gripper=1.0)
 
     def step(self, action: list[float]) -> tuple[list[float], float, bool, bool, dict[str, Any]]:
         values = sanitize_teacher_action(action)
@@ -118,6 +133,7 @@ class MyCobotNexusEnv:
         for target, qpos_index in zip(arm_target, self._qpos_indices, strict=True):
             current = float(self.data.qpos[qpos_index])
             self.data.qpos[qpos_index] = current + self.config.control_alpha * (target - current)
+        self._set_gripper(command=gripper)
         self._mujoco.mj_step(self.model, self.data)
         self._step += 1
         obs = self._observation(gripper=gripper)
@@ -130,9 +146,9 @@ class MyCobotNexusEnv:
         """Choose a qpos target that moves the TCP proxy toward the cube."""
         import numpy as np
 
-        target = np.asarray(_cube_position(), dtype=float)
+        target = np.asarray(self._cube_position(), dtype=float)
         target[2] += 0.08
-        tcp = np.asarray(_tcp_position_from_data(self.data), dtype=float)
+        tcp = np.asarray(self._tcp_position(), dtype=float)
         error = target - tcp
         jacp = np.zeros((3, self.model.nv), dtype=float)
         jacr = np.zeros((3, self.model.nv), dtype=float)
@@ -145,6 +161,24 @@ class MyCobotNexusEnv:
             for value, delta in zip(current, arm_delta, strict=True)
         ]
         return [*_clip(target_qpos, self._low, self._high), -0.2]
+
+    def cube_grasp_lift_action(self, step: int, total_steps: int) -> list[float]:
+        """Approach, close the native gripper, then lift above the cube."""
+        import numpy as np
+
+        phase = step / max(1, total_steps - 1)
+        cube = np.asarray(self._cube_position(), dtype=float)
+        target = cube.copy()
+        gripper = 1.0
+        if phase < 0.45:
+            target[2] += 0.09
+        elif phase < 0.72:
+            target[2] += 0.035
+            gripper = -1.0
+        else:
+            target[2] += 0.18
+            gripper = -1.0
+        return [*self._jacobian_qpos_target(target.tolist(), gain=1.9), gripper]
 
     def render(self) -> Any:
         if self._renderer is None:
@@ -164,11 +198,13 @@ class MyCobotNexusEnv:
 
     def _observation(self, *, gripper: float) -> list[float]:
         qpos = [float(self.data.qpos[index]) for index in self._qpos_indices]
-        return [*qpos, float(gripper), *_cube_position()]
+        return [*qpos, float(gripper), *self._cube_position()]
 
     def _info(self, *, gripper: float) -> dict[str, Any]:
-        tcp = _tcp_position_from_data(self.data)
-        cube = _cube_position()
+        tcp = self._tcp_position()
+        cube = self._cube_position()
+        contacts = self._gripper_cube_contacts()
+        cube_lift = cube[2] - 0.044
         return {
             "step": self._step,
             "joint_names": MYCOBOT_TEACHER_JOINT_NAMES,
@@ -176,10 +212,56 @@ class MyCobotNexusEnv:
             "tcp_position": tcp,
             "tcp_to_cube_dist": _distance(tcp, cube),
             "gripper_command": float(gripper),
-            "success": False,
-            "success_label": "not_claimed_poc_kinematic_step",
+            "gripper_cube_contacts": contacts,
+            "cube_lift": cube_lift,
+            "success": bool(cube_lift > 0.025 and contacts > 0),
+            "success_label": (
+                "contact_lift_success" if cube_lift > 0.025 and contacts > 0 else "not_success"
+            ),
             "scene_path": str(self.scene_path),
         }
+
+    def _jacobian_qpos_target(self, target_xyz: list[float], *, gain: float) -> list[float]:
+        import numpy as np
+
+        target = np.asarray(target_xyz, dtype=float)
+        tcp = np.asarray(self._tcp_position(), dtype=float)
+        error = target - tcp
+        jacp = np.zeros((3, self.model.nv), dtype=float)
+        jacr = np.zeros((3, self.model.nv), dtype=float)
+        body_id = self.model.nbody - 1
+        site_id = self._mujoco.mj_name2id(self.model, self._mujoco.mjtObj.mjOBJ_SITE, TCP_SITE)
+        if site_id >= 0:
+            self._mujoco.mj_jacSite(self.model, self.data, jacp, jacr, site_id)
+        else:
+            self._mujoco.mj_jacBody(self.model, self.data, jacp, jacr, body_id)
+        arm_delta = jacp[:, self._dof_indices].T @ error
+        arm_delta = np.clip(gain * arm_delta, -0.18, 0.18)
+        current = [float(self.data.qpos[index]) for index in self._qpos_indices]
+        target_qpos = [
+            value + float(delta)
+            for value, delta in zip(current, arm_delta, strict=True)
+        ]
+        return _clip(target_qpos, self._low, self._high)
+
+    def _set_gripper(self, *, command: float) -> None:
+        close_amount = (1.0 - max(-1.0, min(1.0, float(command)))) * 0.5
+        qpos_value = close_amount * 0.028
+        for qpos_index in self._gripper_qpos_indices:
+            self.data.qpos[qpos_index] = qpos_value
+
+    def _cube_position(self) -> list[float]:
+        return _body_position(self._mujoco, self.model, self.data, TASK_CUBE_BODY)
+
+    def _tcp_position(self) -> list[float]:
+        site_id = self._mujoco.mj_name2id(self.model, self._mujoco.mjtObj.mjOBJ_SITE, TCP_SITE)
+        if site_id >= 0:
+            pos = self.data.site_xpos[site_id]
+            return [float(pos[0]), float(pos[1]), float(pos[2])]
+        return _body_position(self._mujoco, self.model, self.data, "joint6_flange")
+
+    def _gripper_cube_contacts(self) -> int:
+        return _gripper_cube_contacts(self._mujoco, self.model, self.data)
 
     def _make_camera(self) -> Any:
         camera = self._mujoco.MjvCamera()
@@ -216,10 +298,13 @@ def run_mycobot_nexus_smoke(
     records: list[MyCobotNexusStep] = []
     obs, info = env.reset(seed=seed)
     initial_dist = float(info["tcp_to_cube_dist"])
+    initial_cube_z = float(info["cube_position"][2])
     try:
         for step in range(steps):
             if policy == "cube-approach":
                 action = env.cube_approach_action()
+            elif policy == "grasp-lift":
+                action = env.cube_grasp_lift_action(step, steps)
             elif policy == "sample":
                 action = sample_mycobot_nexus_action(step, steps)
             else:
@@ -247,6 +332,13 @@ def run_mycobot_nexus_smoke(
         for record in records:
             file.write(json.dumps(asdict(record), sort_keys=True) + "\n")
     final_dist = float(records[-1].info["tcp_to_cube_dist"]) if records else initial_dist
+    final_cube_z = float(records[-1].info["cube_position"][2]) if records else initial_cube_z
+    max_contacts = (
+        max(int(record.info["gripper_cube_contacts"]) for record in records)
+        if records
+        else 0
+    )
+    grasp_success = bool(records and any(bool(record.info["success"]) for record in records))
     result = MyCobotNexusSmokeResult(
         status="passed",
         policy=policy,
@@ -263,6 +355,11 @@ def run_mycobot_nexus_smoke(
         approach_improved=bool(
             records and final_dist < initial_dist
         ),
+        initial_cube_z=initial_cube_z,
+        final_cube_z=final_cube_z,
+        cube_lifted=bool(final_cube_z > initial_cube_z + 0.025),
+        gripper_cube_contacts=max_contacts,
+        grasp_success=grasp_success,
         trace_path=str(trace_path),
         frame_path=str(frame_path),
         report_path=str(report_path),
@@ -276,13 +373,13 @@ def mycobot_nexus_contract() -> dict[str, Any]:
     return {
         "env": "MyCobotNexusEnv",
         "surface": ["reset(seed)", "step(action)", "render()", "close()"],
-        "policies": ["sample", "cube-approach"],
+        "policies": ["sample", "cube-approach", "grasp-lift"],
         "asset_source": "https://github.com/elephantrobotics/mycobot_mujoco",
         "model_relative_path": str(MYCOBOT_MODEL_RELATIVE_PATH),
         "joint_order": MYCOBOT_TEACHER_JOINT_NAMES,
         "action_dim": len(MYCOBOT_TEACHER_JOINT_NAMES),
         "observation_dim": len(MYCOBOT_TEACHER_JOINT_NAMES) + 3,
-        "task_objects": ["task_cube", "nexus_work_mat"],
+        "task_objects": ["task_cube", "nexus_work_mat", "native_parallel_gripper"],
         "real_robot_execution": "disabled",
         "poc_boundary": (
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
@@ -371,6 +468,10 @@ def build_mycobot_nexus_scene_model(*, model_path: Path, scene_path: Path) -> No
         raise ValueError(f"missing worldbody in MuJoCo model: {model_path}")
     for node in reversed(_nexus_scene_nodes()):
         worldbody.insert(0, node)
+    flange = root.find(".//body[@name='joint6_flange']")
+    if flange is None:
+        raise ValueError(f"missing joint6_flange body in MuJoCo model: {model_path}")
+    flange.append(_native_parallel_gripper_node())
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
     tree.write(scene_path, encoding="utf-8", xml_declaration=True)
@@ -404,8 +505,8 @@ def _nexus_scene_nodes() -> list[ET.Element]:
                 "pos": "0 0 -0.006",
                 "size": "1.2 1.2 0.01",
                 "material": "nexus_floor",
-                "contype": "0",
-                "conaffinity": "0",
+                "contype": "1",
+                "conaffinity": "1",
             },
         ),
         ET.Element(
@@ -416,23 +517,108 @@ def _nexus_scene_nodes() -> list[ET.Element]:
                 "pos": "-0.18 -0.12 0.004",
                 "size": "0.36 0.26 0.004",
                 "material": "nexus_mat",
-                "contype": "0",
-                "conaffinity": "0",
+                "contype": "1",
+                "conaffinity": "1",
             },
         ),
-        ET.Element(
-            "geom",
-            {
-                "name": "task_cube",
-                "type": "box",
-                "pos": "-0.34 -0.18 0.044",
-                "size": "0.04 0.04 0.04",
-                "material": "task_cube",
-                "contype": "0",
-                "conaffinity": "0",
-            },
-        ),
+        _dynamic_cube_body_node(),
     ]
+
+
+def _native_parallel_gripper_node() -> ET.Element:
+    base = ET.Element("body", {"name": "native_parallel_gripper", "pos": "0 0 -0.055"})
+    ET.SubElement(
+        base,
+        "geom",
+        {
+            "name": "gripper_palm",
+            "type": "box",
+            "pos": "0 0 0",
+            "size": "0.032 0.018 0.012",
+            "rgba": "0.18 0.18 0.17 1",
+            "contype": "1",
+            "conaffinity": "1",
+            "mass": "0.03",
+        },
+    )
+    ET.SubElement(base, "site", {"name": TCP_SITE, "pos": "0 0 -0.085", "size": "0.006"})
+    left = ET.SubElement(base, "body", {"name": "left_finger", "pos": "0 0.042 -0.05"})
+    ET.SubElement(
+        left,
+        "joint",
+        {
+            "name": "left_finger_slide",
+            "type": "slide",
+            "axis": "0 -1 0",
+            "range": "0 0.028",
+            "limited": "true",
+            "damping": "0.6",
+        },
+    )
+    ET.SubElement(
+        left,
+        "geom",
+        {
+            "name": "left_finger_pad",
+            "type": "box",
+            "pos": "0 0 -0.035",
+            "size": "0.012 0.006 0.04",
+            "rgba": "0.08 0.08 0.08 1",
+            "friction": "1.5 0.1 0.1",
+            "contype": "1",
+            "conaffinity": "1",
+            "mass": "0.02",
+        },
+    )
+    right = ET.SubElement(base, "body", {"name": "right_finger", "pos": "0 -0.042 -0.05"})
+    ET.SubElement(
+        right,
+        "joint",
+        {
+            "name": "right_finger_slide",
+            "type": "slide",
+            "axis": "0 1 0",
+            "range": "0 0.028",
+            "limited": "true",
+            "damping": "0.6",
+        },
+    )
+    ET.SubElement(
+        right,
+        "geom",
+        {
+            "name": "right_finger_pad",
+            "type": "box",
+            "pos": "0 0 -0.035",
+            "size": "0.012 0.006 0.04",
+            "rgba": "0.08 0.08 0.08 1",
+            "friction": "1.5 0.1 0.1",
+            "contype": "1",
+            "conaffinity": "1",
+            "mass": "0.02",
+        },
+    )
+    return base
+
+
+def _dynamic_cube_body_node() -> ET.Element:
+    cube = ET.Element("body", {"name": TASK_CUBE_BODY, "pos": "-0.34 -0.18 0.044"})
+    ET.SubElement(cube, "freejoint", {"name": "task_cube_freejoint"})
+    ET.SubElement(
+        cube,
+        "geom",
+        {
+            "name": TASK_CUBE_GEOM,
+            "type": "box",
+            "size": "0.04 0.04 0.04",
+            "material": "task_cube",
+            "mass": "0.035",
+            "friction": "1.2 0.08 0.08",
+            "contype": "1",
+            "conaffinity": "1",
+        },
+    )
+    return cube
 
 
 def _joint_qpos_indices(mujoco: Any, model: Any) -> list[int]:
@@ -452,6 +638,16 @@ def _joint_dof_indices(mujoco: Any, model: Any) -> list[int]:
         if joint_id < 0:
             raise ValueError(f"joint not found in MuJoCo model: {name}")
         indices.append(int(model.jnt_dofadr[joint_id]))
+    return indices
+
+
+def _named_joint_qpos_indices(mujoco: Any, model: Any, joint_names: list[str]) -> list[int]:
+    indices: list[int] = []
+    for name in joint_names:
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if joint_id < 0:
+            raise ValueError(f"joint not found in MuJoCo model: {name}")
+        indices.append(int(model.jnt_qposadr[joint_id]))
     return indices
 
 
@@ -483,15 +679,29 @@ def _clip(values: list[float], low: list[float], high: list[float]) -> list[floa
     return [max(lo, min(hi, value)) for value, lo, hi in zip(values, low, high, strict=True)]
 
 
-def _cube_position() -> list[float]:
-    return [-0.34, -0.18, 0.044]
-
-
-def _tcp_position_from_data(data: Any) -> list[float]:
-    # The official model has no named TCP site. The last body is the closest
-    # stable model-owned proxy for POC verifier distance.
-    pos = data.xpos[-1]
+def _body_position(mujoco: Any, model: Any, data: Any, body_name: str) -> list[float]:
+    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if body_id < 0:
+        raise ValueError(f"body not found in MuJoCo model: {body_name}")
+    pos = data.xpos[body_id]
     return [float(pos[0]), float(pos[1]), float(pos[2])]
+
+
+def _gripper_cube_contacts(mujoco: Any, model: Any, data: Any) -> int:
+    cube_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, TASK_CUBE_GEOM)
+    finger_ids = {
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "left_finger_pad"),
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "right_finger_pad"),
+    }
+    if cube_id < 0 or any(geom_id < 0 for geom_id in finger_ids):
+        return 0
+    contacts = 0
+    for index in range(int(data.ncon)):
+        contact = data.contact[index]
+        pair = {int(contact.geom1), int(contact.geom2)}
+        if cube_id in pair and pair.intersection(finger_ids):
+            contacts += 1
+    return contacts
 
 
 def _distance(a: list[float], b: list[float]) -> float:

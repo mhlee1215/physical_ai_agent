@@ -27,6 +27,8 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         )
         self.assertEqual(contract["joint_order"], MYCOBOT_TEACHER_JOINT_NAMES)
         self.assertIn("cube-approach", contract["policies"])
+        self.assertIn("grasp-lift", contract["policies"])
+        self.assertIn("native_parallel_gripper", contract["task_objects"])
         self.assertEqual(contract["action_dim"], 7)
         self.assertEqual(contract["real_robot_execution"], "disabled")
 
@@ -54,7 +56,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
                 "--height",
                 "180",
                 "--policy",
-                "cube-approach",
+                "grasp-lift",
                 "--dry-contract",
             ]
         )
@@ -65,7 +67,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.width, 320)
         self.assertEqual(args.height, 180)
-        self.assertEqual(args.policy, "cube-approach")
+        self.assertEqual(args.policy, "grasp-lift")
         self.assertTrue(args.dry_contract)
 
     def test_scene_builder_injects_nexus_cube_world(self) -> None:
@@ -83,6 +85,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
     <body name="joint2">
       <joint name="joint2_to_joint1" axis="0 0 1" range="-1 1" limited="true" />
       <geom type="sphere" size="0.02" />
+      <body name="joint6_flange" pos="0 0 0.05" />
     </body>
   </worldbody>
 </mujoco>
@@ -95,6 +98,12 @@ class MyCobotNexusEnvTest(unittest.TestCase):
             names = {element.attrib.get("name") for element in scene.iter()}
 
         self.assertIn("task_cube", names)
+        self.assertIn("task_cube_body", names)
+        self.assertIn("task_cube_freejoint", names)
+        self.assertIn("native_parallel_gripper", names)
+        self.assertIn("left_finger_slide", names)
+        self.assertIn("right_finger_slide", names)
+        self.assertIn("mycobot_tcp_site", names)
         self.assertIn("nexus_work_mat", names)
         self.assertIn("nexus_skybox", names)
         self.assertIn("nexus_key_light", names)

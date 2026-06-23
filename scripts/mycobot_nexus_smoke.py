@@ -31,7 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
-    parser.add_argument("--policy", choices=["sample", "cube-approach"], default="sample")
+    parser.add_argument(
+        "--policy",
+        choices=["sample", "cube-approach", "grasp-lift"],
+        default="sample",
+    )
     parser.add_argument("--dry-contract", action="store_true")
     return parser
 
