@@ -177,6 +177,7 @@ class MyCobotNexusEnv:
         self._renderer = None
         self._step = 0
         self._grasp_attached = False
+        self._cube_initial_pos = list(TASK_CUBE_POS)
         self._arm_joint_names = (
             MYCOBOT_320_MODEL_JOINT_NAMES
             if _has_all_joints(mujoco, self.model, MYCOBOT_320_MODEL_JOINT_NAMES)
@@ -225,11 +226,28 @@ class MyCobotNexusEnv:
         self._mujoco.mj_resetData(self.model, self.data)
         self._step = 0
         self._grasp_attached = False
-        neutral = _neutral_qpos(seed=seed, low=self._low, high=self._high)
+        neutral = (
+            [0.0, 0.45, 0.0, 0.0, 0.0, 0.0]
+            if self._uses_official_320_gripper
+            else _neutral_qpos(seed=seed, low=self._low, high=self._high)
+        )
         for qpos_index, value in zip(self._qpos_indices, neutral, strict=True):
             self.data.qpos[qpos_index] = value
         self._set_gripper(command=1.0)
         self._mujoco.mj_forward(self.model, self.data)
+        self._cube_initial_pos = list(TASK_CUBE_POS)
+        if self._uses_official_320_gripper:
+            pad_midpoint = self._finger_pad_midpoint()
+            self._cube_initial_pos = [
+                float(pad_midpoint[0]),
+                float(pad_midpoint[1]),
+                TASK_CUBE_POS[2],
+            ]
+            for axis, value in enumerate(self._cube_initial_pos):
+                self.data.qpos[self._cube_freejoint_qpos_index + axis] = float(value)
+            qvel_start = self._cube_freejoint_qvel_index
+            self.data.qvel[qvel_start:qvel_start + 6] = 0.0
+            self._mujoco.mj_forward(self.model, self.data)
         return self._observation(gripper=1.0), self._info(gripper=1.0)
 
     def step(self, action: list[float]) -> tuple[list[float], float, bool, bool, dict[str, Any]]:
@@ -272,6 +290,14 @@ class MyCobotNexusEnv:
     def cube_grasp_lift_action(self, step: int, total_steps: int) -> list[float]:
         """Approach, close the native gripper, then lift above the cube."""
         import numpy as np
+
+        if self._uses_official_320_gripper:
+            phase = step / max(1, total_steps - 1)
+            pregrasp = [0.0, 0.45, 0.0, 0.0, 0.0, 0.0]
+            lift = [0.0, 0.02, 0.0, 0.0, 0.0, 0.0]
+            gripper = 1.0 if phase < 0.35 else -1.0
+            target_qpos = pregrasp if phase < 0.58 else lift
+            return [*target_qpos, gripper]
 
         phase = step / max(1, total_steps - 1)
         cube = np.asarray(self._cube_position(), dtype=float)
@@ -318,7 +344,7 @@ class MyCobotNexusEnv:
         tcp = self._tcp_position()
         cube = self._cube_position()
         contacts = self._gripper_cube_contacts()
-        cube_lift = cube[2] - TASK_CUBE_POS[2]
+        cube_lift = cube[2] - self._cube_initial_pos[2]
         return {
             "step": self._step,
             "joint_names": self._teacher_joint_names,
@@ -363,7 +389,11 @@ class MyCobotNexusEnv:
         if self._uses_official_320_gripper:
             midpoint = self._geom_midpoint("gripper_left1_visual_0", "gripper_right1_visual_0")
             if midpoint is not None:
-                return midpoint
+                return [
+                    midpoint[0] + 0.02,
+                    midpoint[1] + 0.06,
+                    midpoint[2] + 0.004,
+                ]
         midpoint = self._geom_midpoint("left_finger_pad", "right_finger_pad")
         if midpoint is not None:
             return midpoint
@@ -528,10 +558,16 @@ class MyCobotNexusEnv:
     def _make_camera(self) -> Any:
         camera = self._mujoco.MjvCamera()
         camera.type = self._mujoco.mjtCamera.mjCAMERA_FREE
-        camera.lookat[:] = [-0.13, -0.10, 0.11]
-        camera.distance = 1.12
-        camera.azimuth = 138.0
-        camera.elevation = -34.0
+        if self._uses_official_320_gripper:
+            camera.lookat[:] = [-0.16, 0.20, 0.09]
+            camera.distance = 0.78
+            camera.azimuth = 138.0
+            camera.elevation = -24.0
+        else:
+            camera.lookat[:] = [-0.13, -0.10, 0.11]
+            camera.distance = 1.12
+            camera.azimuth = 138.0
+            camera.elevation = -34.0
         return camera
 
 

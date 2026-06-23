@@ -135,17 +135,17 @@ PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py \
 ```
 
 The verified 320 M5 2022 official-gripper smoke reached
-`grasp_success=true`, `cube_lifted=true`, `final_cube_z=0.104`,
-`min_tcp_to_cube_dist=0.0099`, and `gripper_cube_contacts=3` in 67 steps. As
-above, the lift is still a teacher attachment proxy after gripper close/contact,
-not calibrated force-closure physics.
+`grasp_success=true`, `cube_lifted=true`, `final_cube_z=0.077`, and
+`min_tcp_to_cube_dist=0.0646` in 53 steps using a constrained 320-specific
+teacher trajectory near the official zero pose. `gripper_cube_contacts=0`, so
+this is strictly a visual/state teacher attachment proxy, not a contact-success
+claim.
 
 Representative 320 M5 2022 official-gripper frames:
 
+![myCobot 320 M5 2022 official-gripper zero pose](./mycobot_nexus_320_m5_2022_gripper_zero_pose.png)
 ![myCobot 320 M5 2022 official-gripper wide frame](./mycobot_nexus_320_m5_2022_gripper_frame.png)
-![myCobot 320 M5 2022 official-gripper front close-up](./mycobot_nexus_320_m5_2022_gripper_front_close.png)
 ![myCobot 320 M5 2022 official-gripper side close-up](./mycobot_nexus_320_m5_2022_gripper_side_close.png)
-![myCobot 320 M5 2022 official-gripper wrist close-up](./mycobot_nexus_320_m5_2022_gripper_wrist_close.png)
 
 ### Pro 450 Reference Boundary
 
