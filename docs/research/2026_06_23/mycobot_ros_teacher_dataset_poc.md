@@ -26,9 +26,31 @@ sh scripts/run_mycobot_ros_teacher_poc_mac.sh
 ```
 
 This writes `_workspace/mycobot_ros_teacher_poc_mac/report.json` and checks
-that the frame rows and placeholder images exist. It uses only the Python
-standard library and does not require ROS, Gazebo, MoveIt, MuJoCo, or LeRobot on
-the Mac.
+that the frame rows, placeholder images, and `viewer.html` exist. It uses only
+the Python standard library and does not require ROS, Gazebo, MoveIt, MuJoCo, or
+LeRobot on the Mac.
+
+To open the generated viewer with the macOS default browser:
+
+```bash
+OPEN_UI=1 sh scripts/run_mycobot_ros_teacher_poc_mac.sh
+```
+
+To generate real robot-arm render frames for the viewer, clone the official
+myCobot MuJoCo asset repo and enable the renderer:
+
+```bash
+git clone https://github.com/elephantrobotics/mycobot_mujoco.git _vendor/mycobot_mujoco
+RENDER_3D=1 sh scripts/run_mycobot_ros_teacher_poc_mac.sh
+```
+
+Use `REQUIRE_3D_RENDER=1` when the run should fail unless MuJoCo produces real
+RGB frames:
+
+```bash
+MYCOBOT_MUJOCO_ROOT=_vendor/mycobot_mujoco \
+REQUIRE_3D_RENDER=1 sh scripts/run_mycobot_ros_teacher_poc_mac.sh
+```
 
 To override the output path or size:
 
@@ -60,6 +82,12 @@ The script writes:
 - `data/episodes.jsonl`: one episode row with `success` intentionally unset.
 - `images/top/*.ppm` and `images/wrist/*.ppm`: deterministic placeholder images
   so downstream viewers/converters can test image paths without ROS.
+- `render/scene/*.bmp`: optional real myCobot MuJoCo robot-arm render frames
+  generated from `elephantrobotics/mycobot_mujoco` assets.
+- `render/render_report.json` and `render/render_blocker.md`: renderer status
+  and dependency/asset blocker details.
+- `viewer.html`: standalone local UI with playback controls, real MuJoCo render
+  frame slots, and state/action visualizations.
 - `report.json`: POC status and next steps.
 
 ## Boundary
@@ -71,4 +99,6 @@ MoveIt/Gazebo traces. A training-quality dataset still needs:
   Gazebo camera images;
 - Gazebo model-state object pose and gripper/contact success oracle;
 - replacement of placeholder PPM images with decoded ROS image messages;
+- native Gazebo/MuJoCo RGB/depth camera streams if task training needs rendered
+  observations beyond the current real robot-arm render preview;
 - fresh rollout filtering before any `save_episode()`-equivalent claim.
