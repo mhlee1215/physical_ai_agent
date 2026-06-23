@@ -10,17 +10,11 @@ from typing import Any
 
 
 MYCOBOT_MODEL_RELATIVE_PATH = Path("xml/mycobot_280jn_mujoco.xml")
-OFFICIAL_GRIPPER_MESH_RELATIVE_PATH = Path(
-    "mycobot_description/urdf/pro_adaptive_gripper/new_gripper"
-)
+OFFICIAL_GRIPPER_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/parallel_gripper")
 OFFICIAL_GRIPPER_MESH_NAMES = [
     "gripper_base",
-    "gripper_left1",
-    "gripper_left2",
-    "gripper_left3",
-    "gripper_right1",
-    "gripper_right2",
-    "gripper_right3",
+    "gripper_left",
+    "gripper_right",
 ]
 MYCOBOT_MODEL_JOINT_NAMES = [
     "joint2_to_joint1",
@@ -37,19 +31,11 @@ MYCOBOT_TEACHER_JOINT_NAMES = [
 SYNTHETIC_GRIPPER_JOINT_NAMES = ["left_finger_slide", "right_finger_slide"]
 OFFICIAL_GRIPPER_JOINT_NAMES = [
     "gripper_controller",
-    "gripper_base_to_gripper_left2",
-    "gripper_left3_to_gripper_left1",
-    "gripper_base_to_gripper_right3",
-    "gripper_base_to_gripper_right2",
-    "gripper_right3_to_gripper_right1",
+    "gripper_base_to_gripper_left",
 ]
 OFFICIAL_GRIPPER_MIMIC = {
     "gripper_controller": 1.0,
-    "gripper_base_to_gripper_left2": 1.0,
-    "gripper_left3_to_gripper_left1": -1.0,
-    "gripper_base_to_gripper_right3": -1.0,
-    "gripper_base_to_gripper_right2": -1.0,
-    "gripper_right3_to_gripper_right1": 1.0,
+    "gripper_base_to_gripper_left": -1.0,
 }
 TASK_CUBE_BODY = "task_cube_body"
 TASK_CUBE_GEOM = "task_cube"
@@ -370,8 +356,8 @@ class MyCobotNexusEnv:
 
     def _set_gripper(self, *, command: float) -> None:
         if self._uses_official_gripper:
-            open_value = 0.0
-            closed_value = -1.0
+            open_value = -0.007
+            closed_value = 0.0
             base_value = closed_value + (max(-1.0, min(1.0, float(command))) + 1.0) * 0.5 * (
                 open_value - closed_value
             )
@@ -521,7 +507,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "task_objects": [
             "task_cube",
             "nexus_work_mat",
-            "official_pro_adaptive_gripper",
+            "official_parallel_gripper",
             "synthetic_parallel_gripper_fallback",
         ],
         "official_gripper_asset_source": "https://github.com/elephantrobotics/mycobot_ros",
@@ -530,7 +516,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "poc_boundary": (
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
             "Nexus-style cube scene. The preferred gripper path uses official "
-            "mycobot_ros Pro adaptive-gripper visual meshes with transparent "
+            "mycobot_ros 280 JN parallel-gripper visual meshes with transparent "
             "MuJoCo contact proxies; it does not yet claim calibrated force control."
         ),
     }
@@ -633,7 +619,7 @@ def build_mycobot_nexus_scene_model(
     if flange is None:
         raise ValueError(f"missing joint6_flange body in MuJoCo model: {model_path}")
     if official_gripper_obj_dir is not None:
-        flange.append(_official_pro_adaptive_gripper_node())
+        flange.append(_official_parallel_gripper_node())
     else:
         flange.append(_synthetic_parallel_gripper_node())
 
@@ -701,7 +687,7 @@ def _official_gripper_mesh_dir(official_gripper_root: Path | None) -> Path | Non
     ]
     if missing:
         raise FileNotFoundError(
-            "missing official myCobot Pro adaptive gripper meshes under "
+            "missing official myCobot parallel gripper meshes under "
             f"{mesh_dir}: {', '.join(missing)}"
         )
     return mesh_dir
@@ -937,138 +923,60 @@ def _add_official_gripper_assets(asset: ET.Element, mesh_dir: Path) -> None:
         )
 
 
-def _official_pro_adaptive_gripper_node() -> ET.Element:
+def _official_parallel_gripper_node() -> ET.Element:
     base = ET.Element(
         "body",
         {
-            "name": "official_pro_adaptive_gripper",
+            "name": "official_parallel_gripper",
             "pos": "0 0 0.034",
             "euler": "1.579 0 0",
         },
     )
-    _add_mesh_geom(
-        base,
-        "gripper_base",
-        pos="-0.02 0.012 -0.018",
-        euler="1.5708 0 1.5708",
-        rgba="0.86 0.84 0.76 1",
-    )
+    _add_mesh_geom(base, "gripper_base", pos="0 0 0", euler="-1.5708 0 0")
     ET.SubElement(
         base,
         "site",
-        {"name": TCP_SITE, "pos": "-0.018 -0.085 -0.018", "size": "0.006", "rgba": "0 0 0 0"},
+        {"name": TCP_SITE, "pos": "0 0.035 0", "size": "0.006", "rgba": "0 0 0 0"},
     )
 
-    left3 = _hinge_body(
+    left = _slide_body(
         base,
-        name="gripper_left3",
+        name="gripper_left",
         joint="gripper_controller",
-        pos="-0.018 0.015 0",
-        range_="-1.11 0",
+        axis="1 0 0",
+        range_="-0.007 0",
     )
-    _add_mesh_geom(
-        left3,
-        "gripper_left3",
-        pos="0 0 -0.018",
-        euler="1.5708 0 1.5708",
-        rgba="0.03 0.03 0.03 1",
-    )
+    _add_mesh_geom(left, "gripper_left", pos="0 0 0", euler="-1.5708 0 0")
+    _add_proxy_pad(left, "left_finger_pad", pos="-0.018 0.035 0")
 
-    left2 = _hinge_body(
+    right = _slide_body(
         base,
-        name="gripper_left2",
-        joint="gripper_base_to_gripper_left2",
-        pos="-0.047 -0.01 0",
-        range_="-0.8 0.5",
+        name="gripper_right",
+        joint="gripper_base_to_gripper_left",
+        axis="1 0 0",
+        range_="-0.007 0",
     )
-    _add_mesh_geom(
-        left2,
-        "gripper_left2",
-        pos="0.026 0.022 -0.018",
-        euler="1.5708 0 1.5708",
-        rgba="0.03 0.03 0.03 1",
-    )
-
-    left1 = _hinge_body(
-        left3,
-        name="gripper_left1",
-        joint="gripper_left3_to_gripper_left1",
-        pos="-0.05 0.035 -0.015",
-        range_="-0.5 0.5",
-    )
-    _add_mesh_geom(
-        left1,
-        "gripper_left1",
-        pos="0.048 -0.035 -0.003",
-        euler="1.5708 0 1.5708",
-        rgba="0.03 0.03 0.03 1",
-    )
-    _add_proxy_pad(left1, "left_finger_pad", pos="0.068 -0.046 -0.003")
-
-    right3 = _hinge_body(
-        base,
-        name="gripper_right3",
-        joint="gripper_base_to_gripper_right3",
-        pos="0.016 0.014 0",
-        range_="-0.3 0.7",
-    )
-    _add_mesh_geom(
-        right3,
-        "gripper_right3",
-        pos="-0.034 0 -0.018",
-        euler="1.5708 0 1.5708",
-        rgba="0.03 0.03 0.03 1",
-    )
-
-    right2 = _hinge_body(
-        base,
-        name="gripper_right2",
-        joint="gripper_base_to_gripper_right2",
-        pos="0.044 -0.01 0",
-        range_="-0.5 0.8",
-    )
-    _add_mesh_geom(
-        right2,
-        "gripper_right2",
-        pos="-0.062 0.0224 -0.018",
-        euler="1.5708 0 1.5708",
-        rgba="0.03 0.03 0.03 1",
-    )
-
-    right1 = _hinge_body(
-        right3,
-        name="gripper_right1",
-        joint="gripper_right3_to_gripper_right1",
-        pos="0.052 0.035 -0.015",
-        range_="-0.5 0.5",
-    )
-    _add_mesh_geom(
-        right1,
-        "gripper_right1",
-        pos="-0.086 -0.036 -0.003",
-        euler="1.5708 0 1.5708",
-        rgba="0.03 0.03 0.03 1",
-    )
-    _add_proxy_pad(right1, "right_finger_pad", pos="-0.068 -0.046 -0.003")
+    _add_mesh_geom(right, "gripper_right", pos="0 0 0", euler="-1.5708 0 0")
+    _add_proxy_pad(right, "right_finger_pad", pos="0.018 0.035 0")
     return base
 
 
-def _hinge_body(
+def _slide_body(
     parent: ET.Element,
     *,
     name: str,
     joint: str,
-    pos: str,
+    axis: str,
     range_: str,
 ) -> ET.Element:
-    body = ET.SubElement(parent, "body", {"name": name, "pos": pos})
+    body = ET.SubElement(parent, "body", {"name": name, "pos": "0 0 0"})
     ET.SubElement(
         body,
         "joint",
         {
             "name": joint,
-            "type": "hinge",
-            "axis": "0 0 1",
+            "type": "slide",
+            "axis": axis,
             "range": range_,
             "limited": "true",
             "damping": "0.18",
@@ -1077,14 +985,7 @@ def _hinge_body(
     return body
 
 
-def _add_mesh_geom(
-    parent: ET.Element,
-    mesh_name: str,
-    *,
-    pos: str,
-    euler: str = "0 0 0",
-    rgba: str | None = None,
-) -> None:
+def _add_mesh_geom(parent: ET.Element, mesh_name: str, *, pos: str, euler: str = "0 0 0") -> None:
     attrib = {
         "name": f"{mesh_name}_visual",
         "type": "mesh",
@@ -1095,8 +996,6 @@ def _add_mesh_geom(
     }
     if euler != "0 0 0":
         attrib["euler"] = euler
-    if rgba is not None:
-        attrib["rgba"] = rgba
     ET.SubElement(parent, "geom", attrib)
 
 
