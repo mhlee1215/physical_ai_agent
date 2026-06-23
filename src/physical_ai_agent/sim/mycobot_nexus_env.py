@@ -10,15 +10,11 @@ from typing import Any
 
 
 MYCOBOT_MODEL_RELATIVE_PATH = Path("xml/mycobot_280jn_mujoco.xml")
-OFFICIAL_GRIPPER_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/adaptive_gripper")
+OFFICIAL_GRIPPER_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/parallel_gripper")
 OFFICIAL_GRIPPER_MESH_NAMES = [
     "gripper_base",
-    "gripper_left1",
-    "gripper_left2",
-    "gripper_left3",
-    "gripper_right1",
-    "gripper_right2",
-    "gripper_right3",
+    "gripper_left",
+    "gripper_right",
 ]
 MYCOBOT_MODEL_JOINT_NAMES = [
     "joint2_to_joint1",
@@ -35,24 +31,16 @@ MYCOBOT_TEACHER_JOINT_NAMES = [
 SYNTHETIC_GRIPPER_JOINT_NAMES = ["left_finger_slide", "right_finger_slide"]
 OFFICIAL_GRIPPER_JOINT_NAMES = [
     "gripper_controller",
-    "gripper_base_to_gripper_left2",
-    "gripper_left3_to_gripper_left1",
-    "gripper_base_to_gripper_right3",
-    "gripper_base_to_gripper_right2",
-    "gripper_right3_to_gripper_right1",
+    "gripper_base_to_gripper_left",
 ]
 OFFICIAL_GRIPPER_MIMIC = {
     "gripper_controller": 1.0,
-    "gripper_base_to_gripper_left2": 1.0,
-    "gripper_left3_to_gripper_left1": -1.0,
-    "gripper_base_to_gripper_right3": -1.0,
-    "gripper_base_to_gripper_right2": -1.0,
-    "gripper_right3_to_gripper_right1": 1.0,
+    "gripper_base_to_gripper_left": -1.0,
 }
 TASK_CUBE_BODY = "task_cube_body"
 TASK_CUBE_GEOM = "task_cube"
-TASK_CUBE_POS = (-0.22, -0.11, 0.033)
-TASK_CUBE_HALF_SIZE = 0.025
+TASK_CUBE_POS = (-0.25, -0.13, 0.023)
+TASK_CUBE_HALF_SIZE = 0.015
 TCP_SITE = "mycobot_tcp_site"
 
 
@@ -214,14 +202,21 @@ class MyCobotNexusEnv:
         target = cube.copy()
         gripper = 1.0
         if phase < 0.45:
-            target[2] += 0.09
+            target[2] += 0.065
         elif phase < 0.72:
-            target[2] += 0.035
+            target[2] += 0.018
             gripper = -1.0
         else:
             target[2] += 0.18
             gripper = -1.0
-        return [*self._jacobian_qpos_target(target.tolist(), gain=1.9), gripper]
+        return [
+            *self._jacobian_qpos_target(
+                target.tolist(),
+                gain=1.9,
+                forward_target_xyz=cube.tolist(),
+            ),
+            gripper,
+        ]
 
     def render(self) -> Any:
         if self._renderer is None:
@@ -264,22 +259,70 @@ class MyCobotNexusEnv:
             "scene_path": str(self.scene_path),
         }
 
-    def _jacobian_qpos_target(self, target_xyz: list[float], *, gain: float) -> list[float]:
+    def _jacobian_qpos_target(
+        self,
+        target_xyz: list[float],
+        *,
+        gain: float,
+        forward_target_xyz: list[float] | None = None,
+    ) -> list[float]:
         import numpy as np
 
         target = np.asarray(target_xyz, dtype=float)
+        tcp = np.asarray(self._tcp_position(), dtype=float)
+        site_id = self._mujoco.mj_name2id(self.model, self._mujoco.mjtObj.mjOBJ_SITE, TCP_SITE)
+        if site_id < 0:
+            return self._single_step_jacobian_qpos_target(target, gain=gain)
+
+        original_qpos = self.data.qpos.copy()
+        original_qvel = self.data.qvel.copy()
+        try:
+            qpos_values = np.asarray(
+                [float(self.data.qpos[index]) for index in self._qpos_indices],
+                dtype=float,
+            )
+            for _ in range(8):
+                for qpos_index, value in zip(self._qpos_indices, qpos_values, strict=True):
+                    self.data.qpos[qpos_index] = float(value)
+                self._mujoco.mj_forward(self.model, self.data)
+                tcp = np.asarray(self.data.site_xpos[site_id], dtype=float)
+                error = target - tcp
+                jacp = np.zeros((3, self.model.nv), dtype=float)
+                jacr = np.zeros((3, self.model.nv), dtype=float)
+                self._mujoco.mj_jacSite(self.model, self.data, jacp, jacr, site_id)
+                arm_delta = jacp[:, self._dof_indices].T @ error
+                if forward_target_xyz is not None:
+                    orientation_error = self._gripper_forward_error(
+                        site_id=site_id,
+                        forward_target_xyz=forward_target_xyz,
+                    )
+                    if orientation_error is not None:
+                        arm_delta += 0.14 * (
+                            jacr[:, self._dof_indices].T @ orientation_error
+                        )
+                arm_delta = np.clip(gain * arm_delta, -0.075, 0.075)
+                qpos_values = np.asarray(
+                    _clip((qpos_values + arm_delta).tolist(), self._low, self._high),
+                    dtype=float,
+                )
+                if float(np.linalg.norm(error)) < 0.01:
+                    break
+            return qpos_values.tolist()
+        finally:
+            self.data.qpos[:] = original_qpos
+            self.data.qvel[:] = original_qvel
+            self._mujoco.mj_forward(self.model, self.data)
+
+    def _single_step_jacobian_qpos_target(self, target: Any, *, gain: float) -> list[float]:
+        import numpy as np
+
         tcp = np.asarray(self._tcp_position(), dtype=float)
         error = target - tcp
         jacp = np.zeros((3, self.model.nv), dtype=float)
         jacr = np.zeros((3, self.model.nv), dtype=float)
         body_id = self.model.nbody - 1
-        site_id = self._mujoco.mj_name2id(self.model, self._mujoco.mjtObj.mjOBJ_SITE, TCP_SITE)
-        if site_id >= 0:
-            self._mujoco.mj_jacSite(self.model, self.data, jacp, jacr, site_id)
-        else:
-            self._mujoco.mj_jacBody(self.model, self.data, jacp, jacr, body_id)
-        arm_delta = jacp[:, self._dof_indices].T @ error
-        arm_delta = np.clip(gain * arm_delta, -0.18, 0.18)
+        self._mujoco.mj_jacBody(self.model, self.data, jacp, jacr, body_id)
+        arm_delta = np.clip(gain * (jacp[:, self._dof_indices].T @ error), -0.18, 0.18)
         current = [float(self.data.qpos[index]) for index in self._qpos_indices]
         target_qpos = [
             value + float(delta)
@@ -287,10 +330,34 @@ class MyCobotNexusEnv:
         ]
         return _clip(target_qpos, self._low, self._high)
 
+    def _gripper_forward_error(
+        self,
+        *,
+        site_id: int,
+        forward_target_xyz: list[float],
+    ) -> Any | None:
+        import numpy as np
+
+        tcp = np.asarray(self.data.site_xpos[site_id], dtype=float)
+        desired_forward = np.asarray(forward_target_xyz, dtype=float) - tcp
+        desired_forward[2] = 0.0
+        desired_norm = float(np.linalg.norm(desired_forward))
+        if desired_norm <= 1e-6:
+            return None
+        desired_forward /= desired_norm
+        site_xmat = np.asarray(self.data.site_xmat[site_id], dtype=float).reshape(3, 3)
+        current_forward = site_xmat @ np.asarray([0.0, -1.0, 0.0], dtype=float)
+        current_forward[2] = 0.0
+        current_norm = float(np.linalg.norm(current_forward))
+        if current_norm <= 1e-6:
+            return None
+        current_forward /= current_norm
+        return np.cross(current_forward, desired_forward)
+
     def _set_gripper(self, *, command: float) -> None:
         if self._uses_official_gripper:
-            open_value = 0.15
-            closed_value = -0.74
+            open_value = -0.007
+            closed_value = 0.0
             base_value = closed_value + (max(-1.0, min(1.0, float(command))) + 1.0) * 0.5 * (
                 open_value - closed_value
             )
@@ -440,17 +507,17 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "task_objects": [
             "task_cube",
             "nexus_work_mat",
-            "official_adaptive_gripper",
+            "official_parallel_gripper",
             "synthetic_parallel_gripper_fallback",
         ],
-        "official_gripper_asset_source": "https://github.com/elephantrobotics/mycobot_ros2",
+        "official_gripper_asset_source": "https://github.com/elephantrobotics/mycobot_ros",
         "official_gripper_relative_path": str(OFFICIAL_GRIPPER_MESH_RELATIVE_PATH),
         "real_robot_execution": "disabled",
         "poc_boundary": (
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
             "Nexus-style cube scene. The preferred gripper path uses official "
-            "mycobot_ros2 adaptive-gripper visual meshes with transparent "
-            "MuJoCo contact proxies; it does not yet claim contact grasp success."
+            "mycobot_ros 280 JN parallel-gripper visual meshes with transparent "
+            "MuJoCo contact proxies; it does not yet claim calibrated force control."
         ),
     }
 
@@ -552,7 +619,7 @@ def build_mycobot_nexus_scene_model(
     if flange is None:
         raise ValueError(f"missing joint6_flange body in MuJoCo model: {model_path}")
     if official_gripper_obj_dir is not None:
-        flange.append(_official_adaptive_gripper_node())
+        flange.append(_official_parallel_gripper_node())
     else:
         flange.append(_synthetic_parallel_gripper_node())
 
@@ -620,7 +687,7 @@ def _official_gripper_mesh_dir(official_gripper_root: Path | None) -> Path | Non
     ]
     if missing:
         raise FileNotFoundError(
-            "missing official myCobot adaptive gripper meshes under "
+            "missing official myCobot parallel gripper meshes under "
             f"{mesh_dir}: {', '.join(missing)}"
         )
     return mesh_dir
@@ -677,7 +744,7 @@ def _convert_collada_mesh_to_obj(dae_path: Path, obj_path: Path) -> None:
         raise ValueError(f"could not extract triangles from official gripper mesh: {dae_path}")
 
     with obj_path.open("w", encoding="utf-8") as file:
-        file.write(f"# converted from official myCobot ROS2 Collada mesh: {dae_path.name}\n")
+        file.write(f"# converted from official myCobot ROS Collada mesh: {dae_path.name}\n")
         for x, y, z in vertices:
             file.write(f"v {x:.9g} {y:.9g} {z:.9g}\n")
         for a, b, c in faces:
@@ -856,92 +923,60 @@ def _add_official_gripper_assets(asset: ET.Element, mesh_dir: Path) -> None:
         )
 
 
-def _official_adaptive_gripper_node() -> ET.Element:
+def _official_parallel_gripper_node() -> ET.Element:
     base = ET.Element(
         "body",
         {
-            "name": "official_adaptive_gripper",
+            "name": "official_parallel_gripper",
             "pos": "0 0 0.034",
             "euler": "1.579 0 0",
         },
     )
-    _add_mesh_geom(base, "gripper_base", pos="0 0 -0.012")
-    ET.SubElement(base, "site", {"name": TCP_SITE, "pos": "0 -0.095 -0.012", "size": "0.006"})
-
-    left3 = _joint_body(
+    _add_mesh_geom(base, "gripper_base", pos="0 0 0", euler="-1.5708 0 0")
+    ET.SubElement(
         base,
-        name="gripper_left3",
+        "site",
+        {"name": TCP_SITE, "pos": "0 0.035 0", "size": "0.006", "rgba": "0 0 0 0"},
+    )
+
+    left = _slide_body(
+        base,
+        name="gripper_left",
         joint="gripper_controller",
-        pos="-0.012 0.005 0",
-        range_="-0.74 0.15",
+        axis="1 0 0",
+        range_="-0.007 0",
     )
-    _add_mesh_geom(left3, "gripper_left3", pos="0.012 0.0025 -0.012")
-    _add_proxy_pad(left3, "left_finger_pad", pos="0.034 -0.16 -0.012")
+    _add_mesh_geom(left, "gripper_left", pos="0 0 0", euler="-1.5708 0 0")
+    _add_proxy_pad(left, "left_finger_pad", pos="-0.018 0.035 0")
 
-    left2 = _joint_body(
+    right = _slide_body(
         base,
-        name="gripper_left2",
-        joint="gripper_base_to_gripper_left2",
-        pos="-0.005 0.027 0",
-        range_="-0.8 0.5",
+        name="gripper_right",
+        joint="gripper_base_to_gripper_left",
+        axis="1 0 0",
+        range_="-0.007 0",
     )
-    _add_mesh_geom(left2, "gripper_left2", pos="0.005 -0.0195 -0.012")
-
-    left1 = _joint_body(
-        left3,
-        name="gripper_left1",
-        joint="gripper_left3_to_gripper_left1",
-        pos="-0.027 0.016 0",
-        range_="-0.5 0.5",
-    )
-    _add_mesh_geom(left1, "gripper_left1", pos="0.039 -0.0133 -0.012")
-
-    right3 = _joint_body(
-        base,
-        name="gripper_right3",
-        joint="gripper_base_to_gripper_right3",
-        pos="0.012 0.005 0",
-        range_="-0.15 0.7",
-    )
-    _add_mesh_geom(right3, "gripper_right3", pos="-0.012 0.0025 -0.012")
-    _add_proxy_pad(right3, "right_finger_pad", pos="-0.034 -0.16 -0.012")
-
-    right2 = _joint_body(
-        base,
-        name="gripper_right2",
-        joint="gripper_base_to_gripper_right2",
-        pos="0.005 0.027 0",
-        range_="-0.5 0.8",
-    )
-    _add_mesh_geom(right2, "gripper_right2", pos="-0.005 -0.0195 -0.012")
-
-    right1 = _joint_body(
-        right3,
-        name="gripper_right1",
-        joint="gripper_right3_to_gripper_right1",
-        pos="0.027 0.016 0",
-        range_="-0.5 0.5",
-    )
-    _add_mesh_geom(right1, "gripper_right1", pos="-0.039 -0.0133 -0.012")
+    _add_mesh_geom(right, "gripper_right", pos="0 0 0", euler="-1.5708 0 0")
+    _add_proxy_pad(right, "right_finger_pad", pos="0.018 0.035 0")
     return base
 
 
-def _joint_body(
+def _slide_body(
     parent: ET.Element,
     *,
     name: str,
     joint: str,
-    pos: str,
+    axis: str,
     range_: str,
 ) -> ET.Element:
-    body = ET.SubElement(parent, "body", {"name": name, "pos": pos})
+    body = ET.SubElement(parent, "body", {"name": name, "pos": "0 0 0"})
     ET.SubElement(
         body,
         "joint",
         {
             "name": joint,
-            "type": "hinge",
-            "axis": "0 0 1",
+            "type": "slide",
+            "axis": axis,
             "range": range_,
             "limited": "true",
             "damping": "0.18",
@@ -950,19 +985,18 @@ def _joint_body(
     return body
 
 
-def _add_mesh_geom(parent: ET.Element, mesh_name: str, *, pos: str) -> None:
-    ET.SubElement(
-        parent,
-        "geom",
-        {
-            "name": f"{mesh_name}_visual",
-            "type": "mesh",
-            "mesh": f"official_{mesh_name}",
-            "pos": pos,
-            "contype": "0",
-            "conaffinity": "0",
-        },
-    )
+def _add_mesh_geom(parent: ET.Element, mesh_name: str, *, pos: str, euler: str = "0 0 0") -> None:
+    attrib = {
+        "name": f"{mesh_name}_visual",
+        "type": "mesh",
+        "mesh": f"official_{mesh_name}",
+        "pos": pos,
+        "contype": "0",
+        "conaffinity": "0",
+    }
+    if euler != "0 0 0":
+        attrib["euler"] = euler
+    ET.SubElement(parent, "geom", attrib)
 
 
 def _add_proxy_pad(parent: ET.Element, name: str, *, pos: str) -> None:
@@ -999,7 +1033,11 @@ def _synthetic_parallel_gripper_node() -> ET.Element:
             "mass": "0.03",
         },
     )
-    ET.SubElement(base, "site", {"name": TCP_SITE, "pos": "0 0 -0.085", "size": "0.006"})
+    ET.SubElement(
+        base,
+        "site",
+        {"name": TCP_SITE, "pos": "0 0 -0.085", "size": "0.006", "rgba": "0 0 0 0"},
+    )
     left = ET.SubElement(base, "body", {"name": "left_finger", "pos": "0 0.042 -0.05"})
     ET.SubElement(
         left,

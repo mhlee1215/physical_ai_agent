@@ -29,7 +29,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertEqual(contract["joint_order"], MYCOBOT_TEACHER_JOINT_NAMES)
         self.assertIn("cube-approach", contract["policies"])
         self.assertIn("grasp-lift", contract["policies"])
-        self.assertIn("official_adaptive_gripper", contract["task_objects"])
+        self.assertIn("official_parallel_gripper", contract["task_objects"])
         self.assertIn("synthetic_parallel_gripper_fallback", contract["task_objects"])
         self.assertEqual(contract["action_dim"], 7)
         self.assertEqual(contract["real_robot_execution"], "disabled")
@@ -50,7 +50,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
                 "--asset-root",
                 "_vendor/mycobot_mujoco",
                 "--official-gripper-root",
-                "_vendor/mycobot_ros2",
+                "_vendor/mycobot_ros",
                 "--steps",
                 "3",
                 "--seed",
@@ -67,7 +67,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
 
         self.assertEqual(str(args.output_dir), "_workspace/test_mycobot")
         self.assertEqual(str(args.asset_root), "_vendor/mycobot_mujoco")
-        self.assertEqual(str(args.official_gripper_root), "_vendor/mycobot_ros2")
+        self.assertEqual(str(args.official_gripper_root), "_vendor/mycobot_ros")
         self.assertEqual(args.steps, 3)
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.width, 320)
@@ -113,13 +113,13 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertIn("nexus_skybox", names)
         self.assertIn("nexus_key_light", names)
 
-    def test_scene_builder_can_use_official_ros2_adaptive_gripper_meshes(self) -> None:
+    def test_scene_builder_can_use_official_ros1_parallel_gripper_meshes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             model_path = tmp_path / "xml" / "mycobot.xml"
             scene_path = tmp_path / "render" / "scene.xml"
-            gripper_root = tmp_path / "mycobot_ros2"
-            mesh_dir = gripper_root / "mycobot_description" / "urdf" / "adaptive_gripper"
+            gripper_root = tmp_path / "mycobot_ros"
+            mesh_dir = gripper_root / "mycobot_description" / "urdf" / "parallel_gripper"
             mesh_dir.mkdir(parents=True)
             for name in OFFICIAL_GRIPPER_MESH_NAMES:
                 (mesh_dir / f"{name}.dae").write_text(_tiny_collada_triangle(), encoding="utf-8")
@@ -149,11 +149,10 @@ class MyCobotNexusEnvTest(unittest.TestCase):
             scene = ET.parse(scene_path).getroot()
             names = {element.attrib.get("name") for element in scene.iter()}
 
-        self.assertIn("official_adaptive_gripper", names)
+        self.assertIn("official_parallel_gripper", names)
         self.assertIn("official_gripper_base", names)
         self.assertIn("gripper_controller", names)
-        self.assertIn("gripper_base_to_gripper_left2", names)
-        self.assertIn("gripper_base_to_gripper_right2", names)
+        self.assertIn("gripper_base_to_gripper_left", names)
         self.assertIn("left_finger_pad", names)
         self.assertIn("right_finger_pad", names)
 

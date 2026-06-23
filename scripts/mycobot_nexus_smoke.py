@@ -31,11 +31,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--official-gripper-root",
         type=Path,
         default=(
-            Path(os.environ["MYCOBOT_ROS2_ROOT"])
+            Path(os.environ["MYCOBOT_ROS_ROOT"])
+            if "MYCOBOT_ROS_ROOT" in os.environ
+            else Path(os.environ["MYCOBOT_ROS2_ROOT"])
             if "MYCOBOT_ROS2_ROOT" in os.environ
             else None
         ),
-        help="Local clone of https://github.com/elephantrobotics/mycobot_ros2.",
+        help="Local clone of https://github.com/elephantrobotics/mycobot_ros.",
     )
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--seed", type=int, default=0)
