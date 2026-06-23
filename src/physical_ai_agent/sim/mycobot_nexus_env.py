@@ -113,6 +113,7 @@ class MyCobotNexusSmokeResult:
     final_cube_z: float
     cube_lifted: bool
     gripper_cube_contacts: int
+    gripper_cube_contact_pads: int
     grasp_success: bool
     trace_path: str
     frame_path: str
@@ -306,11 +307,11 @@ class MyCobotNexusEnv:
         import numpy as np
 
         if self._uses_official_320_gripper:
-            phase = step / max(1, total_steps - 1)
             pregrasp = [0.0, 0.45, 0.0, 0.0, 0.0, 0.0]
             lift = [0.0, -0.25, 0.0, 0.0, 0.0, 0.0]
-            gripper = 1.0 if step < 2 else -1.0
-            target_qpos = pregrasp if step < 3 else lift
+            close_steps = min(35, max(8, total_steps // 4))
+            gripper = -1.0
+            target_qpos = pregrasp if step < close_steps else lift
             return [*target_qpos, gripper]
 
         phase = step / max(1, total_steps - 1)
@@ -358,7 +359,14 @@ class MyCobotNexusEnv:
         tcp = self._tcp_position()
         cube = self._cube_position()
         contacts = self._gripper_cube_contacts()
+        pad_contacts = self._gripper_cube_contact_pad_count()
         cube_lift = cube[2] - self._cube_initial_pos[2]
+        contact_grasp_success = (
+            self._uses_official_320_gripper
+            and cube_lift > 0.025
+            and pad_contacts >= 2
+        )
+        teacher_grasp_success = cube_lift > 0.025 and self._grasp_attached
         return {
             "step": self._step,
             "joint_names": self._teacher_joint_names,
@@ -367,20 +375,15 @@ class MyCobotNexusEnv:
             "tcp_to_cube_dist": _distance(tcp, cube),
             "gripper_command": float(gripper),
             "gripper_cube_contacts": contacts,
+            "gripper_cube_contact_pads": pad_contacts,
             "grasp_attached": bool(self._grasp_attached),
             "cube_lift": cube_lift,
-            "success": bool(
-                cube_lift > 0.025
-                and (
-                    (self._uses_official_320_gripper and contacts > 0)
-                    or self._grasp_attached
-                )
-            ),
+            "success": bool(contact_grasp_success or teacher_grasp_success),
             "success_label": (
                 "contact_grasp_lift_success"
-                if cube_lift > 0.025 and self._uses_official_320_gripper and contacts > 0
+                if contact_grasp_success
                 else "teacher_grasp_lift_success"
-                if cube_lift > 0.025 and self._grasp_attached
+                if teacher_grasp_success
                 else "not_success"
             ),
             "scene_path": str(self.scene_path),
@@ -548,8 +551,9 @@ class MyCobotNexusEnv:
     def _set_gripper(self, *, command: float) -> None:
         if self._uses_official_320_gripper:
             open_value = 0.035
+            closed_value = -0.012
             close_amount = (1.0 - max(-1.0, min(1.0, float(command)))) * 0.5
-            qpos_value = (1.0 - close_amount) * open_value
+            qpos_value = open_value + close_amount * (closed_value - open_value)
             if self._gripper_actuator_indices:
                 for actuator_index in self._gripper_actuator_indices:
                     self.data.ctrl[actuator_index] = qpos_value
@@ -587,6 +591,9 @@ class MyCobotNexusEnv:
 
     def _gripper_cube_contacts(self) -> int:
         return _gripper_cube_contacts(self._mujoco, self.model, self.data)
+
+    def _gripper_cube_contact_pad_count(self) -> int:
+        return _gripper_cube_contact_pad_count(self._mujoco, self.model, self.data)
 
     def _make_camera(self) -> Any:
         camera = self._mujoco.MjvCamera()
@@ -673,9 +680,15 @@ def run_mycobot_nexus_smoke(
         if records
         else 0
     )
+    max_contact_pads = (
+        max(int(record.info.get("gripper_cube_contact_pads", 0)) for record in records)
+        if records
+        else 0
+    )
     grasp_success = bool(records and any(bool(record.info["success"]) for record in records))
+    status = "failed" if policy == "grasp-lift" and not grasp_success else "passed"
     result = MyCobotNexusSmokeResult(
-        status="passed",
+        status=status,
         policy=policy,
         steps=len(records),
         observation_dim=len(obs),
@@ -694,6 +707,7 @@ def run_mycobot_nexus_smoke(
         final_cube_z=final_cube_z,
         cube_lifted=bool(final_cube_z > initial_cube_z + 0.025),
         gripper_cube_contacts=max_contacts,
+        gripper_cube_contact_pads=max_contact_pads,
         grasp_success=grasp_success,
         trace_path=str(trace_path),
         frame_path=str(frame_path),
@@ -720,6 +734,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             "nexus_work_mat",
             "official_parallel_gripper",
             "official_320_m5_2022_gripper",
+            "official_320_m5_2022_friction_contact_gripper",
             "synthetic_parallel_gripper_fallback",
             "teacher_grasp_attachment_proxy",
         ],
@@ -731,8 +746,10 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
             "Nexus-style cube scene. The preferred gripper path uses official "
             "mycobot_ros 280 JN parallel-gripper visual meshes with transparent "
-            "contact pads. grasp-lift success is a teacher attachment proxy, "
-            "not calibrated physical force closure."
+            "contact pads. The 320 M5 2022 profile uses the official 320 arm "
+            "URDF plus a functional friction-contact gripper at the official "
+            "flange; its grasp-lift success requires both finger pads to contact "
+            "the cube without teacher attachment."
         ),
     }
 
@@ -886,6 +903,17 @@ def _build_official_320_nexus_scene_model(
 
     root = ET.Element("mujoco", {"model": "official_320_m5_2022_gripper_nexus"})
     ET.SubElement(root, "compiler", {"angle": "radian"})
+    ET.SubElement(
+        root,
+        "option",
+        {
+            "timestep": "0.001",
+            "cone": "elliptic",
+            "impratio": "100",
+            "iterations": "120",
+            "ls_iterations": "40",
+        },
+    )
     asset = ET.SubElement(root, "asset")
     ET.SubElement(
         asset,
@@ -968,8 +996,8 @@ def _add_320_position_actuators(root: ET.Element) -> None:
             {
                 "name": f"act_{joint_name}",
                 "joint": joint_name,
-                "kp": "40",
-                "ctrlrange": "0 0.035",
+                "kp": "12000",
+                "ctrlrange": "-0.012 0.035",
                 "ctrllimited": "true",
             },
         )
@@ -1108,10 +1136,6 @@ def _functional_320_gripper_node() -> ET.Element:
         "site",
         {"name": TCP_SITE, "pos": "0 0.09 0", "size": "0.006", "rgba": "0 0 0 0"},
     )
-    _functional_320_contact_box(base, "functional_grasp_bottom", "0.09 0.125 0", "0.08 0.05 0.05")
-    _functional_320_contact_box(base, "functional_grasp_top", "-0.035 0.125 0", "0.006 0.05 0.05")
-    _functional_320_contact_box(base, "functional_grasp_front", "0 0.165 0", "0.04 0.006 0.05")
-    _functional_320_contact_box(base, "functional_grasp_back", "0 0.085 0", "0.04 0.006 0.05")
     left = ET.SubElement(base, "body", {"name": "functional_left_finger", "pos": "0 0.085 0.008"})
     ET.SubElement(
         left,
@@ -1120,9 +1144,10 @@ def _functional_320_gripper_node() -> ET.Element:
             "name": "functional_left_finger_slide",
             "type": "slide",
             "axis": "0 0 1",
-            "range": "0 0.035",
+            "range": "-0.012 0.035",
             "limited": "true",
-            "damping": "0.8",
+            "damping": "5.0",
+            "armature": "0.02",
         },
     )
     _functional_320_finger_geoms(left, "left_finger_pad", z_sign=1.0)
@@ -1138,9 +1163,10 @@ def _functional_320_gripper_node() -> ET.Element:
             "name": "functional_right_finger_slide",
             "type": "slide",
             "axis": "0 0 -1",
-            "range": "0 0.035",
+            "range": "-0.012 0.035",
             "limited": "true",
-            "damping": "0.8",
+            "damping": "5.0",
+            "armature": "0.02",
         },
     )
     _functional_320_finger_geoms(right, "right_finger_pad", z_sign=-1.0)
@@ -1154,8 +1180,8 @@ def _functional_320_finger_geoms(parent: ET.Element, pad_name: str, *, z_sign: f
         {
             "name": f"{pad_name}_visual",
             "type": "box",
-            "pos": f"0 0.03 {0.005 * z_sign}",
-            "size": "0.012 0.032 0.006",
+            "pos": f"0 0.038 {0.005 * z_sign}",
+            "size": "0.018 0.045 0.006",
             "rgba": "0.46 0.45 0.4 1",
             "contype": "0",
             "conaffinity": "0",
@@ -1168,36 +1194,12 @@ def _functional_320_finger_geoms(parent: ET.Element, pad_name: str, *, z_sign: f
             "name": pad_name,
             "type": "box",
             "pos": f"0 0.04 {0.005 * z_sign}",
-            "size": "0.014 0.018 0.009",
-            "rgba": "0.08 0.08 0.08 0",
-            "friction": "20.0 2.0 2.0",
+            "size": "0.02 0.04 0.012",
+            "rgba": "0.08 0.08 0.08 0.18",
+            "friction": "80.0 8.0 8.0",
             "condim": "6",
-            "solref": "0.004 1",
-            "solimp": "0.95 0.99 0.001",
-            "contype": "1",
-            "conaffinity": "1",
-            "mass": "0.02",
-        },
-    )
-
-
-def _functional_320_contact_box(
-    parent: ET.Element,
-    name: str,
-    pos: str,
-    size: str,
-) -> None:
-    ET.SubElement(
-        parent,
-        "geom",
-        {
-            "name": name,
-            "type": "box",
-            "pos": pos,
-            "size": size,
-            "rgba": "0.18 0.18 0.17 0.18",
-            "friction": "20.0 2.0 2.0",
-            "condim": "6",
+            "solref": "0.001 1",
+            "solimp": "0.995 0.999 0.0001",
             "contype": "1",
             "conaffinity": "1",
             "mass": "0.02",
@@ -1696,8 +1698,8 @@ def _dynamic_cube_body_node() -> ET.Element:
             "type": "box",
             "size": f"{TASK_CUBE_HALF_SIZE} {TASK_CUBE_HALF_SIZE} {TASK_CUBE_HALF_SIZE}",
             "material": "task_cube",
-            "mass": "0.004",
-            "friction": "10.0 1.0 1.0",
+            "mass": "0.005",
+            "friction": "60.0 6.0 6.0",
             "condim": "6",
             "contype": "1",
             "conaffinity": "1",
@@ -1794,10 +1796,6 @@ def _gripper_cube_contacts(mujoco: Any, model: Any, data: Any) -> int:
     finger_ids = {
         mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "left_finger_pad"),
         mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "right_finger_pad"),
-        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "functional_grasp_bottom"),
-        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "functional_grasp_top"),
-        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "functional_grasp_front"),
-        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "functional_grasp_back"),
     }
     finger_ids = {geom_id for geom_id in finger_ids if geom_id >= 0}
     if cube_id < 0 or not finger_ids:
@@ -1809,6 +1807,24 @@ def _gripper_cube_contacts(mujoco: Any, model: Any, data: Any) -> int:
         if cube_id in pair and pair.intersection(finger_ids):
             contacts += 1
     return contacts
+
+
+def _gripper_cube_contact_pad_count(mujoco: Any, model: Any, data: Any) -> int:
+    cube_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, TASK_CUBE_GEOM)
+    pad_ids = {
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "left_finger_pad"),
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "right_finger_pad"),
+    }
+    pad_ids = {geom_id for geom_id in pad_ids if geom_id >= 0}
+    if cube_id < 0 or not pad_ids:
+        return 0
+    contacted_pad_ids: set[int] = set()
+    for index in range(int(data.ncon)):
+        contact = data.contact[index]
+        pair = {int(contact.geom1), int(contact.geom2)}
+        if cube_id in pair:
+            contacted_pad_ids.update(pair.intersection(pad_ids))
+    return len(contacted_pad_ids)
 
 
 def _distance(a: list[float], b: list[float]) -> float:
