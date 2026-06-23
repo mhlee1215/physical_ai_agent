@@ -11,10 +11,30 @@ from typing import Any
 
 MYCOBOT_MODEL_RELATIVE_PATH = Path("xml/mycobot_280jn_mujoco.xml")
 OFFICIAL_GRIPPER_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/parallel_gripper")
+OFFICIAL_320_URDF_RELATIVE_PATH = Path(
+    "mycobot_description/urdf/mycobot_320_m5_2022/new_mycobot_pro_320_m5_2022_gripper.urdf"
+)
+OFFICIAL_320_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/mycobot_320_m5_2022")
 OFFICIAL_GRIPPER_MESH_NAMES = [
     "gripper_base",
     "gripper_left",
     "gripper_right",
+]
+OFFICIAL_320_LINK_NAMES = [
+    "base",
+    "link1",
+    "link2",
+    "link3",
+    "link4",
+    "link5",
+    "link6",
+    "gripper_base",
+    "gripper_left1",
+    "gripper_left2",
+    "gripper_left3",
+    "gripper_right1",
+    "gripper_right2",
+    "gripper_right3",
 ]
 MYCOBOT_MODEL_JOINT_NAMES = [
     "joint2_to_joint1",
@@ -23,6 +43,14 @@ MYCOBOT_MODEL_JOINT_NAMES = [
     "joint5_to_joint4",
     "joint6_to_joint5",
     "joint7_to_joint6",
+]
+MYCOBOT_320_MODEL_JOINT_NAMES = [
+    "joint2_to_joint1",
+    "joint3_to_joint2",
+    "joint4_to_joint3",
+    "joint5_to_joint4",
+    "joint6_to_joint5",
+    "joint6output_to_joint6",
 ]
 MYCOBOT_TEACHER_JOINT_NAMES = [
     *MYCOBOT_MODEL_JOINT_NAMES,
@@ -37,6 +65,22 @@ OFFICIAL_GRIPPER_MIMIC = {
     "gripper_controller": 1.0,
     "gripper_base_to_gripper_left": -1.0,
 }
+OFFICIAL_320_GRIPPER_JOINT_NAMES = [
+    "gripper_controller",
+    "gripper_base_to_gripper_left2",
+    "gripper_left3_to_gripper_left1",
+    "gripper_base_to_gripper_right3",
+    "gripper_base_to_gripper_right2",
+    "gripper_right3_to_gripper_right1",
+]
+OFFICIAL_320_GRIPPER_MIMIC = {
+    "gripper_controller": 1.0,
+    "gripper_base_to_gripper_left2": 1.0,
+    "gripper_left3_to_gripper_left1": -1.0,
+    "gripper_base_to_gripper_right3": -1.0,
+    "gripper_base_to_gripper_right2": -1.0,
+    "gripper_right3_to_gripper_right1": 1.0,
+}
 TASK_CUBE_BODY = "task_cube_body"
 TASK_CUBE_GEOM = "task_cube"
 TASK_CUBE_POS = (-0.25, -0.13, 0.023)
@@ -49,6 +93,7 @@ class MyCobotNexusConfig:
     asset_root: Path
     work_dir: Path
     official_gripper_root: Path | None = None
+    model_profile: str = "280-jn"
     width: int = 640
     height: int = 360
     control_alpha: float = 0.35
@@ -113,7 +158,9 @@ class MyCobotNexusEnv:
         self.asset_root = config.asset_root.expanduser()
         self.work_dir = config.work_dir.expanduser()
         self.model_path = self.asset_root / MYCOBOT_MODEL_RELATIVE_PATH
-        if not self.model_path.exists():
+        if config.model_profile == "320-m5-2022-gripper":
+            self.model_path = Path("")
+        elif not self.model_path.exists():
             raise FileNotFoundError(
                 f"missing myCobot MuJoCo model: {self.model_path}. "
                 "Clone https://github.com/elephantrobotics/mycobot_mujoco and pass --asset-root."
@@ -123,14 +170,20 @@ class MyCobotNexusEnv:
             model_path=self.model_path,
             scene_path=self.scene_path,
             official_gripper_root=config.official_gripper_root,
+            model_profile=config.model_profile,
         )
         self.model = mujoco.MjModel.from_xml_path(str(self.scene_path))
         self.data = mujoco.MjData(self.model)
         self._renderer = None
         self._step = 0
         self._grasp_attached = False
-        self._qpos_indices = _joint_qpos_indices(mujoco, self.model)
-        self._dof_indices = _joint_dof_indices(mujoco, self.model)
+        self._arm_joint_names = (
+            MYCOBOT_320_MODEL_JOINT_NAMES
+            if _has_all_joints(mujoco, self.model, MYCOBOT_320_MODEL_JOINT_NAMES)
+            else MYCOBOT_MODEL_JOINT_NAMES
+        )
+        self._qpos_indices = _joint_qpos_indices(mujoco, self.model, self._arm_joint_names)
+        self._dof_indices = _joint_dof_indices(mujoco, self.model, self._arm_joint_names)
         cube_joint_id = mujoco.mj_name2id(
             self.model,
             mujoco.mjtObj.mjOBJ_JOINT,
@@ -145,7 +198,15 @@ class MyCobotNexusEnv:
             self.model,
             OFFICIAL_GRIPPER_JOINT_NAMES,
         )
+        self._uses_official_320_gripper = _has_all_joints(
+            mujoco,
+            self.model,
+            OFFICIAL_320_GRIPPER_JOINT_NAMES,
+        )
         gripper_joint_names = (
+            OFFICIAL_320_GRIPPER_JOINT_NAMES
+            if self._uses_official_320_gripper
+            else
             OFFICIAL_GRIPPER_JOINT_NAMES
             if self._uses_official_gripper
             else SYNTHETIC_GRIPPER_JOINT_NAMES
@@ -156,8 +217,9 @@ class MyCobotNexusEnv:
             gripper_joint_names,
         )
         self._low, self._high = _joint_ranges(self.model, self._qpos_indices)
-        self.action_dim = len(MYCOBOT_TEACHER_JOINT_NAMES)
-        self.observation_dim = len(MYCOBOT_TEACHER_JOINT_NAMES) + 3
+        self._teacher_joint_names = [*self._arm_joint_names, "gripper_controller"]
+        self.action_dim = len(self._teacher_joint_names)
+        self.observation_dim = len(self._teacher_joint_names) + 3
 
     def reset(self, seed: int = 0) -> tuple[list[float], dict[str, Any]]:
         self._mujoco.mj_resetData(self.model, self.data)
@@ -259,7 +321,7 @@ class MyCobotNexusEnv:
         cube_lift = cube[2] - TASK_CUBE_POS[2]
         return {
             "step": self._step,
-            "joint_names": MYCOBOT_TEACHER_JOINT_NAMES,
+            "joint_names": self._teacher_joint_names,
             "cube_position": cube,
             "tcp_position": tcp,
             "tcp_to_cube_dist": _distance(tcp, cube),
@@ -280,7 +342,13 @@ class MyCobotNexusEnv:
         cube = self._cube_position()
         tcp = self._tcp_position()
         if not self._grasp_attached:
-            close_enough = _distance(cube, tcp) < 0.04 or self._gripper_cube_contacts() > 0
+            pad_midpoint = self._finger_pad_midpoint()
+            pad_threshold = 0.14 if self._uses_official_320_gripper else 0.08
+            close_enough = (
+                _distance(cube, tcp) < 0.04
+                or _distance(cube, pad_midpoint) < pad_threshold
+                or self._gripper_cube_contacts() > 0
+            )
             if float(gripper) <= -0.5 and close_enough:
                 self._grasp_attached = True
         if not self._grasp_attached:
@@ -292,18 +360,28 @@ class MyCobotNexusEnv:
         self._mujoco.mj_forward(self.model, self.data)
 
     def _finger_pad_midpoint(self) -> list[float]:
+        if self._uses_official_320_gripper:
+            midpoint = self._geom_midpoint("gripper_left1_visual_0", "gripper_right1_visual_0")
+            if midpoint is not None:
+                return midpoint
+        midpoint = self._geom_midpoint("left_finger_pad", "right_finger_pad")
+        if midpoint is not None:
+            return midpoint
+        return self._tcp_position()
+
+    def _geom_midpoint(self, left_name: str, right_name: str) -> list[float] | None:
         left_id = self._mujoco.mj_name2id(
             self.model,
             self._mujoco.mjtObj.mjOBJ_GEOM,
-            "left_finger_pad",
+            left_name,
         )
         right_id = self._mujoco.mj_name2id(
             self.model,
             self._mujoco.mjtObj.mjOBJ_GEOM,
-            "right_finger_pad",
+            right_name,
         )
         if left_id < 0 or right_id < 0:
-            return self._tcp_position()
+            return None
         midpoint = (self.data.geom_xpos[left_id] + self.data.geom_xpos[right_id]) * 0.5
         return [float(value) for value in midpoint]
 
@@ -403,6 +481,19 @@ class MyCobotNexusEnv:
         return np.cross(current_forward, desired_forward)
 
     def _set_gripper(self, *, command: float) -> None:
+        if self._uses_official_320_gripper:
+            open_value = -0.7
+            closed_value = 0.3
+            base_value = closed_value + (max(-1.0, min(1.0, float(command))) + 1.0) * 0.5 * (
+                open_value - closed_value
+            )
+            for qpos_index, joint_name in zip(
+                self._gripper_qpos_indices,
+                OFFICIAL_320_GRIPPER_JOINT_NAMES,
+                strict=True,
+            ):
+                self.data.qpos[qpos_index] = base_value * OFFICIAL_320_GRIPPER_MIMIC[joint_name]
+            return
         if self._uses_official_gripper:
             open_value = -0.007
             closed_value = 0.0
@@ -454,6 +545,7 @@ def run_mycobot_nexus_smoke(
     height: int,
     policy: str = "sample",
     official_gripper_root: Path | None = None,
+    model_profile: str = "280-jn",
 ) -> MyCobotNexusSmokeResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     trace_path = output_dir / "mycobot_nexus_trace.jsonl"
@@ -464,6 +556,7 @@ def run_mycobot_nexus_smoke(
             asset_root=asset_root,
             work_dir=output_dir,
             official_gripper_root=official_gripper_root,
+            model_profile=model_profile,
             width=width,
             height=height,
         )
@@ -517,7 +610,7 @@ def run_mycobot_nexus_smoke(
         policy=policy,
         steps=len(records),
         observation_dim=len(obs),
-        action_dim=len(MYCOBOT_TEACHER_JOINT_NAMES),
+        action_dim=env.action_dim,
         initial_tcp_to_cube_dist=initial_dist,
         final_tcp_to_cube_dist=final_dist,
         min_tcp_to_cube_dist=min(
@@ -547,6 +640,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "env": "MyCobotNexusEnv",
         "surface": ["reset(seed)", "step(action)", "render()", "close()"],
         "policies": ["sample", "cube-approach", "grasp-lift"],
+        "model_profiles": ["280-jn", "320-m5-2022-gripper"],
         "asset_source": "https://github.com/elephantrobotics/mycobot_mujoco",
         "model_relative_path": str(MYCOBOT_MODEL_RELATIVE_PATH),
         "joint_order": MYCOBOT_TEACHER_JOINT_NAMES,
@@ -556,11 +650,13 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             "task_cube",
             "nexus_work_mat",
             "official_parallel_gripper",
+            "official_320_m5_2022_gripper",
             "synthetic_parallel_gripper_fallback",
             "teacher_grasp_attachment_proxy",
         ],
         "official_gripper_asset_source": "https://github.com/elephantrobotics/mycobot_ros",
         "official_gripper_relative_path": str(OFFICIAL_GRIPPER_MESH_RELATIVE_PATH),
+        "official_320_m5_2022_gripper_urdf": str(OFFICIAL_320_URDF_RELATIVE_PATH),
         "real_robot_execution": "disabled",
         "poc_boundary": (
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
@@ -604,7 +700,16 @@ def build_mycobot_nexus_scene_model(
     model_path: Path,
     scene_path: Path,
     official_gripper_root: Path | None = None,
+    model_profile: str = "280-jn",
 ) -> None:
+    if model_profile == "320-m5-2022-gripper":
+        _build_official_320_nexus_scene_model(
+            scene_path=scene_path,
+            official_gripper_root=official_gripper_root,
+        )
+        return
+    if model_profile != "280-jn":
+        raise ValueError(f"unsupported myCobot model profile: {model_profile}")
     tree = ET.parse(model_path)
     root = tree.getroot()
     official_gripper_dir = _official_gripper_mesh_dir(official_gripper_root)
@@ -675,6 +780,206 @@ def build_mycobot_nexus_scene_model(
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
     tree.write(scene_path, encoding="utf-8", xml_declaration=True)
+
+
+def _build_official_320_nexus_scene_model(
+    *,
+    scene_path: Path,
+    official_gripper_root: Path | None,
+) -> None:
+    if official_gripper_root is None:
+        raise FileNotFoundError(
+            "official myCobot ROS root is required for model_profile=320-m5-2022-gripper"
+        )
+    ros_root = official_gripper_root.expanduser()
+    urdf_path = ros_root / OFFICIAL_320_URDF_RELATIVE_PATH
+    mesh_root = ros_root / OFFICIAL_320_MESH_RELATIVE_PATH
+    if not urdf_path.exists():
+        raise FileNotFoundError(f"missing official 320 M5 2022 gripper URDF: {urdf_path}")
+    missing = [name for name in OFFICIAL_320_LINK_NAMES if not (mesh_root / f"{name}.dae").exists()]
+    if missing:
+        raise FileNotFoundError(
+            "missing official 320 M5 2022 meshes under "
+            f"{mesh_root}: {', '.join(missing)}"
+        )
+
+    obj_dir = scene_path.parent / "official_320_m5_2022_meshes"
+    obj_dir.mkdir(parents=True, exist_ok=True)
+    for name in OFFICIAL_320_LINK_NAMES:
+        _convert_collada_mesh_to_obj(mesh_root / f"{name}.dae", obj_dir / f"{name}.obj")
+
+    urdf = ET.parse(urdf_path).getroot()
+    link_visuals = _urdf_link_visuals(urdf)
+    joints = _urdf_joints(urdf)
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for joint in joints:
+        children_by_parent.setdefault(str(joint["parent"]), []).append(joint)
+
+    root = ET.Element("mujoco", {"model": "official_320_m5_2022_gripper_nexus"})
+    ET.SubElement(root, "compiler", {"angle": "radian"})
+    asset = ET.SubElement(root, "asset")
+    ET.SubElement(
+        asset,
+        "texture",
+        {
+            "name": "nexus_skybox",
+            "type": "skybox",
+            "builtin": "gradient",
+            "rgb1": "0.78 0.82 0.86",
+            "rgb2": "0.96 0.97 0.96",
+            "width": "256",
+            "height": "256",
+        },
+    )
+    _add_material(asset, "nexus_floor", "0.78 0.80 0.77 1", specular="0.12")
+    _add_material(asset, "nexus_mat", "0.37 0.43 0.45 1", specular="0.08")
+    _add_material(asset, "task_cube", "0.92 0.24 0.15 1", specular="0.22")
+    for name in OFFICIAL_320_LINK_NAMES:
+        ET.SubElement(
+            asset,
+            "mesh",
+            {"name": f"official_320_{name}", "file": str((obj_dir / f"{name}.obj").resolve())},
+        )
+
+    visual = ET.SubElement(root, "visual")
+    ET.SubElement(
+        visual,
+        "headlight",
+        {
+            "ambient": "0.36 0.36 0.34",
+            "diffuse": "0.76 0.74 0.68",
+            "specular": "0.12 0.12 0.12",
+        },
+    )
+    ET.SubElement(visual, "map", {"znear": "0.01", "zfar": "10"})
+    ET.SubElement(visual, "global", {"offwidth": "960", "offheight": "720"})
+
+    worldbody = ET.SubElement(root, "worldbody")
+    for node in _nexus_scene_nodes():
+        worldbody.append(node)
+    base = ET.SubElement(worldbody, "body", {"name": "base", "pos": "0 0 0"})
+    _add_urdf_visual_geoms(base, "base", link_visuals)
+    _append_urdf_children(base, "base", children_by_parent, link_visuals)
+    _add_320_gripper_helpers(base)
+
+    scene_path.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(root).write(scene_path, encoding="utf-8", xml_declaration=True)
+
+
+def _urdf_link_visuals(urdf: ET.Element) -> dict[str, list[dict[str, str]]]:
+    visuals: dict[str, list[dict[str, str]]] = {}
+    for link in urdf.findall("link"):
+        link_name = link.attrib["name"]
+        for visual in link.findall("visual"):
+            mesh = visual.find("geometry/mesh")
+            if mesh is None:
+                continue
+            origin = visual.find("origin")
+            visuals.setdefault(link_name, []).append(
+                {
+                    "mesh": Path(mesh.attrib["filename"]).name.removesuffix(".dae"),
+                    "xyz": origin.attrib.get("xyz", "0 0 0") if origin is not None else "0 0 0",
+                    "rpy": origin.attrib.get("rpy", "0 0 0") if origin is not None else "0 0 0",
+                }
+            )
+    return visuals
+
+
+def _urdf_joints(urdf: ET.Element) -> list[dict[str, Any]]:
+    joints: list[dict[str, Any]] = []
+    for joint in urdf.findall("joint"):
+        parent = joint.find("parent")
+        child = joint.find("child")
+        if parent is None or child is None:
+            continue
+        origin = joint.find("origin")
+        axis = joint.find("axis")
+        limit = joint.find("limit")
+        joints.append(
+            {
+                "name": joint.attrib["name"],
+                "type": joint.attrib.get("type", "fixed"),
+                "parent": parent.attrib["link"],
+                "child": child.attrib["link"],
+                "xyz": origin.attrib.get("xyz", "0 0 0") if origin is not None else "0 0 0",
+                "rpy": origin.attrib.get("rpy", "0 0 0") if origin is not None else "0 0 0",
+                "axis": axis.attrib.get("xyz", "0 0 1") if axis is not None else "0 0 1",
+                "lower": limit.attrib.get("lower", "-3.14159") if limit is not None else "-3.14159",
+                "upper": limit.attrib.get("upper", "3.14159") if limit is not None else "3.14159",
+            }
+        )
+    return joints
+
+
+def _append_urdf_children(
+    parent: ET.Element,
+    parent_link: str,
+    children_by_parent: dict[str, list[dict[str, Any]]],
+    link_visuals: dict[str, list[dict[str, str]]],
+) -> None:
+    for joint in children_by_parent.get(parent_link, []):
+        attrib = {
+            "name": str(joint["child"]),
+            "pos": _clean_float_string(str(joint["xyz"])),
+            "euler": _clean_float_string(str(joint["rpy"])),
+        }
+        body = ET.SubElement(parent, "body", attrib)
+        if joint["type"] != "fixed":
+            ET.SubElement(
+                body,
+                "joint",
+                {
+                    "name": str(joint["name"]),
+                    "type": "hinge",
+                    "axis": _clean_float_string(str(joint["axis"])),
+                    "range": f"{float(joint['lower'])} {float(joint['upper'])}",
+                    "limited": "true",
+                    "damping": "0.35",
+                },
+            )
+        _add_urdf_visual_geoms(body, str(joint["child"]), link_visuals)
+        _append_urdf_children(body, str(joint["child"]), children_by_parent, link_visuals)
+
+
+def _add_urdf_visual_geoms(
+    body: ET.Element,
+    link_name: str,
+    link_visuals: dict[str, list[dict[str, str]]],
+) -> None:
+    for index, visual in enumerate(link_visuals.get(link_name, [])):
+        ET.SubElement(
+            body,
+            "geom",
+            {
+                "name": f"{link_name}_visual_{index}",
+                "type": "mesh",
+                "mesh": f"official_320_{visual['mesh']}",
+                "pos": _clean_float_string(visual["xyz"]),
+                "euler": _clean_float_string(visual["rpy"]),
+                "contype": "0",
+                "conaffinity": "0",
+            },
+        )
+
+
+def _add_320_gripper_helpers(root_body: ET.Element) -> None:
+    gripper_base = root_body.find(".//body[@name='gripper_base']")
+    if gripper_base is not None:
+        ET.SubElement(
+            gripper_base,
+            "site",
+            {"name": TCP_SITE, "pos": "0 0.055 -0.018", "size": "0.006", "rgba": "0 0 0 0"},
+        )
+    left = root_body.find(".//body[@name='gripper_left1']")
+    if left is not None:
+        _add_proxy_pad(left, "left_finger_pad", pos="0.036 -0.052 0")
+    right = root_body.find(".//body[@name='gripper_right1']")
+    if right is not None:
+        _add_proxy_pad(right, "right_finger_pad", pos="-0.072 -0.05 0")
+
+
+def _clean_float_string(raw: str) -> str:
+    return " ".join(str(float(value)) for value in raw.split())
 
 
 def _nexus_scene_nodes() -> list[ET.Element]:
@@ -1173,9 +1478,9 @@ def _dynamic_cube_body_node() -> ET.Element:
     return cube
 
 
-def _joint_qpos_indices(mujoco: Any, model: Any) -> list[int]:
+def _joint_qpos_indices(mujoco: Any, model: Any, joint_names: list[str]) -> list[int]:
     indices: list[int] = []
-    for name in MYCOBOT_MODEL_JOINT_NAMES:
+    for name in joint_names:
         joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         if joint_id < 0:
             raise ValueError(f"joint not found in MuJoCo model: {name}")
@@ -1183,9 +1488,9 @@ def _joint_qpos_indices(mujoco: Any, model: Any) -> list[int]:
     return indices
 
 
-def _joint_dof_indices(mujoco: Any, model: Any) -> list[int]:
+def _joint_dof_indices(mujoco: Any, model: Any, joint_names: list[str]) -> list[int]:
     indices: list[int] = []
-    for name in MYCOBOT_MODEL_JOINT_NAMES:
+    for name in joint_names:
         joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         if joint_id < 0:
             raise ValueError(f"joint not found in MuJoCo model: {name}")

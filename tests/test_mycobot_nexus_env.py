@@ -29,7 +29,9 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertEqual(contract["joint_order"], MYCOBOT_TEACHER_JOINT_NAMES)
         self.assertIn("cube-approach", contract["policies"])
         self.assertIn("grasp-lift", contract["policies"])
+        self.assertIn("320-m5-2022-gripper", contract["model_profiles"])
         self.assertIn("official_parallel_gripper", contract["task_objects"])
+        self.assertIn("official_320_m5_2022_gripper", contract["task_objects"])
         self.assertIn("synthetic_parallel_gripper_fallback", contract["task_objects"])
         self.assertIn("teacher_grasp_attachment_proxy", contract["task_objects"])
         self.assertEqual(contract["action_dim"], 7)
@@ -62,6 +64,8 @@ class MyCobotNexusEnvTest(unittest.TestCase):
                 "180",
                 "--policy",
                 "grasp-lift",
+                "--model-profile",
+                "320-m5-2022-gripper",
                 "--dry-contract",
             ]
         )
@@ -74,6 +78,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertEqual(args.width, 320)
         self.assertEqual(args.height, 180)
         self.assertEqual(args.policy, "grasp-lift")
+        self.assertEqual(args.model_profile, "320-m5-2022-gripper")
         self.assertTrue(args.dry_contract)
 
     def test_scene_builder_injects_nexus_cube_world(self) -> None:

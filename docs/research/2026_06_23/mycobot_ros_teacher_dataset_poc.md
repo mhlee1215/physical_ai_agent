@@ -108,25 +108,44 @@ Representative verified frames:
 ![myCobot official-gripper teacher grasp side close-up](./mycobot_nexus_official_gripper_side_close.png)
 ![myCobot official-gripper teacher grasp wrist close-up](./mycobot_nexus_official_gripper_wrist_close.png)
 
-### 320 M5 2022 Gripper Reference Boundary
+### Official 320 M5 2022 Gripper Path
 
-The preferred official gripper reference for the next visual/simulation pass is
+The official 320 M5 2022 gripper source is
 `mycobot_320_m5_2022/new_mycobot_pro_320_m5_2022_gripper.urdf`, because the
 upstream ROS1 README explicitly documents it as `mycobot 320 m5 2022 gripper`
-and ships a matching RViz screenshot. That URDF includes the 320 M5 2022 arm
-links, the flange-to-gripper joint, and the gripper mimic-joint tree.
+and ships a matching RViz screenshot. That URDF includes the full 320 M5 2022
+arm links, the flange-to-gripper joint, and the gripper mimic-joint tree.
 
 Official RViz reference copied from the upstream repo:
 
 ![Official 320 M5 2022 gripper reference](./mycobot_320_m5_2022_official_gripper_reference.png)
 
-Do not hand-graft this gripper onto the current 280 JN MuJoCo model and call it
-official. A quick local check showed that the 320 gripper mesh can be loaded,
-but the 320 flange frame does not match the 280 MuJoCo wrist frame, producing a
-visually invalid hybrid. The correct implementation path is to import or
-convert the full official 320 M5 2022 gripper URDF tree, then verify the
-rendered result against the upstream RViz reference before using it as PR
-evidence.
+The implemented path does not graft the 320 gripper onto the 280 MuJoCo arm.
+Instead, `--model-profile 320-m5-2022-gripper` imports the official 320 URDF
+tree and converts its official Collada meshes to OBJ for MuJoCo on macOS:
+
+```bash
+PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py \
+  --model-profile 320-m5-2022-gripper \
+  --official-gripper-root _vendor/mycobot_ros \
+  --asset-root _vendor/mycobot_mujoco \
+  --output-dir _workspace/mycobot_nexus_320_gripper_grasp_lift \
+  --steps 90 \
+  --policy grasp-lift
+```
+
+The verified 320 M5 2022 official-gripper smoke reached
+`grasp_success=true`, `cube_lifted=true`, `final_cube_z=0.104`,
+`min_tcp_to_cube_dist=0.0099`, and `gripper_cube_contacts=3` in 67 steps. As
+above, the lift is still a teacher attachment proxy after gripper close/contact,
+not calibrated force-closure physics.
+
+Representative 320 M5 2022 official-gripper frames:
+
+![myCobot 320 M5 2022 official-gripper wide frame](./mycobot_nexus_320_m5_2022_gripper_frame.png)
+![myCobot 320 M5 2022 official-gripper front close-up](./mycobot_nexus_320_m5_2022_gripper_front_close.png)
+![myCobot 320 M5 2022 official-gripper side close-up](./mycobot_nexus_320_m5_2022_gripper_side_close.png)
+![myCobot 320 M5 2022 official-gripper wrist close-up](./mycobot_nexus_320_m5_2022_gripper_wrist_close.png)
 
 ### Pro 450 Reference Boundary
 

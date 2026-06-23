@@ -39,6 +39,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         help="Local clone of https://github.com/elephantrobotics/mycobot_ros.",
     )
+    parser.add_argument(
+        "--model-profile",
+        choices=["280-jn", "320-m5-2022-gripper"],
+        default="280-jn",
+        help=(
+            "Robot/gripper source profile. 320-m5-2022-gripper imports the official "
+            "mycobot_ros 320 M5 2022 gripper URDF tree."
+        ),
+    )
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--width", type=int, default=640)
@@ -67,6 +76,7 @@ def main() -> None:
         height=args.height,
         policy=args.policy,
         official_gripper_root=args.official_gripper_root,
+        model_profile=args.model_profile,
     )
     print(json.dumps(asdict(result), indent=2, sort_keys=True))
 
