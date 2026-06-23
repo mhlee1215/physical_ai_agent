@@ -8,7 +8,7 @@ LeRobotDataset.
 
 - Official ROS1 repo: `https://github.com/elephantrobotics/mycobot_ros`
 - Official ROS gripper source:
-  `mycobot_description/urdf/mycobot_280_jn/mycobot_280_jn_parallel_gripper.urdf`
+  `mycobot_description/urdf/pro_adaptive_gripper/new_gripper/mycobot_pro_adaptive_gripper_new.urdf`
 - Official ROS1 MoveIt doc: `https://docs.elephantrobotics.com/docs/gitbook-en/12-ApplicationBaseROS/12.1-ROS1/12.1.5-Moveit/myCobot-280.html`
 - Candidate ROS1 launch: `roslaunch mycobot_280_gripper_moveit demo_gazebo.launch gazebo_gui:=false`
 - Smaller unofficial table-world candidate: `roslaunch mycobot_move_it_config demo_gazebo.launch gazebo_gui:=false`
@@ -66,7 +66,7 @@ The verified Mac-local cube-approach smoke reduced TCP-to-cube distance from
 `0.518` to `0.237` over 16 steps with `approach_improved=true`.
 
 To move from pure approach to contact-oriented simulation with the official
-parallel gripper visual geometry, clone the official ROS description repo and
+Pro adaptive gripper visual geometry, clone the official ROS description repo and
 run the gripper/cube lift smoke:
 
 ```bash
@@ -75,22 +75,21 @@ git clone https://github.com/elephantrobotics/mycobot_ros.git _vendor/mycobot_ro
 PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py \
   --asset-root _vendor/mycobot_mujoco \
   --official-gripper-root _vendor/mycobot_ros \
-  --output-dir _workspace/mycobot_nexus_parallel_gripper_grasp_lift \
+  --output-dir _workspace/mycobot_nexus_pro_adaptive_gripper_grasp_lift \
   --policy grasp-lift
 ```
 
-This follows the official `mycobot_ros` 280 JN parallel-gripper assembly
-documented in `mycobot_description/urdf/mycobot_280_jn/
-mycobot_280_jn_parallel_gripper.urdf` and converts the official
-`mycobot_description/urdf/parallel_gripper/*.dae` meshes to OBJ files under the
-smoke output directory so MuJoCo can load them on macOS. The rendered gripper
-visual geometry comes from the official parallel-gripper meshes; contact still
-uses small transparent proxy pads attached to the official mimic-joint gripper
-bodies. The task cube is smaller and closer to the reachable pre-grasp zone.
-The verified Mac-local official-gripper smoke reached
-`min_tcp_to_cube_dist=0.017`, `gripper_cube_contacts=6`, and
-`forward_to_cube_cos=0.977` in the inspected close-up frame; it still does not
-claim calibrated force-closure lift success (`grasp_success=false`).
+This follows the official `mycobot_ros` Pro adaptive-gripper assembly documented
+in `mycobot_description/urdf/pro_adaptive_gripper/new_gripper/
+mycobot_pro_adaptive_gripper_new.urdf` and converts the official
+`mycobot_description/urdf/pro_adaptive_gripper/new_gripper/*.dae` meshes to OBJ
+files under the smoke output directory so MuJoCo can load them on macOS. The
+rendered gripper visual geometry now matches the black two-finger Pro adaptive
+gripper shown in Elephant Robotics product photography more closely than the
+older 280 parallel-gripper asset. Contact still uses transparent proxy pads and
+needs recalibration for the Pro gripper; the verified Mac-local smoke reached
+`min_tcp_to_cube_dist=0.056`, `gripper_cube_contacts=0`, and
+`grasp_success=false`.
 
 ```bash
 python3 scripts/mycobot_nexus_smoke.py \
@@ -145,7 +144,7 @@ The script writes:
   `MyCobotNexusEnv` reset/step trace.
 - `_workspace/mycobot_nexus_smoke/mycobot_nexus_report.json`: optional actual
   simulation smoke report with observation/action dimensions and scene path.
-- `_workspace/mycobot_nexus_parallel_gripper_grasp_lift/mycobot_nexus_report.json`:
+- `_workspace/mycobot_nexus_pro_adaptive_gripper_grasp_lift/mycobot_nexus_report.json`:
   optional official-gripper visual grasp/lift smoke report with contact and
   cube-lift fields.
 - `viewer.html`: standalone local UI with playback controls, real MuJoCo render
