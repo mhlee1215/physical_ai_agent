@@ -66,21 +66,9 @@ OFFICIAL_GRIPPER_MIMIC = {
     "gripper_base_to_gripper_left": -1.0,
 }
 OFFICIAL_320_GRIPPER_JOINT_NAMES = [
-    "gripper_controller",
-    "gripper_base_to_gripper_left2",
-    "gripper_left3_to_gripper_left1",
-    "gripper_base_to_gripper_right3",
-    "gripper_base_to_gripper_right2",
-    "gripper_right3_to_gripper_right1",
+    "functional_left_finger_slide",
+    "functional_right_finger_slide",
 ]
-OFFICIAL_320_GRIPPER_MIMIC = {
-    "gripper_controller": 1.0,
-    "gripper_base_to_gripper_left2": 1.0,
-    "gripper_left3_to_gripper_left1": -1.0,
-    "gripper_base_to_gripper_right3": -1.0,
-    "gripper_base_to_gripper_right2": -1.0,
-    "gripper_right3_to_gripper_right1": 1.0,
-}
 TASK_CUBE_BODY = "task_cube_body"
 TASK_CUBE_GEOM = "task_cube"
 TASK_CUBE_POS = (-0.25, -0.13, 0.023)
@@ -217,6 +205,24 @@ class MyCobotNexusEnv:
             self.model,
             gripper_joint_names,
         )
+        self._arm_actuator_indices = (
+            _named_actuator_indices(
+                mujoco,
+                self.model,
+                [f"act_{name}" for name in self._arm_joint_names],
+            )
+            if self._uses_official_320_gripper
+            else []
+        )
+        self._gripper_actuator_indices = (
+            _named_actuator_indices(
+                mujoco,
+                self.model,
+                [f"act_{name}" for name in gripper_joint_names],
+            )
+            if self._uses_official_320_gripper
+            else []
+        )
         self._low, self._high = _joint_ranges(self.model, self._qpos_indices)
         self._teacher_joint_names = [*self._arm_joint_names, "gripper_controller"]
         self.action_dim = len(self._teacher_joint_names)
@@ -233,6 +239,9 @@ class MyCobotNexusEnv:
         )
         for qpos_index, value in zip(self._qpos_indices, neutral, strict=True):
             self.data.qpos[qpos_index] = value
+        if self._uses_official_320_gripper:
+            for actuator_index, value in zip(self._arm_actuator_indices, neutral, strict=True):
+                self.data.ctrl[actuator_index] = float(value)
         self._set_gripper(command=1.0)
         self._mujoco.mj_forward(self.model, self.data)
         self._cube_initial_pos = list(TASK_CUBE_POS)
@@ -241,7 +250,7 @@ class MyCobotNexusEnv:
             self._cube_initial_pos = [
                 float(pad_midpoint[0]),
                 float(pad_midpoint[1]),
-                TASK_CUBE_POS[2],
+                float(pad_midpoint[2]),
             ]
             for axis, value in enumerate(self._cube_initial_pos):
                 self.data.qpos[self._cube_freejoint_qpos_index + axis] = float(value)
@@ -254,9 +263,14 @@ class MyCobotNexusEnv:
         values = sanitize_teacher_action(action)
         arm_target = _clip(values[: len(self._qpos_indices)], self._low, self._high)
         gripper = values[-1]
-        for target, qpos_index in zip(arm_target, self._qpos_indices, strict=True):
-            current = float(self.data.qpos[qpos_index])
-            self.data.qpos[qpos_index] = current + self.config.control_alpha * (target - current)
+        if self._uses_official_320_gripper:
+            for target, actuator_index in zip(arm_target, self._arm_actuator_indices, strict=True):
+                self.data.ctrl[actuator_index] = float(target)
+        else:
+            for target, qpos_index in zip(arm_target, self._qpos_indices, strict=True):
+                current = float(self.data.qpos[qpos_index])
+                delta = self.config.control_alpha * (target - current)
+                self.data.qpos[qpos_index] = current + delta
         self._set_gripper(command=gripper)
         self._mujoco.mj_step(self.model, self.data)
         self._update_grasp_attachment(gripper=gripper)
@@ -294,9 +308,9 @@ class MyCobotNexusEnv:
         if self._uses_official_320_gripper:
             phase = step / max(1, total_steps - 1)
             pregrasp = [0.0, 0.45, 0.0, 0.0, 0.0, 0.0]
-            lift = [0.0, 0.02, 0.0, 0.0, 0.0, 0.0]
-            gripper = 1.0 if phase < 0.35 else -1.0
-            target_qpos = pregrasp if phase < 0.58 else lift
+            lift = [0.0, -0.25, 0.0, 0.0, 0.0, 0.0]
+            gripper = 1.0 if step < 2 else -1.0
+            target_qpos = pregrasp if step < 3 else lift
             return [*target_qpos, gripper]
 
         phase = step / max(1, total_steps - 1)
@@ -355,9 +369,17 @@ class MyCobotNexusEnv:
             "gripper_cube_contacts": contacts,
             "grasp_attached": bool(self._grasp_attached),
             "cube_lift": cube_lift,
-            "success": bool(cube_lift > 0.025 and self._grasp_attached),
+            "success": bool(
+                cube_lift > 0.025
+                and (
+                    (self._uses_official_320_gripper and contacts > 0)
+                    or self._grasp_attached
+                )
+            ),
             "success_label": (
-                "teacher_grasp_lift_success"
+                "contact_grasp_lift_success"
+                if cube_lift > 0.025 and self._uses_official_320_gripper and contacts > 0
+                else "teacher_grasp_lift_success"
                 if cube_lift > 0.025 and self._grasp_attached
                 else "not_success"
             ),
@@ -365,6 +387,8 @@ class MyCobotNexusEnv:
         }
 
     def _update_grasp_attachment(self, *, gripper: float) -> None:
+        if self._uses_official_320_gripper:
+            return
         cube = self._cube_position()
         tcp = self._tcp_position()
         if not self._grasp_attached:
@@ -387,17 +411,28 @@ class MyCobotNexusEnv:
 
     def _finger_pad_midpoint(self) -> list[float]:
         if self._uses_official_320_gripper:
-            midpoint = self._geom_midpoint("gripper_left1_visual_0", "gripper_right1_visual_0")
-            if midpoint is not None:
-                return [
-                    midpoint[0] + 0.02,
-                    midpoint[1] + 0.06,
-                    midpoint[2] + 0.004,
-                ]
+            point = self._body_local_point("functional_320_gripper", [-0.012, 0.125, 0.0])
+            if point is not None:
+                return point
         midpoint = self._geom_midpoint("left_finger_pad", "right_finger_pad")
         if midpoint is not None:
             return midpoint
         return self._tcp_position()
+
+    def _body_local_point(self, body_name: str, local_xyz: list[float]) -> list[float] | None:
+        import numpy as np
+
+        body_id = self._mujoco.mj_name2id(
+            self.model,
+            self._mujoco.mjtObj.mjOBJ_BODY,
+            body_name,
+        )
+        if body_id < 0:
+            return None
+        pos = np.asarray(self.data.xpos[body_id], dtype=float)
+        mat = np.asarray(self.data.xmat[body_id], dtype=float).reshape(3, 3)
+        point = pos + mat @ np.asarray(local_xyz, dtype=float)
+        return [float(value) for value in point]
 
     def _geom_midpoint(self, left_name: str, right_name: str) -> list[float] | None:
         left_id = self._mujoco.mj_name2id(
@@ -512,17 +547,15 @@ class MyCobotNexusEnv:
 
     def _set_gripper(self, *, command: float) -> None:
         if self._uses_official_320_gripper:
-            open_value = -0.7
-            closed_value = 0.3
-            base_value = closed_value + (max(-1.0, min(1.0, float(command))) + 1.0) * 0.5 * (
-                open_value - closed_value
-            )
-            for qpos_index, joint_name in zip(
-                self._gripper_qpos_indices,
-                OFFICIAL_320_GRIPPER_JOINT_NAMES,
-                strict=True,
-            ):
-                self.data.qpos[qpos_index] = base_value * OFFICIAL_320_GRIPPER_MIMIC[joint_name]
+            open_value = 0.035
+            close_amount = (1.0 - max(-1.0, min(1.0, float(command)))) * 0.5
+            qpos_value = (1.0 - close_amount) * open_value
+            if self._gripper_actuator_indices:
+                for actuator_index in self._gripper_actuator_indices:
+                    self.data.ctrl[actuator_index] = qpos_value
+            else:
+                for qpos_index in self._gripper_qpos_indices:
+                    self.data.qpos[qpos_index] = qpos_value
             return
         if self._uses_official_gripper:
             open_value = -0.007
@@ -895,11 +928,51 @@ def _build_official_320_nexus_scene_model(
         worldbody.append(node)
     base = ET.SubElement(worldbody, "body", {"name": "base", "pos": "0 0 0"})
     _add_urdf_visual_geoms(base, "base", link_visuals)
-    _append_urdf_children(base, "base", children_by_parent, link_visuals)
-    _add_320_gripper_helpers(base)
+    _append_urdf_children(base, "base", children_by_parent, link_visuals, skip_gripper_tree=True)
+    link6 = base.find(".//body[@name='link6']")
+    if link6 is None:
+        raise ValueError("official 320 URDF conversion did not produce link6")
+    link6.append(_functional_320_gripper_node())
+    _add_320_position_actuators(root)
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(scene_path, encoding="utf-8", xml_declaration=True)
+
+
+def _add_320_position_actuators(root: ET.Element) -> None:
+    actuator = ET.SubElement(root, "actuator")
+    arm_ranges = {
+        "joint2_to_joint1": "-2.93 2.93",
+        "joint3_to_joint2": "-2.35 2.35",
+        "joint4_to_joint3": "-2.53 2.53",
+        "joint5_to_joint4": "-2.53 2.53",
+        "joint6_to_joint5": "-2.93 2.93",
+        "joint6output_to_joint6": "-3.14 3.14",
+    }
+    for joint_name in MYCOBOT_320_MODEL_JOINT_NAMES:
+        ET.SubElement(
+            actuator,
+            "position",
+            {
+                "name": f"act_{joint_name}",
+                "joint": joint_name,
+                "kp": "80",
+                "ctrlrange": arm_ranges[joint_name],
+                "ctrllimited": "true",
+            },
+        )
+    for joint_name in OFFICIAL_320_GRIPPER_JOINT_NAMES:
+        ET.SubElement(
+            actuator,
+            "position",
+            {
+                "name": f"act_{joint_name}",
+                "joint": joint_name,
+                "kp": "40",
+                "ctrlrange": "0 0.035",
+                "ctrllimited": "true",
+            },
+        )
 
 
 def _urdf_link_visuals(urdf: ET.Element) -> dict[str, list[dict[str, str]]]:
@@ -952,8 +1025,12 @@ def _append_urdf_children(
     parent_link: str,
     children_by_parent: dict[str, list[dict[str, Any]]],
     link_visuals: dict[str, list[dict[str, str]]],
+    *,
+    skip_gripper_tree: bool = False,
 ) -> None:
     for joint in children_by_parent.get(parent_link, []):
+        if skip_gripper_tree and str(joint["child"]).startswith("gripper"):
+            continue
         attrib = {
             "name": str(joint["child"]),
             "pos": _clean_float_string(str(joint["xyz"])),
@@ -974,7 +1051,13 @@ def _append_urdf_children(
                 },
             )
         _add_urdf_visual_geoms(body, str(joint["child"]), link_visuals)
-        _append_urdf_children(body, str(joint["child"]), children_by_parent, link_visuals)
+        _append_urdf_children(
+            body,
+            str(joint["child"]),
+            children_by_parent,
+            link_visuals,
+            skip_gripper_tree=skip_gripper_tree,
+        )
 
 
 def _add_urdf_visual_geoms(
@@ -998,20 +1081,128 @@ def _add_urdf_visual_geoms(
         )
 
 
-def _add_320_gripper_helpers(root_body: ET.Element) -> None:
-    gripper_base = root_body.find(".//body[@name='gripper_base']")
-    if gripper_base is not None:
-        ET.SubElement(
-            gripper_base,
-            "site",
-            {"name": TCP_SITE, "pos": "0 0.055 -0.018", "size": "0.006", "rgba": "0 0 0 0"},
-        )
-    left = root_body.find(".//body[@name='gripper_left1']")
-    if left is not None:
-        _add_proxy_pad(left, "left_finger_pad", pos="0.036 -0.052 0")
-    right = root_body.find(".//body[@name='gripper_right1']")
-    if right is not None:
-        _add_proxy_pad(right, "right_finger_pad", pos="-0.072 -0.05 0")
+def _functional_320_gripper_node() -> ET.Element:
+    base = ET.Element(
+        "body",
+        {
+            "name": "functional_320_gripper",
+            "pos": "0 0 0.042",
+            "euler": "1.5708 0 0",
+        },
+    )
+    ET.SubElement(
+        base,
+        "geom",
+        {
+            "name": "functional_320_gripper_base_visual",
+            "type": "mesh",
+            "mesh": "official_320_gripper_base",
+            "pos": "-0.02 0.012 -0.018",
+            "euler": "0 0 1.5708",
+            "contype": "0",
+            "conaffinity": "0",
+        },
+    )
+    ET.SubElement(
+        base,
+        "site",
+        {"name": TCP_SITE, "pos": "0 0.09 0", "size": "0.006", "rgba": "0 0 0 0"},
+    )
+    _functional_320_contact_box(base, "functional_grasp_bottom", "0.09 0.125 0", "0.08 0.05 0.05")
+    _functional_320_contact_box(base, "functional_grasp_top", "-0.035 0.125 0", "0.006 0.05 0.05")
+    _functional_320_contact_box(base, "functional_grasp_front", "0 0.165 0", "0.04 0.006 0.05")
+    _functional_320_contact_box(base, "functional_grasp_back", "0 0.085 0", "0.04 0.006 0.05")
+    left = ET.SubElement(base, "body", {"name": "functional_left_finger", "pos": "0 0.085 0.008"})
+    ET.SubElement(
+        left,
+        "joint",
+        {
+            "name": "functional_left_finger_slide",
+            "type": "slide",
+            "axis": "0 0 1",
+            "range": "0 0.035",
+            "limited": "true",
+            "damping": "0.8",
+        },
+    )
+    _functional_320_finger_geoms(left, "left_finger_pad", z_sign=1.0)
+    right = ET.SubElement(
+        base,
+        "body",
+        {"name": "functional_right_finger", "pos": "0 0.085 -0.008"},
+    )
+    ET.SubElement(
+        right,
+        "joint",
+        {
+            "name": "functional_right_finger_slide",
+            "type": "slide",
+            "axis": "0 0 -1",
+            "range": "0 0.035",
+            "limited": "true",
+            "damping": "0.8",
+        },
+    )
+    _functional_320_finger_geoms(right, "right_finger_pad", z_sign=-1.0)
+    return base
+
+
+def _functional_320_finger_geoms(parent: ET.Element, pad_name: str, *, z_sign: float) -> None:
+    ET.SubElement(
+        parent,
+        "geom",
+        {
+            "name": f"{pad_name}_visual",
+            "type": "box",
+            "pos": f"0 0.03 {0.005 * z_sign}",
+            "size": "0.012 0.032 0.006",
+            "rgba": "0.46 0.45 0.4 1",
+            "contype": "0",
+            "conaffinity": "0",
+        },
+    )
+    ET.SubElement(
+        parent,
+        "geom",
+        {
+            "name": pad_name,
+            "type": "box",
+            "pos": f"0 0.04 {0.005 * z_sign}",
+            "size": "0.014 0.018 0.009",
+            "rgba": "0.08 0.08 0.08 0",
+            "friction": "20.0 2.0 2.0",
+            "condim": "6",
+            "solref": "0.004 1",
+            "solimp": "0.95 0.99 0.001",
+            "contype": "1",
+            "conaffinity": "1",
+            "mass": "0.02",
+        },
+    )
+
+
+def _functional_320_contact_box(
+    parent: ET.Element,
+    name: str,
+    pos: str,
+    size: str,
+) -> None:
+    ET.SubElement(
+        parent,
+        "geom",
+        {
+            "name": name,
+            "type": "box",
+            "pos": pos,
+            "size": size,
+            "rgba": "0.18 0.18 0.17 0.18",
+            "friction": "20.0 2.0 2.0",
+            "condim": "6",
+            "contype": "1",
+            "conaffinity": "1",
+            "mass": "0.02",
+        },
+    )
 
 
 def _clean_float_string(raw: str) -> str:
@@ -1505,8 +1696,9 @@ def _dynamic_cube_body_node() -> ET.Element:
             "type": "box",
             "size": f"{TASK_CUBE_HALF_SIZE} {TASK_CUBE_HALF_SIZE} {TASK_CUBE_HALF_SIZE}",
             "material": "task_cube",
-            "mass": "0.02",
-            "friction": "1.2 0.08 0.08",
+            "mass": "0.004",
+            "friction": "10.0 1.0 1.0",
+            "condim": "6",
             "contype": "1",
             "conaffinity": "1",
         },
@@ -1541,6 +1733,16 @@ def _named_joint_qpos_indices(mujoco: Any, model: Any, joint_names: list[str]) -
         if joint_id < 0:
             raise ValueError(f"joint not found in MuJoCo model: {name}")
         indices.append(int(model.jnt_qposadr[joint_id]))
+    return indices
+
+
+def _named_actuator_indices(mujoco: Any, model: Any, actuator_names: list[str]) -> list[int]:
+    indices: list[int] = []
+    for name in actuator_names:
+        actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+        if actuator_id < 0:
+            raise ValueError(f"actuator not found in MuJoCo model: {name}")
+        indices.append(int(actuator_id))
     return indices
 
 
@@ -1592,8 +1794,13 @@ def _gripper_cube_contacts(mujoco: Any, model: Any, data: Any) -> int:
     finger_ids = {
         mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "left_finger_pad"),
         mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "right_finger_pad"),
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "functional_grasp_bottom"),
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "functional_grasp_top"),
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "functional_grasp_front"),
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "functional_grasp_back"),
     }
-    if cube_id < 0 or any(geom_id < 0 for geom_id in finger_ids):
+    finger_ids = {geom_id for geom_id in finger_ids if geom_id >= 0}
+    if cube_id < 0 or not finger_ids:
         return 0
     contacts = 0
     for index in range(int(data.ncon)):
