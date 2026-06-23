@@ -7,8 +7,10 @@ LeRobotDataset.
 ## Source Check
 
 - Official ROS1 repo: `https://github.com/elephantrobotics/mycobot_ros`
-- Official ROS gripper source:
+- Official myCobot 280 gripper source:
   `mycobot_description/urdf/mycobot_280_jn/mycobot_280_jn_parallel_gripper.urdf`
+- Official Pro 450 force-gripper source:
+  `mycobot_description/urdf/mycobot_pro_450/mycobot_pro_450_force_gripper.urdf`
 - Official ROS1 MoveIt doc: `https://docs.elephantrobotics.com/docs/gitbook-en/12-ApplicationBaseROS/12.1-ROS1/12.1.5-Moveit/myCobot-280.html`
 - Candidate ROS1 launch: `roslaunch mycobot_280_gripper_moveit demo_gazebo.launch gazebo_gui:=false`
 - Smaller unofficial table-world candidate: `roslaunch mycobot_move_it_config demo_gazebo.launch gazebo_gui:=false`
@@ -91,6 +93,25 @@ The verified Mac-local official-gripper smoke reached
 `min_tcp_to_cube_dist=0.017`, `gripper_cube_contacts=6`, and
 `forward_to_cube_cos=0.977` in the inspected close-up frame; it still does not
 claim calibrated force-closure lift success (`grasp_success=false`).
+
+### Pro 450 Reference Boundary
+
+The Pro 450 product photos use a different end-effector family than the 280 JN
+parallel gripper above. The official `mycobot_ros` reference for that assembly
+is the full `mycobot_pro_450_force_gripper.urdf`, including the Pro 450 arm,
+`gripper_connection`, and force-gripper links. Do not graft Pro 450 gripper
+meshes onto the 280 MuJoCo arm by hand; that produces a non-official hybrid
+assembly and visually invalid screenshots.
+
+Official RViz reference copied from the upstream repo:
+
+![Official Pro 450 force gripper reference](./mycobot_pro450_official_force_gripper_reference.png)
+
+The correct next implementation path is a dedicated Pro 450 official-URDF
+renderer/importer that preserves the entire URDF tree and Collada semantics.
+Until that importer is verified visually against the upstream RViz reference,
+the Pro 450 gripper should remain a reference image, not a claimed MuJoCo
+simulation artifact.
 
 ```bash
 python3 scripts/mycobot_nexus_smoke.py \
