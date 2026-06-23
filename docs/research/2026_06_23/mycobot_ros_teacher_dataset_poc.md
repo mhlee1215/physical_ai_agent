@@ -44,6 +44,27 @@ git clone https://github.com/elephantrobotics/mycobot_mujoco.git _vendor/mycobot
 RENDER_3D=1 sh scripts/run_mycobot_ros_teacher_poc_mac.sh
 ```
 
+To run the proper myCobot-in-Nexus-style simulation POC instead of only
+rendering dataset frames:
+
+```bash
+PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --output-dir _workspace/mycobot_nexus_smoke
+```
+
+This creates a real `MyCobotNexusEnv` with MuJoCo `MjModel`/`MjData`, calls
+`reset(seed)`, steps teacher-style 7D actions through a qpos-target controller,
+renders the resulting scene, and writes a trace/report. For dependency-light CI
+or code review, the dry contract path records the env surface without importing
+MuJoCo:
+
+```bash
+python3 scripts/mycobot_nexus_smoke.py \
+  --dry-contract \
+  --output-dir _workspace/mycobot_nexus_contract
+```
+
 Use `REQUIRE_3D_RENDER=1` when the run should fail unless MuJoCo produces real
 RGB frames:
 
@@ -87,6 +108,10 @@ The script writes:
   stage with a work mat, lighting, skybox, and task cube.
 - `render/render_report.json` and `render/render_blocker.md`: renderer status
   and dependency/asset blocker details.
+- `_workspace/mycobot_nexus_smoke/mycobot_nexus_trace.jsonl`: optional actual
+  `MyCobotNexusEnv` reset/step trace.
+- `_workspace/mycobot_nexus_smoke/mycobot_nexus_report.json`: optional actual
+  simulation smoke report with observation/action dimensions and scene path.
 - `viewer.html`: standalone local UI with playback controls, real MuJoCo render
   frame slots, and state/action visualizations.
 - `report.json`: POC status and next steps.
@@ -100,6 +125,8 @@ MoveIt/Gazebo traces. A training-quality dataset still needs:
   Gazebo camera images;
 - Gazebo model-state object pose and gripper/contact success oracle;
 - replacement of placeholder PPM images with decoded ROS image messages;
-- native Gazebo/MuJoCo RGB/depth camera streams if task training needs rendered
-  observations beyond the current real robot-arm render preview;
+- calibrated MuJoCo actuators and contact-based grasp success in
+  `MyCobotNexusEnv`;
+- native Gazebo/MuJoCo RGB/depth camera streams if task training needs multiple
+  rendered policy observations beyond the current scene render;
 - fresh rollout filtering before any `save_episode()`-equivalent claim.
