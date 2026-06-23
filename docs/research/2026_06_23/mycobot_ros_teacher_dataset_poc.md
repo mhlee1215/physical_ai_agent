@@ -9,6 +9,8 @@ LeRobotDataset.
 - Official ROS1 repo: `https://github.com/elephantrobotics/mycobot_ros`
 - Official myCobot 280 gripper source:
   `mycobot_description/urdf/mycobot_280_jn/mycobot_280_jn_parallel_gripper.urdf`
+- Official myCobot 320 M5 2022 gripper source:
+  `mycobot_description/urdf/mycobot_320_m5_2022/new_mycobot_pro_320_m5_2022_gripper.urdf`
 - Official Pro 450 force-gripper source:
   `mycobot_description/urdf/mycobot_pro_450/mycobot_pro_450_force_gripper.urdf`
 - Official ROS1 MoveIt doc: `https://docs.elephantrobotics.com/docs/gitbook-en/12-ApplicationBaseROS/12.1-ROS1/12.1.5-Moveit/myCobot-280.html`
@@ -93,6 +95,26 @@ The verified Mac-local official-gripper smoke reached
 `min_tcp_to_cube_dist=0.017`, `gripper_cube_contacts=6`, and
 `forward_to_cube_cos=0.977` in the inspected close-up frame; it still does not
 claim calibrated force-closure lift success (`grasp_success=false`).
+
+### 320 M5 2022 Gripper Reference Boundary
+
+The preferred official gripper reference for the next visual/simulation pass is
+`mycobot_320_m5_2022/new_mycobot_pro_320_m5_2022_gripper.urdf`, because the
+upstream ROS1 README explicitly documents it as `mycobot 320 m5 2022 gripper`
+and ships a matching RViz screenshot. That URDF includes the 320 M5 2022 arm
+links, the flange-to-gripper joint, and the gripper mimic-joint tree.
+
+Official RViz reference copied from the upstream repo:
+
+![Official 320 M5 2022 gripper reference](./mycobot_320_m5_2022_official_gripper_reference.png)
+
+Do not hand-graft this gripper onto the current 280 JN MuJoCo model and call it
+official. A quick local check showed that the 320 gripper mesh can be loaded,
+but the 320 flange frame does not match the 280 MuJoCo wrist frame, producing a
+visually invalid hybrid. The correct implementation path is to import or
+convert the full official 320 M5 2022 gripper URDF tree, then verify the
+rendered result against the upstream RViz reference before using it as PR
+evidence.
 
 ### Pro 450 Reference Boundary
 
