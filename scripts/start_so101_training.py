@@ -55,6 +55,14 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 def _add_start_args(parser: argparse.ArgumentParser) -> None:
     _add_common_args(parser)
+    parser.add_argument(
+        "--preset",
+        choices=["qwen-edge-loopfix-local"],
+        help=(
+            "Apply a named local SO101 training preset. Presets are shortcuts for "
+            "canonical start_so101_training.py flags; do not add separate wrapper scripts."
+        ),
+    )
     parser.add_argument("--run-dir", type=Path, default=DEFAULT_ROOT / "runs" / "latest_lightning")
     parser.add_argument(
         "--dataset-config",
@@ -207,6 +215,8 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
 
 
 def start(args: argparse.Namespace, passthrough: list[str]) -> int:
+    repo_root = Path(__file__).resolve().parents[1]
+    passthrough = _apply_start_preset(args, passthrough, repo_root=repo_root)
     active = status(args.lock_file)
     if active.get("active"):
         if not args.replace:
@@ -219,7 +229,6 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
             return 2
         stop(args.lock_file, timeout_s=20.0)
 
-    repo_root = Path(__file__).resolve().parents[1]
     run_dir = args.run_dir.resolve()
     log_dir = run_dir / "logs"
     metrics_dir = run_dir / "metrics"
@@ -381,6 +390,57 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     current = status(args.lock_file)
     print(json.dumps(current, indent=2, sort_keys=True) if args.json else _human_status(current))
     return 0
+
+
+def _apply_start_preset(args: argparse.Namespace, passthrough: list[str], *, repo_root: Path) -> list[str]:
+    if not getattr(args, "preset", None):
+        return passthrough
+    if args.preset == "qwen-edge-loopfix-local":
+        args.dataset_config = repo_root / "configs/so101/training_datasets/qwen_edge_primitives.json"
+        args.run_dir = (
+            repo_root
+            / "_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/"
+            "qwen_edge_primitives_resume_009632_loopfix_30000"
+        )
+        args.host = "0.0.0.0"
+        args.tensorboard_port = 6015
+        args.runtime_platform = "macos"
+        args.training_device = "mps"
+        args.closed_loop_every_epochs = 1
+        args.closed_loop_episodes = 5
+        args.closed_loop_steps = 120
+        args.closed_loop_env_id = "MuJoCoPickLift-v1"
+        args.closed_loop_mujoco_gl = "glfw"
+        args.closed_loop_runner = "qwen_chain"
+        args.closed_loop_policy = "best_or_periodic"
+        args.closed_loop_subgoal_chain_mode = "valid-mask"
+        args.closed_loop_valid_mask_checkpoint = (
+            repo_root / "_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt"
+        )
+        args.closed_loop_policy_n_action_steps = 15
+        args.closed_loop_policy_num_steps = 10
+        args.record_loop_artifacts = True
+        args.render_loop_media = True
+        args.loop_artifact_width = 128
+        args.loop_artifact_height = 128
+        args.loop_artifact_fps = 12
+        args.max_monitored_checkpoints = 160
+        args.hf_local_files_only = True
+        args.skip_hf_dataset_download = True
+        args.python = repo_root / ".venv/bin/python"
+        if not passthrough and not args.training_args:
+            passthrough = [
+                "--",
+                "--config_path=_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/"
+                "qwen_edge_primitives_suite3_resume_009408_aug_full_virtual_statsfix_30000/"
+                "model/checkpoints/009632/pretrained_model/train_config.json",
+                "--resume=true",
+                "--so101-resume-checkpoint-path=_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/"
+                "qwen_edge_primitives_suite3_resume_009408_aug_full_virtual_statsfix_30000/model/checkpoints/009632",
+                "--steps=30000",
+            ]
+        return passthrough
+    raise SystemExit(f"unknown preset: {args.preset}")
 
 
 def status(lock_file: Path) -> dict[str, Any]:

@@ -1098,6 +1098,43 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertFalse(any("action-dropout" in arg for arg in train_cmd))
             self.assertEqual(payload["dataset_config"]["train_dataset"]["repo_id"], "physical-ai-agent/train")
 
+    def test_single_training_launcher_uses_presets_instead_of_extra_wrapper_scripts(self) -> None:
+        self.assertFalse(Path("scripts/start_so101_loopfix_training_local.sh").exists())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--json",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--preset",
+                    "qwen-edge-loopfix-local",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            train_cmd = payload["train_cmd"]
+
+            self.assertEqual(payload["dataset_config"]["name"], "qwen_edge_primitives")
+            self.assertTrue(str(payload["run_dir"]).endswith("qwen_edge_primitives_resume_009632_loopfix_30000"))
+            self.assertEqual(payload["tensorboard_url"], "http://127.0.0.1:6015/")
+            self.assertIn("--policy.device=mps", train_cmd)
+            self.assertIn("--lightning-accelerator=mps", train_cmd)
+            self.assertIn("--steps=30000", train_cmd)
+            self.assertIn("--training-run-summary-path", train_cmd)
+            self.assertEqual(
+                [case["id"] for case in payload["dataset_config"]["closed_loop"]["test_cases"]],
+                ["move_align_pick_up", "align_pick_up", "pick_up_only"],
+            )
+
     def test_single_training_launcher_uses_linux_runpod_runtime_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = Path(tmpdir) / "dataset_config.json"

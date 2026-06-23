@@ -122,6 +122,16 @@ For Qwen primitive validation configs such as `qwen_edge_primitives.json`, use
 each source subfolder, composes the shards, and passes the configured
 train/validation roots to LeRobot.
 
+Use `scripts/start_so101_training.py start` as the only SO101 training launcher.
+If a launch shape becomes common, add a `--preset` to that script instead of
+adding another shell wrapper with the same purpose. For example, the local Qwen
+edge loopfix lane is:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
+  --preset qwen-edge-loopfix-local
+```
+
 Closed-loop test case workflow:
 
 - Closed-loop tests are part of the same dataset config contract as train and
