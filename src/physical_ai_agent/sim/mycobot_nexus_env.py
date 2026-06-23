@@ -94,7 +94,9 @@ class MyCobotNexusEnv:
     exposes reset/step/render, and records task state around a visible cube.
     The official myCobot MJCF has no actuator section, so step() currently uses
     deterministic qpos-target stepping. That keeps the env executable while the
-    next POC can add calibrated actuators and contact-based success.
+    current cube-grasp POC uses an explicit teacher attachment proxy after
+    gripper contact. The next POC can add calibrated actuators and contact-based
+    force-closure success.
     """
 
     def __init__(self, config: MyCobotNexusConfig) -> None:
@@ -126,8 +128,18 @@ class MyCobotNexusEnv:
         self.data = mujoco.MjData(self.model)
         self._renderer = None
         self._step = 0
+        self._grasp_attached = False
         self._qpos_indices = _joint_qpos_indices(mujoco, self.model)
         self._dof_indices = _joint_dof_indices(mujoco, self.model)
+        cube_joint_id = mujoco.mj_name2id(
+            self.model,
+            mujoco.mjtObj.mjOBJ_JOINT,
+            "task_cube_freejoint",
+        )
+        if cube_joint_id < 0:
+            raise RuntimeError("missing task_cube_freejoint in myCobot Nexus scene")
+        self._cube_freejoint_qpos_index = int(self.model.jnt_qposadr[cube_joint_id])
+        self._cube_freejoint_qvel_index = int(self.model.jnt_dofadr[cube_joint_id])
         self._uses_official_gripper = _has_all_joints(
             mujoco,
             self.model,
@@ -150,6 +162,7 @@ class MyCobotNexusEnv:
     def reset(self, seed: int = 0) -> tuple[list[float], dict[str, Any]]:
         self._mujoco.mj_resetData(self.model, self.data)
         self._step = 0
+        self._grasp_attached = False
         neutral = _neutral_qpos(seed=seed, low=self._low, high=self._high)
         for qpos_index, value in zip(self._qpos_indices, neutral, strict=True):
             self.data.qpos[qpos_index] = value
@@ -166,6 +179,7 @@ class MyCobotNexusEnv:
             self.data.qpos[qpos_index] = current + self.config.control_alpha * (target - current)
         self._set_gripper(command=gripper)
         self._mujoco.mj_step(self.model, self.data)
+        self._update_grasp_attachment(gripper=gripper)
         self._step += 1
         obs = self._observation(gripper=gripper)
         info = self._info(gripper=gripper)
@@ -251,13 +265,47 @@ class MyCobotNexusEnv:
             "tcp_to_cube_dist": _distance(tcp, cube),
             "gripper_command": float(gripper),
             "gripper_cube_contacts": contacts,
+            "grasp_attached": bool(self._grasp_attached),
             "cube_lift": cube_lift,
-            "success": bool(cube_lift > 0.025 and contacts > 0),
+            "success": bool(cube_lift > 0.025 and self._grasp_attached),
             "success_label": (
-                "contact_lift_success" if cube_lift > 0.025 and contacts > 0 else "not_success"
+                "teacher_grasp_lift_success"
+                if cube_lift > 0.025 and self._grasp_attached
+                else "not_success"
             ),
             "scene_path": str(self.scene_path),
         }
+
+    def _update_grasp_attachment(self, *, gripper: float) -> None:
+        cube = self._cube_position()
+        tcp = self._tcp_position()
+        if not self._grasp_attached:
+            close_enough = _distance(cube, tcp) < 0.04 or self._gripper_cube_contacts() > 0
+            if float(gripper) <= -0.5 and close_enough:
+                self._grasp_attached = True
+        if not self._grasp_attached:
+            return
+        target = self._finger_pad_midpoint()
+        for axis, value in enumerate(target):
+            self.data.qpos[self._cube_freejoint_qpos_index + axis] = float(value)
+        self.data.qvel[self._cube_freejoint_qvel_index:self._cube_freejoint_qvel_index + 6] = 0.0
+        self._mujoco.mj_forward(self.model, self.data)
+
+    def _finger_pad_midpoint(self) -> list[float]:
+        left_id = self._mujoco.mj_name2id(
+            self.model,
+            self._mujoco.mjtObj.mjOBJ_GEOM,
+            "left_finger_pad",
+        )
+        right_id = self._mujoco.mj_name2id(
+            self.model,
+            self._mujoco.mjtObj.mjOBJ_GEOM,
+            "right_finger_pad",
+        )
+        if left_id < 0 or right_id < 0:
+            return self._tcp_position()
+        midpoint = (self.data.geom_xpos[left_id] + self.data.geom_xpos[right_id]) * 0.5
+        return [float(value) for value in midpoint]
 
     def _jacobian_qpos_target(
         self,
@@ -509,6 +557,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             "nexus_work_mat",
             "official_parallel_gripper",
             "synthetic_parallel_gripper_fallback",
+            "teacher_grasp_attachment_proxy",
         ],
         "official_gripper_asset_source": "https://github.com/elephantrobotics/mycobot_ros",
         "official_gripper_relative_path": str(OFFICIAL_GRIPPER_MESH_RELATIVE_PATH),
@@ -517,7 +566,8 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
             "Nexus-style cube scene. The preferred gripper path uses official "
             "mycobot_ros 280 JN parallel-gripper visual meshes with transparent "
-            "MuJoCo contact proxies; it does not yet claim calibrated force control."
+            "contact pads. grasp-lift success is a teacher attachment proxy, "
+            "not calibrated physical force closure."
         ),
     }
 

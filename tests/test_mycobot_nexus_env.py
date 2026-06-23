@@ -31,6 +31,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertIn("grasp-lift", contract["policies"])
         self.assertIn("official_parallel_gripper", contract["task_objects"])
         self.assertIn("synthetic_parallel_gripper_fallback", contract["task_objects"])
+        self.assertIn("teacher_grasp_attachment_proxy", contract["task_objects"])
         self.assertEqual(contract["action_dim"], 7)
         self.assertEqual(contract["real_robot_execution"], "disabled")
 

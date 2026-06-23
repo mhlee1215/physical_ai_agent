@@ -91,10 +91,22 @@ smoke output directory so MuJoCo can load them on macOS. The rendered gripper
 visual geometry comes from the official parallel-gripper meshes; contact still
 uses small transparent proxy pads attached to the official mimic-joint gripper
 bodies. The task cube is smaller and closer to the reachable pre-grasp zone.
-The verified Mac-local official-gripper smoke reached
-`min_tcp_to_cube_dist=0.017`, `gripper_cube_contacts=6`, and
-`forward_to_cube_cos=0.977` in the inspected close-up frame; it still does not
-claim calibrated force-closure lift success (`grasp_success=false`).
+
+The verified Mac-local teacher grasp/lift smoke reached `grasp_success=true`,
+`cube_lifted=true`, `final_cube_z=0.075`, `min_tcp_to_cube_dist=0.0018`, and
+`gripper_cube_contacts=4` in 42 steps. The success label is
+`teacher_grasp_lift_success`: after gripper closure near/contacting the cube,
+the cube is explicitly attached to the midpoint of the finger contact pads so a
+teacher dataset can record grasp/lift transitions before calibrated actuator
+and force-closure modeling exists. This is simulation-state teacher supervision,
+not a claim of physical force-closure.
+
+Representative verified frames:
+
+![myCobot official-gripper teacher grasp wide frame](./mycobot_nexus_official_gripper_frame.png)
+![myCobot official-gripper teacher grasp front close-up](./mycobot_nexus_official_gripper_front_close.png)
+![myCobot official-gripper teacher grasp side close-up](./mycobot_nexus_official_gripper_side_close.png)
+![myCobot official-gripper teacher grasp wrist close-up](./mycobot_nexus_official_gripper_wrist_close.png)
 
 ### 320 M5 2022 Gripper Reference Boundary
 
