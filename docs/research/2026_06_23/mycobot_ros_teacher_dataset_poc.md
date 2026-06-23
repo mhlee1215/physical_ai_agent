@@ -121,13 +121,8 @@ Official RViz reference copied from the upstream repo:
 ![Official 320 M5 2022 gripper reference](./mycobot_320_m5_2022_official_gripper_reference.png)
 
 The implemented path does not graft the 320 gripper onto the 280 MuJoCo arm.
-Instead, `--model-profile 320-m5-2022-gripper` imports the official 320 arm
-URDF tree and converts the official Collada meshes to OBJ for MuJoCo on macOS.
-The upstream 320 mimic-linkage gripper did not produce a usable grasp demo after
-direct conversion, so this POC replaces the end-effector linkage with a
-functional two-finger gripper override mounted at the official 320 flange. The
-override keeps the official 320 arm/base render and provides real open/close
-slide joints plus transparent contact pads for cube-grasp teacher data:
+Instead, `--model-profile 320-m5-2022-gripper` imports the official 320 URDF
+tree and converts its official Collada meshes to OBJ for MuJoCo on macOS:
 
 ```bash
 PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py \
@@ -139,20 +134,18 @@ PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py \
   --policy grasp-lift
 ```
 
-The verified 320 M5 2022 functional-gripper smoke reached
-`grasp_success=true`, `cube_lifted=true`, `final_cube_z=0.069`,
-`min_tcp_to_cube_dist=0.035`, and `gripper_cube_contacts=8` in 53 steps using a
-constrained 320-specific teacher trajectory near the official zero pose. This
-is still a teacher attachment proxy after contact, not calibrated force-closure
-physics, but the gripper now has an executable open/close joint path and records
-cube contact before lift.
+The verified 320 M5 2022 official-gripper smoke reached
+`grasp_success=true`, `cube_lifted=true`, `final_cube_z=0.077`, and
+`min_tcp_to_cube_dist=0.0646` in 53 steps using a constrained 320-specific
+teacher trajectory near the official zero pose. `gripper_cube_contacts=0`, so
+this is strictly a visual/state teacher attachment proxy, not a contact-success
+claim.
 
-Representative 320 M5 2022 functional-gripper frames:
+Representative 320 M5 2022 official-gripper frames:
 
 ![myCobot 320 M5 2022 official-gripper zero pose](./mycobot_nexus_320_m5_2022_gripper_zero_pose.png)
-![myCobot 320 M5 2022 functional-gripper wide frame](./mycobot_nexus_320_m5_2022_gripper_frame.png)
-![myCobot 320 M5 2022 functional-gripper open side view](./mycobot_nexus_320_m5_2022_gripper_front_close.png)
-![myCobot 320 M5 2022 functional-gripper closed lift side view](./mycobot_nexus_320_m5_2022_gripper_side_close.png)
+![myCobot 320 M5 2022 official-gripper wide frame](./mycobot_nexus_320_m5_2022_gripper_frame.png)
+![myCobot 320 M5 2022 official-gripper side close-up](./mycobot_nexus_320_m5_2022_gripper_side_close.png)
 
 ### Pro 450 Reference Boundary
 
