@@ -83,7 +83,8 @@ The script writes:
 - `images/top/*.ppm` and `images/wrist/*.ppm`: deterministic placeholder images
   so downstream viewers/converters can test image paths without ROS.
 - `render/scene/*.bmp`: optional real myCobot MuJoCo robot-arm render frames
-  generated from `elephantrobotics/mycobot_mujoco` assets.
+  generated from `elephantrobotics/mycobot_mujoco` assets in a nexus-style
+  stage with a work mat, lighting, skybox, and task cube.
 - `render/render_report.json` and `render/render_blocker.md`: renderer status
   and dependency/asset blocker details.
 - `viewer.html`: standalone local UI with playback controls, real MuJoCo render

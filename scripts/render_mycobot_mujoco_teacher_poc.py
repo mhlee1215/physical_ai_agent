@@ -6,6 +6,7 @@ import json
 import math
 import os
 import struct
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ class RenderReport:
     root: str
     asset_root: str
     model_path: str
+    scene_path: str
     frames: int
     width: int
     height: int
@@ -92,6 +94,7 @@ def render_mycobot_mujoco_teacher_poc(
     blocker_path = render_dir / "render_blocker.md"
     report_path = render_dir / "render_report.json"
     model_path = asset_root / MODEL_RELATIVE_PATH
+    scene_path = render_dir / "mycobot_nexus_scene.xml"
     attempts: list[RenderAttempt] = []
 
     try:
@@ -103,8 +106,9 @@ def render_mycobot_mujoco_teacher_poc(
                 f"missing myCobot MuJoCo model: {model_path}. "
                 "Clone https://github.com/elephantrobotics/mycobot_mujoco and pass --asset-root."
             )
+        _write_nexus_scene_model(model_path=model_path, scene_path=scene_path)
         frame_count = _render_frames(
-            model_path=model_path,
+            model_path=scene_path,
             frames=frames,
             output_dir=output_dir,
             width=width,
@@ -125,6 +129,7 @@ def render_mycobot_mujoco_teacher_poc(
         root=str(root),
         asset_root=str(asset_root),
         model_path=str(model_path),
+        scene_path=str(scene_path),
         frames=frame_count,
         width=width,
         height=height,
@@ -149,6 +154,147 @@ def _read_frames(path: Path) -> list[dict[str, Any]]:
     return frames
 
 
+def _write_nexus_scene_model(*, model_path: Path, scene_path: Path) -> None:
+    tree = ET.parse(model_path)
+    root = tree.getroot()
+
+    compiler = root.find("compiler")
+    if compiler is None:
+        compiler = ET.Element("compiler")
+        root.insert(0, compiler)
+    compiler.set("meshdir", str((model_path.parent / "../meshes_mujoco").resolve()))
+
+    asset = root.find("asset")
+    if asset is None:
+        asset = ET.Element("asset")
+        worldbody_index = _child_index(root, "worldbody")
+        root.insert(worldbody_index if worldbody_index >= 0 else len(root), asset)
+    ET.SubElement(
+        asset,
+        "texture",
+        {
+            "name": "nexus_skybox",
+            "type": "skybox",
+            "builtin": "gradient",
+            "rgb1": "0.78 0.82 0.86",
+            "rgb2": "0.96 0.97 0.96",
+            "width": "256",
+            "height": "256",
+        },
+    )
+    _add_material(asset, "nexus_floor", "0.78 0.80 0.77 1", specular="0.12")
+    _add_material(asset, "nexus_mat", "0.37 0.43 0.45 1", specular="0.08")
+    _add_material(asset, "task_cube", "0.92 0.24 0.15 1", specular="0.22")
+
+    visual = root.find("visual")
+    if visual is None:
+        visual = ET.Element("visual")
+        worldbody_index = _child_index(root, "worldbody")
+        root.insert(worldbody_index if worldbody_index >= 0 else len(root), visual)
+    ET.SubElement(
+        visual,
+        "headlight",
+        {
+            "ambient": "0.36 0.36 0.34",
+            "diffuse": "0.76 0.74 0.68",
+            "specular": "0.12 0.12 0.12",
+        },
+    )
+    ET.SubElement(visual, "map", {"znear": "0.01", "zfar": "10"})
+
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        raise ValueError(f"missing worldbody in MuJoCo model: {model_path}")
+
+    scene_nodes = [
+        ET.Element(
+            "light",
+            {
+                "name": "nexus_key_light",
+                "pos": "-0.55 -0.75 1.35",
+                "dir": "0.35 0.45 -1",
+                "directional": "true",
+                "diffuse": "0.88 0.84 0.72",
+            },
+        ),
+        ET.Element(
+            "light",
+            {
+                "name": "nexus_fill_light",
+                "pos": "0.65 0.35 0.95",
+                "diffuse": "0.28 0.32 0.36",
+            },
+        ),
+        ET.Element(
+            "geom",
+            {
+                "name": "nexus_floor",
+                "type": "plane",
+                "pos": "0 0 -0.006",
+                "size": "1.2 1.2 0.01",
+                "material": "nexus_floor",
+                "contype": "0",
+                "conaffinity": "0",
+            },
+        ),
+        ET.Element(
+            "geom",
+            {
+                "name": "nexus_work_mat",
+                "type": "box",
+                "pos": "-0.18 -0.12 0.004",
+                "size": "0.36 0.26 0.004",
+                "material": "nexus_mat",
+                "contype": "0",
+                "conaffinity": "0",
+            },
+        ),
+        ET.Element(
+            "geom",
+            {
+                "name": "task_cube",
+                "type": "box",
+                "pos": "-0.34 -0.18 0.044",
+                "size": "0.04 0.04 0.04",
+                "material": "task_cube",
+                "contype": "0",
+                "conaffinity": "0",
+            },
+        ),
+    ]
+    for node in reversed(scene_nodes):
+        worldbody.insert(0, node)
+
+    scene_path.parent.mkdir(parents=True, exist_ok=True)
+    tree.write(scene_path, encoding="utf-8", xml_declaration=True)
+
+
+def _add_material(
+    asset: ET.Element,
+    name: str,
+    rgba: str,
+    *,
+    specular: str,
+) -> None:
+    ET.SubElement(
+        asset,
+        "material",
+        {
+            "name": name,
+            "rgba": rgba,
+            "specular": specular,
+            "shininess": "0.28",
+        },
+    )
+
+
+def _child_index(root: ET.Element, tag: str) -> int:
+    for index, child in enumerate(list(root)):
+        if child.tag == tag:
+            return index
+    return -1
+
+
 def _render_frames(
     *,
     model_path: Path,
@@ -165,10 +311,10 @@ def _render_frames(
     try:
         camera = mujoco.MjvCamera()
         camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-        camera.lookat[:] = [-0.08, 0.0, 0.08]
-        camera.distance = 1.15
-        camera.azimuth = 135.0
-        camera.elevation = -15.0
+        camera.lookat[:] = [-0.13, -0.10, 0.11]
+        camera.distance = 1.12
+        camera.azimuth = 138.0
+        camera.elevation = -34.0
         qpos_indices = _joint_qpos_indices(mujoco, model)
         for frame in frames:
             values = _finite_vector(frame.get("observation_state", []))
