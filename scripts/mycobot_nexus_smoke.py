@@ -27,6 +27,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path(os.environ.get("MYCOBOT_MUJOCO_ROOT", "_vendor/mycobot_mujoco")),
         help="Local clone of https://github.com/elephantrobotics/mycobot_mujoco.",
     )
+    parser.add_argument(
+        "--official-gripper-root",
+        type=Path,
+        default=(
+            Path(os.environ["MYCOBOT_ROS2_ROOT"])
+            if "MYCOBOT_ROS2_ROOT" in os.environ
+            else None
+        ),
+        help="Local clone of https://github.com/elephantrobotics/mycobot_ros2.",
+    )
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--width", type=int, default=640)
@@ -54,6 +64,7 @@ def main() -> None:
         width=args.width,
         height=args.height,
         policy=args.policy,
+        official_gripper_root=args.official_gripper_root,
     )
     print(json.dumps(asdict(result), indent=2, sort_keys=True))
 

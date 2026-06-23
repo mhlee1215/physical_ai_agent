@@ -10,6 +10,16 @@ from typing import Any
 
 
 MYCOBOT_MODEL_RELATIVE_PATH = Path("xml/mycobot_280jn_mujoco.xml")
+OFFICIAL_GRIPPER_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/adaptive_gripper")
+OFFICIAL_GRIPPER_MESH_NAMES = [
+    "gripper_base",
+    "gripper_left1",
+    "gripper_left2",
+    "gripper_left3",
+    "gripper_right1",
+    "gripper_right2",
+    "gripper_right3",
+]
 MYCOBOT_MODEL_JOINT_NAMES = [
     "joint2_to_joint1",
     "joint3_to_joint2",
@@ -22,9 +32,27 @@ MYCOBOT_TEACHER_JOINT_NAMES = [
     *MYCOBOT_MODEL_JOINT_NAMES,
     "gripper_controller",
 ]
-GRIPPER_JOINT_NAMES = ["left_finger_slide", "right_finger_slide"]
+SYNTHETIC_GRIPPER_JOINT_NAMES = ["left_finger_slide", "right_finger_slide"]
+OFFICIAL_GRIPPER_JOINT_NAMES = [
+    "gripper_controller",
+    "gripper_base_to_gripper_left2",
+    "gripper_left3_to_gripper_left1",
+    "gripper_base_to_gripper_right3",
+    "gripper_base_to_gripper_right2",
+    "gripper_right3_to_gripper_right1",
+]
+OFFICIAL_GRIPPER_MIMIC = {
+    "gripper_controller": 1.0,
+    "gripper_base_to_gripper_left2": 1.0,
+    "gripper_left3_to_gripper_left1": -1.0,
+    "gripper_base_to_gripper_right3": -1.0,
+    "gripper_base_to_gripper_right2": -1.0,
+    "gripper_right3_to_gripper_right1": 1.0,
+}
 TASK_CUBE_BODY = "task_cube_body"
 TASK_CUBE_GEOM = "task_cube"
+TASK_CUBE_POS = (-0.22, -0.11, 0.033)
+TASK_CUBE_HALF_SIZE = 0.025
 TCP_SITE = "mycobot_tcp_site"
 
 
@@ -32,6 +60,7 @@ TCP_SITE = "mycobot_tcp_site"
 class MyCobotNexusConfig:
     asset_root: Path
     work_dir: Path
+    official_gripper_root: Path | None = None
     width: int = 640
     height: int = 360
     control_alpha: float = 0.35
@@ -100,17 +129,31 @@ class MyCobotNexusEnv:
                 "Clone https://github.com/elephantrobotics/mycobot_mujoco and pass --asset-root."
             )
         self.scene_path = self.work_dir / "mycobot_nexus_scene.xml"
-        build_mycobot_nexus_scene_model(model_path=self.model_path, scene_path=self.scene_path)
+        build_mycobot_nexus_scene_model(
+            model_path=self.model_path,
+            scene_path=self.scene_path,
+            official_gripper_root=config.official_gripper_root,
+        )
         self.model = mujoco.MjModel.from_xml_path(str(self.scene_path))
         self.data = mujoco.MjData(self.model)
         self._renderer = None
         self._step = 0
         self._qpos_indices = _joint_qpos_indices(mujoco, self.model)
         self._dof_indices = _joint_dof_indices(mujoco, self.model)
+        self._uses_official_gripper = _has_all_joints(
+            mujoco,
+            self.model,
+            OFFICIAL_GRIPPER_JOINT_NAMES,
+        )
+        gripper_joint_names = (
+            OFFICIAL_GRIPPER_JOINT_NAMES
+            if self._uses_official_gripper
+            else SYNTHETIC_GRIPPER_JOINT_NAMES
+        )
         self._gripper_qpos_indices = _named_joint_qpos_indices(
             mujoco,
             self.model,
-            GRIPPER_JOINT_NAMES,
+            gripper_joint_names,
         )
         self._low, self._high = _joint_ranges(self.model, self._qpos_indices)
         self.action_dim = len(MYCOBOT_TEACHER_JOINT_NAMES)
@@ -139,7 +182,7 @@ class MyCobotNexusEnv:
         obs = self._observation(gripper=gripper)
         info = self._info(gripper=gripper)
         reward = -float(info["tcp_to_cube_dist"])
-        terminated = bool(info["tcp_to_cube_dist"] < 0.08)
+        terminated = bool(info["success"])
         return obs, reward, terminated, False, info
 
     def cube_approach_action(self) -> list[float]:
@@ -204,7 +247,7 @@ class MyCobotNexusEnv:
         tcp = self._tcp_position()
         cube = self._cube_position()
         contacts = self._gripper_cube_contacts()
-        cube_lift = cube[2] - 0.044
+        cube_lift = cube[2] - TASK_CUBE_POS[2]
         return {
             "step": self._step,
             "joint_names": MYCOBOT_TEACHER_JOINT_NAMES,
@@ -245,6 +288,19 @@ class MyCobotNexusEnv:
         return _clip(target_qpos, self._low, self._high)
 
     def _set_gripper(self, *, command: float) -> None:
+        if self._uses_official_gripper:
+            open_value = 0.15
+            closed_value = -0.74
+            base_value = closed_value + (max(-1.0, min(1.0, float(command))) + 1.0) * 0.5 * (
+                open_value - closed_value
+            )
+            for qpos_index, joint_name in zip(
+                self._gripper_qpos_indices,
+                OFFICIAL_GRIPPER_JOINT_NAMES,
+                strict=True,
+            ):
+                self.data.qpos[qpos_index] = base_value * OFFICIAL_GRIPPER_MIMIC[joint_name]
+            return
         close_amount = (1.0 - max(-1.0, min(1.0, float(command)))) * 0.5
         qpos_value = close_amount * 0.028
         for qpos_index in self._gripper_qpos_indices:
@@ -282,6 +338,7 @@ def run_mycobot_nexus_smoke(
     width: int,
     height: int,
     policy: str = "sample",
+    official_gripper_root: Path | None = None,
 ) -> MyCobotNexusSmokeResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     trace_path = output_dir / "mycobot_nexus_trace.jsonl"
@@ -291,6 +348,7 @@ def run_mycobot_nexus_smoke(
         MyCobotNexusConfig(
             asset_root=asset_root,
             work_dir=output_dir,
+            official_gripper_root=official_gripper_root,
             width=width,
             height=height,
         )
@@ -379,11 +437,20 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "joint_order": MYCOBOT_TEACHER_JOINT_NAMES,
         "action_dim": len(MYCOBOT_TEACHER_JOINT_NAMES),
         "observation_dim": len(MYCOBOT_TEACHER_JOINT_NAMES) + 3,
-        "task_objects": ["task_cube", "nexus_work_mat", "native_parallel_gripper"],
+        "task_objects": [
+            "task_cube",
+            "nexus_work_mat",
+            "official_adaptive_gripper",
+            "synthetic_parallel_gripper_fallback",
+        ],
+        "official_gripper_asset_source": "https://github.com/elephantrobotics/mycobot_ros2",
+        "official_gripper_relative_path": str(OFFICIAL_GRIPPER_MESH_RELATIVE_PATH),
         "real_robot_execution": "disabled",
         "poc_boundary": (
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
-            "Nexus-style cube scene, but does not yet claim contact grasp success."
+            "Nexus-style cube scene. The preferred gripper path uses official "
+            "mycobot_ros2 adaptive-gripper visual meshes with transparent "
+            "MuJoCo contact proxies; it does not yet claim contact grasp success."
         ),
     }
 
@@ -415,9 +482,20 @@ def sanitize_teacher_action(action: list[float]) -> list[float]:
     return values
 
 
-def build_mycobot_nexus_scene_model(*, model_path: Path, scene_path: Path) -> None:
+def build_mycobot_nexus_scene_model(
+    *,
+    model_path: Path,
+    scene_path: Path,
+    official_gripper_root: Path | None = None,
+) -> None:
     tree = ET.parse(model_path)
     root = tree.getroot()
+    official_gripper_dir = _official_gripper_mesh_dir(official_gripper_root)
+    official_gripper_obj_dir = (
+        _prepare_official_gripper_obj_assets(official_gripper_dir, scene_path.parent)
+        if official_gripper_dir is not None
+        else None
+    )
 
     compiler = root.find("compiler")
     if compiler is None:
@@ -446,6 +524,8 @@ def build_mycobot_nexus_scene_model(*, model_path: Path, scene_path: Path) -> No
     _add_material(asset, "nexus_floor", "0.78 0.80 0.77 1", specular="0.12")
     _add_material(asset, "nexus_mat", "0.37 0.43 0.45 1", specular="0.08")
     _add_material(asset, "task_cube", "0.92 0.24 0.15 1", specular="0.22")
+    if official_gripper_obj_dir is not None:
+        _add_official_gripper_assets(asset, official_gripper_obj_dir)
 
     visual = root.find("visual")
     if visual is None:
@@ -471,7 +551,10 @@ def build_mycobot_nexus_scene_model(*, model_path: Path, scene_path: Path) -> No
     flange = root.find(".//body[@name='joint6_flange']")
     if flange is None:
         raise ValueError(f"missing joint6_flange body in MuJoCo model: {model_path}")
-    flange.append(_native_parallel_gripper_node())
+    if official_gripper_obj_dir is not None:
+        flange.append(_official_adaptive_gripper_node())
+    else:
+        flange.append(_synthetic_parallel_gripper_node())
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
     tree.write(scene_path, encoding="utf-8", xml_declaration=True)
@@ -525,8 +608,258 @@ def _nexus_scene_nodes() -> list[ET.Element]:
     ]
 
 
-def _native_parallel_gripper_node() -> ET.Element:
-    base = ET.Element("body", {"name": "native_parallel_gripper", "pos": "0 0 -0.055"})
+def _official_gripper_mesh_dir(official_gripper_root: Path | None) -> Path | None:
+    if official_gripper_root is None:
+        return None
+    root = official_gripper_root.expanduser()
+    mesh_dir = root / OFFICIAL_GRIPPER_MESH_RELATIVE_PATH
+    missing = [
+        name
+        for name in OFFICIAL_GRIPPER_MESH_NAMES
+        if not (mesh_dir / f"{name}.dae").exists()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "missing official myCobot adaptive gripper meshes under "
+            f"{mesh_dir}: {', '.join(missing)}"
+        )
+    return mesh_dir
+
+
+def _prepare_official_gripper_obj_assets(mesh_dir: Path, output_root: Path) -> Path:
+    obj_dir = output_root / "official_gripper_meshes"
+    obj_dir.mkdir(parents=True, exist_ok=True)
+    for name in OFFICIAL_GRIPPER_MESH_NAMES:
+        _convert_collada_mesh_to_obj(mesh_dir / f"{name}.dae", obj_dir / f"{name}.obj")
+    return obj_dir
+
+
+def _convert_collada_mesh_to_obj(dae_path: Path, obj_path: Path) -> None:
+    root = ET.parse(dae_path).getroot()
+    namespace = {"c": root.tag.partition("}")[0].strip("{")}
+    unit = root.find("c:asset/c:unit", namespace)
+    scale = float(unit.attrib.get("meter", "1.0")) if unit is not None else 1.0
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+
+    for geometry in root.findall(".//c:library_geometries/c:geometry", namespace):
+        mesh = geometry.find("c:mesh", namespace)
+        if mesh is None:
+            continue
+        position_source = _collada_position_source(mesh, namespace)
+        if position_source is None:
+            continue
+        mesh_vertices = _collada_float_triplets(position_source, namespace, scale=scale)
+        offset = len(vertices)
+        vertices.extend(mesh_vertices)
+        faces.extend(
+            (a + offset + 1, b + offset + 1, c + offset + 1)
+            for a, b, c in _collada_triangle_indices(mesh, namespace)
+        )
+
+    if not vertices or not faces:
+        raise ValueError(f"could not extract triangles from official gripper mesh: {dae_path}")
+
+    with obj_path.open("w", encoding="utf-8") as file:
+        file.write(f"# converted from official myCobot ROS2 Collada mesh: {dae_path.name}\n")
+        for x, y, z in vertices:
+            file.write(f"v {x:.9g} {y:.9g} {z:.9g}\n")
+        for a, b, c in faces:
+            file.write(f"f {a} {b} {c}\n")
+
+
+def _collada_position_source(mesh: ET.Element, namespace: dict[str, str]) -> ET.Element | None:
+    for source in mesh.findall("c:source", namespace):
+        if source.attrib.get("name") == "position" or "position" in source.attrib.get("id", ""):
+            return source
+    return None
+
+
+def _collada_float_triplets(
+    source: ET.Element,
+    namespace: dict[str, str],
+    *,
+    scale: float,
+) -> list[tuple[float, float, float]]:
+    array = source.find("c:float_array", namespace)
+    if array is None or array.text is None:
+        return []
+    values = [float(value) * scale for value in array.text.split()]
+    return [
+        (values[index], values[index + 1], values[index + 2])
+        for index in range(0, len(values) - 2, 3)
+    ]
+
+
+def _collada_triangle_indices(
+    mesh: ET.Element,
+    namespace: dict[str, str],
+) -> list[tuple[int, int, int]]:
+    triangles: list[tuple[int, int, int]] = []
+    for triangle_node in mesh.findall("c:triangles", namespace):
+        inputs = triangle_node.findall("c:input", namespace)
+        stride = max(int(item.attrib.get("offset", "0")) for item in inputs) + 1
+        vertex_offset = next(
+            int(item.attrib.get("offset", "0"))
+            for item in inputs
+            if item.attrib.get("semantic") == "VERTEX"
+        )
+        p_node = triangle_node.find("c:p", namespace)
+        if p_node is None or p_node.text is None:
+            continue
+        raw = [int(value) for value in p_node.text.split()]
+        for index in range(0, len(raw), stride * 3):
+            triangles.append(
+                (
+                    raw[index + vertex_offset],
+                    raw[index + stride + vertex_offset],
+                    raw[index + stride * 2 + vertex_offset],
+                )
+            )
+    return triangles
+
+
+def _add_official_gripper_assets(asset: ET.Element, mesh_dir: Path) -> None:
+    for name in OFFICIAL_GRIPPER_MESH_NAMES:
+        ET.SubElement(
+            asset,
+            "mesh",
+            {
+                "name": f"official_{name}",
+                "file": str((mesh_dir / f"{name}.obj").resolve()),
+            },
+        )
+
+
+def _official_adaptive_gripper_node() -> ET.Element:
+    base = ET.Element(
+        "body",
+        {
+            "name": "official_adaptive_gripper",
+            "pos": "0 0 0.034",
+            "euler": "1.579 0 0",
+        },
+    )
+    _add_mesh_geom(base, "gripper_base", pos="0 0 -0.012")
+    ET.SubElement(base, "site", {"name": TCP_SITE, "pos": "0 -0.095 -0.012", "size": "0.006"})
+
+    left3 = _joint_body(
+        base,
+        name="gripper_left3",
+        joint="gripper_controller",
+        pos="-0.012 0.005 0",
+        range_="-0.74 0.15",
+    )
+    _add_mesh_geom(left3, "gripper_left3", pos="0.012 0.0025 -0.012")
+    _add_proxy_pad(left3, "left_finger_pad", pos="0.034 -0.16 -0.012")
+
+    left2 = _joint_body(
+        base,
+        name="gripper_left2",
+        joint="gripper_base_to_gripper_left2",
+        pos="-0.005 0.027 0",
+        range_="-0.8 0.5",
+    )
+    _add_mesh_geom(left2, "gripper_left2", pos="0.005 -0.0195 -0.012")
+
+    left1 = _joint_body(
+        left3,
+        name="gripper_left1",
+        joint="gripper_left3_to_gripper_left1",
+        pos="-0.027 0.016 0",
+        range_="-0.5 0.5",
+    )
+    _add_mesh_geom(left1, "gripper_left1", pos="0.039 -0.0133 -0.012")
+
+    right3 = _joint_body(
+        base,
+        name="gripper_right3",
+        joint="gripper_base_to_gripper_right3",
+        pos="0.012 0.005 0",
+        range_="-0.15 0.7",
+    )
+    _add_mesh_geom(right3, "gripper_right3", pos="-0.012 0.0025 -0.012")
+    _add_proxy_pad(right3, "right_finger_pad", pos="-0.034 -0.16 -0.012")
+
+    right2 = _joint_body(
+        base,
+        name="gripper_right2",
+        joint="gripper_base_to_gripper_right2",
+        pos="0.005 0.027 0",
+        range_="-0.5 0.8",
+    )
+    _add_mesh_geom(right2, "gripper_right2", pos="-0.005 -0.0195 -0.012")
+
+    right1 = _joint_body(
+        right3,
+        name="gripper_right1",
+        joint="gripper_right3_to_gripper_right1",
+        pos="0.027 0.016 0",
+        range_="-0.5 0.5",
+    )
+    _add_mesh_geom(right1, "gripper_right1", pos="-0.039 -0.0133 -0.012")
+    return base
+
+
+def _joint_body(
+    parent: ET.Element,
+    *,
+    name: str,
+    joint: str,
+    pos: str,
+    range_: str,
+) -> ET.Element:
+    body = ET.SubElement(parent, "body", {"name": name, "pos": pos})
+    ET.SubElement(
+        body,
+        "joint",
+        {
+            "name": joint,
+            "type": "hinge",
+            "axis": "0 0 1",
+            "range": range_,
+            "limited": "true",
+            "damping": "0.18",
+        },
+    )
+    return body
+
+
+def _add_mesh_geom(parent: ET.Element, mesh_name: str, *, pos: str) -> None:
+    ET.SubElement(
+        parent,
+        "geom",
+        {
+            "name": f"{mesh_name}_visual",
+            "type": "mesh",
+            "mesh": f"official_{mesh_name}",
+            "pos": pos,
+            "contype": "0",
+            "conaffinity": "0",
+        },
+    )
+
+
+def _add_proxy_pad(parent: ET.Element, name: str, *, pos: str) -> None:
+    ET.SubElement(
+        parent,
+        "geom",
+        {
+            "name": name,
+            "type": "box",
+            "pos": pos,
+            "size": "0.012 0.035 0.024",
+            "rgba": "0.08 0.08 0.08 0",
+            "friction": "1.5 0.1 0.1",
+            "contype": "1",
+            "conaffinity": "1",
+            "mass": "0.01",
+        },
+    )
+
+
+def _synthetic_parallel_gripper_node() -> ET.Element:
+    base = ET.Element("body", {"name": "synthetic_parallel_gripper", "pos": "0 0 -0.055"})
     ET.SubElement(
         base,
         "geom",
@@ -602,7 +935,13 @@ def _native_parallel_gripper_node() -> ET.Element:
 
 
 def _dynamic_cube_body_node() -> ET.Element:
-    cube = ET.Element("body", {"name": TASK_CUBE_BODY, "pos": "-0.34 -0.18 0.044"})
+    cube = ET.Element(
+        "body",
+        {
+            "name": TASK_CUBE_BODY,
+            "pos": f"{TASK_CUBE_POS[0]} {TASK_CUBE_POS[1]} {TASK_CUBE_POS[2]}",
+        },
+    )
     ET.SubElement(cube, "freejoint", {"name": "task_cube_freejoint"})
     ET.SubElement(
         cube,
@@ -610,9 +949,9 @@ def _dynamic_cube_body_node() -> ET.Element:
         {
             "name": TASK_CUBE_GEOM,
             "type": "box",
-            "size": "0.04 0.04 0.04",
+            "size": f"{TASK_CUBE_HALF_SIZE} {TASK_CUBE_HALF_SIZE} {TASK_CUBE_HALF_SIZE}",
             "material": "task_cube",
-            "mass": "0.035",
+            "mass": "0.02",
             "friction": "1.2 0.08 0.08",
             "contype": "1",
             "conaffinity": "1",
@@ -649,6 +988,13 @@ def _named_joint_qpos_indices(mujoco: Any, model: Any, joint_names: list[str]) -
             raise ValueError(f"joint not found in MuJoCo model: {name}")
         indices.append(int(model.jnt_qposadr[joint_id]))
     return indices
+
+
+def _has_all_joints(mujoco: Any, model: Any, joint_names: list[str]) -> bool:
+    return all(
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name) >= 0
+        for name in joint_names
+    )
 
 
 def _joint_ranges(model: Any, qpos_indices: list[int]) -> tuple[list[float], list[float]]:

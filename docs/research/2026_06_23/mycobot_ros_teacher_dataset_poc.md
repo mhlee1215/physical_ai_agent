@@ -64,26 +64,30 @@ the dry contract path records the env surface without importing MuJoCo:
 The verified Mac-local cube-approach smoke reduced TCP-to-cube distance from
 `0.518` to `0.237` over 16 steps with `approach_improved=true`.
 
-To move from pure approach to contact-oriented simulation, run the native
-gripper/cube lift smoke:
+To move from pure approach to contact-oriented simulation with the official
+adaptive gripper visual geometry, clone the official ROS2 description repo and
+run the gripper/cube lift smoke:
 
 ```bash
+git clone https://github.com/elephantrobotics/mycobot_ros2.git _vendor/mycobot_ros2
+
 PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py \
   --asset-root _vendor/mycobot_mujoco \
-  --output-dir _workspace/mycobot_nexus_grasp_lift \
+  --official-gripper-root _vendor/mycobot_ros2 \
+  --output-dir _workspace/mycobot_nexus_official_gripper_grasp_lift \
   --policy grasp-lift
 ```
 
-This injects a MuJoCo-native parallel gripper under `joint6_flange`, makes the
-task cube a free-joint dynamic body, steps an approach/close/lift policy, and
-records `gripper_cube_contacts`, `cube_lifted`, and `grasp_success` in the
-report. The gripper is intentionally native MuJoCo geometry rather than a
-claimed official gripper URDF, so any successful contact/lift result still
-needs follow-up calibration before being used as training-quality task success.
-The verified Mac-local grasp-lift smoke approached the cube
-(`0.401 -> 0.166`, `min=0.139`) and kept the cube dynamic on the work mat, but
-did not yet make finger-cube contact (`gripper_cube_contacts=0`,
-`grasp_success=false`).
+This uses `mycobot_ros2/mycobot_description/urdf/mycobot_280_jn/
+mycobot_280_jn_adaptive_gripper.urdf` as the source contract and converts the
+official adaptive-gripper DAE meshes to OBJ files under the smoke output
+directory so MuJoCo can load them on macOS. The rendered gripper visual geometry
+comes from the official ROS2 adaptive-gripper meshes; contact still uses small
+transparent proxy pads attached to the official mimic-joint gripper bodies.
+The task cube is now smaller and closer to the reachable pre-grasp zone. The
+verified Mac-local official-gripper smoke reached `min_tcp_to_cube_dist=0.043`
+with `approach_improved=true`, but still did not achieve contact or lift
+(`gripper_cube_contacts=0`, `grasp_success=false`).
 
 ```bash
 python3 scripts/mycobot_nexus_smoke.py \
@@ -138,8 +142,9 @@ The script writes:
   `MyCobotNexusEnv` reset/step trace.
 - `_workspace/mycobot_nexus_smoke/mycobot_nexus_report.json`: optional actual
   simulation smoke report with observation/action dimensions and scene path.
-- `_workspace/mycobot_nexus_grasp_lift/mycobot_nexus_report.json`: optional
-  native-gripper grasp/lift smoke report with contact and cube-lift fields.
+- `_workspace/mycobot_nexus_official_gripper_grasp_lift/mycobot_nexus_report.json`:
+  optional official-gripper visual grasp/lift smoke report with contact and
+  cube-lift fields.
 - `viewer.html`: standalone local UI with playback controls, real MuJoCo render
   frame slots, and state/action visualizations.
 - `report.json`: POC status and next steps.

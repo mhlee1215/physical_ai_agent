@@ -1507,7 +1507,7 @@ Current lifecycle convention:
 - `sh scripts/so101_interactive_sim.sh --output-dir _workspace/so101_interactive/scripted_smoke --command observe --command 'nudge shoulder_pan 0.1' --command 'action [0,0,0,0,0,0]'`
 - `PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py --dry-contract --output-dir _workspace/mycobot_nexus_contract`
 - `PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py --asset-root _vendor/mycobot_mujoco --output-dir _workspace/mycobot_nexus_smoke --policy cube-approach`
-- `PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py --asset-root _vendor/mycobot_mujoco --output-dir _workspace/mycobot_nexus_grasp_lift --policy grasp-lift`
+- `PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py --asset-root _vendor/mycobot_mujoco --official-gripper-root _vendor/mycobot_ros2 --output-dir _workspace/mycobot_nexus_official_gripper_grasp_lift --policy grasp-lift`
 - `PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_smoke.py --env-id MuJoCoPickLift-v1 --camera-name wrist_cam --width 128 --height 128 --steps 4`
 - `PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_policy_smoke.py --env-id MuJoCoPickLift-v1 --camera-name wrist_cam --width 64 --height 64 --rollout-steps 4`
 - `PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_rl.py --env-id MuJoCoReach-v1 --camera-name wrist_cam --width 64 --height 64 --updates 80 --rollout-steps 32 --output-dir _workspace/so101_visual_rl/train_reach`
