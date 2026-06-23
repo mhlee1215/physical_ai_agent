@@ -50,14 +50,19 @@ rendering dataset frames:
 ```bash
 PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py \
   --asset-root _vendor/mycobot_mujoco \
-  --output-dir _workspace/mycobot_nexus_smoke
+  --output-dir _workspace/mycobot_nexus_smoke \
+  --policy cube-approach
 ```
 
 This creates a real `MyCobotNexusEnv` with MuJoCo `MjModel`/`MjData`, calls
 `reset(seed)`, steps teacher-style 7D actions through a qpos-target controller,
-renders the resulting scene, and writes a trace/report. For dependency-light CI
-or code review, the dry contract path records the env surface without importing
-MuJoCo:
+uses the `cube-approach` Jacobian policy to move the TCP proxy toward the task
+cube, renders the resulting scene, and writes a trace/report with initial,
+final, and minimum TCP-to-cube distance. For dependency-light CI or code review,
+the dry contract path records the env surface without importing MuJoCo:
+
+The verified Mac-local cube-approach smoke reduced TCP-to-cube distance from
+`0.518` to `0.237` over 16 steps with `approach_improved=true`.
 
 ```bash
 python3 scripts/mycobot_nexus_smoke.py \

@@ -47,9 +47,14 @@ class MyCobotNexusStep:
 @dataclass(frozen=True)
 class MyCobotNexusSmokeResult:
     status: str
+    policy: str
     steps: int
     observation_dim: int
     action_dim: int
+    initial_tcp_to_cube_dist: float
+    final_tcp_to_cube_dist: float
+    min_tcp_to_cube_dist: float
+    approach_improved: bool
     trace_path: str
     frame_path: str
     report_path: str
@@ -92,6 +97,7 @@ class MyCobotNexusEnv:
         self._renderer = None
         self._step = 0
         self._qpos_indices = _joint_qpos_indices(mujoco, self.model)
+        self._dof_indices = _joint_dof_indices(mujoco, self.model)
         self._low, self._high = _joint_ranges(self.model, self._qpos_indices)
         self.action_dim = len(MYCOBOT_TEACHER_JOINT_NAMES)
         self.observation_dim = len(MYCOBOT_TEACHER_JOINT_NAMES) + 3
@@ -119,6 +125,26 @@ class MyCobotNexusEnv:
         reward = -float(info["tcp_to_cube_dist"])
         terminated = bool(info["tcp_to_cube_dist"] < 0.08)
         return obs, reward, terminated, False, info
+
+    def cube_approach_action(self) -> list[float]:
+        """Choose a qpos target that moves the TCP proxy toward the cube."""
+        import numpy as np
+
+        target = np.asarray(_cube_position(), dtype=float)
+        target[2] += 0.08
+        tcp = np.asarray(_tcp_position_from_data(self.data), dtype=float)
+        error = target - tcp
+        jacp = np.zeros((3, self.model.nv), dtype=float)
+        jacr = np.zeros((3, self.model.nv), dtype=float)
+        self._mujoco.mj_jacBody(self.model, self.data, jacp, jacr, self.model.nbody - 1)
+        arm_delta = jacp[:, self._dof_indices].T @ error
+        arm_delta = np.clip(1.8 * arm_delta, -0.18, 0.18)
+        current = [float(self.data.qpos[index]) for index in self._qpos_indices]
+        target_qpos = [
+            value + float(delta)
+            for value, delta in zip(current, arm_delta, strict=True)
+        ]
+        return [*_clip(target_qpos, self._low, self._high), -0.2]
 
     def render(self) -> Any:
         if self._renderer is None:
@@ -173,6 +199,7 @@ def run_mycobot_nexus_smoke(
     seed: int,
     width: int,
     height: int,
+    policy: str = "sample",
 ) -> MyCobotNexusSmokeResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     trace_path = output_dir / "mycobot_nexus_trace.jsonl"
@@ -188,9 +215,15 @@ def run_mycobot_nexus_smoke(
     )
     records: list[MyCobotNexusStep] = []
     obs, info = env.reset(seed=seed)
+    initial_dist = float(info["tcp_to_cube_dist"])
     try:
         for step in range(steps):
-            action = sample_mycobot_nexus_action(step, steps)
+            if policy == "cube-approach":
+                action = env.cube_approach_action()
+            elif policy == "sample":
+                action = sample_mycobot_nexus_action(step, steps)
+            else:
+                raise ValueError(f"unsupported myCobot Nexus policy: {policy}")
             obs, reward, terminated, truncated, info = env.step(action)
             records.append(
                 MyCobotNexusStep(
@@ -213,11 +246,23 @@ def run_mycobot_nexus_smoke(
     with trace_path.open("w", encoding="utf-8") as file:
         for record in records:
             file.write(json.dumps(asdict(record), sort_keys=True) + "\n")
+    final_dist = float(records[-1].info["tcp_to_cube_dist"]) if records else initial_dist
     result = MyCobotNexusSmokeResult(
         status="passed",
+        policy=policy,
         steps=len(records),
         observation_dim=len(obs),
         action_dim=len(MYCOBOT_TEACHER_JOINT_NAMES),
+        initial_tcp_to_cube_dist=initial_dist,
+        final_tcp_to_cube_dist=final_dist,
+        min_tcp_to_cube_dist=min(
+            float(record.info["tcp_to_cube_dist"]) for record in records
+        )
+        if records
+        else initial_dist,
+        approach_improved=bool(
+            records and final_dist < initial_dist
+        ),
         trace_path=str(trace_path),
         frame_path=str(frame_path),
         report_path=str(report_path),
@@ -231,6 +276,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
     return {
         "env": "MyCobotNexusEnv",
         "surface": ["reset(seed)", "step(action)", "render()", "close()"],
+        "policies": ["sample", "cube-approach"],
         "asset_source": "https://github.com/elephantrobotics/mycobot_mujoco",
         "model_relative_path": str(MYCOBOT_MODEL_RELATIVE_PATH),
         "joint_order": MYCOBOT_TEACHER_JOINT_NAMES,
@@ -396,6 +442,16 @@ def _joint_qpos_indices(mujoco: Any, model: Any) -> list[int]:
         if joint_id < 0:
             raise ValueError(f"joint not found in MuJoCo model: {name}")
         indices.append(int(model.jnt_qposadr[joint_id]))
+    return indices
+
+
+def _joint_dof_indices(mujoco: Any, model: Any) -> list[int]:
+    indices: list[int] = []
+    for name in MYCOBOT_MODEL_JOINT_NAMES:
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if joint_id < 0:
+            raise ValueError(f"joint not found in MuJoCo model: {name}")
+        indices.append(int(model.jnt_dofadr[joint_id]))
     return indices
 
 

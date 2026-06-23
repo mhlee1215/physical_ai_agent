@@ -26,6 +26,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
             ["reset(seed)", "step(action)", "render()", "close()"],
         )
         self.assertEqual(contract["joint_order"], MYCOBOT_TEACHER_JOINT_NAMES)
+        self.assertIn("cube-approach", contract["policies"])
         self.assertEqual(contract["action_dim"], 7)
         self.assertEqual(contract["real_robot_execution"], "disabled")
 
@@ -52,6 +53,8 @@ class MyCobotNexusEnvTest(unittest.TestCase):
                 "320",
                 "--height",
                 "180",
+                "--policy",
+                "cube-approach",
                 "--dry-contract",
             ]
         )
@@ -62,6 +65,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.width, 320)
         self.assertEqual(args.height, 180)
+        self.assertEqual(args.policy, "cube-approach")
         self.assertTrue(args.dry_contract)
 
     def test_scene_builder_injects_nexus_cube_world(self) -> None:
