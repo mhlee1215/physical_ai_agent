@@ -89,6 +89,11 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--validation-image-cache-dir", type=Path)
     parser.add_argument("--so101-augmentation-report", type=Path)
     parser.add_argument("--tensorboard-log-dir", type=Path)
+    parser.add_argument(
+        "--training-run-summary-path",
+        type=Path,
+        help="JSON launch summary written by start_so101_training.py and mirrored into TensorBoard text.",
+    )
     parser.add_argument("--lightning-precision", default="16-mixed")
     parser.add_argument("--lightning-accelerator", default="auto")
     parser.add_argument("--lightning-devices", default="auto")
@@ -253,6 +258,14 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     )
     tb_log_dir = (wrapper_args.tensorboard_log_dir or cfg.output_dir / "tensorboard").resolve()
     logger = TensorBoardLogger(save_dir=str(tb_log_dir), name="so101_smolvla", version="")
+    _log_training_run_texts(
+        logger=logger,
+        summary_path=wrapper_args.training_run_summary_path,
+        cfg=cfg,
+        augmentation=augmentation,
+        wrapper_args=wrapper_args,
+        lerobot_args=sys.argv[1:],
+    )
     callbacks = []
     checkpoint_callback = _make_lerobot_checkpoint_callback(
         lightning.Callback,
@@ -312,6 +325,277 @@ def _import_tensorboard_logger() -> Any:
     except ModuleNotFoundError:
         from pytorch_lightning.loggers import TensorBoardLogger
     return TensorBoardLogger
+
+
+def _log_training_run_texts(
+    *,
+    logger: Any,
+    summary_path: Path | None,
+    cfg: TrainPipelineConfig,
+    augmentation: SamplingAugmentationConfig,
+    wrapper_args: argparse.Namespace,
+    lerobot_args: list[str],
+) -> None:
+    experiment = getattr(logger, "experiment", None)
+    if experiment is None or not hasattr(experiment, "add_text"):
+        return
+    summary = _load_training_run_summary(summary_path)
+    sections = {
+        "training/summary": _training_summary_markdown(summary, cfg=cfg, summary_path=summary_path),
+        "training/datasets": _training_datasets_markdown(summary),
+        "training/closed_loop": _training_closed_loop_markdown(summary),
+        "training/augmentation": _training_augmentation_markdown(summary, augmentation=augmentation),
+        "training/runtime": _training_runtime_markdown(summary, wrapper_args=wrapper_args, cfg=cfg),
+        "training/command": _training_command_markdown(summary, lerobot_args=lerobot_args),
+    }
+    for tag, text in sections.items():
+        experiment.add_text(tag, text, global_step=0)
+
+
+def _load_training_run_summary(summary_path: Path | None) -> dict[str, Any]:
+    if summary_path is None:
+        return {}
+    try:
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"summary_path": str(summary_path), "summary_load_error": "file not found"}
+    except json.JSONDecodeError as exc:
+        return {"summary_path": str(summary_path), "summary_load_error": str(exc)}
+
+
+def _training_summary_markdown(
+    summary: dict[str, Any],
+    *,
+    cfg: TrainPipelineConfig,
+    summary_path: Path | None,
+) -> str:
+    dataset_config = _summary_mapping(summary.get("dataset_config"))
+    training = _summary_mapping(dataset_config.get("training"))
+    closed_loop = _summary_mapping(dataset_config.get("closed_loop"))
+    rows = {
+        "run_dir": summary.get("run_dir", ""),
+        "summary_path": str(summary_path) if summary_path is not None else "",
+        "policy_type": getattr(cfg.policy, "type", ""),
+        "policy_repo_id": training.get("policy_repo_id") or getattr(cfg.policy, "repo_id", ""),
+        "output_dir": str(cfg.output_dir),
+        "steps": getattr(cfg, "steps", ""),
+        "save_freq": getattr(cfg, "save_freq", ""),
+        "batch_size": training.get("batch_size", getattr(cfg, "batch_size", "")),
+        "validation_interval_epochs": _arg_value(summary.get("train_cmd"), "--validation-interval-epochs"),
+        "validation_interval_steps": _arg_value(summary.get("train_cmd"), "--validation-interval-steps"),
+        "closed_loop_policy": _arg_value(summary.get("post_checkpoint_loop_cmd"), "--closed-loop-policy"),
+        "closed_loop_runner": closed_loop.get("runner", ""),
+        "tensorboard_url": summary.get("tensorboard_url", ""),
+        "mobile_tensorboard_url": summary.get("mobile_tensorboard_url", ""),
+    }
+    return _markdown_table("SO101 Training Summary", rows)
+
+
+def _training_datasets_markdown(summary: dict[str, Any]) -> str:
+    dataset_config = _summary_mapping(summary.get("dataset_config"))
+    lines = ["### SO101 Dataset Contract", ""]
+    if dataset_config.get("name"):
+        lines.append(f"- config: `{dataset_config.get('name')}`")
+    if dataset_config.get("task"):
+        lines.append(f"- task: `{dataset_config.get('task')}`")
+    if dataset_config.get("scenario"):
+        lines.append(f"- scenario: `{dataset_config.get('scenario')}`")
+    lines.append("")
+    camera_contract = _summary_mapping(dataset_config.get("camera_contract"))
+    if camera_contract:
+        lines.append("#### Cameras")
+        lines.extend(_dict_table_lines(camera_contract))
+        lines.append("")
+    train_datasets = dataset_config.get("train_datasets")
+    if isinstance(train_datasets, list):
+        lines.append("#### Train Datasets")
+        lines.extend(_dataset_table_lines(train_datasets))
+        lines.append("")
+    train_dataset = dataset_config.get("train_dataset")
+    if isinstance(train_dataset, dict):
+        lines.append("#### Train Dataset")
+        lines.extend(_dataset_table_lines([train_dataset]))
+        lines.append("")
+    validation = _summary_mapping(dataset_config.get("validation_dataset"))
+    validation_sources = validation.get("hf_resolved_sources") or validation.get("hf_merge_sources")
+    if isinstance(validation_sources, list):
+        lines.append("#### Validation Datasets")
+        lines.extend(_dataset_table_lines(validation_sources))
+    elif validation:
+        lines.append("#### Validation Dataset")
+        lines.extend(_dataset_table_lines([validation]))
+    return "\n".join(lines).strip()
+
+
+def _training_closed_loop_markdown(summary: dict[str, Any]) -> str:
+    dataset_config = _summary_mapping(summary.get("dataset_config"))
+    closed_loop = _summary_mapping(dataset_config.get("closed_loop"))
+    lines = ["### Closed-Loop Evaluation", ""]
+    lines.extend(
+        _dict_table_lines(
+            {
+                "runner": closed_loop.get("runner", ""),
+                "env_id": closed_loop.get("env_id", ""),
+                "task_prompt": closed_loop.get("task_prompt", ""),
+                "qwen_object": closed_loop.get("qwen_object", ""),
+                "valid_mask_checkpoint": closed_loop.get("valid_mask_checkpoint", ""),
+                "success_metric": closed_loop.get("success_metric", ""),
+            }
+        )
+    )
+    test_cases = closed_loop.get("test_cases")
+    if isinstance(test_cases, list):
+        lines.extend(["", "#### Test Cases", "", "| id | episodes | steps | seed | start_contract | task_prompt | plan_json |", "| --- | ---: | ---: | ---: | --- | --- | --- |"])
+        for test_case in test_cases:
+            if not isinstance(test_case, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    _escape_md(
+                        test_case.get(key, "")
+                    )
+                    for key in ("id", "episodes", "steps", "seed", "start_contract", "task_prompt", "plan_json")
+                )
+                + " |"
+            )
+    commands = summary.get("post_checkpoint_loop_cmds")
+    if isinstance(commands, list) and commands:
+        lines.extend(["", "#### Expanded Loop Commands", ""])
+        for index, command in enumerate(commands, start=1):
+            lines.append(f"```text\n# loop command {index}\n{_shell_join(command)}\n```")
+    return "\n".join(lines).strip()
+
+
+def _training_augmentation_markdown(
+    summary: dict[str, Any],
+    *,
+    augmentation: SamplingAugmentationConfig,
+) -> str:
+    dataset_config = _summary_mapping(summary.get("dataset_config"))
+    configured = _summary_mapping(dataset_config.get("augmentation"))
+    actual = {
+        field.name: getattr(augmentation, field.name)
+        for field in dataclasses.fields(augmentation)
+        if hasattr(augmentation, field.name)
+    }
+    lines = ["### Train-Time Augmentation", "", "Validation and closed-loop inputs are unaugmented.", ""]
+    if configured:
+        lines.append("#### Configured")
+        lines.extend(_dict_table_lines(configured))
+        lines.append("")
+    lines.append("#### Effective Environment")
+    lines.extend(_dict_table_lines(actual))
+    return "\n".join(lines).strip()
+
+
+def _training_runtime_markdown(
+    summary: dict[str, Any],
+    *,
+    wrapper_args: argparse.Namespace,
+    cfg: TrainPipelineConfig,
+) -> str:
+    rows = {
+        "runtime_platform": _summary_mapping(summary.get("runtime_contract")).get("runtime_platform", ""),
+        "training_device": _summary_mapping(summary.get("runtime_contract")).get("training_device", ""),
+        "lightning_accelerator": wrapper_args.lightning_accelerator,
+        "lightning_devices": wrapper_args.lightning_devices,
+        "lightning_precision": wrapper_args.lightning_precision,
+        "resume": getattr(cfg, "resume", ""),
+        "resume_checkpoint": wrapper_args.so101_resume_checkpoint_path or "",
+        "local_training_standard": _summary_mapping(summary.get("local_training_standard")).get("name", ""),
+        "train_log": _summary_mapping(summary.get("logs")).get("train", ""),
+        "tensorboard_log": _summary_mapping(summary.get("logs")).get("tensorboard", ""),
+    }
+    return _markdown_table("Runtime", rows)
+
+
+def _training_command_markdown(summary: dict[str, Any], *, lerobot_args: list[str]) -> str:
+    train_cmd = summary.get("train_cmd")
+    lines = ["### Training Command", ""]
+    if isinstance(train_cmd, list):
+        lines.append(f"```text\n{_shell_join(train_cmd)}\n```")
+    else:
+        lines.append(f"```text\n{_shell_join([sys.argv[0], *lerobot_args])}\n```")
+    tensorboard_cmd = summary.get("tensorboard_cmd")
+    if isinstance(tensorboard_cmd, list):
+        lines.extend(["", "### TensorBoard Command", "", f"```text\n{_shell_join(tensorboard_cmd)}\n```"])
+    cache_cmds = summary.get("cache_build_cmds")
+    if isinstance(cache_cmds, list) and cache_cmds:
+        lines.extend(["", "### Cache Build Commands", ""])
+        for command in cache_cmds:
+            if isinstance(command, list):
+                lines.append(f"```text\n{_shell_join(command)}\n```")
+    return "\n".join(lines).strip()
+
+
+def _summary_mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _markdown_table(title: str, rows: dict[str, Any]) -> str:
+    lines = [f"### {title}", "", "| key | value |", "| --- | --- |"]
+    for key, value in rows.items():
+        lines.append(f"| `{_escape_md(key)}` | {_escape_md(value)} |")
+    return "\n".join(lines)
+
+
+def _dict_table_lines(rows: dict[str, Any]) -> list[str]:
+    lines = ["| key | value |", "| --- | --- |"]
+    for key, value in rows.items():
+        lines.append(f"| `{_escape_md(key)}` | {_escape_md(value)} |")
+    return lines
+
+
+def _dataset_table_lines(rows: list[Any]) -> list[str]:
+    lines = ["| name | repo_id | root | episodes | frames | hf_path |", "| --- | --- | --- | ---: | ---: | --- |"]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                _escape_md(row.get(key, ""))
+                for key in ("name", "repo_id", "root", "expected_episodes", "expected_frames", "hf_path_in_repo")
+            )
+            + " |"
+        )
+    return lines
+
+
+def _arg_value(command: Any, flag: str) -> str:
+    if not isinstance(command, list):
+        return ""
+    prefix = f"{flag}="
+    for index, part in enumerate(command):
+        if not isinstance(part, str):
+            continue
+        if part == flag and index + 1 < len(command):
+            return str(command[index + 1])
+        if part.startswith(prefix):
+            return part[len(prefix):]
+    return ""
+
+
+def _shell_join(command: list[Any]) -> str:
+    return " ".join(shlex_quote(str(part)) for part in command)
+
+
+def shlex_quote(value: str) -> str:
+    if not value:
+        return "''"
+    if re.fullmatch(r"[A-Za-z0-9_@%+=:,./-]+", value):
+        return value
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _escape_md(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value, sort_keys=True)
+    text = str(value)
+    return text.replace("|", "\\|").replace("\n", "<br>")
 
 
 def _post_checkpoint_loop_command(args: argparse.Namespace) -> list[str] | None:

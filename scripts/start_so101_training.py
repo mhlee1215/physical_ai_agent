@@ -258,6 +258,8 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         str(tensorboard_dir),
         *_ensure_arg(training_args, "output_dir", str(train_output_dir)),
     ]
+    training_run_summary_path = run_dir / "training_run_summary.json"
+    train_cmd.extend(["--training-run-summary-path", str(training_run_summary_path)])
     tensorboard_exe = _tensorboard_executable(args.python, repo_root)
     tensorboard_cmd = tensorboard_exe if tensorboard_exe else [str(args.python), "-m", "tensorboard.main"]
     tensorboard_cmd.extend(
@@ -326,9 +328,17 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "post_checkpoint_loop_cmds": post_checkpoint_loop_cmds,
         "cache_build_cmds": cache_build_cmds,
         "runtime_contract": runtime_contract,
+        "training_run_summary_path": str(training_run_summary_path),
         "tensorboard_url": f"http://127.0.0.1:{args.tensorboard_port}/" if enable_tensorboard else None,
         "mobile_tensorboard_url": _mobile_url(args.tensorboard_port) if enable_tensorboard else None,
         "dashboard_url": f"http://127.0.0.1:{args.dashboard_port}/" if enable_dashboard else None,
+        "logs": {
+            "train": str(log_dir / "train.log"),
+            "tensorboard": str(log_dir / "tensorboard.log") if enable_tensorboard else None,
+            "dashboard": str(log_dir / "dashboard.log") if enable_dashboard else None,
+            "gpu_monitor": str(log_dir / "gpu_monitor.log") if enable_gpu_monitor else None,
+            "progress_monitor": str(log_dir / "progress_monitor.log") if enable_progress_monitor else None,
+        },
     }
     _validate_monitoring_contract(
         args=args,
@@ -343,6 +353,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         return 0
 
     _run_cache_builds(cache_build_cmds, log_dir=log_dir, cwd=repo_root)
+    _write_training_run_summary(training_run_summary_path, launch_plan)
     train = _popen(train_cmd, log_dir / "train.log", cwd=repo_root)
     train_pid_file.write_text(str(train.pid) + "\n", encoding="utf-8")
     tensorboard = (
@@ -365,13 +376,6 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "dashboard_pid": dashboard.pid if dashboard else None,
         "gpu_monitor_pid": gpu_monitor.pid if gpu_monitor else None,
         "progress_monitor_pid": progress_monitor.pid if progress_monitor else None,
-        "logs": {
-            "train": str(log_dir / "train.log"),
-            "tensorboard": str(log_dir / "tensorboard.log") if tensorboard else None,
-            "dashboard": str(log_dir / "dashboard.log") if dashboard else None,
-            "gpu_monitor": str(log_dir / "gpu_monitor.log") if gpu_monitor else None,
-            "progress_monitor": str(log_dir / "progress_monitor.log") if progress_monitor else None,
-        },
     }
     _write_json(args.lock_file, record)
     current = status(args.lock_file)
@@ -400,6 +404,36 @@ def status(lock_file: Path) -> dict[str, Any]:
         if port is not None:
             record["mobile_tensorboard_url"] = _mobile_url(port)
     return record
+
+
+def _write_training_run_summary(path: Path, launch_plan: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    summary = {
+        key: launch_plan.get(key)
+        for key in (
+            "operation",
+            "run_dir",
+            "train_output_dir",
+            "lock_file",
+            "local_training_standard",
+            "train_cmd",
+            "dataset_config",
+            "tensorboard_cmd",
+            "dashboard_cmd",
+            "gpu_monitor_cmd",
+            "progress_monitor_cmd",
+            "post_checkpoint_loop_cmd",
+            "post_checkpoint_loop_cmds",
+            "cache_build_cmds",
+            "runtime_contract",
+            "tensorboard_url",
+            "mobile_tensorboard_url",
+            "dashboard_url",
+        )
+    }
+    summary["training_run_summary_path"] = str(path)
+    summary["written_at_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _write_json(path, summary)
 
 
 def stop(lock_file: Path, *, timeout_s: float, json_output: bool = False) -> int:

@@ -301,6 +301,13 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("/input_prompt", constants)
         self.assertIn("/input_motor_state", constants)
         self.assertIn("/input_camera_contract", constants)
+        self.assertIn("--training-run-summary-path", constants)
+        self.assertIn("training/summary", constants)
+        self.assertIn("training/datasets", constants)
+        self.assertIn("training/closed_loop", constants)
+        self.assertIn("training/augmentation", constants)
+        self.assertIn("training/runtime", constants)
+        self.assertIn("training/command", constants)
         self.assertIn("observation.state", constants)
         self.assertIn("val/loss", constants)
         self.assertIn("important/train_loss", constants)
@@ -1055,6 +1062,12 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIsNone(payload["progress_monitor_cmd"])
             self.assertIsNotNone(payload["post_checkpoint_loop_cmd"])
             self.assertIn("--post-checkpoint-loop-command-json", train_cmd)
+            self.assertIn("training_run_summary_path", payload)
+            self.assertIn("--training-run-summary-path", train_cmd)
+            self.assertEqual(
+                train_cmd[train_cmd.index("--training-run-summary-path") + 1],
+                payload["training_run_summary_path"],
+            )
             self.assertEqual(payload["runtime_contract"]["runtime_platform"], "macos")
             self.assertEqual(payload["runtime_contract"]["training_device"], "mps")
             self.assertEqual(payload["runtime_contract"]["closed_loop_mujoco_gl"], "glfw")
