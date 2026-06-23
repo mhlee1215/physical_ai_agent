@@ -66,21 +66,9 @@ OFFICIAL_GRIPPER_MIMIC = {
     "gripper_base_to_gripper_left": -1.0,
 }
 OFFICIAL_320_GRIPPER_JOINT_NAMES = [
-    "gripper_controller",
-    "gripper_base_to_gripper_left2",
-    "gripper_left3_to_gripper_left1",
-    "gripper_base_to_gripper_right3",
-    "gripper_base_to_gripper_right2",
-    "gripper_right3_to_gripper_right1",
+    "functional_left_finger_slide",
+    "functional_right_finger_slide",
 ]
-OFFICIAL_320_GRIPPER_MIMIC = {
-    "gripper_controller": 1.0,
-    "gripper_base_to_gripper_left2": 1.0,
-    "gripper_left3_to_gripper_left1": -1.0,
-    "gripper_base_to_gripper_right3": -1.0,
-    "gripper_base_to_gripper_right2": -1.0,
-    "gripper_right3_to_gripper_right1": 1.0,
-}
 TASK_CUBE_BODY = "task_cube_body"
 TASK_CUBE_GEOM = "task_cube"
 TASK_CUBE_POS = (-0.25, -0.13, 0.023)
@@ -241,7 +229,7 @@ class MyCobotNexusEnv:
             self._cube_initial_pos = [
                 float(pad_midpoint[0]),
                 float(pad_midpoint[1]),
-                TASK_CUBE_POS[2],
+                float(pad_midpoint[2]),
             ]
             for axis, value in enumerate(self._cube_initial_pos):
                 self.data.qpos[self._cube_freejoint_qpos_index + axis] = float(value)
@@ -369,7 +357,7 @@ class MyCobotNexusEnv:
         tcp = self._tcp_position()
         if not self._grasp_attached:
             pad_midpoint = self._finger_pad_midpoint()
-            pad_threshold = 0.14 if self._uses_official_320_gripper else 0.08
+            pad_threshold = 0.04 if self._uses_official_320_gripper else 0.08
             close_enough = (
                 _distance(cube, tcp) < 0.04
                 or _distance(cube, pad_midpoint) < pad_threshold
@@ -387,13 +375,9 @@ class MyCobotNexusEnv:
 
     def _finger_pad_midpoint(self) -> list[float]:
         if self._uses_official_320_gripper:
-            midpoint = self._geom_midpoint("gripper_left1_visual_0", "gripper_right1_visual_0")
+            midpoint = self._geom_midpoint("left_finger_pad", "right_finger_pad")
             if midpoint is not None:
-                return [
-                    midpoint[0] + 0.02,
-                    midpoint[1] + 0.06,
-                    midpoint[2] + 0.004,
-                ]
+                return midpoint
         midpoint = self._geom_midpoint("left_finger_pad", "right_finger_pad")
         if midpoint is not None:
             return midpoint
@@ -512,17 +496,11 @@ class MyCobotNexusEnv:
 
     def _set_gripper(self, *, command: float) -> None:
         if self._uses_official_320_gripper:
-            open_value = -0.7
-            closed_value = 0.3
-            base_value = closed_value + (max(-1.0, min(1.0, float(command))) + 1.0) * 0.5 * (
-                open_value - closed_value
-            )
-            for qpos_index, joint_name in zip(
-                self._gripper_qpos_indices,
-                OFFICIAL_320_GRIPPER_JOINT_NAMES,
-                strict=True,
-            ):
-                self.data.qpos[qpos_index] = base_value * OFFICIAL_320_GRIPPER_MIMIC[joint_name]
+            open_value = 0.035
+            close_amount = (1.0 - max(-1.0, min(1.0, float(command)))) * 0.5
+            qpos_value = (1.0 - close_amount) * open_value
+            for qpos_index in self._gripper_qpos_indices:
+                self.data.qpos[qpos_index] = qpos_value
             return
         if self._uses_official_gripper:
             open_value = -0.007
@@ -895,8 +873,11 @@ def _build_official_320_nexus_scene_model(
         worldbody.append(node)
     base = ET.SubElement(worldbody, "body", {"name": "base", "pos": "0 0 0"})
     _add_urdf_visual_geoms(base, "base", link_visuals)
-    _append_urdf_children(base, "base", children_by_parent, link_visuals)
-    _add_320_gripper_helpers(base)
+    _append_urdf_children(base, "base", children_by_parent, link_visuals, skip_gripper_tree=True)
+    link6 = base.find(".//body[@name='link6']")
+    if link6 is None:
+        raise ValueError("official 320 URDF conversion did not produce link6")
+    link6.append(_functional_320_gripper_node())
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(scene_path, encoding="utf-8", xml_declaration=True)
@@ -952,8 +933,12 @@ def _append_urdf_children(
     parent_link: str,
     children_by_parent: dict[str, list[dict[str, Any]]],
     link_visuals: dict[str, list[dict[str, str]]],
+    *,
+    skip_gripper_tree: bool = False,
 ) -> None:
     for joint in children_by_parent.get(parent_link, []):
+        if skip_gripper_tree and str(joint["child"]).startswith("gripper"):
+            continue
         attrib = {
             "name": str(joint["child"]),
             "pos": _clean_float_string(str(joint["xyz"])),
@@ -974,7 +959,13 @@ def _append_urdf_children(
                 },
             )
         _add_urdf_visual_geoms(body, str(joint["child"]), link_visuals)
-        _append_urdf_children(body, str(joint["child"]), children_by_parent, link_visuals)
+        _append_urdf_children(
+            body,
+            str(joint["child"]),
+            children_by_parent,
+            link_visuals,
+            skip_gripper_tree=skip_gripper_tree,
+        )
 
 
 def _add_urdf_visual_geoms(
@@ -998,20 +989,97 @@ def _add_urdf_visual_geoms(
         )
 
 
-def _add_320_gripper_helpers(root_body: ET.Element) -> None:
-    gripper_base = root_body.find(".//body[@name='gripper_base']")
-    if gripper_base is not None:
-        ET.SubElement(
-            gripper_base,
-            "site",
-            {"name": TCP_SITE, "pos": "0 0.055 -0.018", "size": "0.006", "rgba": "0 0 0 0"},
-        )
-    left = root_body.find(".//body[@name='gripper_left1']")
-    if left is not None:
-        _add_proxy_pad(left, "left_finger_pad", pos="0.036 -0.052 0")
-    right = root_body.find(".//body[@name='gripper_right1']")
-    if right is not None:
-        _add_proxy_pad(right, "right_finger_pad", pos="-0.072 -0.05 0")
+def _functional_320_gripper_node() -> ET.Element:
+    base = ET.Element(
+        "body",
+        {
+            "name": "functional_320_gripper",
+            "pos": "0 0 0.042",
+            "euler": "1.5708 0 0",
+        },
+    )
+    ET.SubElement(
+        base,
+        "geom",
+        {
+            "name": "functional_320_gripper_base_visual",
+            "type": "mesh",
+            "mesh": "official_320_gripper_base",
+            "pos": "-0.02 0.012 -0.018",
+            "euler": "0 0 1.5708",
+            "contype": "0",
+            "conaffinity": "0",
+        },
+    )
+    ET.SubElement(
+        base,
+        "site",
+        {"name": TCP_SITE, "pos": "0 0.088 0", "size": "0.006", "rgba": "0 0 0 0"},
+    )
+    left = ET.SubElement(base, "body", {"name": "functional_left_finger", "pos": "0 0.085 0.008"})
+    ET.SubElement(
+        left,
+        "joint",
+        {
+            "name": "functional_left_finger_slide",
+            "type": "slide",
+            "axis": "0 0 1",
+            "range": "0 0.035",
+            "limited": "true",
+            "damping": "0.6",
+        },
+    )
+    _functional_320_finger_geoms(left, "left_finger_pad", z_sign=1.0)
+    right = ET.SubElement(
+        base,
+        "body",
+        {"name": "functional_right_finger", "pos": "0 0.085 -0.008"},
+    )
+    ET.SubElement(
+        right,
+        "joint",
+        {
+            "name": "functional_right_finger_slide",
+            "type": "slide",
+            "axis": "0 0 -1",
+            "range": "0 0.035",
+            "limited": "true",
+            "damping": "0.6",
+        },
+    )
+    _functional_320_finger_geoms(right, "right_finger_pad", z_sign=-1.0)
+    return base
+
+
+def _functional_320_finger_geoms(parent: ET.Element, pad_name: str, *, z_sign: float) -> None:
+    ET.SubElement(
+        parent,
+        "geom",
+        {
+            "name": f"{pad_name}_visual",
+            "type": "box",
+            "pos": f"0 0.028 {0.005 * z_sign}",
+            "size": "0.012 0.03 0.006",
+            "rgba": "0.46 0.45 0.4 1",
+            "contype": "0",
+            "conaffinity": "0",
+        },
+    )
+    ET.SubElement(
+        parent,
+        "geom",
+        {
+            "name": pad_name,
+            "type": "box",
+            "pos": f"0 0.038 {0.005 * z_sign}",
+            "size": "0.012 0.014 0.008",
+            "rgba": "0.08 0.08 0.08 0",
+            "friction": "1.5 0.1 0.1",
+            "contype": "1",
+            "conaffinity": "1",
+            "mass": "0.01",
+        },
+    )
 
 
 def _clean_float_string(raw: str) -> str:
