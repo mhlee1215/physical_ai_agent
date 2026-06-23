@@ -37,6 +37,18 @@ def main() -> None:
     parser.add_argument("--media-height", type=int, default=128)
     parser.add_argument("--media-fps", type=int, default=12)
     parser.add_argument("--media-every-n-steps", type=int, default=1)
+    parser.add_argument(
+        "--loop-test-id",
+        action="append",
+        default=[],
+        help="Only rebuild the selected loop test id. Repeat to rebuild multiple loop tests.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        action="append",
+        default=[],
+        help="Only rebuild loop tests for this checkpoint. Repeat to rebuild multiple checkpoints.",
+    )
     args = parser.parse_args()
 
     manifest = build_export(
@@ -48,6 +60,8 @@ def main() -> None:
         media_height=args.media_height,
         media_fps=args.media_fps,
         media_every_n_steps=args.media_every_n_steps,
+        loop_test_ids=args.loop_test_id,
+        checkpoints=args.checkpoint,
     )
     print(json.dumps({"manifest_path": str(args.output_dir / "manifest.json"), **manifest["summary"]}, indent=2))
 
@@ -62,13 +76,22 @@ def build_export(
     media_height: int = 128,
     media_fps: int = 12,
     media_every_n_steps: int = 1,
+    loop_test_ids: list[str] | tuple[str, ...] | set[str] | None = None,
+    checkpoints: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> dict[str, Any]:
     run_dir = run_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     validations = _validation_by_checkpoint(run_dir)
-    loop_tests = []
+    selected_loop_ids = {str(value) for value in (loop_test_ids or []) if value}
+    selected_checkpoints = {str(value) for value in (checkpoints or []) if value}
+    filtered_build = bool(selected_loop_ids or selected_checkpoints)
+    loop_tests_by_id = _existing_loop_tests_by_id(output_dir) if filtered_build else {}
     for report_path in _closed_loop_report_paths(run_dir):
         report = _read_json(report_path)
+        checkpoint = _checkpoint_from_report_path(report_path)
+        loop_test_id = _loop_test_id_from_report_path(report_path, checkpoint)
+        if filtered_build and loop_test_id not in selected_loop_ids and checkpoint not in selected_checkpoints:
+            continue
         loop_test = _build_loop_test(
             run_dir,
             output_dir,
@@ -82,7 +105,8 @@ def build_export(
             media_fps=media_fps,
             media_every_n_steps=media_every_n_steps,
         )
-        loop_tests.append(loop_test)
+        loop_tests_by_id[loop_test["loop_test_id"]] = loop_test
+    loop_tests = list(loop_tests_by_id.values())
     loop_tests.sort(key=lambda row: (row.get("training_step") or -1, row.get("checkpoint") or ""))
 
     manifest = {
@@ -102,6 +126,24 @@ def build_export(
     _write_standalone_report(output_dir, manifest)
     _write_zip_bundle(output_dir)
     return manifest
+
+
+def _existing_loop_tests_by_id(output_dir: Path) -> dict[str, dict[str, Any]]:
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return {}
+    try:
+        manifest = _read_json(manifest_path)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    rows = manifest.get("loop_tests")
+    if not isinstance(rows, list):
+        return {}
+    return {
+        str(row["loop_test_id"]): row
+        for row in rows
+        if isinstance(row, dict) and row.get("loop_test_id")
+    }
 
 
 def _build_loop_test(
@@ -157,6 +199,8 @@ def _build_loop_test(
         "scenario": "pick_up_cube",
         "policy_type": "qwen_chain",
         "policy_label": "Qwen chain + SmolVLA",
+        "env_id": report.get("env_id"),
+        "camera_contract": report.get("camera_contract"),
         "checkpoint": checkpoint,
         "training_step": step,
         "validation_loss": validation.get("loss"),
@@ -185,6 +229,7 @@ def _build_loop_test(
         "scenario": loop_manifest["scenario"],
         "policy_type": loop_manifest["policy_type"],
         "policy_label": loop_manifest["policy_label"],
+        "env_id": loop_manifest["env_id"],
         "validation_loss": loop_manifest["validation_loss"],
         "success_rate": loop_manifest["success_rate"],
         "status": loop_manifest["status"],
@@ -394,7 +439,7 @@ def _policy_step_row(
         "policy_input": {
             "prompt": record.get("prompt"),
             "observation": record.get("observation"),
-            "image_feature_mapping": record.get("image_feature_mapping"),
+            "image_feature_mapping": _image_feature_mapping(record, report),
             "images": {},
         },
         "policy_output": {
@@ -675,7 +720,9 @@ def _generate_media_for_records(
     except Exception:
         return records
 
-    env_id = str(report.get("env_id") or (records[0].get("render_replay") or {}).get("env_id") or "MuJoCoReach-v1")
+    replay = records[0].get("render_replay") or {}
+    env_id = str(report.get("env_id") or replay.get("env_id") or "MuJoCoReach-v1")
+    env_config = _env_config_for_replay(report, replay)
     seed = int(episode.get("seed") or report.get("seed") or (records[0].get("render_replay") or {}).get("seed") or 0)
     media_root = episode_dir / "media"
     env = None
@@ -683,7 +730,7 @@ def _generate_media_for_records(
     generated = [dict(record) for record in records]
     primitive_frames: dict[tuple[Any, Any], list[str]] = defaultdict(list)
     try:
-        env = SO101NexusEnv(env_id, None)
+        env = SO101NexusEnv(env_id, None, env_kwargs=_env_kwargs_from_config(env_id, env_config))
         raw_env = getattr(env, "env", env)
         renderers = {
             name: mujoco.Renderer(raw_env.unwrapped.model, height=int(height), width=int(width))
@@ -739,6 +786,42 @@ def _generate_media_for_records(
         if env is not None:
             env.close()
     return generated
+
+
+def _env_config_for_replay(report: dict[str, Any], replay: dict[str, Any]) -> dict[str, Any]:
+    for value in (report.get("env_config"), replay.get("env_config")):
+        if isinstance(value, dict):
+            return {str(key): item for key, item in value.items()}
+    target_object = _target_object(report.get("plan") or {})
+    if target_object.endswith(" cube"):
+        return {
+            "object_shape": "cube",
+            "object_color": target_object[: -len(" cube")],
+            "cube_half_size": 0.0125,
+            "n_distractors": 0,
+        }
+    return {}
+
+
+def _env_kwargs_from_config(env_id: str, env_config: dict[str, Any]) -> dict[str, Any]:
+    if env_id != "MuJoCoPickLift-v1":
+        return {}
+    color = env_config.get("object_color")
+    shape = env_config.get("object_shape", "cube")
+    if not color or shape != "cube":
+        return {}
+    from so101_nexus_core.config import PickConfig
+    from so101_nexus_core.objects import CubeObject
+
+    return {
+        "config": PickConfig(
+            objects=CubeObject(
+                color=str(color),
+                half_size=float(env_config.get("cube_half_size", 0.0125)),
+            ),
+            n_distractors=int(env_config.get("n_distractors", 0)),
+        )
+    }
 
 
 def _write_generated_primitive_videos(
@@ -801,6 +884,41 @@ def _target_object(plan: dict[str, Any]) -> str:
     return "green cube"
 
 
+def _image_feature_mapping(record: dict[str, Any], report: dict[str, Any]) -> dict[str, str]:
+    legacy_mapping = record.get("image_feature_mapping")
+    contract = report.get("camera_contract")
+    if isinstance(legacy_mapping, dict):
+        mapping = {str(key): str(value) for key, value in legacy_mapping.items()}
+        if isinstance(contract, dict) and contract:
+            normalized_contract = {str(key): str(value) for key, value in contract.items()}
+            _assert_camera_mapping_consistent(mapping, normalized_contract)
+        return mapping
+    if isinstance(contract, dict) and contract:
+        return {str(key): str(value) for key, value in contract.items()}
+    return {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate",
+    }
+
+
+def _assert_camera_mapping_consistent(mapping: dict[str, str], contract: dict[str, str]) -> None:
+    mismatches = []
+    for key, actual in mapping.items():
+        expected = contract.get(key)
+        if expected is None:
+            continue
+        expected_base = expected.replace(" duplicate", "")
+        actual_base = actual.replace(" duplicate", "")
+        if actual_base != expected_base:
+            mismatches.append(f"{key}: trace={actual!r} report={expected!r}")
+    if mismatches:
+        raise ValueError(
+            "loop-test camera mapping mismatch; refusing to relabel analyzer inputs: "
+            + ", ".join(mismatches)
+        )
+
+
 def _tool_call_payload(call: dict[str, Any]) -> dict[str, Any]:
     return {
         "function": call.get("fn"),
@@ -832,7 +950,7 @@ def _tool_parameters_from_record(record: dict[str, Any]) -> dict[str, Any]:
 
 def _object_from_prompt(prompt: Any) -> str | None:
     text = str(prompt or "")
-    for marker in ("green cube", "cube"):
+    for marker in ("green cube", "red cube", "blue cube", "cube"):
         if marker in text:
             return marker
     return None

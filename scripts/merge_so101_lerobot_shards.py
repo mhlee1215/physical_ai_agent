@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -28,7 +27,13 @@ def main() -> None:
     print(json.dumps(report, indent=2, sort_keys=True))
 
 
-def merge_shards(*, output_root: Path, repo_id: str, shard_roots: list[Path], overwrite: bool) -> dict[str, Any]:
+def merge_shards(
+    *,
+    output_root: Path,
+    repo_id: str,
+    shard_roots: list[Path],
+    overwrite: bool,
+) -> dict[str, Any]:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     try:
@@ -135,30 +140,11 @@ def _frame_from_source(sample: dict[str, Any], *, include_camera3: bool) -> dict
         "observation.images.camera2": _image_hwc_uint8(sample["observation.images.camera2"]),
         "observation.state": _array(sample["observation.state"], dtype=np.float32),
         "action": _array(sample["action"], dtype=np.float32),
-        "task": _normalize_task_prompt(str(sample["task"])),
+        "task": str(sample["task"]),
     }
     if include_camera3:
         frame["observation.images.camera3"] = _image_hwc_uint8(sample["observation.images.camera3"])
     return frame
-
-
-def _normalize_task_prompt(prompt: str) -> str:
-    prompt = re.sub(
-        r"^Move the static finger pad above one visible (.+) edge\.$",
-        r"Move the gripper above one visible \1 edge.",
-        prompt,
-    )
-    prompt = re.sub(
-        r"^Align the static finger pad with one visible (.+) edge\.$",
-        r"Align the gripper jaws around one visible \1 edge.",
-        prompt,
-    )
-    prompt = re.sub(
-        r"^Keep the static finger pad at the (.+) edge, close the gripper, and lift\.$",
-        r"Close the gripper on the \1 edge and lift.",
-        prompt,
-    )
-    return prompt
 
 
 def _image_hwc_uint8(value: Any) -> np.ndarray:

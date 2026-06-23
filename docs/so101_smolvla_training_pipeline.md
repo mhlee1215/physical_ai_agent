@@ -51,6 +51,8 @@ explicitly overrides it:
   "image_camera_dropout_prob": 0.0,
   "image_patch_dropout_prob": 0.0,
   "image_patch_mask_ratio": 0.15,
+  "image_color_jitter": true,
+  "image_sharpness_jitter": true,
   "image_affine_degrees": 5.0,
   "image_affine_translate": 0.05,
   "gpu_image_augmentation": true
@@ -61,6 +63,10 @@ explicitly overrides it:
 training image sample. It is distinct from legacy `image_patch_dropout_prob`,
 which only masks one random patch for selected samples and should stay `0.0`
 unless a specific ablation requires it.
+
+`image_color_jitter` and `image_sharpness_jitter` mirror the LeRobot SmolVLA
+image transform recipe while keeping validation and closed-loop inputs
+unchanged.
 
 `image_affine_degrees` and `image_affine_translate` apply a small random affine
 transform after the image batch is on the training device. The implementation

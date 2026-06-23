@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-06-18
+Last updated: 2026-06-23
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -95,6 +95,15 @@ paper-facing concepts:
   not authoritative; verify `torch.backends.mps.is_available()` and launch
   MPS training from an unsandboxed/external runtime. Keep deterministic logs,
   TensorBoard events, checkpoints, and monitor artifacts under `_workspace/`.
+- User policy: for this `physical_ai_agent` repo, executable local work that
+  materially depends on real runtime access should be launched outside the Codex
+  sandbox by default. This standing approval covers repo-local training,
+  evaluation, closed-loop tests, MuJoCo/MPS runs, TensorBoard, dataset/viewer
+  servers, and executable verification commands. Do not pause to ask again in
+  chat before these launches; request the required unsandboxed tool execution
+  directly and keep logs/artifacts under `_workspace/`. This does not authorize
+  destructive cleanup, secret disclosure, remote spending/resource creation, or
+  broad network/download actions unless the user explicitly requests them.
 - Local SO101 training standard: use
   `docs/so101_local_training_standard.md` before starting local training. The
   current standard lane is `primitive training with qwen validation v1`: one

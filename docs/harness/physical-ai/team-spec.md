@@ -250,6 +250,16 @@ policy is:
   Launch local MPS training through that unsandboxed path, while writing logs,
   TensorBoard events, checkpoints, monitor JSONL, and closed-loop artifacts
   under `_workspace/` so Codex can inspect and report them afterward.
+- User policy: for this `physical_ai_agent` repo, executable local work that
+  materially depends on real runtime access has standing approval to run
+  outside the Codex sandbox. This includes repo-local training, supervised
+  evaluation, closed-loop tests, MuJoCo/MPS runs, TensorBoard, dataset/viewer
+  servers, and executable verification commands. Do not ask the user again in
+  chat before these launches; request the required unsandboxed tool execution
+  directly, with a concise justification, and preserve deterministic logs and
+  artifacts under `_workspace/`. This standing approval does not cover
+  destructive cleanup, secret disclosure, remote spending/resource creation, or
+  broad network/download actions unless the user explicitly requests them.
 - Local SO101 training must consult `docs/so101_local_training_standard.md`
   before launch. The current local standard lane is `primitive training with
   qwen validation v1`: one SmolVLA checkpoint trained on the three primitive
@@ -465,10 +475,15 @@ reports, tests, and non-interactive hardware helpers when permissions allow.
 If an external Terminal is required for macOS camera/TCC or MPS/runtime access,
 the command must write deterministic logs and artifacts under `_workspace/` and
 the final report must state why the external Terminal path was used.
-SO101/SmolVLA training is a standing exception: the user has chosen that
-training launches, including local MPS runs, happen outside the Codex sandbox.
-Codex may still prepare configs, inspect `_workspace/` outputs, run lightweight
-non-training tests, and monitor TensorBoard/dashboard logs from the sandbox.
+SO101/SmolVLA training and related repo-local executable validation are a
+standing exception: the user has chosen that local runs which depend on real
+runtime access happen outside the Codex sandbox. Covered examples include
+training launches, local MPS runs, MuJoCo closed-loop evaluation, TensorBoard,
+dataset/viewer servers, and executable verification commands. Codex should ask
+for unsandboxed tool execution directly rather than stopping to ask in chat
+again, while keeping logs and artifacts under `_workspace/`. The exception does
+not authorize destructive cleanup, secret disclosure, remote spending/resource
+creation, or broad network/download work without explicit user request.
 
 ### Phase 1: Select Checkpoint
 

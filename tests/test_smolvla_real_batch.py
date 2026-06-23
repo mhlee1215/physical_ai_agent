@@ -14,7 +14,11 @@ class _FakeStateFeature:
 
 class _FakePolicyConfig:
     robot_state_feature = _FakeStateFeature()
-    image_features = {"observation.images.camera1": _FakeFeature()}
+    image_features = {
+        "observation.images.camera1": _FakeFeature(),
+        "observation.images.camera2": _FakeFeature(),
+        "observation.images.camera3": _FakeFeature(),
+    }
     device = "cpu"
     vlm_model_name = "fake-vlm"
     pad_language_to = "longest"
@@ -43,6 +47,27 @@ class _FakeTokenizer:
 
 
 class SmolVLARealBatchTest(TestCase):
+    def test_so101_policy_batch_maps_camera1_to_egocentric_and_camera2_to_wrist(self) -> None:
+        import numpy as np
+
+        camera_pixels = {
+            "egocentric_cam": np.full((8, 8, 3), 255, dtype=np.uint8),
+            "wrist_cam": np.full((8, 8, 3), 127, dtype=np.uint8),
+        }
+
+        batch, mapping = _build_batch_for_policy(
+            _FakePolicy(),
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            camera_pixels,
+            instruction=None,
+            local_files_only=True,
+        )
+
+        self.assertEqual(mapping["observation.images.camera1"], "egocentric_cam")
+        self.assertEqual(mapping["observation.images.camera2"], "wrist_cam")
+        self.assertEqual(mapping["observation.images.camera3"], "wrist_cam")
+        self.assertGreater(float(batch["observation.images.camera1"].mean()), float(batch["observation.images.camera2"].mean()))
+
     def test_instruction_is_tokenized_when_provided(self) -> None:
         fake_tokenizer = _FakeTokenizer()
 

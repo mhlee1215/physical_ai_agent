@@ -133,6 +133,7 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--closed-loop-every-epochs", type=int, default=1)
     parser.add_argument("--closed-loop-episodes", type=int, default=10)
     parser.add_argument("--closed-loop-steps", type=int, default=120)
+    parser.add_argument("--closed-loop-env-id")
     parser.add_argument(
         "--closed-loop-mujoco-gl",
         choices=["auto", "glfw", "egl", "osmesa"],
@@ -155,7 +156,7 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--closed-loop-task-prompt")
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--loop-artifact-width", type=int, default=128)
     parser.add_argument("--loop-artifact-height", type=int, default=128)
     parser.add_argument("--loop-artifact-fps", type=int, default=12)
@@ -165,7 +166,8 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--qwen-api-key")
     parser.add_argument("--qwen-response-json", type=Path)
     parser.add_argument("--qwen-plan-json", type=Path)
-    parser.add_argument("--qwen-object", default="green cube")
+    parser.add_argument("--qwen-object")
+    parser.add_argument("--qwen-env-object-color")
     parser.add_argument("--closed-loop-subgoal-chain-mode", choices=["off", "fixed", "valid-mask"], default="off")
     parser.add_argument("--closed-loop-subgoal-sequence")
     parser.add_argument("--closed-loop-fixed-subgoal-chunks", type=int, default=1)
@@ -296,8 +298,12 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         train_pid_file=train_pid_file,
     )
     post_checkpoint_loop_cmd = _post_checkpoint_loop_command(progress_monitor_cmd)
-    if post_checkpoint_loop_cmd is not None:
-        train_cmd.extend(["--post-checkpoint-loop-command-json", json.dumps(post_checkpoint_loop_cmd)])
+    post_checkpoint_loop_cmds = _post_checkpoint_loop_commands(
+        progress_monitor_cmd=progress_monitor_cmd,
+        dataset_config=dataset_config,
+    )
+    if post_checkpoint_loop_cmds:
+        train_cmd.extend(["--post-checkpoint-loop-command-json", json.dumps(post_checkpoint_loop_cmds)])
     cache_build_cmds = _cache_build_commands(args.python, repo_root, dataset_config)
     enable_tensorboard = not args.no_tensorboard
     enable_dashboard = bool(args.with_dashboard) and not args.no_dashboard
@@ -317,6 +323,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "gpu_monitor_cmd": gpu_monitor_cmd if enable_gpu_monitor else None,
         "progress_monitor_cmd": progress_monitor_cmd if enable_progress_monitor else None,
         "post_checkpoint_loop_cmd": post_checkpoint_loop_cmd,
+        "post_checkpoint_loop_cmds": post_checkpoint_loop_cmds,
         "cache_build_cmds": cache_build_cmds,
         "runtime_contract": runtime_contract,
         "tensorboard_url": f"http://127.0.0.1:{args.tensorboard_port}/" if enable_tensorboard else None,
@@ -859,11 +866,30 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
     updated = _ensure_arg(updated, "dataset.root", str(train["root"]))
     if train_datasets:
         updated = _ensure_arg(updated, "train-datasets-json", json.dumps(train_datasets, sort_keys=True))
+    else:
+        train_sources = train.get("hf_resolved_sources")
+        if isinstance(train_sources, list) and train_sources:
+            train_source_spans = _dataset_source_spans(train_sources)
+        else:
+            train_source_spans = []
+        if train_source_spans:
+            updated = _ensure_arg(
+                updated,
+                "train-dataset-source-spans-json",
+                json.dumps(train_source_spans, sort_keys=True),
+            )
     if validation:
         if "repo_id" in validation:
             updated = _ensure_arg(updated, "validation-dataset-repo-id", str(validation["repo_id"]))
         if "root" in validation:
             updated = _ensure_arg(updated, "validation-dataset-root", str(validation["root"]))
+        validation_sources = validation.get("hf_resolved_sources")
+        if isinstance(validation_sources, list) and validation_sources:
+            updated = _ensure_arg(
+                updated,
+                "validation-datasets-json",
+                json.dumps(_with_validation_dataset_cache_dirs(config, validation_sources), sort_keys=True),
+            )
     training = config.get("training") or {}
     if not isinstance(training, dict):
         raise SystemExit("dataset config training must be an object")
@@ -889,7 +915,7 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
     ):
         if name == "train" and train_datasets:
             continue
-        if name in cache:
+        if name in cache and cache.get(name) not in (None, False, {}):
             updated = _ensure_arg(updated, cli_name, str(_resolve_cache_dir(cache, name)))
     tensorboard = config.get("tensorboard") or {}
     if not isinstance(tensorboard, dict):
@@ -917,6 +943,8 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
     for name, cli_name in (
         ("state_jitter_arm_only", "so101-state-jitter-arm-only"),
         ("state_dropout_keep_gripper", "so101-state-dropout-keep-gripper"),
+        ("image_color_jitter", "so101-image-color-jitter"),
+        ("image_sharpness_jitter", "so101-image-sharpness-jitter"),
         ("gpu_image_augmentation", "so101-gpu-image-augmentation"),
     ):
         if name in augmentation:
@@ -953,6 +981,8 @@ def _with_train_dataset_cache_dirs(config: dict[str, Any], entries: list[dict[st
     if not cache:
         return entries
     train_cache = cache.get("train")
+    if train_cache is None or train_cache is False or (isinstance(train_cache, dict) and not train_cache):
+        return [dict(entry) for entry in entries]
     if train_cache is None and not cache.get("default_root") and not cache.get("root_env"):
         return entries
     updated = []
@@ -967,6 +997,46 @@ def _with_train_dataset_cache_dirs(config: dict[str, Any], entries: list[dict[st
             item["image_cache_dir"] = str(_resolve_cache_value(cache, str(cache_name)))
         updated.append(item)
     return updated
+
+
+def _with_validation_dataset_cache_dirs(config: dict[str, Any], entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cache = config.get("predecoded_image_cache") or {}
+    if not isinstance(cache, dict) or not cache:
+        return [dict(entry) for entry in entries]
+    validation_cache = cache.get("validation")
+    if not isinstance(validation_cache, dict):
+        return [dict(entry) for entry in entries]
+    updated = []
+    for entry in entries:
+        item = dict(entry)
+        if "image_cache_dir" not in item:
+            cache_name = None
+            cache_name = validation_cache.get(str(item.get("name") or ""))
+            if not cache_name:
+                updated.append(item)
+                continue
+            item["image_cache_dir"] = str(_resolve_cache_value(cache, str(cache_name)))
+        updated.append(item)
+    return updated
+
+
+def _dataset_source_spans(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    spans = []
+    for index, source in enumerate(sources):
+        if not isinstance(source, dict):
+            raise SystemExit(f"dataset source span {index} must be an object")
+        name = source.get("name") or source.get("repo_id") or f"source_{index}"
+        length = source.get("expected_frames")
+        if length is None:
+            root = source.get("root")
+            if root:
+                info_path = Path(str(root)) / "meta" / "info.json"
+                info = _read_json(info_path) or {}
+                length = info.get("total_frames")
+        if length is None:
+            return []
+        spans.append({"name": str(name), "length": int(length)})
+    return spans
 
 
 def _required_mapping(config: dict[str, Any], key: str) -> dict[str, Any]:
@@ -1081,12 +1151,15 @@ def _validate_monitoring_contract(
 
     errors: list[str] = []
     validation = dataset_config.get("validation_dataset")
+    has_virtual_validation = _has_virtual_validation_sources(dataset_config)
     if not isinstance(validation, dict):
-        errors.append("dataset config must define validation_dataset for val/loss.")
+        if not has_virtual_validation:
+            errors.append("dataset config must define validation_dataset for val/loss.")
     else:
-        for key in ("repo_id", "root"):
-            if not validation.get(key):
-                errors.append(f"validation_dataset.{key} is required for val/loss.")
+        if not has_virtual_validation:
+            for key in ("repo_id", "root"):
+                if not validation.get(key):
+                    errors.append(f"validation_dataset.{key} is required for val/loss.")
 
     if args.no_tensorboard:
         errors.append("TensorBoard is disabled; remove --no-tensorboard for monitored training.")
@@ -1106,9 +1179,9 @@ def _validate_monitoring_contract(
     validation_interval_steps = _validation_interval_steps(dataset_config, training_args)
     if validation_interval_steps <= 0:
         errors.append("validation cadence must be positive; set --validation-interval-epochs or --validation-interval-steps.")
-    if not _has_any_arg(training_args, "validation-dataset-root"):
+    if not has_virtual_validation and not _has_any_arg(training_args, "validation-dataset-root"):
         errors.append("training command is missing --validation-dataset-root.")
-    if not _has_any_arg(training_args, "validation-dataset-repo-id"):
+    if not has_virtual_validation and not _has_any_arg(training_args, "validation-dataset-repo-id"):
         errors.append("training command is missing --validation-dataset-repo-id.")
 
     steps_per_epoch = _steps_per_epoch(dataset_config, training_args)
@@ -1128,6 +1201,7 @@ def _validate_monitoring_contract(
 
     loop_test_enabled = (
         launch_plan.get("post_checkpoint_loop_cmd") is not None
+        or bool(launch_plan.get("post_checkpoint_loop_cmds"))
         or launch_plan.get("progress_monitor_cmd") is not None
     )
     if not loop_test_enabled:
@@ -1145,7 +1219,13 @@ def _validate_monitoring_contract(
             "so every validation-loss checkpoint also runs closed-loop."
         )
     progress_monitor_cmd = launch_plan.get("progress_monitor_cmd") or []
-    loop_test_cmd = launch_plan.get("post_checkpoint_loop_cmd") or progress_monitor_cmd
+    post_checkpoint_loop_cmds = launch_plan.get("post_checkpoint_loop_cmds") or []
+    loop_test_cmd = (
+        post_checkpoint_loop_cmds[0]
+        if post_checkpoint_loop_cmds and isinstance(post_checkpoint_loop_cmds[0], list)
+        else launch_plan.get("post_checkpoint_loop_cmd")
+        or progress_monitor_cmd
+    )
     if "--mujoco-gl" not in loop_test_cmd:
         errors.append("loop test command is missing --mujoco-gl for platform-specific closed-loop rendering.")
     if int(args.closed_loop_every_epochs) <= 0:
@@ -1196,6 +1276,19 @@ def _validate_monitoring_contract(
         raise SystemExit(f"SO101 monitored training contract failed:\n{detail}")
 
 
+def _has_virtual_validation_sources(dataset_config: dict[str, Any] | None) -> bool:
+    if not dataset_config:
+        return False
+    validation = dataset_config.get("validation_dataset")
+    if not isinstance(validation, dict):
+        return False
+    for key in ("hf_resolved_sources", "hf_merge_sources"):
+        sources = validation.get(key)
+        if isinstance(sources, list) and sources:
+            return True
+    return False
+
+
 def _validation_interval_steps(config: dict[str, Any], args: list[str]) -> int:
     steps = _positive_int_arg(args, "validation-interval-steps") or _positive_int_arg(
         args, "validation-every-n-train-steps"
@@ -1238,6 +1331,27 @@ def _closed_loop_policy_name(args: argparse.Namespace) -> str:
     return str(getattr(args, "closed_loop_policy", "periodic") or "periodic")
 
 
+def _monitor_validation_dataset(dataset_config: dict[str, Any]) -> dict[str, str] | None:
+    validation = dataset_config.get("validation_dataset")
+    if isinstance(validation, dict):
+        if "root" in validation and "repo_id" in validation:
+            return {"root": str(validation["root"]), "repo_id": str(validation["repo_id"])}
+        sources = validation.get("hf_resolved_sources")
+        if isinstance(sources, list) and sources:
+            for source in sources:
+                if isinstance(source, dict) and "root" in source and "repo_id" in source:
+                    return {"root": str(source["root"]), "repo_id": str(source["repo_id"])}
+    train = dataset_config.get("train_dataset")
+    if isinstance(train, dict) and "root" in train and "repo_id" in train:
+        return {"root": str(train["root"]), "repo_id": str(train["repo_id"])}
+    train_datasets = dataset_config.get("train_datasets")
+    if isinstance(train_datasets, list) and train_datasets:
+        first = train_datasets[0]
+        if isinstance(first, dict) and "root" in first and "repo_id" in first:
+            return {"root": str(first["root"]), "repo_id": str(first["repo_id"])}
+    return None
+
+
 def _progress_monitor_command(
     *,
     args: argparse.Namespace,
@@ -1251,8 +1365,8 @@ def _progress_monitor_command(
 ) -> list[str] | None:
     if not dataset_config:
         return None
-    validation = dataset_config.get("validation_dataset") or dataset_config.get("train_dataset") or {}
-    if not isinstance(validation, dict) or "root" not in validation or "repo_id" not in validation:
+    validation = _monitor_validation_dataset(dataset_config)
+    if validation is None:
         return None
     training = dataset_config.get("training") or {}
     if not isinstance(training, dict):
@@ -1296,6 +1410,8 @@ def _progress_monitor_command(
         str(args.closed_loop_episodes),
         "--closed-loop-steps",
         str(args.closed_loop_steps),
+        "--closed-loop-env-id",
+        _closed_loop_env_id(args, dataset_config),
         "--mujoco-gl",
         runtime_contract["closed_loop_mujoco_gl"],
         "--closed-loop-runner",
@@ -1333,7 +1449,7 @@ def _progress_monitor_command(
         cmd.extend(
             [
                 "--record-loop-artifacts",
-                "--render-loop-media" if getattr(args, "render_loop_media", False) else "--no-render-loop-media",
+                "--render-loop-media" if getattr(args, "render_loop_media", True) else "--no-render-loop-media",
                 "--loop-artifact-width",
                 str(getattr(args, "loop_artifact_width", 128)),
                 "--loop-artifact-height",
@@ -1347,7 +1463,16 @@ def _progress_monitor_command(
     else:
         cmd.append("--no-record-loop-artifacts")
     if closed_loop_runner == "qwen_chain":
-        cmd.extend(["--qwen-model", args.qwen_model, "--qwen-object", args.qwen_object])
+        cmd.extend(
+            [
+                "--qwen-model",
+                args.qwen_model,
+                "--qwen-object",
+                _qwen_object(args, dataset_config),
+                "--qwen-env-object-color",
+                _qwen_env_object_color(args, dataset_config),
+            ]
+        )
         if args.qwen_plan_json:
             cmd.extend(["--qwen-plan-json", str(args.qwen_plan_json)])
         elif args.qwen_response_json:
@@ -1375,6 +1500,112 @@ def _post_checkpoint_loop_command(progress_monitor_cmd: list[str] | None) -> lis
     return cmd
 
 
+def _post_checkpoint_loop_commands(
+    *,
+    progress_monitor_cmd: list[str] | None,
+    dataset_config: dict[str, Any] | None,
+) -> list[list[str]]:
+    base = _post_checkpoint_loop_command(progress_monitor_cmd)
+    if not base:
+        return []
+    test_cases = _closed_loop_test_cases(dataset_config)
+    if not test_cases:
+        return [base]
+    commands = []
+    for test_case in test_cases:
+        cmd = _apply_closed_loop_test_case(base, test_case)
+        commands.append(cmd)
+    return commands
+
+
+def _closed_loop_test_cases(dataset_config: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not dataset_config:
+        return []
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if not isinstance(closed_loop, dict):
+        return []
+    test_cases = closed_loop.get("test_cases")
+    source_key = "test_cases"
+    if not isinstance(test_cases, list):
+        test_cases = closed_loop.get("suites")
+        source_key = "suites"
+    if not isinstance(test_cases, list):
+        return []
+    result = []
+    for index, test_case in enumerate(test_cases):
+        if not isinstance(test_case, dict):
+            raise SystemExit(f"closed_loop.{source_key}[{index}] must be an object")
+        result.append(dict(test_case))
+    return result
+
+
+def _apply_closed_loop_test_case(base: list[str], test_case: dict[str, Any]) -> list[str]:
+    cmd = [*base]
+    test_id = str(test_case.get("id") or test_case.get("name") or "closed_loop")
+    cmd = _replace_or_append_arg(cmd, "--closed-loop-test-id", test_id)
+    if "episodes" in test_case:
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-episodes", str(int(test_case["episodes"])))
+    if "steps" in test_case:
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-steps", str(int(test_case["steps"])))
+    if "seed" in test_case:
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-seed", str(int(test_case["seed"])))
+    if test_case.get("start_contract"):
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-start-contract", str(test_case["start_contract"]))
+    if test_case.get("task_prompt"):
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-task-prompt", str(test_case["task_prompt"]))
+    if test_case.get("qwen_object"):
+        cmd = _replace_or_append_arg(cmd, "--qwen-object", str(test_case["qwen_object"]))
+    if test_case.get("env_object_color"):
+        cmd = _replace_or_append_arg(cmd, "--qwen-env-object-color", str(test_case["env_object_color"]))
+    else:
+        cmd = _remove_arg_with_value(cmd, "--qwen-env-object-color")
+    if test_case.get("plan_json"):
+        cmd = _remove_arg_with_value(cmd, "--qwen-response-json")
+        cmd = _replace_or_append_arg(cmd, "--qwen-plan-json", str(test_case["plan_json"]))
+    elif test_case.get("qwen_response_json"):
+        cmd = _remove_arg_with_value(cmd, "--qwen-plan-json")
+        cmd = _replace_or_append_arg(cmd, "--qwen-response-json", str(test_case["qwen_response_json"]))
+    if test_case.get("precondition_plan_json"):
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-precondition-plan-json", str(test_case["precondition_plan_json"]))
+    else:
+        cmd = _remove_arg_with_value(cmd, "--closed-loop-precondition-plan-json")
+    return cmd
+
+
+def _replace_or_append_arg(cmd: list[str], flag: str, value: str) -> list[str]:
+    updated = [*cmd]
+    prefix = f"{flag}="
+    for index, part in enumerate(updated):
+        if part == flag:
+            if index + 1 < len(updated):
+                updated[index + 1] = value
+                return updated
+            updated.append(value)
+            return updated
+        if part.startswith(prefix):
+            updated[index] = f"{flag}={value}"
+            return updated
+    updated.extend([flag, value])
+    return updated
+
+
+def _remove_arg_with_value(cmd: list[str], flag: str) -> list[str]:
+    updated: list[str] = []
+    skip_next = False
+    prefix = f"{flag}="
+    for part in cmd:
+        if skip_next:
+            skip_next = False
+            continue
+        if part == flag:
+            skip_next = True
+            continue
+        if part.startswith(prefix):
+            continue
+        updated.append(part)
+    return updated
+
+
 def _closed_loop_eval_skill_mode(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
     if args.closed_loop_eval_skill_mode:
         return str(args.closed_loop_eval_skill_mode)
@@ -1396,6 +1627,38 @@ def _closed_loop_runner(args: argparse.Namespace, dataset_config: dict[str, Any]
     if dataset_config.get("execution_policy") == "qwen_edge_chain":
         return "qwen_chain"
     return "picklift"
+
+
+def _closed_loop_env_id(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    if args.closed_loop_env_id:
+        return str(args.closed_loop_env_id)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("env_id"):
+        return str(closed_loop["env_id"])
+    if _closed_loop_runner(args, dataset_config) == "qwen_chain":
+        return "MuJoCoPickLift-v1"
+    return "MuJoCoPickLift-v1"
+
+
+def _qwen_object(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    if getattr(args, "qwen_object", None):
+        return str(args.qwen_object)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("qwen_object"):
+        return str(closed_loop["qwen_object"])
+    return "green cube"
+
+
+def _qwen_env_object_color(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    if getattr(args, "qwen_env_object_color", None):
+        return str(args.qwen_env_object_color)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("env_object_color"):
+        return str(closed_loop["env_object_color"])
+    qwen_object = _qwen_object(args, dataset_config).strip().lower()
+    if qwen_object.endswith(" cube"):
+        return qwen_object[: -len(" cube")]
+    return "green"
 
 
 def _closed_loop_valid_mask_checkpoint(args: argparse.Namespace, dataset_config: dict[str, Any]) -> Path | None:

@@ -31,9 +31,9 @@ class SmolVLASO101Contract:
     tokenizer_max_length: int = 48
     runtime_camera_mapping: dict[str, str] = field(
         default_factory=lambda: {
-            "observation.images.camera1": "top_down",
+            "observation.images.camera1": "egocentric_cam",
             "observation.images.camera2": "wrist_cam",
-            "observation.images.camera3": "wrist_cam_duplicate",
+            "observation.images.camera3": "wrist_cam duplicate",
         }
     )
 
@@ -56,6 +56,7 @@ class SO101AugmentationContract:
 
     prefer_device_backends: tuple[str, ...] = ("cuda", "mps")
     image_color_jitter: bool = True
+    image_sharpness_jitter: bool = True
     image_affine_jitter: bool = True
     image_affine_degrees: float = 5.0
     image_affine_translate: float = 0.05

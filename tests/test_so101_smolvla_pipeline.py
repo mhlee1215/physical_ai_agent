@@ -10,6 +10,8 @@ import argparse
 from pathlib import Path
 from unittest import TestCase, mock
 
+import numpy as np
+
 from physical_ai_agent.so101_smolvla_pipeline import (
     SO101AugmentationContract,
     SO101DatasetManifest,
@@ -22,7 +24,21 @@ from physical_ai_agent.so101_smolvla_pipeline import (
 from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE
 
 
+def _ensure_scripts_on_path() -> None:
+    scripts_path = str(Path("scripts").resolve())
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+
+
 class SO101SmolVLAPipelineTest(TestCase):
+    def test_so101_contract_uses_egocentric_camera1_and_wrist_camera2(self) -> None:
+        contract = SmolVLASO101Contract()
+
+        self.assertEqual(contract.runtime_camera_mapping["observation.images.camera1"], "egocentric_cam")
+        self.assertEqual(contract.runtime_camera_mapping["observation.images.camera2"], "wrist_cam")
+        self.assertEqual(contract.runtime_camera_mapping["observation.images.camera3"], "wrist_cam duplicate")
+        self.assertNotIn("top_down", contract.runtime_camera_mapping.values())
+
     def test_default_augmentation_contract_matches_training_configs(self) -> None:
         contract = SO101AugmentationContract()
 
@@ -32,6 +48,8 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(contract.image_camera_dropout_prob, 0.0)
         self.assertEqual(contract.image_patch_dropout_prob, 0.0)
         self.assertEqual(contract.image_patch_mask_ratio, 0.15)
+        self.assertTrue(contract.image_color_jitter)
+        self.assertTrue(contract.image_sharpness_jitter)
         self.assertEqual(contract.image_affine_degrees, 5.0)
         self.assertEqual(contract.image_affine_translate, 0.05)
         self.assertTrue(contract.run_after_batch_to_device)
@@ -278,7 +296,8 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("loss_prefix_weight", constants)
         self.assertIn("loss_prefix_steps", constants)
         self.assertIn("camera1,camera2", constants)
-        self.assertIn("/input_", constants)
+        self.assertIn("input", constants)
+        self.assertIn("augmented_input", constants)
         self.assertIn("/input_prompt", constants)
         self.assertIn("/input_motor_state", constants)
         self.assertIn("/input_camera_contract", constants)
@@ -339,6 +358,16 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("success_rate", constants)
         self.assertIn("important/closed_loop_success_rate", constants)
 
+    def test_training_monitor_writes_closed_loop_camera_rollout_videos(self) -> None:
+        source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+
+        self.assertIn("writer.add_video", source)
+        self.assertIn("rollout_{camera_name}", source)
+        self.assertIn('"camera1"', source)
+        self.assertIn('"camera2"', source)
+        self.assertIn("observation.images.camera1", source)
+        self.assertIn("observation.images.camera2", source)
+
     def test_training_monitor_uses_macos_safe_mujoco_gl(self) -> None:
         sys.path.insert(0, str(Path("scripts").resolve()))
         import monitor_so101_training_dashboard as monitor
@@ -367,13 +396,16 @@ class SO101SmolVLAPipelineTest(TestCase):
                 repo_root=Path.cwd(),
                 closed_loop_task_prompt="pick and lift the green cube",
                 qwen_object="green cube",
+                qwen_env_object_color="green",
                 qwen_model="qwen3-vl-8b-instruct-mlx",
                 qwen_plan_json=None,
                 qwen_response_json=Path("configs/agent/qwen3_so101_tool_planner_mock_response.json"),
                 qwen_base_url=None,
                 qwen_api_key=None,
                 closed_loop_episodes=1,
+                closed_loop_env_id="MuJoCoPickLift-v1",
                 closed_loop_seed=98100,
+                closed_loop_start_contract="full_chain_reset",
                 policy_device="cpu",
                 closed_loop_steps=2,
                 policy_n_action_steps=15,
@@ -429,11 +461,19 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(captured_cmd[captured_cmd.index("--policy-num-steps") + 1], "10")
         self.assertIn("--valid-mask-checkpoint", captured_cmd)
         self.assertEqual(captured_cmd[captured_cmd.index("--valid-mask-checkpoint") + 1], "/tmp/valid_mask_head.pt")
+        self.assertIn("--env-id", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--env-id") + 1], "MuJoCoPickLift-v1")
+        self.assertIn("--env-object-color", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--env-object-color") + 1], "green")
+        self.assertIn("--start-contract", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--start-contract") + 1], "full_chain_reset")
         self.assertIn("--record-loop-artifacts", captured_cmd)
         self.assertIn("--render-loop-media", captured_cmd)
         self.assertEqual(captured_cmd[captured_cmd.index("--artifact-width") + 1], "128")
 
     def test_virtual_merge_concat_dataset_len_is_sum(self) -> None:
+        from types import SimpleNamespace
+
         from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset
 
         class FakeDataset:
@@ -441,7 +481,18 @@ class SO101SmolVLAPipelineTest(TestCase):
                 self.name = name
                 self.repo_id = name
                 self.root = f"/tmp/{name}"
-                self.meta = {"name": name}
+                self.meta = SimpleNamespace(
+                    name=name,
+                    stats={
+                        "action": {
+                            "min": [0.0],
+                            "max": [float(length)],
+                            "mean": [float(length) / 2.0],
+                            "std": [1.0],
+                            "count": [length],
+                        },
+                    },
+                )
                 self.items = list(range(length))
 
             def __len__(self) -> int:
@@ -464,6 +515,7 @@ class SO101SmolVLAPipelineTest(TestCase):
 
     def test_virtual_merge_balanced_sampler_draws_each_dataset_evenly(self) -> None:
         import torch
+        from types import SimpleNamespace
 
         from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset
 
@@ -472,7 +524,18 @@ class SO101SmolVLAPipelineTest(TestCase):
                 self.name = name
                 self.repo_id = name
                 self.root = f"/tmp/{name}"
-                self.meta = {"name": name}
+                self.meta = SimpleNamespace(
+                    name=name,
+                    stats={
+                        "action": {
+                            "min": [0.0],
+                            "max": [float(length)],
+                            "mean": [float(length) / 2.0],
+                            "std": [1.0],
+                            "count": [length],
+                        },
+                    },
+                )
                 self.items = list(range(length))
 
             def __len__(self) -> int:
@@ -500,6 +563,70 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertLess(counts["small"], 550)
         self.assertGreater(counts["large"], 450)
         self.assertLess(counts["large"], 550)
+
+    def test_virtual_merge_aggregates_child_stats_instead_of_first_dataset_only(self) -> None:
+        from types import SimpleNamespace
+
+        from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset
+
+        class FakeDataset:
+            def __init__(
+                self,
+                name: str,
+                *,
+                mean: float,
+                std: float,
+                minimum: float,
+                maximum: float,
+                count: int,
+            ) -> None:
+                self.name = name
+                self.repo_id = name
+                self.root = f"/tmp/{name}"
+                self.items = [None] * count
+                self.meta = SimpleNamespace(
+                    stats={
+                        "action": {
+                            "min": [minimum],
+                            "max": [maximum],
+                            "mean": [mean],
+                            "std": [std],
+                            "count": [count],
+                        },
+                    }
+                )
+
+            def __len__(self) -> int:
+                return len(self.items)
+
+            def __getitem__(self, index: int) -> dict[str, int]:
+                return {"index": index}
+
+        dataset = LeRobotConcatDataset(
+            [
+                FakeDataset(
+                    "constant_gripper_move",
+                    mean=-0.17453,
+                    std=0.0,
+                    minimum=-0.17453,
+                    maximum=-0.17453,
+                    count=10,
+                ),
+                FakeDataset(
+                    "variable_gripper_grip",
+                    mean=1.0,
+                    std=0.5,
+                    minimum=-0.1,
+                    maximum=1.7,
+                    count=10,
+                ),
+            ]
+        )
+
+        action_stats = dataset.meta.stats["action"]
+        self.assertLess(float(action_stats["min"][0]), 0.0)
+        self.assertGreater(float(action_stats["max"][0]), 1.0)
+        self.assertGreater(float(action_stats["std"][0]), 0.0)
 
     def test_virtual_merge_dataloader_uses_dataset_balanced_sampler(self) -> None:
         import torch
@@ -777,23 +904,49 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn('run_dir / "tensorboard" / "so101_closed_loop"', source)
         self.assertNotIn('log_dir = run_dir / "tensorboard" / "so101_smolvla"', source)
 
-    def test_qwen_edge_merge_normalizes_legacy_static_finger_prompts(self) -> None:
-        from scripts.merge_so101_lerobot_shards import _normalize_task_prompt
+    def test_qwen_edge_export_templates_are_training_prompts(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.export_so101_teacher_rollouts_lerobot import COLOR_SHAPE_SKILL_TASK_TEMPLATES
 
         self.assertEqual(
-            _normalize_task_prompt("Move the static finger pad above one visible green cube edge."),
-            "Move the gripper above one visible green cube edge.",
+            COLOR_SHAPE_SKILL_TASK_TEMPLATES["move_over_cube_edge"],
+            "Move the gripper above one visible {color} {shape} edge.",
         )
         self.assertEqual(
-            _normalize_task_prompt("Align the static finger pad with one visible red cube edge."),
-            "Align the gripper jaws around one visible red cube edge.",
+            COLOR_SHAPE_SKILL_TASK_TEMPLATES["align_fixed_jaw_cube_edge"],
+            "Align the gripper jaws around one visible {color} {shape} edge.",
         )
         self.assertEqual(
-            _normalize_task_prompt(
-                "Keep the static finger pad at the blue cube edge, close the gripper, and lift."
-            ),
-            "Close the gripper on the blue cube edge and lift.",
+            COLOR_SHAPE_SKILL_TASK_TEMPLATES["grip_from_edge_cube"],
+            "Close the gripper on the {color} {shape} edge and lift.",
         )
+        for template in COLOR_SHAPE_SKILL_TASK_TEMPLATES.values():
+            self.assertNotIn("static finger pad", template)
+
+    def test_qwen_edge_merge_preserves_dataset_prompt_without_rewrite(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.merge_so101_lerobot_shards import _frame_from_source
+
+        sample = {
+            "observation.images.camera1": np.zeros((3, 2, 2), dtype=np.float32),
+            "observation.images.camera2": np.zeros((3, 2, 2), dtype=np.float32),
+            "observation.images.camera3": np.zeros((3, 2, 2), dtype=np.float32),
+            "observation.state": np.zeros(6, dtype=np.float32),
+            "action": np.zeros(6, dtype=np.float32),
+            "task": "Align the static finger pad with one visible red cube edge.",
+        }
+
+        frame = _frame_from_source(sample, include_camera3=True)
+
+        self.assertEqual(frame["task"], sample["task"])
+
+    def test_dataset_viewer_uses_training_config_group_order_for_default_dataset(self) -> None:
+        source = Path("scripts/serve_so101_dataset_viewer.py").read_text(encoding="utf-8")
+
+        self.assertIn('Path("configs/so101/training_datasets/qwen_edge_primitives.json")', source)
+        self.assertIn("const orderedNames = []", source)
+        self.assertIn("for (const group of payload.dataset_groups || [])", source)
+        self.assertNotIn("Object.keys(datasets).map(name => `<option", source)
 
     def test_single_training_launcher_dataset_config_injects_dataset_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -839,6 +992,8 @@ class SO101SmolVLAPipelineTest(TestCase):
                             "image_camera_dropout_prob": 0.04,
                             "image_patch_dropout_prob": 0.05,
                             "image_patch_mask_ratio": 0.15,
+                            "image_color_jitter": True,
+                            "image_sharpness_jitter": True,
                             "image_affine_degrees": 5.0,
                             "image_affine_translate": 0.05,
                             "gpu_image_augmentation": True,
@@ -922,6 +1077,8 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--so101-image-camera-dropout-prob=0.04", train_cmd)
             self.assertIn("--so101-image-patch-dropout-prob=0.05", train_cmd)
             self.assertIn("--so101-image-patch-mask-ratio=0.15", train_cmd)
+            self.assertIn("--so101-image-color-jitter", train_cmd)
+            self.assertIn("--so101-image-sharpness-jitter", train_cmd)
             self.assertIn("--so101-image-affine-degrees=5.0", train_cmd)
             self.assertIn("--so101-image-affine-translate=0.05", train_cmd)
             self.assertIn("--so101-gpu-image-augmentation", train_cmd)
@@ -1410,6 +1567,8 @@ class SO101SmolVLAPipelineTest(TestCase):
                     qwen_response_json=None,
                     qwen_plan_json=None,
                     qwen_object="green cube",
+                    qwen_env_object_color=None,
+                    closed_loop_env_id=None,
                     closed_loop_subgoal_chain_mode="off",
                     closed_loop_fixed_subgoal_chunks=1,
                     closed_loop_valid_mask_threshold=0.5,
@@ -1550,6 +1709,8 @@ class SO101SmolVLAPipelineTest(TestCase):
                     qwen_response_json=None,
                     qwen_plan_json=None,
                     qwen_object="green cube",
+                    qwen_env_object_color=None,
+                    closed_loop_env_id=None,
                     record_loop_artifacts=True,
                     render_loop_media=True,
                     loop_artifact_width=128,
@@ -1598,8 +1759,115 @@ class SO101SmolVLAPipelineTest(TestCase):
 
         self.assertEqual(config["execution_policy"], "qwen_edge_chain")
         self.assertEqual(closed_loop["execution_policy"], "qwen_edge_chain")
+        self.assertEqual(closed_loop["env_id"], "MuJoCoPickLift-v1")
+        self.assertEqual(closed_loop["qwen_object"], "green cube")
+        self.assertNotIn("env_object_color", closed_loop)
         self.assertIn("valid_mask_checkpoint", closed_loop)
         self.assertTrue(str(closed_loop["valid_mask_checkpoint"]).endswith("valid_mask_head.pt"))
+
+    def test_qwen_edge_closed_loop_test_cases_are_explicit_and_five_episode(self) -> None:
+        config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
+        self.assertIn("test_cases", config["closed_loop"])
+        self.assertNotIn("suites", config["closed_loop"])
+        test_cases = config["closed_loop"]["test_cases"]
+
+        self.assertEqual(
+            [test_case["id"] for test_case in test_cases],
+            ["move_align_pick_up", "align_pick_up", "pick_up_only"],
+        )
+        expected_calls = {
+            "move_align_pick_up": ["move", "align", "pick_up"],
+            "align_pick_up": ["align", "pick_up"],
+            "pick_up_only": ["pick_up"],
+        }
+        for test_case in test_cases:
+            with self.subTest(test_case=test_case["id"]):
+                self.assertEqual(test_case["episodes"], 5)
+                self.assertIn("seed", test_case)
+                self.assertIn("start_contract", test_case)
+                self.assertEqual(test_case["qwen_object"], "green cube")
+                self.assertNotIn("env_object_color", test_case)
+                plan_path = Path(test_case["plan_json"])
+                self.assertTrue(plan_path.exists(), str(plan_path))
+                plan = json.loads(plan_path.read_text(encoding="utf-8"))["plan"]
+                self.assertEqual([call["fn"] for call in plan["calls"]], expected_calls[test_case["id"]])
+                self.assertTrue(all(call["object"] == "green cube" for call in plan["calls"]))
+                self.assertNotIn("precondition_plan_json", test_case)
+        self.assertEqual([test_case["seed"] for test_case in test_cases], [98100, 98200, 98300])
+        self.assertEqual(
+            [test_case["start_contract"] for test_case in test_cases],
+            ["full_chain_reset", "align_pick_reset", "pick_up_reset"],
+        )
+
+    def test_qwen_edge_closed_loop_test_case_commands_use_case_seed_and_start_contract(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
+        base = [
+            sys.executable,
+            "scripts/run_so101_training_loop_test.py",
+            "--closed-loop-test-id",
+            "default",
+            "--closed-loop-seed",
+            "98100",
+            "--closed-loop-steps",
+            "160",
+        ]
+        commands = start_so101_training._post_checkpoint_loop_commands(
+            progress_monitor_cmd=base,
+            dataset_config=config,
+        )
+
+        self.assertEqual(len(commands), 3)
+        for command, test_case in zip(commands, config["closed_loop"]["test_cases"]):
+            with self.subTest(test_case=test_case["id"]):
+                self.assertEqual(command[command.index("--closed-loop-test-id") + 1], test_case["id"])
+                self.assertEqual(command[command.index("--closed-loop-seed") + 1], str(test_case["seed"]))
+                self.assertEqual(
+                    command[command.index("--closed-loop-start-contract") + 1],
+                    test_case["start_contract"],
+                )
+                self.assertNotIn("--qwen-env-object-color", command)
+                self.assertNotIn("--closed-loop-precondition-plan-json", command)
+
+    def test_qwen_edge_primitives_training_uses_virtual_merge_only(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
+
+        self.assertIn("train_datasets", config)
+        self.assertNotIn("train_dataset", config)
+        prepared = start_so101_training._prepare_merged_train_dataset(
+            config,
+            repo_root=Path.cwd(),
+            python=Path(sys.executable),
+            merge=False,
+        )
+        train_args = start_so101_training._with_dataset_config([], prepared)
+
+        self.assertTrue(any(arg.startswith("--train-datasets-json=") for arg in train_args))
+        self.assertFalse(any("merge_so101_lerobot_shards.py" in str(value) for value in prepared.values()))
+        self.assertFalse(any("--output-root" in str(value) for value in prepared.values()))
+        self.assertNotIn("merge_command", json.dumps(prepared, sort_keys=True))
+
+    def test_training_harness_logs_source_dataset_losses_and_loop_test_case_metrics(self) -> None:
+        lightning_source = Path("scripts/lerobot_train_so101_lightning.py").read_text(encoding="utf-8")
+        launcher_source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
+        monitor_source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+
+        self.assertIn("--train-dataset-source-spans-json", lightning_source)
+        self.assertIn("train/datasets/", lightning_source)
+        self.assertIn("val/datasets/", lightning_source)
+        self.assertIn("--validation-datasets-json", lightning_source)
+        self.assertIn("train-dataset-source-spans-json", launcher_source)
+        self.assertIn("_post_checkpoint_loop_commands", launcher_source)
+        self.assertIn("_closed_loop_test_cases", launcher_source)
+        self.assertIn("--closed-loop-test-id", launcher_source)
+        self.assertIn("--closed-loop-start-contract", launcher_source)
+        self.assertIn("IMPORTANT_CLOSED_LOOP_SUCCESS_RATE_TAG", monitor_source)
+        self.assertIn("closed_loop_test_id", monitor_source)
 
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (
@@ -1616,6 +1884,8 @@ class SO101SmolVLAPipelineTest(TestCase):
                 self.assertEqual(augmentation["state_jitter_std"], 0.003)
                 self.assertEqual(augmentation["state_dropout_prob"], 0.02)
                 self.assertEqual(augmentation["image_patch_mask_ratio"], 0.15)
+                self.assertTrue(augmentation["image_color_jitter"])
+                self.assertTrue(augmentation["image_sharpness_jitter"])
                 self.assertEqual(augmentation["image_affine_degrees"], 5.0)
                 self.assertEqual(augmentation["image_affine_translate"], 0.05)
                 self.assertTrue(augmentation["gpu_image_augmentation"])

@@ -16,6 +16,8 @@ class SamplingAugmentationConfig:
     image_camera_dropout_prob: float = 0.0
     image_patch_dropout_prob: float = 0.0
     image_patch_mask_ratio: float = 0.0
+    image_color_jitter: bool = False
+    image_sharpness_jitter: bool = False
     image_affine_degrees: float = 0.0
     image_affine_translate: float = 0.0
     gpu_image_augmentation: bool = False
@@ -40,6 +42,16 @@ class SamplingAugmentationConfig:
         image_camera_dropout_prob = float(os.environ.get("SO101_IMAGE_CAMERA_DROPOUT_PROB", "0.0"))
         image_patch_dropout_prob = float(os.environ.get("SO101_IMAGE_PATCH_DROPOUT_PROB", "0.0"))
         image_patch_mask_ratio = float(os.environ.get("SO101_IMAGE_PATCH_MASK_RATIO", "0.0"))
+        image_color_jitter = os.environ.get("SO101_IMAGE_COLOR_JITTER", "0") in {
+            "1",
+            "true",
+            "True",
+        }
+        image_sharpness_jitter = os.environ.get("SO101_IMAGE_SHARPNESS_JITTER", "0") in {
+            "1",
+            "true",
+            "True",
+        }
         image_affine_degrees = float(os.environ.get("SO101_IMAGE_AFFINE_DEGREES", "0.0"))
         image_affine_translate = float(os.environ.get("SO101_IMAGE_AFFINE_TRANSLATE", "0.0"))
         state_dropout_keep_gripper = os.environ.get("SO101_STATE_DROPOUT_KEEP_GRIPPER", "1") not in {
@@ -55,6 +67,8 @@ class SamplingAugmentationConfig:
             image_camera_dropout_prob=image_camera_dropout_prob,
             image_patch_dropout_prob=image_patch_dropout_prob,
             image_patch_mask_ratio=image_patch_mask_ratio,
+            image_color_jitter=image_color_jitter,
+            image_sharpness_jitter=image_sharpness_jitter,
             image_affine_degrees=image_affine_degrees,
             image_affine_translate=image_affine_translate,
             gpu_image_augmentation=gpu_image_augmentation,
@@ -64,6 +78,8 @@ class SamplingAugmentationConfig:
                 or image_camera_dropout_prob > 0.0
                 or image_patch_dropout_prob > 0.0
                 or image_patch_mask_ratio > 0.0
+                or image_color_jitter
+                or image_sharpness_jitter
                 or image_affine_degrees > 0.0
                 or image_affine_translate > 0.0
                 or gpu_image_augmentation
@@ -273,8 +289,10 @@ def _augment_images_on_device(batch: dict[str, Any], config: SamplingAugmentatio
         image = value.to(torch.float32).clamp(0.0, 1.0)
         image = _camera_dropout(image)
         image = _patch_dropout(image)
-        image = _color_jitter(image)
-        image = _sharpness_jitter(image)
+        if config.image_color_jitter:
+            image = _color_jitter(image)
+        if config.image_sharpness_jitter:
+            image = _sharpness_jitter(image)
         image = _affine_jitter(image, F, config)
         image = _patch_mask_ratio(image, config.image_patch_mask_ratio)
         batch[key] = image.to(value.dtype).clamp(0.0, 1.0)
@@ -434,6 +452,7 @@ def write_sampling_augmentation_report(path: Path, config: SamplingAugmentationC
         "argv": argv,
         "notes": [
             "When gpu_image_augmentation=true, image augmentation runs after LeRobot preprocessing on the training device.",
+            "The default SO101 image augmentation recipe mirrors the LeRobot SmolVLA image_transforms list: color jitter, sharpness jitter, affine jitter, and patch masking when enabled.",
             "When gpu_image_augmentation=false, image augmentation is delegated to LeRobot dataset.image_transforms and is applied in __getitem__.",
             "State augmentation adds observation.state noise during training; stored teacher data is unchanged.",
             "Actions are not noised.",

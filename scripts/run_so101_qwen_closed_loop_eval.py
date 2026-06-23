@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--qwen-api-key", default=None)
     parser.add_argument("--qwen-response-json", type=Path)
     parser.add_argument("--qwen-plan-json", type=Path)
+    parser.add_argument("--precondition-plan-json", type=Path)
     parser.add_argument("--policy-path", default=None, help="Default SmolVLA checkpoint/path for every primitive.")
     parser.add_argument(
         "--primitive-policy",
@@ -46,8 +47,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", type=Path, default=Path("_workspace/qwen_so101_closed_loop"))
     parser.add_argument("--env-id", default=DEFAULT_SO101_ENV_ID)
+    parser.add_argument(
+        "--env-object-color",
+        choices=["red", "orange", "yellow", "green", "blue", "purple", "black", "white"],
+        help="For MuJoCoPickLift-v1, force a single cube target color so the rendered object matches the prompt.",
+    )
+    parser.add_argument("--env-cube-half-size", type=float, default=0.0125)
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--seed", type=int, default=98100)
+    parser.add_argument("--start-contract", default="default_reset")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     parser.add_argument("--allow-download", action="store_true")
     parser.add_argument("--max-steps-per-primitive", type=int, default=None)
@@ -80,6 +88,7 @@ def main() -> None:
     args = build_parser().parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     plan, qwen_artifacts = _load_or_build_plan(args)
+    precondition_plan = _load_precondition_plan(args.precondition_plan_json)
     _write_qwen_artifacts(args.output_dir, qwen_artifacts, plan)
     primitive_policy_paths = parse_primitive_policy_routes(args.primitive_policy)
     if args.plan_only:
@@ -120,6 +129,10 @@ def main() -> None:
                 fps=int(args.artifact_fps),
                 every_n_steps=int(args.artifact_every_n_steps),
             ),
+            env_config=_env_config_metadata_for_args(args),
+            start_contract=args.start_contract,
+            precondition_plan=precondition_plan,
+            env_factory=_env_factory_for_args(args),
         )
     print(json.dumps(report, indent=2, sort_keys=True))
     if args.require_pass and report["status"] not in {"passed", "planned"}:
@@ -127,6 +140,7 @@ def main() -> None:
 
 
 def _load_or_build_plan(args: argparse.Namespace) -> tuple[SO101ToolPlan, dict[str, object]]:
+    _validate_prompt_env_alignment(args)
     if args.qwen_plan_json:
         payload = json.loads(args.qwen_plan_json.read_text(encoding="utf-8"))
         return _plan_from_dict(payload), {"source": "qwen_plan_json", "plan_json": payload}
@@ -142,6 +156,116 @@ def _load_or_build_plan(args: argparse.Namespace) -> tuple[SO101ToolPlan, dict[s
         "source": source,
         "request": recording_client.last_request,
         "response": recording_client.last_response,
+    }
+
+
+def _load_precondition_plan(path: Path | None) -> SO101ToolPlan | None:
+    if path is None:
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return _plan_from_dict(payload)
+
+
+def _validate_prompt_env_alignment(args: argparse.Namespace) -> None:
+    if args.env_id == "MuJoCoReach-v1":
+        raise ValueError(
+            "Qwen edge-grasp closed-loop tests must not use MuJoCoReach-v1; "
+            "use MuJoCoPickLift-v1 so the visual target is a graspable cube."
+        )
+    if args.env_object_color:
+        expected = f"{args.env_object_color} cube"
+        if str(args.object).strip().lower() != expected:
+            raise ValueError(
+                f"Qwen target object {args.object!r} does not match closed-loop "
+                f"env object {expected!r}."
+            )
+
+
+def _env_factory_for_args(args: argparse.Namespace):
+    env_kwargs = _env_kwargs_for_args(args)
+
+    def make_env(env_id: str, render_mode: str | None):
+        if env_id == "MuJoCoPickLift-v1" and not args.env_object_color:
+            from train_so101_wrist_ego_visual_servo import make_high_contrast_picklift_env
+
+            if render_mode is not None:
+                raise ValueError("high-contrast SO101 pick-lift closed-loop env only supports render_mode=None")
+            return _GymEnvAdapter(make_high_contrast_picklift_env(), env_id=env_id)
+        from physical_ai_agent.sim.so101_nexus_env import SO101NexusEnv
+
+        return SO101NexusEnv(env_id, render_mode, env_kwargs=env_kwargs)
+
+    return make_env
+
+
+class _GymEnvAdapter:
+    def __init__(self, env, *, env_id: str) -> None:
+        self.env = env
+        self.env_id = env_id
+
+    @property
+    def action_space(self):
+        return self.env.action_space
+
+    @property
+    def observation_space(self):
+        return self.env.observation_space
+
+    @property
+    def action_dim(self) -> int:
+        return int(self.action_space.shape[0])
+
+    def reset(self, seed: int = 0):
+        obs, info = self.env.reset(seed=seed)
+        return _as_float_list(obs), dict(info)
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        return _as_float_list(obs), float(reward), bool(terminated), bool(truncated), dict(info)
+
+    def close(self) -> None:
+        self.env.close()
+
+
+def _as_float_list(values) -> list[float]:
+    return [float(value) for value in values]
+
+
+def _env_kwargs_for_args(args: argparse.Namespace) -> dict[str, object]:
+    if args.env_id != "MuJoCoPickLift-v1" or not args.env_object_color:
+        if args.env_id == "MuJoCoPickLift-v1":
+            return {
+                "object_shape": "cube",
+                "object_color": "dataset_seeded_high_contrast",
+                "object_colors": ["red", "blue", "green"],
+                "cube_half_sizes": [0.0125, 0.015, 0.0175],
+                "source": "train_so101_wrist_ego_visual_servo.make_high_contrast_picklift_env",
+                "start_contract": args.start_contract,
+            }
+        return {}
+    from so101_nexus_core.config import PickConfig
+    from so101_nexus_core.objects import CubeObject
+
+    return {
+        "config": PickConfig(
+            objects=CubeObject(
+                color=args.env_object_color,
+                half_size=float(args.env_cube_half_size),
+            ),
+            n_distractors=0,
+        )
+    }
+
+
+def _env_config_metadata_for_args(args: argparse.Namespace) -> dict[str, object]:
+    if args.env_id != "MuJoCoPickLift-v1" or not args.env_object_color:
+        return {}
+    return {
+        "object_shape": "cube",
+        "object_color": args.env_object_color,
+        "cube_half_size": float(args.env_cube_half_size),
+        "n_distractors": 0,
+        "start_contract": args.start_contract,
     }
 
 

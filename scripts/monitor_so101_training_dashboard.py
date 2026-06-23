@@ -11,6 +11,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+IMPORTANT_CLOSED_LOOP_SUCCESS_RATE_TAG = "important/closed_loop_success_rate"
 from zoneinfo import ZoneInfo
 
 from physical_ai_agent.so101_smolvla_pipeline import (
@@ -50,6 +52,9 @@ def main() -> None:
     parser.add_argument("--closed-loop-episodes", type=int, default=10)
     parser.add_argument("--closed-loop-steps", type=int, default=160)
     parser.add_argument("--closed-loop-seed", type=int, default=98100)
+    parser.add_argument("--closed-loop-test-id", default="default")
+    parser.add_argument("--closed-loop-start-contract", default="default_reset")
+    parser.add_argument("--closed-loop-env-id", default="MuJoCoPickLift-v1")
     parser.add_argument("--closed-loop-width", type=int, default=256)
     parser.add_argument("--closed-loop-height", type=int, default=256)
     parser.add_argument(
@@ -72,7 +77,7 @@ def main() -> None:
     )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--loop-artifact-width", type=int, default=128)
     parser.add_argument("--loop-artifact-height", type=int, default=128)
     parser.add_argument("--loop-artifact-fps", type=int, default=12)
@@ -82,7 +87,9 @@ def main() -> None:
     parser.add_argument("--qwen-api-key")
     parser.add_argument("--qwen-response-json", type=Path)
     parser.add_argument("--qwen-plan-json", type=Path)
+    parser.add_argument("--closed-loop-precondition-plan-json", type=Path)
     parser.add_argument("--qwen-object", default="green cube")
+    parser.add_argument("--qwen-env-object-color", default="green")
     parser.add_argument("--closed-loop-subgoal-chain-mode", choices=["off", "fixed", "valid-mask"], default="off")
     parser.add_argument("--closed-loop-subgoal-sequence")
     parser.add_argument("--closed-loop-fixed-subgoal-chunks", type=int, default=1)
@@ -294,8 +301,10 @@ def _run_picklift_closed_loop_eval(
     checkpoint: str,
     policy_path: Path,
 ) -> dict[str, Any]:
+    closed_loop_test_id = str(getattr(args, "closed_loop_test_id", "default") or "default")
     output_dir = run_dir / "closed_loop_evals" / (
-        f"val24_seed{args.closed_loop_seed}_nact{args.policy_n_action_steps}_{checkpoint}"
+        f"{_safe_id(closed_loop_test_id)}_seed{args.closed_loop_seed}_"
+        f"nact{args.policy_n_action_steps}_{checkpoint}"
     )
     cmd = [
         args.python,
@@ -362,7 +371,9 @@ def _run_picklift_closed_loop_eval(
     if completed.returncode != 0:
         raise RuntimeError((completed.stderr or completed.stdout or f"closed-loop eval failed: {completed.returncode}")[-2000:])
     report_path = output_dir / "so101_picklift_smolvla_eval_report.json"
-    return json.loads(report_path.read_text(encoding="utf-8"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report.setdefault("closed_loop_test_id", closed_loop_test_id)
+    return report
 
 
 def _run_qwen_chain_closed_loop_eval(
@@ -373,7 +384,10 @@ def _run_qwen_chain_closed_loop_eval(
 ) -> dict[str, Any]:
     if args.closed_loop_valid_mask_checkpoint is None:
         raise RuntimeError("qwen_chain closed-loop requires --closed-loop-valid-mask-checkpoint")
-    output_dir = run_dir / "closed_loop_evals" / f"qwen_chain_seed{args.closed_loop_seed}_{checkpoint}"
+    closed_loop_test_id = str(getattr(args, "closed_loop_test_id", "default") or "default")
+    output_dir = run_dir / "closed_loop_evals" / (
+        f"qwen_chain_{_safe_id(closed_loop_test_id)}_seed{args.closed_loop_seed}_{checkpoint}"
+    )
     cmd = [
         args.python,
         str(args.repo_root / "scripts" / "run_so101_qwen_closed_loop_eval.py"),
@@ -383,6 +397,10 @@ def _run_qwen_chain_closed_loop_eval(
         args.qwen_object,
         "--qwen-model",
         args.qwen_model,
+        "--env-id",
+        args.closed_loop_env_id,
+        "--env-object-color",
+        args.qwen_env_object_color,
         "--policy-path",
         str(policy_path),
         "--output-dir",
@@ -391,6 +409,8 @@ def _run_qwen_chain_closed_loop_eval(
         str(args.closed_loop_episodes),
         "--seed",
         str(args.closed_loop_seed),
+        "--start-contract",
+        args.closed_loop_start_contract,
         "--device",
         args.policy_device,
         "--max-steps-per-primitive",
@@ -433,6 +453,8 @@ def _run_qwen_chain_closed_loop_eval(
         )
     if args.qwen_api_key:
         cmd.extend(["--qwen-api-key", args.qwen_api_key])
+    if getattr(args, "closed_loop_precondition_plan_json", None):
+        cmd.extend(["--precondition-plan-json", str(args.closed_loop_precondition_plan_json)])
     if not args.local_files_only:
         cmd.append("--allow-download")
     completed = subprocess.run(cmd, cwd=args.repo_root, env=_runtime_env(args), text=True, capture_output=True, check=False)
@@ -441,6 +463,8 @@ def _run_qwen_chain_closed_loop_eval(
     report_path = output_dir / "qwen_closed_loop_eval_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     report.setdefault("eval_skill_mode", "qwen_edge_chain")
+    report.setdefault("closed_loop_test_id", closed_loop_test_id)
+    report.setdefault("start_contract", args.closed_loop_start_contract)
     report.setdefault("task_prompt", args.closed_loop_task_prompt or (report.get("plan") or {}).get("task"))
     return report
 
@@ -569,6 +593,12 @@ def _bytes_to_gb(value: int | None) -> float | None:
 
 def _should_run_closed_loop(args: argparse.Namespace, run_dir: Path, checkpoint: str) -> bool:
     policy = _closed_loop_policy(args)
+    test_id = str(getattr(args, "closed_loop_test_id", "default") or "default")
+    closed_loop_rows = [
+        row
+        for row in _read_jsonl(run_dir / "metrics" / "closed_loop_metrics.jsonl")
+        if str(row.get("test_id", "default")) == test_id
+    ]
     return should_run_closed_loop(
         schedule=SO101TrainingSchedule(
             closed_loop_policy=policy,
@@ -580,7 +610,7 @@ def _should_run_closed_loop(args: argparse.Namespace, run_dir: Path, checkpoint:
         ),
         checkpoint=checkpoint,
         validation_rows=_read_jsonl(run_dir / "metrics" / "validation_metrics.jsonl"),
-        closed_loop_rows=_read_jsonl(run_dir / "metrics" / "closed_loop_metrics.jsonl"),
+        closed_loop_rows=closed_loop_rows,
     )
 
 
@@ -676,6 +706,7 @@ def _append_closed_loop_metric(run_dir: Path, checkpoint: str, report: dict[str,
     row = {
         "step": _checkpoint_to_step(checkpoint),
         "checkpoint": checkpoint,
+        "test_id": report.get("closed_loop_test_id", "default"),
         "operation": report.get("operation"),
         "success_rate": report.get("success_rate"),
         "env_success_rate": report.get("env_success_rate"),
@@ -703,12 +734,13 @@ def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: d
     log_dir = run_dir / "tensorboard" / "so101_closed_loop"
     step = int(row.get("step") or 0)
     with SummaryWriter(log_dir=str(log_dir)) as writer:
+        test_id = _safe_id(str(row.get("test_id") or "default"))
         for key in ("success_rate", "grasp_rate", "episodes", "duration_s"):
             value = row.get(key)
             if isinstance(value, (int, float)):
-                writer.add_scalar(f"closed_loop/{key}", float(value), global_step=step)
+                writer.add_scalar(f"closed_loop/{test_id}/{key}", float(value), global_step=step)
                 if key == "success_rate":
-                    writer.add_scalar("important/closed_loop_success_rate", float(value), global_step=step)
+                    writer.add_scalar(f"{IMPORTANT_CLOSED_LOOP_SUCCESS_RATE_TAG}/{test_id}", float(value), global_step=step)
         for camera_name, image_path in _first_closed_loop_input_grid_paths(report).items():
             image = _read_hwc_image(Path(image_path))
             if image is not None:
@@ -718,6 +750,13 @@ def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: d
                     global_step=step,
                     dataformats="HWC",
                 )
+        for camera_name, video in _closed_loop_policy_camera_videos(report).items():
+            writer.add_video(
+                f"closed_loop/{test_id}/rollout_{camera_name}",
+                video,
+                global_step=step,
+                fps=12,
+            )
 
 
 def _first_closed_loop_input_grid_paths(report: dict[str, Any]) -> dict[str, str]:
@@ -726,6 +765,75 @@ def _first_closed_loop_input_grid_paths(report: dict[str, Any]) -> dict[str, str
         if isinstance(paths, dict) and paths:
             return {str(key): str(value) for key, value in paths.items()}
     return {}
+
+
+def _closed_loop_policy_camera_videos(report: dict[str, Any]) -> dict[str, Any]:
+    videos = {}
+    for camera_feature, camera_label in (
+        ("observation.images.camera1", "camera1"),
+        ("observation.images.camera2", "camera2"),
+    ):
+        frames = _closed_loop_policy_camera_frames(report, camera_feature, max_frames=96)
+        if frames:
+            video = _frames_to_tensorboard_video(frames)
+            if video is not None:
+                videos[camera_label] = video
+    return videos
+
+
+def _closed_loop_policy_camera_frames(
+    report: dict[str, Any],
+    camera_feature: str,
+    *,
+    max_frames: int,
+) -> list[Path]:
+    paths: list[Path] = []
+    for episode in report.get("episodes") or []:
+        trace_path_value = episode.get("trace_path")
+        if not trace_path_value:
+            continue
+        trace_path = Path(str(trace_path_value))
+        if not trace_path.exists():
+            continue
+        for row in _read_jsonl(trace_path):
+            mapping = row.get("image_feature_mapping") or {}
+            camera_name = mapping.get(camera_feature)
+            if not camera_name:
+                continue
+            media = row.get("media") or {}
+            image_path = (media.get("policy_input_images") or {}).get(camera_name)
+            if not image_path:
+                continue
+            path = Path(str(image_path))
+            if path.exists():
+                paths.append(path)
+            if len(paths) >= max_frames:
+                return paths
+    return paths
+
+
+def _frames_to_tensorboard_video(paths: list[Path]) -> Any | None:
+    try:
+        import numpy as np
+        import torch
+
+        frames = []
+        for path in paths:
+            image = _read_hwc_image(path)
+            if image is None:
+                continue
+            array = np.asarray(image)
+            if array.ndim == 2:
+                array = np.repeat(array[:, :, None], 3, axis=2)
+            if array.shape[2] > 3:
+                array = array[:, :, :3]
+            frames.append(array.astype("uint8", copy=False))
+        if not frames:
+            return None
+        stacked = np.stack(frames, axis=0)  # T,H,W,C
+        return torch.from_numpy(stacked).permute(0, 3, 1, 2).unsqueeze(0)
+    except Exception:
+        return None
 
 
 def _read_hwc_image(path: Path) -> Any | None:
@@ -828,6 +936,10 @@ def _checkpoint_to_step(checkpoint: str) -> int | None:
 
 def _now_local() -> str:
     return datetime.now(LOCAL_TZ).isoformat(timespec="seconds")
+
+
+def _safe_id(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in str(value)).strip("_") or "default"
 
 
 if __name__ == "__main__":
