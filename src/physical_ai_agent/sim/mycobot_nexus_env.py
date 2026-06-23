@@ -639,23 +639,39 @@ def _convert_collada_mesh_to_obj(dae_path: Path, obj_path: Path) -> None:
     namespace = {"c": root.tag.partition("}")[0].strip("{")}
     unit = root.find("c:asset/c:unit", namespace)
     scale = float(unit.attrib.get("meter", "1.0")) if unit is not None else 1.0
+    geometries = _collada_geometry_meshes(root, namespace)
+    library_nodes = {
+        f"#{node.attrib['id']}": node
+        for node in root.findall(".//c:library_nodes/c:node", namespace)
+        if "id" in node.attrib
+    }
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
 
-    for geometry in root.findall(".//c:library_geometries/c:geometry", namespace):
-        mesh = geometry.find("c:mesh", namespace)
-        if mesh is None:
-            continue
-        position_source = _collada_position_source(mesh, namespace)
-        if position_source is None:
-            continue
-        mesh_vertices = _collada_float_triplets(position_source, namespace, scale=scale)
-        offset = len(vertices)
-        vertices.extend(mesh_vertices)
-        faces.extend(
-            (a + offset + 1, b + offset + 1, c + offset + 1)
-            for a, b, c in _collada_triangle_indices(mesh, namespace)
-        )
+    for scene in root.findall(".//c:library_visual_scenes/c:visual_scene", namespace):
+        for node in scene.findall("c:node", namespace):
+            _append_collada_node_instances(
+                node,
+                namespace,
+                geometries,
+                library_nodes,
+                _identity_matrix4(),
+                scale,
+                vertices,
+                faces,
+            )
+
+    if not vertices:
+        for mesh_vertices, mesh_faces in geometries.values():
+            offset = len(vertices)
+            vertices.extend(
+                (x * scale, y * scale, z * scale)
+                for x, y, z in mesh_vertices
+            )
+            faces.extend(
+                (a + offset + 1, b + offset + 1, c + offset + 1)
+                for a, b, c in mesh_faces
+            )
 
     if not vertices or not faces:
         raise ValueError(f"could not extract triangles from official gripper mesh: {dae_path}")
@@ -668,6 +684,117 @@ def _convert_collada_mesh_to_obj(dae_path: Path, obj_path: Path) -> None:
             file.write(f"f {a} {b} {c}\n")
 
 
+def _collada_geometry_meshes(
+    root: ET.Element,
+    namespace: dict[str, str],
+) -> dict[str, tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]]:
+    geometries: dict[str, tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]] = {}
+    for geometry in root.findall(".//c:library_geometries/c:geometry", namespace):
+        geometry_id = geometry.attrib.get("id")
+        mesh = geometry.find("c:mesh", namespace)
+        if geometry_id is None or mesh is None:
+            continue
+        position_source = _collada_position_source(mesh, namespace)
+        if position_source is None:
+            continue
+        geometries[f"#{geometry_id}"] = (
+            _collada_float_triplets(position_source, namespace),
+            _collada_triangle_indices(mesh, namespace),
+        )
+    return geometries
+
+
+def _append_collada_node_instances(
+    node: ET.Element,
+    namespace: dict[str, str],
+    geometries: dict[str, tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]],
+    library_nodes: dict[str, ET.Element],
+    parent_matrix: list[list[float]],
+    scale: float,
+    vertices: list[tuple[float, float, float]],
+    faces: list[tuple[int, int, int]],
+) -> None:
+    matrix = _matrix_multiply(parent_matrix, _collada_node_matrix(node, namespace))
+    for instance in node.findall("c:instance_geometry", namespace):
+        geometry = geometries.get(instance.attrib.get("url", ""))
+        if geometry is None:
+            continue
+        mesh_vertices, mesh_faces = geometry
+        offset = len(vertices)
+        vertices.extend(_transform_point(matrix, vertex, scale=scale) for vertex in mesh_vertices)
+        faces.extend(
+            (a + offset + 1, b + offset + 1, c + offset + 1)
+            for a, b, c in mesh_faces
+        )
+    for instance in node.findall("c:instance_node", namespace):
+        referenced = library_nodes.get(instance.attrib.get("url", ""))
+        if referenced is not None:
+            _append_collada_node_instances(
+                referenced,
+                namespace,
+                geometries,
+                library_nodes,
+                matrix,
+                scale,
+                vertices,
+                faces,
+            )
+    for child in node.findall("c:node", namespace):
+        _append_collada_node_instances(
+            child,
+            namespace,
+            geometries,
+            library_nodes,
+            matrix,
+            scale,
+            vertices,
+            faces,
+        )
+
+
+def _collada_node_matrix(node: ET.Element, namespace: dict[str, str]) -> list[list[float]]:
+    matrix_node = node.find("c:matrix", namespace)
+    if matrix_node is None or matrix_node.text is None:
+        return _identity_matrix4()
+    values = [float(value) for value in matrix_node.text.split()]
+    if len(values) != 16:
+        return _identity_matrix4()
+    return [values[index:index + 4] for index in range(0, 16, 4)]
+
+
+def _identity_matrix4() -> list[list[float]]:
+    return [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def _matrix_multiply(left: list[list[float]], right: list[list[float]]) -> list[list[float]]:
+    return [
+        [
+            sum(left[row][inner] * right[inner][column] for inner in range(4))
+            for column in range(4)
+        ]
+        for row in range(4)
+    ]
+
+
+def _transform_point(
+    matrix: list[list[float]],
+    point: tuple[float, float, float],
+    *,
+    scale: float,
+) -> tuple[float, float, float]:
+    x, y, z = point
+    return (
+        (matrix[0][0] * x + matrix[0][1] * y + matrix[0][2] * z + matrix[0][3]) * scale,
+        (matrix[1][0] * x + matrix[1][1] * y + matrix[1][2] * z + matrix[1][3]) * scale,
+        (matrix[2][0] * x + matrix[2][1] * y + matrix[2][2] * z + matrix[2][3]) * scale,
+    )
+
+
 def _collada_position_source(mesh: ET.Element, namespace: dict[str, str]) -> ET.Element | None:
     for source in mesh.findall("c:source", namespace):
         if source.attrib.get("name") == "position" or "position" in source.attrib.get("id", ""):
@@ -678,13 +805,11 @@ def _collada_position_source(mesh: ET.Element, namespace: dict[str, str]) -> ET.
 def _collada_float_triplets(
     source: ET.Element,
     namespace: dict[str, str],
-    *,
-    scale: float,
 ) -> list[tuple[float, float, float]]:
     array = source.find("c:float_array", namespace)
     if array is None or array.text is None:
         return []
-    values = [float(value) * scale for value in array.text.split()]
+    values = [float(value) for value in array.text.split()]
     return [
         (values[index], values[index + 1], values[index + 2])
         for index in range(0, len(values) - 2, 3)
