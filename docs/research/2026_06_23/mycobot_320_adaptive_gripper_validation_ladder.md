@@ -132,14 +132,16 @@ as visibly broken even though the numeric XML parity gate passes.
 ![Gate 4 eulerseq corrected moved-open render](./mycobot_320_adaptive_eulerseq_fix_moved_open_full.png)
 ![Gate 4 eulerseq corrected moved-closed render](./mycobot_320_adaptive_eulerseq_fix_moved_closed_full.png)
 
-Follow-up correction: the adaptive gripper also needs MuJoCo closed-loop
-constraints. The upstream URDF expresses the adaptive gripper as a mimic-joint
-tree for ROS/RViz, but the physical mechanism is a four-bar linkage. The MuJoCo
-scene now adds invisible loop sites on `gripper_left2`/`gripper_left1` and
-`gripper_right2`/`gripper_right1`, plus two `equality/connect` constraints:
-`left_adaptive_fourbar_loop` and `right_adaptive_fourbar_loop`. The site
-positions were derived in body-local coordinates after applying each official
-visual origin transform, not from raw mesh coordinates.
+Follow-up correction: a direct MuJoCo closed-loop conversion was attempted and
+then removed. The upstream URDF expresses the adaptive gripper as a mimic-joint
+tree for ROS/RViz, while the real mechanism is a closed linkage. Adding
+`equality/connect` loop constraints on top of the official mimic tree made the
+visual links fight the generated MuJoCo constraints during closed commands; the
+rendered gripper looked under-assembled, with intermediate links visibly pulled
+apart. The POC now keeps the official mimic tree as the visual authority and
+re-applies the kinematic mimic pose after each MuJoCo step. That preserves the
+official assembly while the separate invisible finger-pad geoms provide the
+contact proxy for cube experiments.
 
 ![Gate 4 adaptive four-bar open](./mycobot_320_adaptive_fourbar_open_gripper.png)
 ![Gate 4 adaptive four-bar mid](./mycobot_320_adaptive_fourbar_mid_gripper.png)
@@ -151,16 +153,16 @@ coordinate frame. They used raw DAE mesh coordinates, but the MuJoCo bodies use
 the official URDF visual origin transform first. The pads are now placed on the
 closed-fingertip contact points in body-local coordinates:
 `left_finger_pad=(0.00093, 0.04795, 0.00381)` and
-`right_finger_pad=(-0.00567, 0.04202, 0.00390)`. The adaptive gripper joints
-also now have position actuators, so the closed command is held across env
-steps instead of relying on a one-shot qpos assignment. With 30 env steps at
-closed command, the pad center gap is `0.000148 m` in XY and `0.000228 m` in
-3D.
+`right_finger_pad=(-0.00567, 0.04202, 0.00390)`. The adaptive gripper mimic
+followers are not clamped by their passive joint limits during kinematic pose
+application because the official controller lower bound (`-1.11`) expands past
+some follower limits. Clamping the followers left the jaw partially open and
+made the closed pose look wrong. With the unclamped official mimic expression,
+the closed gripper stays assembled after arm motion.
 
-![Gate 4 adaptive fixed closed topdown az0](./mycobot_320_adaptive_fixed_fully_closed_topdown_az0.png)
-![Gate 4 adaptive fixed closed topdown az90](./mycobot_320_adaptive_fixed_fully_closed_topdown_az90.png)
-![Gate 4 adaptive fixed closed oblique](./mycobot_320_adaptive_fixed_fully_closed_oblique.png)
-![Gate 4 adaptive fixed closed oblique front](./mycobot_320_adaptive_fixed_fully_closed_oblique_front.png)
+![Gate 4 adaptive mimic closed top after move](./mycobot_320_adaptive_mimic_closed_top_after_move.png)
+![Gate 4 adaptive mimic closed oblique after move](./mycobot_320_adaptive_mimic_closed_oblique_after_move.png)
+![Gate 4 adaptive mimic closed side after move](./mycobot_320_adaptive_mimic_closed_side_after_move.png)
 
 ### Gate 5: Mimic Motion Parity
 
@@ -186,7 +188,7 @@ all official follower joints and showed that increasing controller value opens
 the jaw. The upstream range lower end is closed (`-1.11`, jaw gap `0.0505 m`)
 and the upper end is open (`0.0`, jaw gap `0.1510 m`). The MuJoCo command
 convention was corrected so adaptive command `+1` maps to open `0.0`, and
-adaptive command `-1` maps to closed `-1.05`.
+adaptive command `-1` maps to closed `-1.11`.
 
 ![Gate 5 mimic motion evidence](./mycobot_320_adaptive_mimic_motion_gate.png)
 

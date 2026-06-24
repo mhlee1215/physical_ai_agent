@@ -199,10 +199,6 @@ class MyCobotNexusEnvTest(unittest.TestCase):
                 for element in scene.findall(".//mesh")
                 if "file" in element.attrib
             }
-            equality_names = {
-                element.attrib.get("name")
-                for element in scene.findall(".//equality/connect")
-            }
             actuator_names = {
                 element.attrib.get("name")
                 for element in scene.findall(".//actuator/position")
@@ -215,15 +211,11 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertIn("gripper_right3_to_gripper_right1", names)
         self.assertIn("left_finger_pad", names)
         self.assertIn("right_finger_pad", names)
-        self.assertIn("left2_loop_site", names)
-        self.assertIn("left1_loop_site", names)
-        self.assertIn("right2_loop_site", names)
-        self.assertIn("right1_loop_site", names)
-        self.assertIn("left_adaptive_fourbar_loop", equality_names)
-        self.assertIn("right_adaptive_fourbar_loop", equality_names)
-        self.assertIn("act_gripper_controller", actuator_names)
-        self.assertIn("act_gripper_base_to_gripper_left2", actuator_names)
-        self.assertIn("act_gripper_right3_to_gripper_right1", actuator_names)
+        self.assertNotIn("left2_loop_site", names)
+        self.assertNotIn("right1_loop_site", names)
+        self.assertNotIn("act_gripper_controller", actuator_names)
+        self.assertNotIn("act_gripper_base_to_gripper_left2", actuator_names)
+        self.assertNotIn("act_gripper_right3_to_gripper_right1", actuator_names)
         self.assertIn("gripper_base.obj", mesh_files)
         self.assertIn("link6.obj", mesh_files)
 
