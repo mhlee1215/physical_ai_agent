@@ -163,6 +163,12 @@ MuJoCo grasp. On this Mac thread, both default Python and the bundled Codex
 Python lack `mujoco`, so actual render/physics smoke is still pending a
 MuJoCo-capable runtime.
 
+Further adaptive-gripper work must follow
+[`mycobot_320_adaptive_gripper_validation_ladder.md`](./mycobot_320_adaptive_gripper_validation_ladder.md).
+Do not tune contact pads, cube placement, friction, or arm trajectory until the
+URDF-vs-MuJoCo kinematic tree, mesh transform parity, visual pose, and mimic
+motion gates have passed.
+
 Target render/physics command once MuJoCo is available:
 
 ```bash
