@@ -16,6 +16,9 @@ from physical_ai_agent.sim.mycobot_nexus_env import (
     write_dry_contract,
 )
 from scripts.mycobot_nexus_smoke import build_parser
+from scripts.verify_mycobot_280_pi_adaptive_profile import (
+    verify_280_pi_adaptive_profile,
+)
 from scripts.verify_mycobot_320_adaptive_kinematic_tree import (
     verify_adaptive_kinematic_tree,
 )
@@ -256,6 +259,21 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertIn("G_base.obj", mesh_files)
         self.assertIn("joint6.obj", mesh_files)
         self.assertIn("gripper_base.obj", mesh_files)
+
+    def test_280_pi_adaptive_profile_verifier_writes_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ros_root = _write_minimal_280_pi_adaptive_ros1_tree(tmp_path)
+            report = verify_280_pi_adaptive_profile(
+                official_gripper_root=ros_root,
+                output_dir=tmp_path / "verify_280_pi_adaptive",
+            )
+
+            self.assertEqual(report.status, "passed")
+            self.assertEqual(report.failed_check_count, 0)
+            self.assertGreater(report.passed_check_count, 10)
+            self.assertTrue(Path(report.artifacts["json"]).exists())
+            self.assertTrue(Path(report.artifacts["markdown"]).exists())
 
     def test_320_adaptive_kinematic_tree_verifier_writes_visual_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
