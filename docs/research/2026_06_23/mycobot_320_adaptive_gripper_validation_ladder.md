@@ -132,6 +132,20 @@ as visibly broken even though the numeric XML parity gate passes.
 ![Gate 4 eulerseq corrected moved-open render](./mycobot_320_adaptive_eulerseq_fix_moved_open_full.png)
 ![Gate 4 eulerseq corrected moved-closed render](./mycobot_320_adaptive_eulerseq_fix_moved_closed_full.png)
 
+Follow-up correction: the adaptive gripper also needs MuJoCo closed-loop
+constraints. The upstream URDF expresses the adaptive gripper as a mimic-joint
+tree for ROS/RViz, but the physical mechanism is a four-bar linkage. The MuJoCo
+scene now adds invisible loop sites on `gripper_left2`/`gripper_left1` and
+`gripper_right2`/`gripper_right1`, plus two `equality/connect` constraints:
+`left_adaptive_fourbar_loop` and `right_adaptive_fourbar_loop`. The site
+positions were derived in body-local coordinates after applying each official
+visual origin transform, not from raw mesh coordinates.
+
+![Gate 4 adaptive four-bar open](./mycobot_320_adaptive_fourbar_open_gripper.png)
+![Gate 4 adaptive four-bar mid](./mycobot_320_adaptive_fourbar_mid_gripper.png)
+![Gate 4 adaptive four-bar closed](./mycobot_320_adaptive_fourbar_closed_gripper.png)
+![Gate 4 adaptive four-bar full view](./mycobot_320_adaptive_fourbar_open_full.png)
+
 ### Gate 5: Mimic Motion Parity
 
 Question: does one gripper command move all adaptive gripper links in the

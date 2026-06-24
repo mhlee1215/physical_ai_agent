@@ -182,7 +182,12 @@ inspection then exposed a missed MuJoCo compiler issue: without
 `eulerseq="XYZ"`, URDF/RViz RPY poses were interpreted differently and the arm
 and adaptive gripper rendered as physically broken. The scene builder now
 forces `eulerseq="XYZ"` and the corrected neutral/moved renders are included in
-the adaptive validation ladder. Gate 5 is passed:
+the adaptive validation ladder. A second visual inspection found that the
+adaptive gripper also needed explicit MuJoCo four-bar loop constraints: the
+upstream URDF mimic-joint tree is now supplemented with invisible
+`equality/connect` loops between `gripper_left2`/`gripper_left1` and
+`gripper_right2`/`gripper_right1`, with body-local site positions derived after
+applying each official visual origin transform. Gate 5 is passed:
 `scripts/verify_mycobot_320_adaptive_mimic_motion.py` sampled five
 `gripper_controller` values and showed the official controller direction is
 lower-to-upper = closed-to-open. The jaw gap increases from `0.0505 m` at

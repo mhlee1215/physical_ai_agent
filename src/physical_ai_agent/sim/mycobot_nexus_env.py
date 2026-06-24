@@ -105,6 +105,16 @@ ADAPTIVE_FINGER_PAD_SIZE = (0.02636, 0.006, 0.006)
 ADAPTIVE_FINGER_PAD_EULER = (0.0, 0.0, 0.0)
 ADAPTIVE_FINGER_PAD_FRICTION = (80.0, 8.0, 8.0)
 ADAPTIVE_FINGER_PAD_CONDIM = 6
+ADAPTIVE_FOURBAR_LOOP_SITES = {
+    "left2_loop_site": ("gripper_left2", (-0.0418, 0.03789, -0.011)),
+    "left1_loop_site": ("gripper_left1", (-0.02079, -0.02212, 0.004)),
+    "right2_loop_site": ("gripper_right2", (0.04795, 0.03553, -0.022)),
+    "right1_loop_site": ("gripper_right1", (0.02392, -0.02345, -0.007)),
+}
+ADAPTIVE_FOURBAR_EQUALITIES = (
+    ("left_adaptive_fourbar_loop", "left2_loop_site", "left1_loop_site"),
+    ("right_adaptive_fourbar_loop", "right2_loop_site", "right1_loop_site"),
+)
 
 
 @dataclass(frozen=True)
@@ -1064,6 +1074,8 @@ def _build_official_320_nexus_scene_model(
     _add_urdf_visual_geoms(base, "base", link_visuals)
     _append_urdf_children(base, "base", children_by_parent, link_visuals)
     _add_320_official_gripper_contact_pads(base)
+    if model_profile == MODEL_PROFILE_320_ADAPTIVE_GRIPPER:
+        _add_320_adaptive_fourbar_loops(root, base)
     _add_320_position_actuators(root)
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1219,6 +1231,38 @@ def _add_320_official_gripper_contact_pads(base: ET.Element) -> None:
             right,
             "right_finger_pad",
             pos=ADAPTIVE_RIGHT_FINGER_PAD_POS,
+        )
+
+
+def _add_320_adaptive_fourbar_loops(root: ET.Element, base: ET.Element) -> None:
+    for site_name, (body_name, site_pos) in ADAPTIVE_FOURBAR_LOOP_SITES.items():
+        body = base.find(f".//body[@name='{body_name}']")
+        if body is None:
+            continue
+        ET.SubElement(
+            body,
+            "site",
+            {
+                "name": site_name,
+                "pos": _float_sequence(site_pos),
+                "size": "0.002",
+                "rgba": "0 0 0 0",
+            },
+        )
+    equality = root.find("equality")
+    if equality is None:
+        equality = ET.SubElement(root, "equality")
+    for name, site1, site2 in ADAPTIVE_FOURBAR_EQUALITIES:
+        ET.SubElement(
+            equality,
+            "connect",
+            {
+                "name": name,
+                "site1": site1,
+                "site2": site2,
+                "solref": "0.002 1",
+                "solimp": "0.99 0.999 0.0001",
+            },
         )
 
 
