@@ -8,6 +8,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -15,6 +16,8 @@ from physical_ai_agent.sim.mycobot_nexus_env import (  # noqa: E402
     ADAPTIVE_GATE7_TABLE_ARM_QPOS,
     ADAPTIVE_GATE8_LIFT_ARM_QPOS,
     MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+    TASK_CUBE_BODY,
+    TASK_CUBE_GEOM,
     TASK_CUBE_POS,
     MyCobotNexusConfig,
     MyCobotNexusEnv,
@@ -34,6 +37,7 @@ JOINT_NAMES = [
     "joint6output_to_joint6",
     "gripper_controller",
 ]
+NATURAL_READY_ARM_QPOS = (0.0, 0.28, -0.18, 0.16, 0.0, 0.0)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,11 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=240)
     parser.add_argument("--render-every", type=int, default=4)
-    parser.add_argument("--pregrasp-steps", type=int, default=20)
-    parser.add_argument("--close-steps", type=int, default=80)
-    parser.add_argument("--lift-steps", type=int, default=60)
+    parser.add_argument("--pregrasp-steps", type=int, default=24)
+    parser.add_argument("--close-steps", type=int, default=72)
+    parser.add_argument("--lift-steps", type=int, default=28)
     parser.add_argument("--placement-gripper-command", type=float, default=0.25)
-    parser.add_argument("--close-gripper-command", type=float, default=-0.7)
+    parser.add_argument("--close-gripper-command", type=float, default=-0.75)
+    parser.add_argument("--cube-half-size", type=float, default=0.02)
     return parser
 
 
@@ -76,6 +81,7 @@ def main() -> None:
         lift_steps=args.lift_steps,
         placement_gripper_command=args.placement_gripper_command,
         close_gripper_command=args.close_gripper_command,
+        cube_half_size=args.cube_half_size,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     if report["episodes"] != args.episodes or report["failed_episodes"]:
@@ -97,8 +103,12 @@ def export_dataset(
     lift_steps: int,
     placement_gripper_command: float,
     close_gripper_command: float,
+    cube_half_size: float,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(output_dir / "episodes", ignore_errors=True)
+    shutil.rmtree(output_dir / "frames", ignore_errors=True)
+    shutil.rmtree(output_dir / "scene_cache", ignore_errors=True)
     (output_dir / "episodes").mkdir(exist_ok=True)
     (output_dir / "frames").mkdir(exist_ok=True)
     episode_summaries = []
@@ -119,6 +129,7 @@ def export_dataset(
             lift_steps=lift_steps,
             placement_gripper_command=placement_gripper_command,
             close_gripper_command=close_gripper_command,
+            cube_half_size=cube_half_size,
         )
         episode_summaries.append(summary)
         total_frames += int(summary["frames"])
@@ -129,6 +140,14 @@ def export_dataset(
         "dataset_id": output_dir.name,
         "robot": "myCobot 320 M5 2022 + adaptive gripper",
         "task": "short_grasp_lift_red_cube",
+        "trajectory": "natural_ready_fast_grasp_lift",
+        "cube_half_size": cube_half_size,
+        "success_criteria": {
+            "close_best_sustained_contact_steps": 15,
+            "lift_best_sustained_contact_steps": 25,
+            "final_cube_lift": 0.025,
+            "final_gripper_cube_contact_pads": 2,
+        },
         "episodes": episodes,
         "frames": total_frames,
         "fps": 20,
@@ -144,8 +163,9 @@ def export_dataset(
             "env": f"MYCOBOT_TEMP_DATASETS={output_dir.name}={output_dir}",
         },
         "notes": (
-            "Gate 8 teacher dataset POC. Episodes are short grasp-lift rollouts "
-            "with contact/lift metrics in metadata; this is not yet LeRobot parquet."
+            "Gate 8 teacher dataset POC. Episodes start from a natural ready pose, "
+            "approach a 40mm table cube, close the adaptive gripper, and lift faster "
+            "than the initial contact-proof dataset; this is not yet LeRobot parquet."
         ),
     }
     (output_dir / "manifest.json").write_text(
@@ -170,6 +190,7 @@ def _export_episode(
     lift_steps: int,
     placement_gripper_command: float,
     close_gripper_command: float,
+    cube_half_size: float,
 ) -> dict[str, Any]:
     episode_path = output_dir / "episodes" / f"episode_{episode_index:04d}.jsonl"
     frame_dir = output_dir / "frames" / f"episode_{episode_index:04d}"
@@ -185,6 +206,7 @@ def _export_episode(
             height=height,
         )
     )
+    _resize_scene_cube(env, cube_half_size)
     rows: list[dict[str, Any]] = []
     try:
         env.reset(seed=seed)
@@ -192,15 +214,29 @@ def _export_episode(
         env._set_gripper(command=placement_gripper_command)
         env._mujoco.mj_forward(env.model, env.data)
         pad_midpoint = env._finger_pad_midpoint()
-        initial_cube_position = [float(pad_midpoint[0]), float(pad_midpoint[1]), float(TASK_CUBE_POS[2])]
+        initial_cube_position = [
+            float(pad_midpoint[0]),
+            float(pad_midpoint[1]),
+            float(cube_half_size + 0.008),
+        ]
         for axis, value in enumerate(initial_cube_position):
             env.data.qpos[env._cube_freejoint_qpos_index + axis] = float(value)
         qvel_start = env._cube_freejoint_qvel_index
         env.data.qvel[qvel_start:qvel_start + 6] = 0.0
         env._cube_initial_pos = list(initial_cube_position)
         env._mujoco.mj_forward(env.model, env.data)
+        _set_arm_pose(env, NATURAL_READY_ARM_QPOS)
+        env._set_gripper(command=placement_gripper_command)
+        env._mujoco.mj_forward(env.model, env.data)
         step_index = 0
-        for _ in range(pregrasp_steps):
+        approach_denominator = max(pregrasp_steps - 1, 1)
+        for step in range(pregrasp_steps):
+            alpha = _smoothstep(step / approach_denominator)
+            arm = _lerp_vector(
+                list(NATURAL_READY_ARM_QPOS),
+                list(ADAPTIVE_GATE7_TABLE_ARM_QPOS),
+                alpha,
+            )
             step_index = _append_step(
                 env,
                 rows,
@@ -208,8 +244,8 @@ def _export_episode(
                 frame_dir,
                 episode_index,
                 step_index,
-                "pregrasp",
-                [*ADAPTIVE_GATE7_TABLE_ARM_QPOS, placement_gripper_command],
+                "approach",
+                [*arm, placement_gripper_command],
                 render_every,
             )
         close_denominator = max(close_steps - 1, 1)
@@ -259,7 +295,7 @@ def _export_episode(
     final_lift = float(final["cube_lift"])
     success = (
         _best_sustained_two_pad_contact(close_infos) >= 15
-        and _best_sustained_two_pad_contact(lift_infos) >= 30
+        and _best_sustained_two_pad_contact(lift_infos) >= 25
         and int(final["gripper_cube_contact_pads"]) >= 2
         and final_lift >= 0.025
     )
@@ -290,6 +326,9 @@ def _append_step(
     action: list[float],
     render_every: int,
 ) -> int:
+    if phase == "approach":
+        _set_arm_pose(env, tuple(action[:6]))
+        env._mujoco.mj_forward(env.model, env.data)
     obs, reward, terminated, truncated, info = env.step(action)
     image = ""
     if step_index % max(1, render_every) == 0:
@@ -318,6 +357,45 @@ def _set_arm_pose(env: MyCobotNexusEnv, qpos: tuple[float, ...]) -> None:
         env.data.qpos[qpos_index] = float(value)
     for actuator_index, value in zip(env._arm_actuator_indices, qpos, strict=True):
         env.data.ctrl[actuator_index] = float(value)
+
+
+def _resize_scene_cube(env: MyCobotNexusEnv, cube_half_size: float) -> None:
+    tree = ET.parse(env.scene_path)
+    root = tree.getroot()
+    cube_body = root.find(f".//body[@name='{TASK_CUBE_BODY}']")
+    cube_geom = root.find(f".//geom[@name='{TASK_CUBE_GEOM}']")
+    if cube_body is None or cube_geom is None:
+        raise RuntimeError("missing task cube body/geom in generated myCobot scene")
+    cube_body.set(
+        "pos",
+        f"{TASK_CUBE_POS[0]} {TASK_CUBE_POS[1]} {cube_half_size + 0.008}",
+    )
+    cube_geom.set("size", f"{cube_half_size} {cube_half_size} {cube_half_size}")
+    scale = cube_half_size / 0.015
+    cube_geom.set("mass", f"{0.005 * scale ** 3:.6f}")
+    tree.write(env.scene_path, encoding="utf-8", xml_declaration=True)
+    env.model = env._mujoco.MjModel.from_xml_path(str(env.scene_path))
+    env.data = env._mujoco.MjData(env.model)
+    env._renderer = None
+    cube_joint_id = env._mujoco.mj_name2id(
+        env.model,
+        env._mujoco.mjtObj.mjOBJ_JOINT,
+        "task_cube_freejoint",
+    )
+    env._cube_freejoint_qpos_index = int(env.model.jnt_qposadr[cube_joint_id])
+    env._cube_freejoint_qvel_index = int(env.model.jnt_dofadr[cube_joint_id])
+    env._qpos_indices = [
+        int(env.model.jnt_qposadr[env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_JOINT, name)])
+        for name in env._arm_joint_names
+    ]
+    env._dof_indices = [
+        int(env.model.jnt_dofadr[env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_JOINT, name)])
+        for name in env._arm_joint_names
+    ]
+    env._arm_actuator_indices = [
+        int(env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_ACTUATOR, f"act_{name}"))
+        for name in env._arm_joint_names
+    ]
 
 
 def _best_sustained_two_pad_contact(infos: list[dict[str, Any]]) -> int:
