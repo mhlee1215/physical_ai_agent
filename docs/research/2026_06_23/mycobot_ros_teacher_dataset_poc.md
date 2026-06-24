@@ -183,12 +183,17 @@ passed: `scripts/verify_mycobot_320_adaptive_mimic_motion.py` sampled five
 `gripper_controller` values and showed the official controller direction is
 lower-to-upper = closed-to-open. The jaw gap increases from `0.0505 m` at
 `-1.11` to `0.1510 m` at `0.0`, so the adaptive MuJoCo command mapping was
-corrected to `+1=open` and `-1=closed`.
+corrected to `+1=open` and `-1=closed`. Gate 6 is passed:
+`scripts/verify_mycobot_320_adaptive_collision_proxy.py` derives the two
+contact proxy boxes from official `gripper_left1` and `gripper_right1` mesh
+bounds, then verifies parent link, local position, size, friction, `condim`,
+`contype`, and `conaffinity` in the generated MuJoCo XML.
 
 ![myCobot 320 adaptive kinematic tree gate](./mycobot_320_adaptive_kinematic_tree_gate.png)
 ![myCobot 320 adaptive mesh transform gate](./mycobot_320_adaptive_mesh_transform_gate.png)
 ![myCobot 320 adaptive visual pose gate](./mycobot_320_adaptive_visual_pose_gate.png)
 ![myCobot 320 adaptive mimic motion gate](./mycobot_320_adaptive_mimic_motion_gate.png)
+![myCobot 320 adaptive collision proxy gate](./mycobot_320_adaptive_collision_proxy_gate.png)
 
 Target render/physics command once MuJoCo is available:
 

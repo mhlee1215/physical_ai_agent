@@ -173,6 +173,16 @@ Stop condition:
 - Do not move contact pads based only on failed cube traces. Pad placement must
   come from the validated finger-link coordinate frames.
 
+Current status: passed by
+`scripts/verify_mycobot_320_adaptive_collision_proxy.py` against the ROS2
+Humble adaptive gripper source. Evidence: both contact proxy geoms are derived
+from official `gripper_left1` and `gripper_right1` mesh bounds, attached to the
+matching validated finger link frames, and verified in the generated MuJoCo XML.
+The pads are thin box proxies, not raw visual meshes. The current design uses
+size `0.02636 0.006 0.006`, friction `80 8 8`, and `condim=6`.
+
+![Gate 6 collision proxy evidence](./mycobot_320_adaptive_collision_proxy_gate.png)
+
 ### Gate 7: Static Contact Smoke
 
 Question: can the gripper close on a pre-positioned cube without arm motion?
@@ -208,7 +218,7 @@ Stop condition:
 
 ## Current Next Step
 
-The next implementation should be Gate 6: collision proxy design. It must
-derive contact geoms from the validated finger-link frames and record local
-positions, sizes, friction, and link ownership before any cube-placement,
-friction, or arm-trajectory tuning.
+The next implementation should be Gate 7: static contact smoke. It must start
+with the cube between the validated finger contact geoms, keep the arm fixed,
+close the gripper slowly, and require sustained contacts from both sides before
+any arm trajectory tuning.

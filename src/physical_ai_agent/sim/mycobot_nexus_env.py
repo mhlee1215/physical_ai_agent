@@ -97,6 +97,14 @@ TCP_SITE = "mycobot_tcp_site"
 MODEL_PROFILE_280_JN = "280-jn"
 MODEL_PROFILE_320_GRIPPER = "320-m5-2022-gripper"
 MODEL_PROFILE_320_ADAPTIVE_GRIPPER = "320-m5-2022-adaptive-gripper"
+ADAPTIVE_LEFT_FINGER_PAD_PARENT = "gripper_left1"
+ADAPTIVE_RIGHT_FINGER_PAD_PARENT = "gripper_right1"
+ADAPTIVE_LEFT_FINGER_PAD_POS = (0.0419991088, 0.0033629020, -0.0406646156)
+ADAPTIVE_RIGHT_FINGER_PAD_POS = (0.0418926304, 0.0034037355, 0.0773255844)
+ADAPTIVE_FINGER_PAD_SIZE = (0.02636, 0.006, 0.006)
+ADAPTIVE_FINGER_PAD_EULER = (0.0, 0.0, 0.0)
+ADAPTIVE_FINGER_PAD_FRICTION = (80.0, 8.0, 8.0)
+ADAPTIVE_FINGER_PAD_CONDIM = 6
 
 
 @dataclass(frozen=True)
@@ -1198,27 +1206,40 @@ def _add_320_official_gripper_contact_pads(base: ET.Element) -> None:
             "site",
             {"name": TCP_SITE, "pos": "0 0.065 -0.018", "size": "0.006", "rgba": "0 0 0 0"},
         )
-    left = base.find(".//body[@name='gripper_left1']")
+    left = base.find(f".//body[@name='{ADAPTIVE_LEFT_FINGER_PAD_PARENT}']")
     if left is not None:
-        _add_320_official_finger_pad(left, "left_finger_pad", pos="0.022 -0.0645 0")
-    right = base.find(".//body[@name='gripper_right1']")
+        _add_320_official_finger_pad(
+            left,
+            "left_finger_pad",
+            pos=ADAPTIVE_LEFT_FINGER_PAD_POS,
+        )
+    right = base.find(f".//body[@name='{ADAPTIVE_RIGHT_FINGER_PAD_PARENT}']")
     if right is not None:
-        _add_320_official_finger_pad(right, "right_finger_pad", pos="-0.058 -0.0615 0")
+        _add_320_official_finger_pad(
+            right,
+            "right_finger_pad",
+            pos=ADAPTIVE_RIGHT_FINGER_PAD_POS,
+        )
 
 
-def _add_320_official_finger_pad(parent: ET.Element, pad_name: str, *, pos: str) -> None:
+def _add_320_official_finger_pad(
+    parent: ET.Element,
+    pad_name: str,
+    *,
+    pos: tuple[float, float, float],
+) -> None:
     ET.SubElement(
         parent,
         "geom",
         {
             "name": pad_name,
             "type": "box",
-            "pos": pos,
-            "euler": "0 0 1.5708",
-            "size": "0.016 0.024 0.010",
+            "pos": _float_sequence(pos),
+            "euler": _float_sequence(ADAPTIVE_FINGER_PAD_EULER),
+            "size": _float_sequence(ADAPTIVE_FINGER_PAD_SIZE),
             "rgba": "0.08 0.08 0.08 0",
-            "friction": "80.0 8.0 8.0",
-            "condim": "6",
+            "friction": _float_sequence(ADAPTIVE_FINGER_PAD_FRICTION),
+            "condim": str(ADAPTIVE_FINGER_PAD_CONDIM),
             "solref": "0.001 1",
             "solimp": "0.995 0.999 0.0001",
             "contype": "1",
@@ -1226,6 +1247,10 @@ def _add_320_official_finger_pad(parent: ET.Element, pad_name: str, *, pos: str)
             "mass": "0.02",
         },
     )
+
+
+def _float_sequence(values: tuple[float, ...]) -> str:
+    return " ".join(f"{value:.10g}" for value in values)
 
 
 def _clean_float_string(raw: str) -> str:

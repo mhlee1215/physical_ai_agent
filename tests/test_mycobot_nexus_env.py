@@ -18,6 +18,9 @@ from scripts.mycobot_nexus_smoke import build_parser
 from scripts.verify_mycobot_320_adaptive_kinematic_tree import (
     verify_adaptive_kinematic_tree,
 )
+from scripts.verify_mycobot_320_adaptive_collision_proxy import (
+    verify_adaptive_collision_proxy,
+)
 from scripts.verify_mycobot_320_adaptive_mesh_transform import (
     verify_adaptive_mesh_transform,
 )
@@ -266,6 +269,20 @@ class MyCobotNexusEnvTest(unittest.TestCase):
             self.assertTrue(report.controller_increase_opens)
             self.assertLess(report.closed_jaw_gap_xy, report.open_jaw_gap_xy)
             self.assertEqual(report.sample_count, 5)
+            self.assertTrue(Path(report.artifacts["json"]).exists())
+            self.assertTrue(Path(report.artifacts["markdown"]).exists())
+            self.assertTrue(Path(report.artifacts["svg"]).exists())
+
+    def test_320_adaptive_collision_proxy_verifier_writes_visual_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ros_root = _write_minimal_320_adaptive_ros2_tree(tmp_path)
+            report = verify_adaptive_collision_proxy(
+                official_gripper_root=ros_root,
+                output_dir=tmp_path / "verify_collision_proxy",
+            )
+
+            self.assertEqual(report.compared_proxy_count, 2)
             self.assertTrue(Path(report.artifacts["json"]).exists())
             self.assertTrue(Path(report.artifacts["markdown"]).exists())
             self.assertTrue(Path(report.artifacts["svg"]).exists())
