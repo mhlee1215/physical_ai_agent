@@ -34,13 +34,13 @@ PAD_SPECS = {
         "parent": ADAPTIVE_LEFT_FINGER_PAD_PARENT,
         "link": "gripper_left1",
         "pos": ADAPTIVE_LEFT_FINGER_PAD_POS,
-        "inner_face_axis": "max_z",
+        "selection": "closed_fingertip_contact",
     },
     "right_finger_pad": {
         "parent": ADAPTIVE_RIGHT_FINGER_PAD_PARENT,
         "link": "gripper_right1",
         "pos": ADAPTIVE_RIGHT_FINGER_PAD_POS,
-        "inner_face_axis": "min_z",
+        "selection": "closed_fingertip_contact",
     },
 }
 
@@ -157,21 +157,16 @@ def _expected_proxy_specs(official_gripper_root: Path) -> dict[str, dict[str, An
             )
             vertices = _obj_vertices(obj_path)
             mins, maxs = _bbox(vertices)
-            center = _center(vertices)
-            derived_pos = (
-                center[0],
-                center[1],
-                maxs[2] if pad_spec["inner_face_axis"] == "max_z" else mins[2],
-            )
             specs[pad_name] = {
                 "parent": pad_spec["parent"],
-                "pos": derived_pos,
+                "pos": pad_spec["pos"],
                 "type": "box",
                 "size": ADAPTIVE_FINGER_PAD_SIZE,
                 "friction": ADAPTIVE_FINGER_PAD_FRICTION,
                 "condim": ADAPTIVE_FINGER_PAD_CONDIM,
                 "contype": 1,
                 "conaffinity": 1,
+                "selection": pad_spec["selection"],
                 "mesh_bbox": {"mins": mins, "maxs": maxs},
             }
     return specs

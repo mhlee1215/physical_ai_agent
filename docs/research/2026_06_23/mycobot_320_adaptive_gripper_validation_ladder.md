@@ -146,6 +146,22 @@ visual origin transform, not from raw mesh coordinates.
 ![Gate 4 adaptive four-bar closed](./mycobot_320_adaptive_fourbar_closed_gripper.png)
 ![Gate 4 adaptive four-bar full view](./mycobot_320_adaptive_fourbar_open_full.png)
 
+Second follow-up correction: the original contact pads were also in the wrong
+coordinate frame. They used raw DAE mesh coordinates, but the MuJoCo bodies use
+the official URDF visual origin transform first. The pads are now placed on the
+closed-fingertip contact points in body-local coordinates:
+`left_finger_pad=(0.00093, 0.04795, 0.00381)` and
+`right_finger_pad=(-0.00567, 0.04202, 0.00390)`. The adaptive gripper joints
+also now have position actuators, so the closed command is held across env
+steps instead of relying on a one-shot qpos assignment. With 30 env steps at
+closed command, the pad center gap is `0.000148 m` in XY and `0.000228 m` in
+3D.
+
+![Gate 4 adaptive fixed closed topdown az0](./mycobot_320_adaptive_fixed_fully_closed_topdown_az0.png)
+![Gate 4 adaptive fixed closed topdown az90](./mycobot_320_adaptive_fixed_fully_closed_topdown_az90.png)
+![Gate 4 adaptive fixed closed oblique](./mycobot_320_adaptive_fixed_fully_closed_oblique.png)
+![Gate 4 adaptive fixed closed oblique front](./mycobot_320_adaptive_fixed_fully_closed_oblique_front.png)
+
 ### Gate 5: Mimic Motion Parity
 
 Question: does one gripper command move all adaptive gripper links in the

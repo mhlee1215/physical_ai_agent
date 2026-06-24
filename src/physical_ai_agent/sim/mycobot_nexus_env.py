@@ -99,9 +99,9 @@ MODEL_PROFILE_320_GRIPPER = "320-m5-2022-gripper"
 MODEL_PROFILE_320_ADAPTIVE_GRIPPER = "320-m5-2022-adaptive-gripper"
 ADAPTIVE_LEFT_FINGER_PAD_PARENT = "gripper_left1"
 ADAPTIVE_RIGHT_FINGER_PAD_PARENT = "gripper_right1"
-ADAPTIVE_LEFT_FINGER_PAD_POS = (0.0419991088, 0.0033629020, -0.0406646156)
-ADAPTIVE_RIGHT_FINGER_PAD_POS = (0.0418926304, 0.0034037355, 0.0773255844)
-ADAPTIVE_FINGER_PAD_SIZE = (0.02636, 0.006, 0.006)
+ADAPTIVE_LEFT_FINGER_PAD_POS = (0.00093, 0.04795, 0.00381)
+ADAPTIVE_RIGHT_FINGER_PAD_POS = (-0.00567, 0.04202, 0.00390)
+ADAPTIVE_FINGER_PAD_SIZE = (0.014, 0.006, 0.006)
 ADAPTIVE_FINGER_PAD_EULER = (0.0, 0.0, 0.0)
 ADAPTIVE_FINGER_PAD_FRICTION = (80.0, 8.0, 8.0)
 ADAPTIVE_FINGER_PAD_CONDIM = 6
@@ -265,8 +265,12 @@ class MyCobotNexusEnv:
             else []
         )
         self._gripper_actuator_indices = (
-            []
-            if self._uses_official_320_gripper
+            _named_actuator_indices(
+                mujoco,
+                self.model,
+                [f"act_{name}" for name in gripper_joint_names],
+            )
+            if self._uses_official_320_adaptive_gripper
             else []
         )
         self._low, self._high = _joint_ranges(self.model, self._qpos_indices)
@@ -607,7 +611,7 @@ class MyCobotNexusEnv:
     def _set_gripper(self, *, command: float) -> None:
         if self._uses_official_320_gripper:
             open_value = 0.0 if self._uses_official_320_adaptive_gripper else -0.7
-            closed_value = -1.05 if self._uses_official_320_adaptive_gripper else 0.3
+            closed_value = -1.11 if self._uses_official_320_adaptive_gripper else 0.3
             close_amount = (1.0 - max(-1.0, min(1.0, float(command)))) * 0.5
             base_value = open_value + close_amount * (closed_value - open_value)
             for index, (qpos_index, joint_name) in enumerate(
@@ -618,10 +622,13 @@ class MyCobotNexusEnv:
                 )
             ):
                 raw_value = base_value * OFFICIAL_320_GRIPPER_MIMIC[joint_name]
-                self.data.qpos[qpos_index] = max(
+                target = max(
                     self._gripper_low[index],
                     min(self._gripper_high[index], raw_value),
                 )
+                self.data.qpos[qpos_index] = target
+                if index < len(self._gripper_actuator_indices):
+                    self.data.ctrl[self._gripper_actuator_indices[index]] = target
             return
         if self._uses_official_gripper:
             open_value = -0.007
@@ -1076,13 +1083,16 @@ def _build_official_320_nexus_scene_model(
     _add_320_official_gripper_contact_pads(base)
     if model_profile == MODEL_PROFILE_320_ADAPTIVE_GRIPPER:
         _add_320_adaptive_fourbar_loops(root, base)
-    _add_320_position_actuators(root)
+    _add_320_position_actuators(
+        root,
+        include_adaptive_gripper=model_profile == MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+    )
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(scene_path, encoding="utf-8", xml_declaration=True)
 
 
-def _add_320_position_actuators(root: ET.Element) -> None:
+def _add_320_position_actuators(root: ET.Element, *, include_adaptive_gripper: bool) -> None:
     actuator = ET.SubElement(root, "actuator")
     arm_ranges = {
         "joint2_to_joint1": "-2.93 2.93",
@@ -1104,6 +1114,30 @@ def _add_320_position_actuators(root: ET.Element) -> None:
                 "ctrllimited": "true",
             },
         )
+    if not include_adaptive_gripper:
+        return
+    gripper_ranges = {
+        "gripper_controller": "-1.11 0",
+        "gripper_base_to_gripper_left2": "-0.8 0.5",
+        "gripper_left3_to_gripper_left1": "-0.5 0.5",
+        "gripper_base_to_gripper_right3": "-0.3 0.7",
+        "gripper_base_to_gripper_right2": "-0.5 0.8",
+        "gripper_right3_to_gripper_right1": "-0.5 0.5",
+    }
+    for joint_name in OFFICIAL_320_GRIPPER_JOINT_NAMES:
+        ET.SubElement(
+            actuator,
+            "position",
+            {
+                "name": f"act_{joint_name}",
+                "joint": joint_name,
+                "kp": "45",
+                "ctrlrange": gripper_ranges[joint_name],
+                "ctrllimited": "true",
+            },
+        )
+
+
 def _urdf_link_visuals(urdf: ET.Element) -> dict[str, list[dict[str, str]]]:
     visuals: dict[str, list[dict[str, str]]] = {}
     for link in urdf.findall("link"):

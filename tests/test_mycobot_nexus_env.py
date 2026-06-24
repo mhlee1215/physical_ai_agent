@@ -203,6 +203,10 @@ class MyCobotNexusEnvTest(unittest.TestCase):
                 element.attrib.get("name")
                 for element in scene.findall(".//equality/connect")
             }
+            actuator_names = {
+                element.attrib.get("name")
+                for element in scene.findall(".//actuator/position")
+            }
 
         self.assertIsNotNone(compiler)
         self.assertEqual(compiler.attrib.get("eulerseq"), "XYZ")
@@ -217,6 +221,9 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertIn("right1_loop_site", names)
         self.assertIn("left_adaptive_fourbar_loop", equality_names)
         self.assertIn("right_adaptive_fourbar_loop", equality_names)
+        self.assertIn("act_gripper_controller", actuator_names)
+        self.assertIn("act_gripper_base_to_gripper_left2", actuator_names)
+        self.assertIn("act_gripper_right3_to_gripper_right1", actuator_names)
         self.assertIn("gripper_base.obj", mesh_files)
         self.assertIn("link6.obj", mesh_files)
 

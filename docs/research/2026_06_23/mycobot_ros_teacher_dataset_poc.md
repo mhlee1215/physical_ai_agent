@@ -187,7 +187,12 @@ adaptive gripper also needed explicit MuJoCo four-bar loop constraints: the
 upstream URDF mimic-joint tree is now supplemented with invisible
 `equality/connect` loops between `gripper_left2`/`gripper_left1` and
 `gripper_right2`/`gripper_right1`, with body-local site positions derived after
-applying each official visual origin transform. Gate 5 is passed:
+applying each official visual origin transform. A follow-up top-down check then
+found the contact pads were still using raw mesh coordinates instead of
+URDF-visual-origin body-local coordinates. The pads now sit on the
+closed-fingertip contact points, and adaptive gripper position actuators hold
+the closed command across env steps. After 30 closed env steps the measured pad
+gap is `0.000148 m` in XY and `0.000228 m` in 3D. Gate 5 is passed:
 `scripts/verify_mycobot_320_adaptive_mimic_motion.py` sampled five
 `gripper_controller` values and showed the official controller direction is
 lower-to-upper = closed-to-open. The jaw gap increases from `0.0505 m` at
