@@ -62,6 +62,7 @@ class MyCobotTeacherDatasetViewerTest(TestCase):
         self.assertFalse(summary["training_ready"])
         self.assertEqual(frame["frame"], 1)
         self.assertEqual(frame["phase"], "lift")
+        self.assertEqual(frame["prompt"], "short_grasp_lift_red_cube")
         self.assertIn("render", frame["images"])
         self.assertEqual(frame["state"]["gripper_controller"], 0.7)
 

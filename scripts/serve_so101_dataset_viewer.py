@@ -493,6 +493,7 @@ def _mycobot_frame_payload(root: Path, split: str, episode: int, frame: int) -> 
         "row_index": frame,
         "timestamp": float(row.get("timestamp") or 0.0),
         "task": row.get("task", ""),
+        "prompt": row.get("prompt") or row.get("task", ""),
         "phase": row.get("phase", ""),
         "images": images,
         "image_path": image_path,
