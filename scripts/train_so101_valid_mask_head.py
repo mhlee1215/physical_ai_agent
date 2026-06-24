@@ -25,6 +25,8 @@ def main() -> None:
     parser.add_argument("--dataset-repo-id", required=True)
     parser.add_argument("--validation-dataset-root", type=Path)
     parser.add_argument("--validation-dataset-repo-id")
+    parser.add_argument("--image-cache-dir", type=Path)
+    parser.add_argument("--validation-image-cache-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -44,6 +46,8 @@ def main() -> None:
         dataset_repo_id=args.dataset_repo_id,
         validation_dataset_root=args.validation_dataset_root,
         validation_dataset_repo_id=args.validation_dataset_repo_id,
+        image_cache_dir=args.image_cache_dir,
+        validation_image_cache_dir=args.validation_image_cache_dir,
         output_dir=args.output_dir,
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -66,6 +70,8 @@ def train_valid_mask_head(
     dataset_repo_id: str,
     validation_dataset_root: Path | None,
     validation_dataset_repo_id: str | None,
+    image_cache_dir: Path | None,
+    validation_image_cache_dir: Path | None,
     output_dir: Path,
     epochs: int,
     batch_size: int,
@@ -82,6 +88,7 @@ def train_valid_mask_head(
     from lerobot.datasets.factory import resolve_delta_timestamps
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.policies.factory import make_pre_post_processors
+    from physical_ai_agent.lerobot_sampling_augmentation import PredecodedImageCacheDataset
 
     started = perf_counter()
     torch.manual_seed(int(seed))
@@ -101,6 +108,8 @@ def train_valid_mask_head(
     metadata = LeRobotDatasetMetadata(dataset_repo_id, root=dataset_root)
     delta_timestamps = resolve_delta_timestamps(policy.config, metadata)
     train_dataset = LeRobotDataset(dataset_repo_id, root=dataset_root, delta_timestamps=delta_timestamps, video_backend="torchcodec")
+    if image_cache_dir is not None:
+        train_dataset = PredecodedImageCacheDataset(train_dataset, image_cache_dir)
     val_dataset = None
     if validation_dataset_root is not None and validation_dataset_repo_id:
         val_dataset = LeRobotDataset(
@@ -109,6 +118,8 @@ def train_valid_mask_head(
             delta_timestamps=delta_timestamps,
             video_backend="torchcodec",
         )
+        if validation_image_cache_dir is not None:
+            val_dataset = PredecodedImageCacheDataset(val_dataset, validation_image_cache_dir)
 
     train_loader = _make_dataloader(train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True)
     val_loader = _make_dataloader(val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False) if val_dataset else None
@@ -183,6 +194,8 @@ def train_valid_mask_head(
         "dataset_repo_id": dataset_repo_id,
         "validation_dataset_root": str(validation_dataset_root) if validation_dataset_root else None,
         "validation_dataset_repo_id": validation_dataset_repo_id,
+        "image_cache_dir": str(image_cache_dir) if image_cache_dir else None,
+        "validation_image_cache_dir": str(validation_image_cache_dir) if validation_image_cache_dir else None,
         "epochs": int(epochs),
         "batch_size": int(batch_size),
         "num_workers": int(num_workers),

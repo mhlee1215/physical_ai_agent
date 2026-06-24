@@ -45,10 +45,14 @@ def _dataset_roots_from_contract(repo_root: Path) -> dict[str, Path]:
             continue
         contract = json.loads(path.read_text(encoding="utf-8"))
         for dataset_name, dataset in contract.get("datasets", {}).items():
-            for split_name, split in (("train", dataset.get("train")), ("validation", dataset.get("validation"))):
+            for split_name, suffix in (
+                ("train", "train"),
+                ("validation", "val"),
+                ("loop_validation", "loop_validation"),
+            ):
+                split = dataset.get(split_name)
                 if not isinstance(split, dict):
                     continue
-                suffix = "val" if split_name == "validation" else "train"
                 roots[f"{dataset_name}_{suffix}"] = Path(split["root"])
     return roots
 

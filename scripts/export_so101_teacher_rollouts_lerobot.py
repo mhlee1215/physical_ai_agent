@@ -32,21 +32,24 @@ SKILL_TASKS = {
     "pick_cube": TASK,
     "move_over_cube": "Move the gripper over the visible cube.",
     "pick_from_top_cube": "From above the visible cube, grasp it and lift it up.",
-    "move_over_cube_edge": "Move the static finger pad above one visible cube edge.",
-    "align_fixed_jaw_cube_edge": "Align the static finger pad with one visible cube edge.",
-    "grip_from_edge_cube": "Keep the static finger pad at the cube edge, close the gripper, and lift.",
+    "move_over_cube_edge": "Move the gripper above one visible cube edge.",
+    "align_fixed_jaw_cube_edge": "Align the gripper jaws around one visible cube edge.",
+    "move_and_align_cube_edge": "Move the gripper above one visible cube edge and align the jaws around it.",
+    "grip_from_edge_cube": "Close the gripper on the cube edge and lift.",
 }
 COLOR_SHAPE_SKILL_TASK_TEMPLATES = {
     "pick_cube": "Grasp the visible {color} {shape} and lift it up.",
     "move_over_cube": "Move the gripper over the visible {color} {shape}.",
     "pick_from_top_cube": "From above the visible {color} {shape}, grasp it and lift it up.",
-    "move_over_cube_edge": "Move the static finger pad above one visible {color} {shape} edge.",
-    "align_fixed_jaw_cube_edge": "Align the static finger pad with one visible {color} {shape} edge.",
-    "grip_from_edge_cube": "Keep the static finger pad at the {color} {shape} edge, close the gripper, and lift.",
+    "move_over_cube_edge": "Move the gripper above one visible {color} {shape} edge.",
+    "align_fixed_jaw_cube_edge": "Align the gripper jaws around one visible {color} {shape} edge.",
+    "move_and_align_cube_edge": "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
+    "grip_from_edge_cube": "Close the gripper on the {color} {shape} edge and lift.",
 }
 FIXED_JAW_SKILL_MODES = {
     "move_over_cube_edge",
     "align_fixed_jaw_cube_edge",
+    "move_and_align_cube_edge",
     "grip_from_edge_cube",
 }
 STATE_NAMES = [
@@ -163,6 +166,11 @@ def main() -> None:
         default=8,
         help="Maximum candidate seeds to try, as episodes * multiplier.",
     )
+    parser.add_argument(
+        "--target-object-color",
+        choices=["red", "orange", "yellow", "green", "blue", "purple", "black", "white"],
+        help="Only export episodes whose target object has this color.",
+    )
     parser.add_argument("--no-camera3-duplicate", action="store_true")
     args = parser.parse_args()
 
@@ -197,6 +205,7 @@ def main() -> None:
         pick_start_min_actual_abs_y=args.pick_start_min_actual_abs_y,
         pick_start_min_actual_z=args.pick_start_min_actual_z,
         max_attempt_multiplier=args.max_attempt_multiplier,
+        target_object_color=args.target_object_color,
         include_camera3_duplicate=not args.no_camera3_duplicate,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
@@ -234,6 +243,7 @@ def export_teacher_rollouts(
     pick_start_min_actual_abs_y: float = 0.015,
     pick_start_min_actual_z: float = 0.0,
     max_attempt_multiplier: int = 8,
+    target_object_color: str | None = None,
     include_camera3_duplicate: bool = True,
 ) -> dict[str, Any]:
     import shutil
@@ -285,6 +295,16 @@ def export_teacher_rollouts(
             target_object = _target_object_metadata(env)
             episode_task = _format_skill_task(skill_mode, target_object)
             candidate_seed += 1
+            if target_object_color and target_object["color"] != target_object_color:
+                skipped.append(
+                    {
+                        "seed": candidate_seed - 1,
+                        "reason": "target_object_color_mismatch",
+                        "object_color": target_object["color"],
+                        "required_object_color": target_object_color,
+                    }
+                )
+                continue
             teacher_visible = object_visible_to_teacher(env, teacher_renderers, config=config)
             visible, search_steps = sweep_until_visible(env, policy_renderers, max_sweeps=config.max_sweeps)
             teacher_visible = teacher_visible or object_visible_to_teacher(env, teacher_renderers, config=config)
@@ -411,6 +431,7 @@ def export_teacher_rollouts(
             "pick_start_max_abs_y": float(pick_start_max_abs_y),
             "pick_start_min_actual_abs_y": float(pick_start_min_actual_abs_y),
             "pick_start_min_actual_z": float(pick_start_min_actual_z),
+            "target_object_color": target_object_color,
         },
         "camera3_duplicate": {
             "enabled": bool(include_camera3_duplicate),
@@ -660,7 +681,11 @@ def _make_fast_fixed_jaw_teacher_targets(env: Any) -> list[dict[str, Any]]:
             "z_offset": float(spec["z_offset"]),
             "open_value": float(spec["open_value"]),
             "success_step": None,
-            "score": -float(solve_meta["cost"]) - 0.0005 * float(spec["candidate_index"]),
+            "score": (
+                -float(solve_meta["cost"])
+                - 0.12 * float(solve_meta.get("finger_axis_parallel_angle_deg", 0.0))
+                - 0.0005 * float(spec["candidate_index"])
+            ),
             "candidate_index": int(spec["candidate_index"]),
             "candidate_attempts": len(specs),
             "mode_successes": None,
@@ -729,6 +754,7 @@ def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[
     desired_static = obj_pos - axis * (cube_half_extent + 0.002) + np.asarray([0.0, 0.0, z_offset])
     desired_moving = desired_static + axis * gap
     desired_center = 0.5 * (desired_static + desired_moving)
+    desired_axis_xy = axis[:2] / max(1e-6, float(np.linalg.norm(axis[:2])))
 
     def set_qpos(qpos: np.ndarray) -> None:
         for addr, value in zip(joint_addrs, qpos):
@@ -742,16 +768,20 @@ def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[
         static_pos = data.geom_xpos[static_pad]
         moving_pos = data.geom_xpos[moving_pad]
         center = 0.5 * (static_pos + moving_pos)
+        finger_axis = moving_pos - static_pos
+        finger_axis_xy = finger_axis[:2] / max(1e-6, float(np.linalg.norm(finger_axis[:2])))
+        parallel_error = finger_axis_xy - desired_axis_xy
         return np.concatenate(
             [
                 (static_pos - desired_static) * 28.0,
-                (moving_pos - desired_moving) * 10.0,
+                (moving_pos - desired_moving) * 18.0,
                 (center - desired_center) * 6.0,
+                parallel_error * 18.0,
                 (arm_qpos - q_seed[:5]) * 0.025,
             ]
         )
 
-    starts = [
+    base_starts = [
         q_seed[:5],
         np.asarray([-0.5, 0.4, 0.1, 0.5, -1.3]),
         np.asarray([0.0, 0.55, -0.25, 0.85, 1.2]),
@@ -759,6 +789,18 @@ def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[
         np.asarray([-0.8, 0.2, 0.2, 0.6, -1.0]),
         np.asarray([0.0, -0.15, 0.85, -0.75, 0.0]),
     ]
+    roll_targets = [
+        float(np.arctan2(axis[1], axis[0])),
+        float(np.arctan2(axis[1], axis[0]) + np.pi / 2.0),
+        float(np.arctan2(axis[1], axis[0]) - np.pi / 2.0),
+        float(np.arctan2(axis[1], axis[0]) + np.pi),
+    ]
+    starts = list(base_starts)
+    for base in base_starts:
+        for roll_target in roll_targets:
+            candidate = np.asarray(base, dtype=float).copy()
+            candidate[4] = roll_target
+            starts.append(candidate)
     best: tuple[float, np.ndarray] | None = None
     for start in starts:
         result = least_squares(
@@ -775,13 +817,26 @@ def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[
     qpos = np.clip(best[1], low, high)
     set_qpos(qpos)
     static_delta = np.asarray(data.geom_xpos[static_pad] - data.geom_xpos[obj_geom_id], dtype=float)
+    moving_delta = np.asarray(data.geom_xpos[moving_pad] - data.geom_xpos[obj_geom_id], dtype=float)
+    finger_axis = np.asarray(data.geom_xpos[moving_pad] - data.geom_xpos[static_pad], dtype=float)
+    finger_axis_xy = finger_axis[:2] / max(1e-6, float(np.linalg.norm(finger_axis[:2])))
+    axis_parallel_dot = float(np.clip(np.dot(finger_axis_xy, desired_axis_xy), -1.0, 1.0))
+    axis_parallel_angle_deg = float(np.degrees(np.arccos(axis_parallel_dot)))
     target_delta = desired_static - obj_pos
     return qpos.astype(np.float32), {
         "cost": float(best[0]),
         "static_edge_xy_error": float(np.linalg.norm((static_delta - target_delta)[:2])),
+        "finger_axis_parallel_dot": axis_parallel_dot,
+        "finger_axis_parallel_angle_deg": axis_parallel_angle_deg,
         "static_delta_x": float(static_delta[0]),
         "static_delta_y": float(static_delta[1]),
         "static_delta_z": float(static_delta[2]),
+        "moving_delta_x": float(moving_delta[0]),
+        "moving_delta_y": float(moving_delta[1]),
+        "moving_delta_z": float(moving_delta[2]),
+        "finger_axis_x": float(finger_axis[0]),
+        "finger_axis_y": float(finger_axis[1]),
+        "finger_axis_z": float(finger_axis[2]),
         "target_delta_x": float(target_delta[0]),
         "target_delta_y": float(target_delta[1]),
         "target_delta_z": float(target_delta[2]),
@@ -1292,6 +1347,15 @@ def _write_fixed_jaw_edge_episode(
         q_edge[-1] = _open_gripper_value(env)
         phases = [("align", q_start, q_edge, max(1, int(approach_steps))), ("settle", q_edge, q_edge, max(0, int(settle_steps)))]
         success_kind = "edge_contact"
+    elif skill_mode == "move_and_align_cube_edge":
+        q_start = _make_home_closed_start_qpos(env, reset_home_qpos)
+        q_edge = q_edge.copy()
+        q_edge[-1] = _open_gripper_value(env)
+        phases = [
+            ("move_align", q_start, q_edge, max(1, int(approach_steps)) * 2),
+            ("settle", q_edge, q_edge, max(0, int(settle_steps))),
+        ]
+        success_kind = "edge_contact_parallel"
     elif skill_mode == "grip_from_edge_cube":
         q_start = q_edge.copy()
         q_close = q_edge.copy()
@@ -1368,6 +1432,11 @@ def _write_fixed_jaw_edge_episode(
             and start_camera1["centered"]
             and wrist["visible"]
             and wrist["centered"]
+        )
+    elif success_kind == "edge_contact_parallel":
+        task_success = bool(
+            final_static_edge_error["xy_error"] <= 0.012
+            and float(best_meta.get("finger_axis_parallel_angle_deg", 180.0)) <= 8.0
         )
     else:
         task_success = bool(final_static_edge_error["xy_error"] <= 0.015)

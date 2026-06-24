@@ -54,10 +54,12 @@ def main() -> None:
                 self._send_json(_loop_test_detail(export_dir, loop_test_id))
                 return
             if parsed.path == "/api/generate-media-status":
+                query = parse_qs(parsed.query)
+                loop_test_id = (query.get("loop") or [""])[0] or None
                 with media_job_lock:
                     if media_job.get("status") == "idle":
                         media_job.update(_load_media_job_status(export_dir))
-                    self._send_json(_with_media_progress(export_dir, dict(media_job)))
+                    self._send_json(_status_for_loop(export_dir, dict(media_job), loop_test_id=loop_test_id))
                 return
             if parsed.path == "/artifact":
                 query = parse_qs(parsed.query)
@@ -71,7 +73,9 @@ def main() -> None:
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             if parsed.path == "/api/generate-media":
-                self._start_generate_media_job()
+                query = parse_qs(parsed.query)
+                loop_test_id = (query.get("loop") or [""])[0] or None
+                self._start_generate_media_job(loop_test_id=loop_test_id)
                 return
             self.send_error(404)
 
@@ -113,17 +117,24 @@ def main() -> None:
             self.end_headers()
             self.wfile.write(data)
 
-        def _start_generate_media_job(self) -> None:
+        def _start_generate_media_job(self, *, loop_test_id: str | None) -> None:
+            if not loop_test_id:
+                self.send_error(400, "loop query parameter is required")
+                return
+            if not _loop_test_exists(export_dir, loop_test_id):
+                self.send_error(404, f"loop test not found: {loop_test_id}")
+                return
             with media_job_lock:
                 if media_job.get("status") == "running":
                     self._send_json(dict(media_job))
                     return
                 generation_root = _media_generation_repo_root(repo_root, export_dir)
-                command = _media_generation_command(generation_root, export_dir)
+                command = _media_generation_command(generation_root, export_dir, loop_test_id=loop_test_id)
                 media_job.clear()
                 media_job.update(
                     {
                         "status": "running",
+                        "loop_test_id": loop_test_id,
                         "started_at": time.time(),
                         "finished_at": None,
                         "command": command,
@@ -131,7 +142,7 @@ def main() -> None:
                         "run_dir": str(export_dir.parent),
                         "output_dir": str(export_dir),
                         "server_pid": os.getpid(),
-                        "progress": _media_artifact_progress(export_dir),
+                        "progress": _media_artifact_progress(export_dir, loop_test_id=loop_test_id),
                         "stdout": "",
                         "stderr": "",
                     }
@@ -158,7 +169,7 @@ def main() -> None:
                         "returncode": completed.returncode,
                         "stdout": completed.stdout[-4000:],
                         "stderr": completed.stderr[-4000:],
-                        "progress": _media_artifact_progress(export_dir),
+                        "progress": _media_artifact_progress(export_dir, loop_test_id=loop_test_id),
                     }
                 except OSError as exc:
                     result = {
@@ -167,7 +178,7 @@ def main() -> None:
                         "returncode": None,
                         "stdout": "",
                         "stderr": str(exc),
-                        "progress": _media_artifact_progress(export_dir),
+                        "progress": _media_artifact_progress(export_dir, loop_test_id=loop_test_id),
                     }
                 with media_job_lock:
                     media_job.update(result)
@@ -175,7 +186,7 @@ def main() -> None:
 
             threading.Thread(target=run_job, name="loop-test-generate-media", daemon=True).start()
             with media_job_lock:
-                self._send_json(_with_media_progress(export_dir, dict(media_job)))
+                self._send_json(_with_media_progress(export_dir, dict(media_job), loop_test_id=loop_test_id))
 
         def _send_vendor_file(self, path: Path) -> None:
             if not path.is_file():
@@ -201,9 +212,14 @@ def _media_generation_repo_root(server_repo_root: Path, export_dir: Path) -> Pat
     return server_repo_root
 
 
-def _media_generation_command(repo_root: Path, export_dir: Path, python_executable: str | None = None) -> list[str]:
+def _media_generation_command(
+    repo_root: Path,
+    export_dir: Path,
+    python_executable: str | None = None,
+    loop_test_id: str | None = None,
+) -> list[str]:
     executable = _media_generation_python(repo_root, export_dir, python_executable=python_executable)
-    return [
+    command = [
         executable,
         "-B",
         str(repo_root / "scripts" / "build_loop_test_analyzer_export.py"),
@@ -214,6 +230,9 @@ def _media_generation_command(repo_root: Path, export_dir: Path, python_executab
         "--copy-source",
         "--generate-media",
     ]
+    if loop_test_id:
+        command.extend(["--loop-test-id", loop_test_id])
+    return command
 
 
 def _media_generation_python(repo_root: Path, export_dir: Path, python_executable: str | None = None) -> str:
@@ -249,20 +268,28 @@ def _save_media_job_status(export_dir: Path, payload: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def _with_media_progress(export_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
+def _status_for_loop(export_dir: Path, payload: dict[str, Any], *, loop_test_id: str | None = None) -> dict[str, Any]:
+    if loop_test_id and payload.get("loop_test_id") != loop_test_id and payload.get("status") != "running":
+        payload = {"status": "idle", "loop_test_id": loop_test_id}
+    progress_loop_id = str(payload.get("loop_test_id") or loop_test_id or "") or None
+    return _with_media_progress(export_dir, payload, loop_test_id=progress_loop_id)
+
+
+def _with_media_progress(export_dir: Path, payload: dict[str, Any], *, loop_test_id: str | None = None) -> dict[str, Any]:
+    progress_loop_id = str(payload.get("loop_test_id") or loop_test_id or "") or None
     if payload.get("status") == "running":
-        payload["progress"] = _media_artifact_progress(export_dir)
+        payload["progress"] = _media_artifact_progress(export_dir, loop_test_id=progress_loop_id)
         _save_media_job_status(export_dir, payload)
     elif payload.get("progress") is None:
-        payload["progress"] = _media_artifact_progress(export_dir)
+        payload["progress"] = _media_artifact_progress(export_dir, loop_test_id=progress_loop_id)
     return payload
 
 
-def _media_artifact_progress(export_dir: Path) -> dict[str, Any]:
+def _media_artifact_progress(export_dir: Path, loop_test_id: str | None = None) -> dict[str, Any]:
     run_dir = export_dir.parent
-    total_records = _source_rollout_record_count(run_dir)
+    total_records = _source_rollout_record_count(run_dir, loop_test_id=loop_test_id)
     expected_png_files = total_records * 3 if total_records else 0
-    media_root = export_dir / "loop_tests"
+    media_root = export_dir / "loop_tests" / loop_test_id if loop_test_id else export_dir / "loop_tests"
     png_files = _count_files(media_root, "*.png")
     gif_files = _count_files(media_root, "*.gif")
     mp4_files = _count_files(media_root, "*.mp4")
@@ -285,12 +312,23 @@ def _media_artifact_progress(export_dir: Path) -> dict[str, Any]:
         "png_files": png_files,
         "gif_files": gif_files,
         "mp4_files": mp4_files,
+        "loop_test_id": loop_test_id,
     }
 
 
-def _source_rollout_record_count(run_dir: Path) -> int:
+def _loop_test_exists(export_dir: Path, loop_test_id: str) -> bool:
+    try:
+        manifest = _read_json(export_dir / "manifest.json")
+    except (OSError, json.JSONDecodeError):
+        return False
+    return any(row.get("loop_test_id") == loop_test_id for row in manifest.get("loop_tests") or [])
+
+
+def _source_rollout_record_count(run_dir: Path, loop_test_id: str | None = None) -> int:
     total = 0
     for report_path in sorted((run_dir / "closed_loop_evals").glob("**/*_report.json")):
+        if loop_test_id and _loop_test_id_from_report_path(report_path) != loop_test_id:
+            continue
         report = _read_json_safely(report_path)
         for episode in report.get("episodes") or []:
             trace_path = Path(episode.get("trace_path") or "")
@@ -315,6 +353,27 @@ def _count_jsonl_records(path: Path) -> int:
         return 0
 
 
+def _loop_test_id_from_report_path(path: Path) -> str:
+    checkpoint = _checkpoint_from_report_path(path)
+    parent = path.parent.name
+    canonical = f"qwen_chain_seed98100_{checkpoint}"
+    if parent == canonical:
+        return f"qwen_chain_{checkpoint}"
+    if parent.startswith("qwen_chain_") and parent.endswith(f"_{checkpoint}"):
+        suffix = parent.removeprefix("qwen_chain_").removesuffix(f"_{checkpoint}")
+        suffix = suffix.removeprefix("seed98100_").strip("_")
+        if suffix:
+            return f"qwen_chain_{suffix}_{checkpoint}"
+    return f"qwen_chain_{checkpoint}"
+
+
+def _checkpoint_from_report_path(path: Path) -> str:
+    match = path.parent.name.rsplit("_", 1)
+    if len(match) == 2 and match[1].isdigit():
+        return match[1]
+    return path.parent.name
+
+
 def _count_files(root: Path, pattern: str) -> int:
     if not root.exists():
         return 0
@@ -323,11 +382,16 @@ def _count_files(root: Path, pattern: str) -> int:
 
 def _loop_tests_payload(export_dir: Path) -> dict[str, Any]:
     manifest = _read_json(export_dir / "manifest.json")
+    loop_tests = [
+        _with_training_source(row)
+        for row in (manifest.get("loop_tests") or [])
+        if isinstance(row, dict)
+    ]
     return {
         "export_dir": str(export_dir),
         "schema_version": manifest.get("schema_version"),
         "summary": manifest.get("summary") or {},
-        "loop_tests": manifest.get("loop_tests") or [],
+        "loop_tests": loop_tests,
     }
 
 
@@ -337,11 +401,65 @@ def _loop_test_detail(export_dir: Path, loop_test_id: str) -> dict[str, Any]:
     if row is None:
         return {"error": f"loop test not found: {loop_test_id}"}
     detail = _read_json(Path(row["manifest_path"]))
+    detail = _with_training_source(detail)
     episodes = []
     for episode in detail.get("episodes") or []:
         timeline_path = Path(episode["timeline_path"])
         episodes.append({**episode, "timeline": _read_jsonl(timeline_path)})
     return {"loop_test": detail, "episodes": episodes}
+
+
+def _with_training_source(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    source = _training_source_from_row(enriched)
+    enriched["training_source"] = source
+    if source.get("training_id"):
+        enriched.setdefault("training_id", source["training_id"])
+    if source.get("checkpoint"):
+        enriched.setdefault("checkpoint", source["checkpoint"])
+    return enriched
+
+
+def _training_source_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    run_dir_value = row.get("run_dir")
+    if not run_dir_value and row.get("manifest_path"):
+        path = Path(str(row["manifest_path"]))
+        parts = list(path.parts)
+        if "loop_test_analyzer_export" in parts:
+            index = parts.index("loop_test_analyzer_export")
+            run_dir_value = str(Path(*parts[:index]))
+    if not run_dir_value and row.get("report_path"):
+        report_path = Path(str(row["report_path"]))
+        try:
+            run_dir_value = str(report_path.parents[2])
+        except IndexError:
+            run_dir_value = None
+    source: dict[str, Any] = {
+        "training_id": None,
+        "run_dir": run_dir_value,
+        "checkpoint": row.get("checkpoint"),
+        "training_step": row.get("training_step"),
+        "dataset_config_name": None,
+        "summary_path": None,
+    }
+    if not run_dir_value:
+        return source
+    run_dir = Path(str(run_dir_value))
+    summary_path = run_dir / "training_run_summary.json"
+    if summary_path.exists():
+        summary = _read_json(summary_path)
+        dataset_config = summary.get("dataset_config") if isinstance(summary.get("dataset_config"), dict) else {}
+        source.update(
+            {
+                "training_id": summary.get("training_id") or run_dir.name,
+                "dataset_config_name": dataset_config.get("name") or summary.get("dataset_config_name"),
+                "summary_path": str(summary_path),
+                "started_at_utc": summary.get("started_at_utc"),
+            }
+        )
+    else:
+        source["training_id"] = run_dir.name
+    return source
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -393,6 +511,9 @@ def _index_html() -> str:
     .pill.warn { color:var(--warn); border-color:#fedf89; background:var(--warn-soft); }
     .header { display:grid; gap:8px; margin-bottom:14px; }
     .metrics { display:flex; gap:8px; flex-wrap:wrap; }
+    .episode-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:8px; border:1px solid var(--border); border-radius:6px; background:#fff; }
+    .episode-bar label { font-weight:700; color:#344054; }
+    .episode-bar select { width:auto; min-width:min(360px, 100%); }
     .media-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .media-actions .status { color:var(--muted); }
     .media-progress { display:grid; gap:5px; min-width:min(420px, 100%); flex:1 1 280px; }
@@ -412,8 +533,13 @@ def _index_html() -> str:
     summary { cursor:pointer; padding:8px 9px; font-weight:650; color:#344054; }
     details > pre, details > .detail-body { margin:0 8px 8px; }
     .tool-call { border:1px solid #d9d6fe; background:#fafaff; border-radius:6px; padding:8px; margin-top:8px; }
-    .step-list { display:grid; gap:7px; padding:0 8px 8px; }
-    .step-card { border:1px solid #edf0f5; border-radius:5px; padding:7px; background:#fbfcfe; }
+    .raw-payload { border:1px solid #edf0f5; border-radius:6px; padding:8px; margin:8px 0; background:#fbfcfe; }
+    .raw-payload summary { padding:0; }
+    .raw-payload pre { max-height:360px; }
+	    .step-list { display:grid; gap:7px; padding:0 8px 8px; }
+	    .step-card { border:1px solid #edf0f5; border-radius:5px; padding:7px; background:#fbfcfe; }
+	    .test-group { border:1px solid #e5e7eb; border-radius:8px; margin:8px 0; padding:8px; background:#f8fafc; }
+	    .group-title { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:4px; }
     code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
     pre { white-space: pre-wrap; word-break: break-word; max-height: 230px; overflow:auto; background:#f8fafc; border:1px solid #edf0f5; border-radius:5px; padding:8px; margin:6px 0 0; }
     .placeholder { height:112px; display:grid; place-items:center; border:1px dashed var(--border); border-radius:6px; color:var(--muted); background:#fbfcfe; text-align:center; padding:10px; }
@@ -489,18 +615,40 @@ def _index_html() -> str:
     function renderList() {
       const q = el("filter").value.toLowerCase();
       const status = el("statusFilter").value;
-      const rows = state.tests.filter(row => {
-        const text = `${row.checkpoint} ${row.policy_type} ${row.scenario}`.toLowerCase();
-        const statusOk = !status || (status === "success" ? row.success_rate > 0 : !(row.success_rate > 0));
-        return text.includes(q) && statusOk;
-      });
-      el("tests").innerHTML = rows.map(row => `
-        <div class="test ${row.loop_test_id === state.active ? "active" : ""}" onclick="selectTest('${row.loop_test_id}')">
-          <div class="row"><strong>${row.checkpoint}</strong><span class="pill policy">${row.policy_type}</span></div>
-          <div class="muted">step ${row.training_step ?? "-"} · val ${fmt(row.validation_loss)}</div>
-          <div><span class="pill ${row.success_rate > 0 ? "robot" : "fail"}">success ${fmt(row.success_rate)}</span> <span class="muted">${row.status}</span></div>
-        </div>`).join("");
-    }
+	      const rows = state.tests.filter(row => {
+	        const text = `${row.checkpoint} ${row.policy_type} ${row.scenario} ${row.training_source?.training_id || ""} ${row.training_source?.dataset_config_name || ""}`.toLowerCase();
+	        const statusOk = !status || (status === "success" ? row.success_rate > 0 : !(row.success_rate > 0));
+	        return text.includes(q) && statusOk;
+	      });
+	      const groups = groupByTraining(rows);
+	      el("tests").innerHTML = groups.map(group => `
+	        <div class="test-group">
+	          <div class="group-title">
+	            <strong>${escapeHtml(group.trainingId)}</strong>
+	            <span class="pill">${group.rows.length} checkpoints</span>
+	          </div>
+	          <div class="muted">${escapeHtml(group.dataset || "")}</div>
+	          ${group.rows.map(row => `
+	            <div class="test ${row.loop_test_id === state.active ? "active" : ""}" onclick="selectTest('${row.loop_test_id}')">
+	              <div class="row"><strong>${row.checkpoint}</strong><span class="pill policy">${row.policy_type}</span></div>
+	              <div class="muted">step ${row.training_step ?? "-"} · val ${fmt(row.validation_loss)}</div>
+	              <div class="muted">training ${escapeHtml(row.training_source?.training_id || "-")}</div>
+	              <div><span class="pill ${row.success_rate > 0 ? "robot" : "fail"}">success ${fmt(row.success_rate)}</span> <span class="muted">${row.status}</span></div>
+	            </div>`).join("")}
+	        </div>`).join("");
+	    }
+	    function groupByTraining(rows) {
+	      const groups = new Map();
+	      for (const row of rows) {
+	        const source = row.training_source || {};
+	        const key = source.training_id || source.run_dir || "unknown training";
+	        if (!groups.has(key)) {
+	          groups.set(key, { trainingId: key, dataset: source.dataset_config_name || "", rows: [] });
+	        }
+	        groups.get(key).rows.push(row);
+	      }
+	      return Array.from(groups.values());
+	    }
     async function selectTest(id, options = {}) {
       state.active = id;
       state.episode = Number(options.episode || 0);
@@ -515,18 +663,23 @@ def _index_html() -> str:
       if (data.error) { el("detail").textContent = data.error; return; }
       const lt = data.loop_test;
       const episodes = data.episodes || [];
-      const ep = episodes[Math.min(state.episode, Math.max(0, episodes.length - 1))] || { timeline: [] };
-      el("detail").innerHTML = `
-        <div class="header">
-          <h2>${lt.policy_label} · ${lt.checkpoint}</h2>
-          <div class="metrics">
-            <span class="pill policy">scenario ${lt.scenario}</span>
-            <span class="pill">step ${lt.training_step}</span>
+      const episodeIndex = Math.min(state.episode, Math.max(0, episodes.length - 1));
+      state.episode = episodeIndex;
+      const ep = episodes[episodeIndex] || { timeline: [] };
+	      el("detail").innerHTML = `
+	        <div class="header">
+	          <h2>${lt.policy_label} · ${lt.checkpoint}</h2>
+	          <div class="metrics">
+	            <span class="pill policy">training ${lt.training_source?.training_id || "-"}</span>
+	            <span class="pill policy">scenario ${lt.scenario}</span>
+	            <span class="pill">step ${lt.training_step}</span>
             <span class="pill">val ${fmt(lt.validation_loss)}</span>
             <span class="pill ${lt.success_rate > 0 ? "robot" : "fail"}">task success ${fmt(lt.success_rate)}</span>
             <span class="pill warn">status means ${lt.status_meaning}</span>
           </div>
-          <div class="media-actions">
+	          ${renderEpisodeSelector(episodes, episodeIndex)}
+	          ${renderTrainingSource(lt.training_source || {})}
+	          <div class="media-actions">
             <button id="generateMediaBtn" onclick="generateMedia()">Generate / refresh media</button>
             <div class="media-progress">
               <span id="mediaJobStatus" class="status">frames and videos are generated locally on demand</span>
@@ -542,6 +695,38 @@ def _index_html() -> str:
       renderDiagnosticCharts(ep);
       initSyncedPlayers();
       refreshMediaJobStatus();
+	    }
+	    function renderTrainingSource(source) {
+	      return `<details open>
+	        <summary>Training source</summary>
+	        <div class="detail-body">
+	          <div class="metrics">
+	            <span class="pill policy">training ${escapeHtml(source.training_id || "-")}</span>
+	            <span class="pill">checkpoint ${escapeHtml(source.checkpoint || "-")}</span>
+	            <span class="pill">step ${escapeHtml(source.training_step ?? "-")}</span>
+	          </div>
+	          <div class="muted">${escapeHtml(source.dataset_config_name || "")}</div>
+	          <div class="muted">${escapeHtml(source.run_dir || "")}</div>
+	        </div>
+	      </details>`;
+	    }
+    function renderEpisodeSelector(episodes, activeIndex) {
+      if (!episodes.length) return `<div class="episode-bar muted">No episodes recorded for this loop test.</div>`;
+      const options = episodes.map((episode, index) => {
+        const ok = episode.final_success ? "success" : "fail";
+        const label = `episode ${episode.episode_index ?? index} · ${ok} · steps ${episode.steps ?? "-"}`;
+        return `<option value="${index}" ${index === activeIndex ? "selected" : ""}>${escapeHtml(label)}</option>`;
+      }).join("");
+      return `<div class="episode-bar">
+        <label for="episodeSelect">Episode</label>
+        <select id="episodeSelect" onchange="changeEpisode(this.value)">${options}</select>
+        <span class="muted">${activeIndex + 1}/${episodes.length}</span>
+      </div>`;
+    }
+    function changeEpisode(value) {
+      const episode = Number(value || 0);
+      if (!state.active) return;
+      selectTest(state.active, { episode, replace: false });
     }
     function renderDiagnostics(ep) {
       const rows = (ep.timeline || []).filter(row => row.type === "policy_step");
@@ -666,14 +851,47 @@ def _index_html() -> str:
         ["Parsed plan", raw.plan_path]
       ].filter(([, path]) => path);
       if (!links.length) return "";
-      return `<details><summary>Raw Qwen payloads</summary><div class="detail-body">${links.map(([label, path]) => `<a class="video-link" href="${artifactUrl(path)}" target="_blank">${escapeHtml(label)}</a>`).join("<br>")}</div></details>`;
+      return `<details>
+        <summary>Raw Qwen payloads</summary>
+        <div class="detail-body">${links.map(([label, path], index) => renderRawPayloadPanel(label, path, index)).join("")}</div>
+      </details>`;
+    }
+    function renderRawPayloadPanel(label, path, index) {
+      const id = `rawQwenPayload_${state.active || "loop"}_${index}`.replace(/[^a-zA-Z0-9_]/g, "_");
+      return `<details class="raw-payload" ontoggle="loadRawPayload(this, '${id}', '${escapeJs(path)}')">
+        <summary>${escapeHtml(label)}</summary>
+        <pre id="${id}">Open to load ${escapeHtml(label)} inline.</pre>
+      </details>`;
+    }
+    async function loadRawPayload(details, preId, path) {
+      if (!details.open || details.dataset.loaded === "1") return;
+      const pre = el(preId);
+      if (!pre) return;
+      pre.textContent = "loading...";
+      try {
+        const response = await fetch(artifactUrl(path));
+        const text = await response.text();
+        try {
+          pre.textContent = JSON.stringify(JSON.parse(text), null, 2);
+        } catch {
+          pre.textContent = text;
+        }
+        details.dataset.loaded = "1";
+      } catch (error) {
+        pre.textContent = `failed to load payload: ${error}`;
+      }
     }
     async function generateMedia() {
       const button = el("generateMediaBtn");
       if (button) button.disabled = true;
+      if (!state.active) {
+        setMediaJobStatus("select a loop test before generating media");
+        if (button) button.disabled = false;
+        return;
+      }
       setMediaJobStatus("starting media export...");
       try {
-        const data = await (await fetch("/api/generate-media", { method: "POST" })).json();
+        const data = await (await fetch(`/api/generate-media?loop=${encodeURIComponent(state.active)}`, { method: "POST" })).json();
         updateMediaJobStatus(data);
         pollMediaJob();
       } catch (error) {
@@ -682,7 +900,8 @@ def _index_html() -> str:
       }
     }
     async function pollMediaJob() {
-      const data = await (await fetch("/api/generate-media-status")).json();
+      const loopQuery = state.active ? `?loop=${encodeURIComponent(state.active)}` : "";
+      const data = await (await fetch(`/api/generate-media-status${loopQuery}`)).json();
       updateMediaJobStatus(data);
       if (data.status === "running") {
         setTimeout(pollMediaJob, 1500);
@@ -697,7 +916,8 @@ def _index_html() -> str:
     }
     async function refreshMediaJobStatus() {
       try {
-        const data = await (await fetch("/api/generate-media-status")).json();
+        const loopQuery = state.active ? `?loop=${encodeURIComponent(state.active)}` : "";
+        const data = await (await fetch(`/api/generate-media-status${loopQuery}`)).json();
         updateMediaJobStatus(data);
         if (data.status === "running") pollMediaJob();
       } catch (error) {
@@ -719,7 +939,8 @@ def _index_html() -> str:
       if (data.status === "running") {
         const stage = data.progress?.stage || "generating media";
         const percent = typeof data.progress?.percent === "number" ? ` ${data.progress.percent.toFixed(1)}%` : "";
-        setMediaJobStatus(`${stage}${percent}`);
+        const loop = data.loop_test_id ? ` for ${data.loop_test_id}` : "";
+        setMediaJobStatus(`${stage}${percent}${loop}`);
         return;
       }
       if (data.status === "succeeded") {
@@ -747,7 +968,8 @@ def _index_html() -> str:
         <span>frames ${progress.png_files ?? 0}/${expected}</span>
         <span>gif ${progress.gif_files ?? 0}</span>
         <span>mp4 ${progress.mp4_files ?? 0}</span>
-        <span>records ${progress.source_rollout_records ?? "-"}</span>`;
+        <span>records ${progress.source_rollout_records ?? "-"}</span>
+        <span>${progress.loop_test_id || "all loops"}</span>`;
     }
     function setMediaJobStatus(text) {
       const node = el("mediaJobStatus");
@@ -1078,6 +1300,9 @@ def _index_html() -> str:
     }
     function escapeHtml(text) {
       return String(text).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[ch]));
+    }
+    function escapeJs(text) {
+      return String(text).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "\\r");
     }
     function artifactUrl(path) {
       return `/artifact?path=${encodeURIComponent(path)}`;

@@ -49,9 +49,11 @@ Config fields:
   fields are `state_jitter_std`, `state_jitter_arm_only`,
   `state_dropout_prob`, `state_dropout_keep_gripper`,
   `image_camera_dropout_prob`, `image_patch_dropout_prob`,
-  `image_patch_mask_ratio`, and `gpu_image_augmentation`. SO101 training configs
-  should include moderate train-time augmentation by default. Validation and
-  closed-loop test data must stay unaugmented.
+  `image_patch_mask_ratio`, `image_color_jitter`,
+  `image_sharpness_jitter`, `image_affine_degrees`,
+  `image_affine_translate`, and `gpu_image_augmentation`. SO101 training
+  configs should include moderate train-time augmentation by default.
+  Validation and closed-loop test data must stay unaugmented.
 
 Dropout locations:
 
@@ -63,6 +65,14 @@ Dropout locations:
   random image patch for selected batch items.
 - `image_patch_mask_ratio`: with `gpu_image_augmentation=true`, masks this
   fraction of an 8x8 patch grid for every image sample.
+- `image_color_jitter`: with `gpu_image_augmentation=true`, applies brightness,
+  contrast, saturation, and small hue-like color jitter on the training device.
+- `image_sharpness_jitter`: with `gpu_image_augmentation=true`, applies a small
+  random blur/sharpen transform on the training device.
+- `image_affine_degrees`, `image_affine_translate`: with
+  `gpu_image_augmentation=true`, applies a small random affine transform on the
+  training device. The implementation uses Torch `affine_grid`/`grid_sample` on
+  the batch tensor's device, so CUDA and MPS follow the same path.
 - Do not add action-label dropout to SO101 BC dataset configs. If action chunks
   need smoothing, use an explicit predicted-action temporal smoothness loss or
   inference-time temporal ensembling/chunk smoothing.
@@ -77,6 +87,10 @@ Default moderate train-time preset:
   "image_camera_dropout_prob": 0.0,
   "image_patch_dropout_prob": 0.0,
   "image_patch_mask_ratio": 0.15,
+  "image_color_jitter": true,
+  "image_sharpness_jitter": true,
+  "image_affine_degrees": 5.0,
+  "image_affine_translate": 0.05,
   "gpu_image_augmentation": true
 }
 ```
@@ -107,6 +121,45 @@ For Qwen primitive validation configs such as `qwen_edge_primitives.json`, use
 `hf_merge_sources` for both train and validation splits. The launcher downloads
 each source subfolder, composes the shards, and passes the configured
 train/validation roots to LeRobot.
+
+Use `scripts/start_so101_training.py start` as the only SO101 training launcher.
+If a launch shape becomes common, add a `--preset` to that script instead of
+adding another shell wrapper with the same purpose. For example, the local Qwen
+edge loopfix lane is:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
+  --preset qwen-edge-loopfix-local
+```
+
+Closed-loop test case workflow:
+
+- Closed-loop tests are part of the same dataset config contract as train and
+  validation datasets. Define them under `closed_loop.test_cases`, not in ad hoc
+  run folders or dashboard-only code.
+- Each test case must carry its own `id`, `episodes`, `steps`, `seed`,
+  `start_contract`, `task_prompt`, `qwen_object`, `env_object_color`, and
+  `plan_json`. Official SO101 primitive-chain test cases must use deterministic
+  `start_contract` resets that match the corresponding train/validation split
+  start distribution. Do not use `precondition_plan_json` for these official
+  cases unless the user explicitly approves it, because that makes the test
+  start state depend on earlier policy success.
+- `scripts/start_so101_training.py` expands `closed_loop.test_cases` into one
+  post-checkpoint loop command per case. `scripts/serve_so101_dataset_viewer.py`
+  reads the same `closed_loop.test_cases` catalog and attaches the latest
+  matching rollout artifact if one exists.
+- Official closed-loop test episodes are dataset-backed identities, not a loose
+  seed modulo reset. Keep train and validation splits unchanged, create a
+  separate `loop_validation` split when the user asks for exact loop-test
+  alignment, and point each official test case at that split through
+  `start_dataset.root` or `start_report_path`. Episode `i` must initialize from
+  the `i`th matching exported episode in that closed-loop report, filtered by
+  `env_object_color` when present. Closed-loop reports must keep the selected
+  `dataset_source_index`, `dataset_candidate_index`, `dataset_episode_seed`,
+  object metadata, and prompt so the viewer can prove alignment with the
+  corresponding split.
+- Do not rename, remove, or reinterpret closed-loop test cases without explicit
+  user approval. Treat them like dataset splits: config first, artifacts second.
 
 For local export debugging, `--use-local-dataset-roots` ignores the HF fields
 and forwards the config's `root` values directly. For HF cache debugging,

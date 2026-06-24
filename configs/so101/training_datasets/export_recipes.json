@@ -363,6 +363,27 @@
       }
     },
     {
+      "name": "move_over_cube_edge_loop_validation",
+      "contract": "skill_dataset_contract",
+      "dataset": "move_over_cube_edge",
+      "split": "loop_validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/move_over_cube_edge_loop_validation10_ego_wrist_256_seed116500",
+      "repo_id": "physical-ai-agent/so101-move-over-cube-edge-loop-validation10-ego-wrist-256",
+      "episodes": 10,
+      "seed": 116500,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "move_over_cube_edge",
+        "approach_steps": 48,
+        "settle_steps": 4,
+        "move_target_z_offset": 0.06,
+        "random_start_joint_std": 0.18,
+        "target_object_color": "green",
+        "max_attempt_multiplier": 600
+      }
+    },
+    {
       "name": "align_fixed_jaw_cube_edge_train",
       "contract": "skill_dataset_contract",
       "dataset": "align_fixed_jaw_cube_edge",
@@ -398,6 +419,86 @@
         "settle_steps": 4,
         "move_target_z_offset": 0.06,
         "max_attempt_multiplier": 250
+      }
+    },
+    {
+      "name": "align_fixed_jaw_cube_edge_loop_validation",
+      "contract": "skill_dataset_contract",
+      "dataset": "align_fixed_jaw_cube_edge",
+      "split": "loop_validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_loop_validation10_ego_wrist_256_seed118500",
+      "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-loop-validation10-ego-wrist-256",
+      "episodes": 10,
+      "seed": 118500,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "align_fixed_jaw_cube_edge",
+        "approach_steps": 18,
+        "settle_steps": 4,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "max_attempt_multiplier": 600
+      }
+    },
+    {
+      "name": "move_and_align_cube_edge_train",
+      "contract": "skill_dataset_contract",
+      "dataset": "move_and_align_cube_edge",
+      "split": "train",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train100_ego_wrist_256_seed122000",
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train100-ego-wrist-256",
+      "episodes": 100,
+      "seed": 122000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "move_and_align_cube_edge",
+        "approach_steps": 32,
+        "settle_steps": 4,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "max_attempt_multiplier": 800
+      }
+    },
+    {
+      "name": "move_and_align_cube_edge_validation",
+      "contract": "skill_dataset_contract",
+      "dataset": "move_and_align_cube_edge",
+      "split": "validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_valid25_ego_wrist_256_seed123000",
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-valid25-ego-wrist-256",
+      "episodes": 25,
+      "seed": 123000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "move_and_align_cube_edge",
+        "approach_steps": 32,
+        "settle_steps": 4,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "max_attempt_multiplier": 800
+      }
+    },
+    {
+      "name": "move_and_align_cube_edge_loop_validation",
+      "contract": "skill_dataset_contract",
+      "dataset": "move_and_align_cube_edge",
+      "split": "loop_validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_loop_validation10_ego_wrist_256_seed123500",
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-loop-validation10-ego-wrist-256",
+      "episodes": 10,
+      "seed": 123500,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "move_and_align_cube_edge",
+        "approach_steps": 32,
+        "settle_steps": 4,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "max_attempt_multiplier": 800
       }
     },
     {
@@ -440,6 +541,28 @@
         "lift_steps": 30,
         "move_target_z_offset": 0.06,
         "max_attempt_multiplier": 300
+      }
+    },
+    {
+      "name": "grip_from_edge_cube_loop_validation",
+      "contract": "skill_dataset_contract",
+      "dataset": "grip_from_edge_cube",
+      "split": "loop_validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/grip_from_edge_cube_loop_validation10_ego_wrist_256_seed121000",
+      "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-loop-validation10-ego-wrist-256",
+      "episodes": 10,
+      "seed": 121000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "grip_from_edge_cube",
+        "approach_steps": 18,
+        "settle_steps": 4,
+        "close_steps": 18,
+        "lift_steps": 30,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "max_attempt_multiplier": 600
       }
     }
   ]

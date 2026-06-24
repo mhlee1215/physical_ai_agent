@@ -1,0 +1,17 @@
+{
+  "plan": {
+    "calls": [
+      {
+        "fn": "align",
+        "index": 0,
+        "max_steps": 120,
+        "object": "green cube",
+        "primitive_id": "align_fixed_jaw_cube_edge",
+        "prompt": "Align the gripper jaws around one visible green cube edge."
+      }
+    ],
+    "model": "qwen3-vl-8b-instruct-mlx",
+    "task": "Align the gripper jaws around one visible green cube edge.",
+    "thinking_mode": "non-thinking"
+  }
+}

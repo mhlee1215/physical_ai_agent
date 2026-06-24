@@ -33,7 +33,12 @@ class SO101Rollout:
 
 
 class SO101NexusEnv:
-    def __init__(self, env_id: str = DEFAULT_SO101_ENV_ID, render_mode: str | None = None) -> None:
+    def __init__(
+        self,
+        env_id: str = DEFAULT_SO101_ENV_ID,
+        render_mode: str | None = None,
+        env_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         try:
             importlib.import_module("so101_nexus_mujoco")
             gym = importlib.import_module("gymnasium")
@@ -47,7 +52,7 @@ class SO101NexusEnv:
 
         self.env_id = env_id
         self._gym = gym
-        self.env = gym.make(env_id, render_mode=render_mode)
+        self.env = gym.make(env_id, render_mode=render_mode, **(env_kwargs or {}))
 
     @property
     def action_space(self):

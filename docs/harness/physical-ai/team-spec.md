@@ -206,12 +206,29 @@ policy is:
 
 - Keep only the validation-best checkpoint plus one latest checkpoint needed for
   crash recovery. A pruner may delete older non-best checkpoints after each save.
-- Run supervised validation loss after checkpoint saves, preferably CPU-only so
-  the GPU training process can continue.
+- SO101 training, supervised evaluation, and loop test are all mandatory phases.
+  The canonical flow is owned by the training process: train, run supervised
+  evaluation, save checkpoint, then run the scheduled loop test.
 - For the local `primitive training with qwen validation v1` lane, every
   validation-loss checkpoint must also run the Qwen-chain closed-loop test.
   Keep `validation_interval_steps == save_freq == steps_per_epoch` and
   `closed-loop-every-epochs=1` unless the user explicitly changes this lane.
+- Local SO101 training visibility must use one TensorBoard process only. The
+  default launcher surface is exactly the training process plus one TensorBoard
+  process. Do not start extra dashboard, GPU monitor, progress monitor, watcher,
+  alternate TensorBoard, or ad hoc polling service unless the user explicitly
+  asks for that one-off tool. If the TensorBoard view is stale or wrong, stop
+  and restart only that TensorBoard process for the current run logdir. Do not
+  use an external polling monitor to discover checkpoints in the default lane;
+  the training loop must invoke loop tests directly after checkpoint/evaluation
+  events through the one-shot `scripts/run_so101_training_loop_test.py`
+  entrypoint.
+- Whenever TensorBoard is started or reported, include both the local URL and
+  the same-Wi-Fi mobile TensorBoard URL.
+- SO101 training-time closed-loop validation must run exactly 10 episodes by
+  default. Keep `--closed-loop-episodes 10` in both launcher and monitor
+  command paths; use any other count only for an explicitly labeled one-off
+  smoke/debug run requested by the user.
 - All SO101 loop tests must record analyzer artifacts by default. For
   Qwen-chain closed-loop tests this means raw Qwen request/response payloads,
   rollout `policy_rollout_config`, action-chunk metadata, and seed/action/state
@@ -233,6 +250,16 @@ policy is:
   Launch local MPS training through that unsandboxed path, while writing logs,
   TensorBoard events, checkpoints, monitor JSONL, and closed-loop artifacts
   under `_workspace/` so Codex can inspect and report them afterward.
+- User policy: for this `physical_ai_agent` repo, executable local work that
+  materially depends on real runtime access has standing approval to run
+  outside the Codex sandbox. This includes repo-local training, supervised
+  evaluation, closed-loop tests, MuJoCo/MPS runs, TensorBoard, dataset/viewer
+  servers, and executable verification commands. Do not ask the user again in
+  chat before these launches; request the required unsandboxed tool execution
+  directly, with a concise justification, and preserve deterministic logs and
+  artifacts under `_workspace/`. This standing approval does not cover
+  destructive cleanup, secret disclosure, remote spending/resource creation, or
+  broad network/download actions unless the user explicitly requests them.
 - Local SO101 training must consult `docs/so101_local_training_standard.md`
   before launch. The current local standard lane is `primitive training with
   qwen validation v1`: one SmolVLA checkpoint trained on the three primitive
@@ -250,12 +277,21 @@ policy is:
   `--mujoco-gl=egl`. `--runtime-platform auto` detects the host. Before a
   training PR is treated as ready, dry-run both macOS and Linux profiles or run
   the targeted unit tests that assert these command contracts.
+- Qwen-chain SO101 loop tests must use the valid-mask termination head, not
+  fixed-length primitive execution. Provide `closed_loop.valid_mask_checkpoint`
+  in the dataset config or pass `--closed-loop-valid-mask-checkpoint` through
+  `scripts/start_so101_training.py`. Missing valid-mask configuration is a
+  validation-loop contract failure, not a warning. Lightweight smoke/debug runs
+  may bypass this only when explicitly labeled non-authoritative.
 - SO101 SmolVLA training configs must enable moderate train-time augmentation
   by default. The current moderate preset is `state_jitter_std=0.003`,
   `state_dropout_prob=0.02`, `image_patch_mask_ratio=0.15`,
+  `image_affine_degrees=5.0`, `image_affine_translate=0.05`,
   `gpu_image_augmentation=true`, `image_camera_dropout_prob=0.0`, and
-  `image_patch_dropout_prob=0.0`. Validation and closed-loop test inputs stay
-  unaugmented. Do not use teacher-action dropout in BC runs.
+  `image_patch_dropout_prob=0.0`. Affine augmentation must run on the training
+  device tensor path so CUDA and MPS are both supported. Validation and
+  closed-loop test inputs stay unaugmented. Do not use teacher-action dropout in
+  BC runs.
 - If SO101 action chunks look jittery, handle it as action smoothness, not data
   augmentation. Preferred training-side regularization is an explicit temporal
   smoothness loss on predicted action chunks, for example
@@ -291,7 +327,10 @@ policy is:
   verification, then upload to the HF dataset bundle
   `mhlee1215/so101-nexus-sim-dataset`. Training must start through
   `scripts/start_so101_training.py`, whose dataset config resolver downloads
-  the configured HF subfolder before handing the local path to LeRobot. RunPod
+  the configured HF subfolder before handing the local path to LeRobot. Private
+  HF dataset uploads/downloads must authenticate with `HF_TOKEN` from `.env` or
+  the active runtime environment; `HF_API_TOKEN` is not the canonical variable
+  for this harness. Never write token values to repo docs, logs, or PRs. RunPod
   should not be the primary MuJoCo/LeRobot teacher-data exporter because remote
   export on the network volume is slow and does not benefit much from the GPU.
   Use RunPod-side dataset generation only when local export is blocked, when a
@@ -436,10 +475,15 @@ reports, tests, and non-interactive hardware helpers when permissions allow.
 If an external Terminal is required for macOS camera/TCC or MPS/runtime access,
 the command must write deterministic logs and artifacts under `_workspace/` and
 the final report must state why the external Terminal path was used.
-SO101/SmolVLA training is a standing exception: the user has chosen that
-training launches, including local MPS runs, happen outside the Codex sandbox.
-Codex may still prepare configs, inspect `_workspace/` outputs, run lightweight
-non-training tests, and monitor TensorBoard/dashboard logs from the sandbox.
+SO101/SmolVLA training and related repo-local executable validation are a
+standing exception: the user has chosen that local runs which depend on real
+runtime access happen outside the Codex sandbox. Covered examples include
+training launches, local MPS runs, MuJoCo closed-loop evaluation, TensorBoard,
+dataset/viewer servers, and executable verification commands. Codex should ask
+for unsandboxed tool execution directly rather than stopping to ask in chat
+again, while keeping logs and artifacts under `_workspace/`. The exception does
+not authorize destructive cleanup, secret disclosure, remote spending/resource
+creation, or broad network/download work without explicit user request.
 
 ### Phase 1: Select Checkpoint
 

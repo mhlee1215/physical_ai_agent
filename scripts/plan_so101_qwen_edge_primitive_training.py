@@ -55,6 +55,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     eval_device = args.eval_device or train_device
     run_dir = args.run_root / "qwen_edge_primitives"
     checkpoint = run_dir / "model" / "checkpoints" / "last" / "pretrained_model"
+    valid_mask_checkpoint = Path(str(config["closed_loop"]["valid_mask_checkpoint"]))
     steps_per_epoch = int(config["training"]["steps_per_epoch"])
     save_freq = steps_per_epoch * max(1, int(args.save_every_epochs))
     validation_interval_steps = save_freq
@@ -110,6 +111,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
                 episodes=args.eval_episodes,
                 max_steps_per_primitive=args.eval_max_steps_per_primitive,
                 device=eval_device,
+                valid_mask_checkpoint=valid_mask_checkpoint,
                 output_dir=args.run_root / "closed_loop_pick_up_cube_qwen_edge_chain",
             ),
         },
@@ -187,6 +189,7 @@ def _qwen_eval_command(
     episodes: int,
     max_steps_per_primitive: int,
     device: str,
+    valid_mask_checkpoint: Path,
     output_dir: Path,
 ) -> str:
     argv = [
@@ -212,6 +215,8 @@ def _qwen_eval_command(
         "15",
         "--policy-num-steps",
         "10",
+        "--valid-mask-checkpoint",
+        str(valid_mask_checkpoint),
         "--record-loop-artifacts",
         "--device",
         device,

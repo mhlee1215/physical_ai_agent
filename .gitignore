@@ -14,6 +14,8 @@
 .codex/skills/*
 !.codex/skills/harness/
 !.codex/skills/harness/**
+!.codex/skills/robot-experiment-manager/
+!.codex/skills/robot-experiment-manager/**
 
 # Python
 __pycache__/

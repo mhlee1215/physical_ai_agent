@@ -52,6 +52,10 @@
     "image_camera_dropout_prob": 0.0,
     "image_patch_dropout_prob": 0.0,
     "image_patch_mask_ratio": 0.15,
+    "image_color_jitter": true,
+    "image_sharpness_jitter": true,
+    "image_affine_degrees": 5.0,
+    "image_affine_translate": 0.05,
     "gpu_image_augmentation": true
   },
   "closed_loop": {

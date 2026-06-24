@@ -26,6 +26,8 @@ def main() -> None:
     parser.add_argument("--so101-image-camera-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-image-patch-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-image-patch-mask-ratio", type=float, default=0.0)
+    parser.add_argument("--so101-image-affine-degrees", type=float, default=0.0)
+    parser.add_argument("--so101-image-affine-translate", type=float, default=0.0)
     parser.add_argument("--so101-gpu-image-augmentation", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--so101-image-cache-dir", type=Path)
     parser.add_argument("--so101-augmentation-report", type=Path)
@@ -49,6 +51,8 @@ def main() -> None:
     os.environ["SO101_IMAGE_CAMERA_DROPOUT_PROB"] = str(args.so101_image_camera_dropout_prob)
     os.environ["SO101_IMAGE_PATCH_DROPOUT_PROB"] = str(args.so101_image_patch_dropout_prob)
     os.environ["SO101_IMAGE_PATCH_MASK_RATIO"] = str(args.so101_image_patch_mask_ratio)
+    os.environ["SO101_IMAGE_AFFINE_DEGREES"] = str(args.so101_image_affine_degrees)
+    os.environ["SO101_IMAGE_AFFINE_TRANSLATE"] = str(args.so101_image_affine_translate)
     os.environ["SO101_GPU_IMAGE_AUGMENTATION"] = "1" if args.so101_gpu_image_augmentation else "0"
     if args.so101_image_cache_dir is not None:
         os.environ["SO101_IMAGE_CACHE_DIR"] = str(args.so101_image_cache_dir)
