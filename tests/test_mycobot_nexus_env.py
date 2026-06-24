@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from physical_ai_agent.sim.mycobot_nexus_env import (
+    MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
     MYCOBOT_TEACHER_JOINT_NAMES,
     OFFICIAL_GRIPPER_MESH_NAMES,
     build_mycobot_nexus_scene_model,
@@ -46,9 +47,11 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertIn("grasp-lift", contract["policies"])
         self.assertIn("320-m5-2022-gripper", contract["model_profiles"])
         self.assertIn("320-m5-2022-adaptive-gripper", contract["model_profiles"])
+        self.assertIn(MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER, contract["model_profiles"])
         self.assertIn("official_parallel_gripper", contract["task_objects"])
         self.assertIn("official_320_m5_2022_gripper", contract["task_objects"])
         self.assertIn("official_320_m5_2022_adaptive_gripper", contract["task_objects"])
+        self.assertIn("official_280_pi_adaptive_gripper", contract["task_objects"])
         self.assertIn("synthetic_parallel_gripper_fallback", contract["task_objects"])
         self.assertIn("teacher_grasp_attachment_proxy", contract["task_objects"])
         self.assertEqual(contract["action_dim"], 7)
@@ -96,6 +99,15 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertEqual(args.height, 180)
         self.assertEqual(args.policy, "grasp-lift")
         self.assertEqual(args.model_profile, "320-m5-2022-adaptive-gripper")
+
+        pi_args = build_parser().parse_args(
+            [
+                "--model-profile",
+                MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+                "--dry-contract",
+            ]
+        )
+        self.assertEqual(pi_args.model_profile, MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER)
         self.assertTrue(args.dry_contract)
 
     def test_scene_builder_injects_nexus_cube_world(self) -> None:
@@ -210,6 +222,41 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertIn("gripper_base.obj", mesh_files)
         self.assertIn("link6.obj", mesh_files)
 
+    def test_scene_builder_can_use_ros1_280_pi_adaptive_gripper_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            scene_path = tmp_path / "render" / "scene.xml"
+            ros_root = _write_minimal_280_pi_adaptive_ros1_tree(tmp_path)
+
+            build_mycobot_nexus_scene_model(
+                model_path=Path(""),
+                scene_path=scene_path,
+                official_gripper_root=ros_root,
+                model_profile=MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+            )
+            scene = ET.parse(scene_path).getroot()
+            compiler = scene.find("compiler")
+            names = {element.attrib.get("name") for element in scene.iter()}
+            mesh_files = {
+                Path(element.attrib["file"]).name
+                for element in scene.findall(".//mesh")
+                if "file" in element.attrib
+            }
+
+        self.assertIsNotNone(compiler)
+        self.assertEqual(compiler.attrib.get("eulerseq"), "XYZ")
+        self.assertIn("joint7_to_joint6", names)
+        self.assertIn("joint6_flange", names)
+        self.assertIn("gripper_base", names)
+        self.assertIn("gripper_controller", names)
+        self.assertIn("gripper_base_to_gripper_left2", names)
+        self.assertIn("left_finger_pad", names)
+        self.assertIn("right_finger_pad", names)
+        self.assertIn("mycobot_tcp_site", names)
+        self.assertIn("G_base.obj", mesh_files)
+        self.assertIn("joint6.obj", mesh_files)
+        self.assertIn("gripper_base.obj", mesh_files)
+
     def test_320_adaptive_kinematic_tree_verifier_writes_visual_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -301,6 +348,42 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertTrue(all(math.isfinite(value) for value in sanitized))
 
 
+
+def _write_minimal_280_pi_adaptive_ros1_tree(tmp_path: Path) -> Path:
+    ros_root = tmp_path / "mycobot_ros"
+    arm_mesh_dir = ros_root / "mycobot_description" / "urdf" / "mycobot_280_pi"
+    adaptive_mesh_dir = ros_root / "mycobot_description" / "urdf" / "adaptive_gripper"
+    arm_mesh_dir.mkdir(parents=True)
+    adaptive_mesh_dir.mkdir(parents=True)
+    for name in ("G_base", "joint1_pi", "joint2", "joint3", "joint4", "joint5", "joint6"):
+        (arm_mesh_dir / f"{name}.dae").write_text(
+            _tiny_collada_triangle(),
+            encoding="utf-8",
+        )
+    for name in (
+        "gripper_base",
+        "gripper_left1",
+        "gripper_left2",
+        "gripper_left3",
+        "gripper_right1",
+        "gripper_right2",
+        "gripper_right3",
+    ):
+        (adaptive_mesh_dir / f"{name}.dae").write_text(
+            _tiny_collada_triangle(),
+            encoding="utf-8",
+        )
+    (arm_mesh_dir / "mycobot_280_pi.urdf").write_text(
+        _minimal_280_pi_arm_urdf(),
+        encoding="utf-8",
+    )
+    (adaptive_mesh_dir / "mycobot_adaptive_gripper.urdf").write_text(
+        _minimal_adaptive_gripper_urdf(),
+        encoding="utf-8",
+    )
+    return ros_root
+
+
 def _write_minimal_320_adaptive_ros2_tree(tmp_path: Path) -> Path:
     ros_root = tmp_path / "mycobot_ros2"
     arm_mesh_dir = ros_root / "mycobot_description" / "urdf" / "mycobot_320_m5_2022"
@@ -354,6 +437,125 @@ def _tiny_collada_triangle() -> str:
   </library_geometries>
 </COLLADA>
 """.strip()
+
+
+
+def _minimal_280_pi_arm_urdf() -> str:
+    visual_meshes = {
+        "base": "G_base",
+        "link1": "joint1_pi",
+        "link2": "joint2",
+        "link3": "joint3",
+        "link4": "joint4",
+        "link5": "joint5",
+        "link6": "joint6",
+    }
+    links = "\n".join(
+        f"""
+  <link name=\"{link_name}\">
+    <visual>
+      <geometry>
+        <mesh filename=\"package://mycobot_description/urdf/mycobot_280_pi/{mesh_name}.dae\"/>
+      </geometry>
+      <origin xyz=\"0 0 0\" rpy=\"0 0 0\"/>
+    </visual>
+  </link>
+"""
+        for link_name, mesh_name in visual_meshes.items()
+    )
+    joints = """
+  <link name="joint6_flange"/>
+  <joint name="joint2_to_joint1" type="revolute">
+    <parent link="base"/><child link="link1"/><origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+  <joint name="joint3_to_joint2" type="revolute">
+    <parent link="link1"/><child link="link2"/><origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+  <joint name="joint4_to_joint3" type="revolute">
+    <parent link="link2"/><child link="link3"/><origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+  <joint name="joint5_to_joint4" type="revolute">
+    <parent link="link3"/><child link="link4"/><origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+  <joint name="joint6_to_joint5" type="revolute">
+    <parent link="link4"/><child link="link5"/><origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+  <joint name="joint7_to_joint6" type="revolute">
+    <parent link="link5"/><child link="link6"/><origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+  <joint name="joint6_to_joint6_flange" type="fixed">
+    <parent link="link6"/><child link="joint6_flange"/><origin xyz="0 0 0.02" rpy="0 0 0"/>
+  </joint>
+"""
+    return f"<robot name=\"minimal_280_pi\">{links}{joints}</robot>"
+
+
+def _minimal_adaptive_gripper_urdf() -> str:
+    links = "\n".join(
+        f"""
+  <link name=\"{name}\">
+    <visual>
+      <geometry>
+        <mesh filename=\"package://mycobot_description/urdf/adaptive_gripper/{name}.dae\"/>
+      </geometry>
+      <origin xyz=\"0 0 0\" rpy=\"0 0 0\"/>
+    </visual>
+  </link>
+"""
+        for name in (
+            "gripper_base",
+            "gripper_left1",
+            "gripper_left2",
+            "gripper_left3",
+            "gripper_right1",
+            "gripper_right2",
+            "gripper_right3",
+        )
+    )
+    joints = """
+  <joint name="gripper_controller" type="revolute">
+    <parent link="gripper_base"/><child link="gripper_left3"/>
+    <origin xyz="-0.018 0.015 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-1.11" upper="0" effort="1" velocity="1"/>
+  </joint>
+  <joint name="gripper_base_to_gripper_left2" type="revolute">
+    <parent link="gripper_base"/><child link="gripper_left2"/>
+    <origin xyz="-0.047 -0.01 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-0.8" upper="0.5" effort="1" velocity="1"/>
+    <mimic joint="gripper_controller" multiplier="1.0" offset="0"/>
+  </joint>
+  <joint name="gripper_left3_to_gripper_left1" type="revolute">
+    <parent link="gripper_left3"/><child link="gripper_left1"/>
+    <origin xyz="-0.05 0.035 -0.015" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-0.5" upper="0.5" effort="1" velocity="1"/>
+    <mimic joint="gripper_controller" multiplier="-1.0" offset="0"/>
+  </joint>
+  <joint name="gripper_base_to_gripper_right3" type="revolute">
+    <parent link="gripper_base"/><child link="gripper_right3"/>
+    <origin xyz="0.016 0.014 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-0.3" upper="0.7" effort="1" velocity="1"/>
+    <mimic joint="gripper_controller" multiplier="-1.0" offset="0"/>
+  </joint>
+  <joint name="gripper_base_to_gripper_right2" type="revolute">
+    <parent link="gripper_base"/><child link="gripper_right2"/>
+    <origin xyz="0.044 -0.01 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-0.5" upper="0.8" effort="1" velocity="1"/>
+    <mimic joint="gripper_controller" multiplier="-1.0" offset="0"/>
+  </joint>
+  <joint name="gripper_right3_to_gripper_right1" type="revolute">
+    <parent link="gripper_right3"/><child link="gripper_right1"/>
+    <origin xyz="0.052 0.035 -0.015" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-0.5" upper="0.5" effort="1" velocity="1"/>
+    <mimic joint="gripper_controller" multiplier="1.0" offset="0"/>
+  </joint>
+"""
+    return f"<robot name=\"minimal_adaptive_gripper\">{links}{joints}</robot>"
 
 
 def _minimal_320_adaptive_urdf() -> str:

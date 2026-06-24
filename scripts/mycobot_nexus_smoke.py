@@ -11,6 +11,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from physical_ai_agent.sim.mycobot_nexus_env import (
+    MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+    MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+    MODEL_PROFILE_320_GRIPPER,
     run_mycobot_nexus_smoke,
     write_dry_contract,
 )
@@ -41,12 +44,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model-profile",
-        choices=["280-jn", "320-m5-2022-gripper", "320-m5-2022-adaptive-gripper"],
+        choices=[
+            "280-jn",
+            MODEL_PROFILE_320_GRIPPER,
+            MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+        ],
         default="280-jn",
         help=(
             "Robot/gripper source profile. 320-m5-2022-gripper imports the official "
             "mycobot_ros 320 M5 2022 gripper URDF tree; "
-            "320-m5-2022-adaptive-gripper imports the ROS2 Humble adaptive gripper tree."
+            "320-m5-2022-adaptive-gripper imports the ROS2 Humble adaptive gripper tree; "
+            "280-pi-adaptive-gripper composes the ROS1 mycobot_280_pi arm URDF "
+            "with the ROS1 adaptive_gripper URDF."
         ),
     )
     parser.add_argument("--steps", type=int, default=8)

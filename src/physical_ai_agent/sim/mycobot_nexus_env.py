@@ -21,6 +21,16 @@ OFFICIAL_320_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/mycobot_320_m5_
 OFFICIAL_320_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH = Path(
     "mycobot_description/urdf/pro_adaptive_gripper"
 )
+OFFICIAL_280_PI_URDF_RELATIVE_PATH = Path(
+    "mycobot_description/urdf/mycobot_280_pi/mycobot_280_pi.urdf"
+)
+OFFICIAL_280_PI_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/mycobot_280_pi")
+OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH = Path(
+    "mycobot_description/urdf/adaptive_gripper/mycobot_adaptive_gripper.urdf"
+)
+OFFICIAL_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH = Path(
+    "mycobot_description/urdf/adaptive_gripper"
+)
 OFFICIAL_GRIPPER_MESH_NAMES = [
     "gripper_base",
     "gripper_left",
@@ -44,6 +54,15 @@ OFFICIAL_320_LINK_NAMES = [
 ]
 OFFICIAL_320_ARM_LINK_NAMES = OFFICIAL_320_LINK_NAMES[:7]
 OFFICIAL_320_GRIPPER_LINK_NAMES = OFFICIAL_320_LINK_NAMES[7:]
+OFFICIAL_ADAPTIVE_GRIPPER_LINK_NAMES = [
+    "gripper_base",
+    "gripper_left1",
+    "gripper_left2",
+    "gripper_left3",
+    "gripper_right1",
+    "gripper_right2",
+    "gripper_right3",
+]
 MYCOBOT_MODEL_JOINT_NAMES = [
     "joint2_to_joint1",
     "joint3_to_joint2",
@@ -97,6 +116,7 @@ TCP_SITE = "mycobot_tcp_site"
 MODEL_PROFILE_280_JN = "280-jn"
 MODEL_PROFILE_320_GRIPPER = "320-m5-2022-gripper"
 MODEL_PROFILE_320_ADAPTIVE_GRIPPER = "320-m5-2022-adaptive-gripper"
+MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER = "280-pi-adaptive-gripper"
 ADAPTIVE_LEFT_FINGER_PAD_PARENT = "gripper_left1"
 ADAPTIVE_RIGHT_FINGER_PAD_PARENT = "gripper_right1"
 ADAPTIVE_LEFT_FINGER_PAD_POS = (0.0419991088, 0.0033629020, -0.0406646156)
@@ -178,7 +198,11 @@ class MyCobotNexusEnv:
         self.asset_root = config.asset_root.expanduser()
         self.work_dir = config.work_dir.expanduser()
         self.model_path = self.asset_root / MYCOBOT_MODEL_RELATIVE_PATH
-        if config.model_profile in {MODEL_PROFILE_320_GRIPPER, MODEL_PROFILE_320_ADAPTIVE_GRIPPER}:
+        if config.model_profile in {
+            MODEL_PROFILE_320_GRIPPER,
+            MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+        }:
             self.model_path = Path("")
         elif not self.model_path.exists():
             raise FileNotFoundError(
@@ -225,7 +249,10 @@ class MyCobotNexusEnv:
             OFFICIAL_320_GRIPPER_JOINT_NAMES,
         )
         self._uses_official_320_adaptive_gripper = (
-            config.model_profile == MODEL_PROFILE_320_ADAPTIVE_GRIPPER
+            config.model_profile in {
+                MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+                MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+            }
             and self._uses_official_320_gripper
         )
         gripper_joint_names = (
@@ -779,6 +806,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             MODEL_PROFILE_280_JN,
             MODEL_PROFILE_320_GRIPPER,
             MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
         ],
         "asset_source": "https://github.com/elephantrobotics/mycobot_mujoco",
         "model_relative_path": str(MYCOBOT_MODEL_RELATIVE_PATH),
@@ -791,6 +819,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             "official_parallel_gripper",
             "official_320_m5_2022_gripper",
             "official_320_m5_2022_adaptive_gripper",
+            "official_280_pi_adaptive_gripper",
             "official_320_m5_2022_friction_contact_gripper",
             "synthetic_parallel_gripper_fallback",
             "teacher_grasp_attachment_proxy",
@@ -804,6 +833,10 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "official_320_m5_2022_adaptive_gripper_meshes": str(
             OFFICIAL_320_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH
         ),
+        "official_280_pi_urdf": str(OFFICIAL_280_PI_URDF_RELATIVE_PATH),
+        "official_280_pi_meshes": str(OFFICIAL_280_PI_MESH_RELATIVE_PATH),
+        "official_adaptive_gripper_urdf": str(OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH),
+        "official_adaptive_gripper_meshes": str(OFFICIAL_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH),
         "real_robot_execution": "disabled",
         "poc_boundary": (
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
@@ -868,6 +901,12 @@ def build_mycobot_nexus_scene_model(
             scene_path=scene_path,
             official_gripper_root=official_gripper_root,
             model_profile=model_profile,
+        )
+        return
+    if model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER:
+        _build_official_280_pi_adaptive_nexus_scene_model(
+            scene_path=scene_path,
+            official_gripper_root=official_gripper_root,
         )
         return
     if model_profile != MODEL_PROFILE_280_JN:
@@ -1061,13 +1100,194 @@ def _build_official_320_nexus_scene_model(
     for node in _nexus_scene_nodes():
         worldbody.append(node)
     base = ET.SubElement(worldbody, "body", {"name": "base", "pos": "0 0 0"})
-    _add_urdf_visual_geoms(base, "base", link_visuals)
-    _append_urdf_children(base, "base", children_by_parent, link_visuals)
+    _add_urdf_visual_geoms(base, "base", link_visuals, mesh_prefix="official_320")
+    _append_urdf_children(
+        base,
+        "base",
+        children_by_parent,
+        link_visuals,
+        mesh_prefix="official_320",
+    )
     _add_320_official_gripper_contact_pads(base)
     _add_320_position_actuators(root)
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(scene_path, encoding="utf-8", xml_declaration=True)
+
+
+def _build_official_280_pi_adaptive_nexus_scene_model(
+    *,
+    scene_path: Path,
+    official_gripper_root: Path | None,
+) -> None:
+    if official_gripper_root is None:
+        raise FileNotFoundError(
+            "official myCobot ROS root is required for model_profile="
+            f"{MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER}"
+        )
+    ros_root = official_gripper_root.expanduser()
+    arm_urdf_path = ros_root / OFFICIAL_280_PI_URDF_RELATIVE_PATH
+    gripper_urdf_path = ros_root / OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH
+    arm_mesh_root = ros_root / OFFICIAL_280_PI_MESH_RELATIVE_PATH
+    gripper_mesh_root = ros_root / OFFICIAL_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH
+    if not arm_urdf_path.exists():
+        raise FileNotFoundError(f"missing official 280 Pi URDF: {arm_urdf_path}")
+    if not gripper_urdf_path.exists():
+        raise FileNotFoundError(f"missing official adaptive gripper URDF: {gripper_urdf_path}")
+
+    arm_urdf = ET.parse(arm_urdf_path).getroot()
+    gripper_urdf = ET.parse(gripper_urdf_path).getroot()
+    urdf = _combined_280_pi_adaptive_urdf(arm_urdf, gripper_urdf)
+    link_visuals = _urdf_link_visuals(urdf)
+    joints = _urdf_joints(urdf)
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for joint in joints:
+        children_by_parent.setdefault(str(joint["parent"]), []).append(joint)
+
+    mesh_names = sorted({visual["mesh"] for visuals in link_visuals.values() for visual in visuals})
+    obj_dir = scene_path.parent / "official_280_pi_adaptive_meshes"
+    obj_dir.mkdir(parents=True, exist_ok=True)
+    for name in mesh_names:
+        dae_path = _find_required_mesh(name, (arm_mesh_root, gripper_mesh_root))
+        _convert_collada_mesh_to_obj(
+            dae_path,
+            obj_dir / f"{name}.obj",
+            bake_visual_scene=False,
+        )
+
+    root = ET.Element("mujoco", {"model": "official_280_pi_adaptive_gripper_nexus"})
+    ET.SubElement(root, "compiler", {"angle": "radian", "eulerseq": "XYZ"})
+    ET.SubElement(
+        root,
+        "option",
+        {
+            "timestep": "0.001",
+            "cone": "elliptic",
+            "impratio": "100",
+            "iterations": "120",
+            "ls_iterations": "40",
+        },
+    )
+    asset = ET.SubElement(root, "asset")
+    ET.SubElement(
+        asset,
+        "texture",
+        {
+            "name": "nexus_skybox",
+            "type": "skybox",
+            "builtin": "gradient",
+            "rgb1": "0.78 0.82 0.86",
+            "rgb2": "0.96 0.97 0.96",
+            "width": "256",
+            "height": "256",
+        },
+    )
+    _add_material(asset, "nexus_floor", "0.78 0.80 0.77 1", specular="0.12")
+    _add_material(asset, "nexus_mat", "0.37 0.43 0.45 1", specular="0.08")
+    _add_material(asset, "task_cube", "0.92 0.24 0.15 1", specular="0.22")
+    for name in mesh_names:
+        ET.SubElement(
+            asset,
+            "mesh",
+            {"name": f"official_280pi_{name}", "file": str((obj_dir / f"{name}.obj").resolve())},
+        )
+
+    visual = ET.SubElement(root, "visual")
+    ET.SubElement(
+        visual,
+        "headlight",
+        {
+            "ambient": "0.36 0.36 0.34",
+            "diffuse": "0.76 0.74 0.68",
+            "specular": "0.12 0.12 0.12",
+        },
+    )
+    ET.SubElement(visual, "map", {"znear": "0.01", "zfar": "10"})
+    ET.SubElement(visual, "global", {"offwidth": "960", "offheight": "720"})
+
+    root_link = "base" if "base" in link_visuals else _first_urdf_link_name(urdf)
+    worldbody = ET.SubElement(root, "worldbody")
+    for node in _nexus_scene_nodes():
+        worldbody.append(node)
+    base = ET.SubElement(worldbody, "body", {"name": root_link, "pos": "0 0 0"})
+    _add_urdf_visual_geoms(base, root_link, link_visuals, mesh_prefix="official_280pi")
+    _append_urdf_children(
+        base,
+        root_link,
+        children_by_parent,
+        link_visuals,
+        mesh_prefix="official_280pi",
+    )
+    _add_320_official_gripper_contact_pads(base)
+    _add_280_pi_position_actuators(root)
+
+    scene_path.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(root).write(scene_path, encoding="utf-8", xml_declaration=True)
+
+
+def _combined_280_pi_adaptive_urdf(arm_urdf: ET.Element, gripper_urdf: ET.Element) -> ET.Element:
+    combined = ET.Element("robot", {"name": "mycobot_280_pi_adaptive_gripper"})
+    for source in (arm_urdf, gripper_urdf):
+        for child in source:
+            if child.tag in {"link", "joint"}:
+                combined.append(ET.fromstring(ET.tostring(child, encoding="unicode")))
+    parent_link = _preferred_existing_link(arm_urdf, ("joint6_flange", "link6", "joint6"))
+    child_link = _preferred_existing_link(gripper_urdf, ("gripper_base",))
+    joint = ET.SubElement(combined, "joint", {"name": "joint6_to_adaptive_gripper_base", "type": "fixed"})
+    ET.SubElement(joint, "parent", {"link": parent_link})
+    ET.SubElement(joint, "child", {"link": child_link})
+    ET.SubElement(joint, "origin", {"xyz": "0 0 0.05", "rpy": "0 0 0"})
+    return combined
+
+
+def _preferred_existing_link(urdf: ET.Element, preferred: tuple[str, ...]) -> str:
+    names = [link.attrib["name"] for link in urdf.findall("link") if "name" in link.attrib]
+    for name in preferred:
+        if name in names:
+            return name
+    if not names:
+        raise ValueError("URDF has no links")
+    return names[-1]
+
+
+def _first_urdf_link_name(urdf: ET.Element) -> str:
+    link = urdf.find("link")
+    if link is None or "name" not in link.attrib:
+        raise ValueError("URDF has no named root link")
+    return link.attrib["name"]
+
+
+def _find_required_mesh(name: str, mesh_roots: tuple[Path, ...]) -> Path:
+    for root in mesh_roots:
+        candidate = root / f"{name}.dae"
+        if candidate.exists():
+            return candidate
+    roots = ", ".join(str(root) for root in mesh_roots)
+    raise FileNotFoundError(f"missing official mesh {name}.dae under: {roots}")
+
+
+def _add_280_pi_position_actuators(root: ET.Element) -> None:
+    actuator = ET.SubElement(root, "actuator")
+    arm_ranges = {
+        "joint2_to_joint1": "-2.93 2.93",
+        "joint3_to_joint2": "-2.35 2.35",
+        "joint4_to_joint3": "-2.53 2.53",
+        "joint5_to_joint4": "-2.53 2.53",
+        "joint6_to_joint5": "-2.93 2.93",
+        "joint7_to_joint6": "-3.14 3.14",
+    }
+    for joint_name in MYCOBOT_MODEL_JOINT_NAMES:
+        ET.SubElement(
+            actuator,
+            "position",
+            {
+                "name": f"act_{joint_name}",
+                "joint": joint_name,
+                "kp": "60",
+                "ctrlrange": arm_ranges[joint_name],
+                "ctrllimited": "true",
+            },
+        )
 
 
 def _add_320_position_actuators(root: ET.Element) -> None:
@@ -1143,6 +1363,7 @@ def _append_urdf_children(
     children_by_parent: dict[str, list[dict[str, Any]]],
     link_visuals: dict[str, list[dict[str, str]]],
     *,
+    mesh_prefix: str = "official_320",
     skip_gripper_tree: bool = False,
 ) -> None:
     for joint in children_by_parent.get(parent_link, []):
@@ -1167,12 +1388,18 @@ def _append_urdf_children(
                     "damping": "0.35",
                 },
             )
-        _add_urdf_visual_geoms(body, str(joint["child"]), link_visuals)
+        _add_urdf_visual_geoms(
+            body,
+            str(joint["child"]),
+            link_visuals,
+            mesh_prefix=mesh_prefix,
+        )
         _append_urdf_children(
             body,
             str(joint["child"]),
             children_by_parent,
             link_visuals,
+            mesh_prefix=mesh_prefix,
             skip_gripper_tree=skip_gripper_tree,
         )
 
@@ -1181,6 +1408,8 @@ def _add_urdf_visual_geoms(
     body: ET.Element,
     link_name: str,
     link_visuals: dict[str, list[dict[str, str]]],
+    *,
+    mesh_prefix: str = "official_320",
 ) -> None:
     for index, visual in enumerate(link_visuals.get(link_name, [])):
         ET.SubElement(
@@ -1189,7 +1418,7 @@ def _add_urdf_visual_geoms(
             {
                 "name": f"{link_name}_visual_{index}",
                 "type": "mesh",
-                "mesh": f"official_320_{visual['mesh']}",
+                "mesh": f"{mesh_prefix}_{visual['mesh']}",
                 "pos": _clean_float_string(visual["xyz"]),
                 "euler": _clean_float_string(visual["rpy"]),
                 "contype": "0",
