@@ -166,8 +166,11 @@ MuJoCo-capable runtime.
 Further adaptive-gripper work must follow
 [`mycobot_320_adaptive_gripper_validation_ladder.md`](./mycobot_320_adaptive_gripper_validation_ladder.md).
 Do not tune contact pads, cube placement, friction, or arm trajectory until the
-URDF-vs-MuJoCo kinematic tree, mesh transform parity, visual pose, and mimic
-motion gates have passed.
+mesh transform parity, visual pose, and mimic motion gates have passed. Gate 2
+is now passed: `scripts/verify_mycobot_320_adaptive_kinematic_tree.py` compared
+13/13 upstream arm/adaptive-gripper joints against the generated MuJoCo tree.
+
+![myCobot 320 adaptive kinematic tree gate](./mycobot_320_adaptive_kinematic_tree_gate.png)
 
 Target render/physics command once MuJoCo is available:
 

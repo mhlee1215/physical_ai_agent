@@ -64,6 +64,13 @@ Stop condition:
 - Do not tune collision pads, cube placement, friction, or arm trajectory if
   this table does not match.
 
+Current status: passed by
+`scripts/verify_mycobot_320_adaptive_kinematic_tree.py` against the ROS2 Humble
+adaptive gripper source. Evidence: 13/13 arm and adaptive-gripper joints passed
+parent-child, origin, axis, range, and mimic-multiplier comparison.
+
+![Gate 2 kinematic tree evidence](./mycobot_320_adaptive_kinematic_tree_gate.png)
+
 ### Gate 3: Mesh Transform Parity
 
 Question: are DAE geometry transforms and URDF visual origins applied exactly
@@ -170,7 +177,7 @@ Stop condition:
 
 ## Current Next Step
 
-The next implementation should be Gate 2: a deterministic URDF-vs-MuJoCo tree
-comparison script/test. This is the smallest useful step toward a trustworthy
-adaptive gripper simulation and avoids guessing contact-pad coordinates.
-
+The next implementation should be Gate 3: mesh transform parity. This must
+decide raw-vs-baked Collada conversion for the adaptive gripper meshes using
+reference visual evidence before any contact-pad, cube-placement, friction, or
+trajectory tuning.

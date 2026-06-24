@@ -15,6 +15,9 @@ from physical_ai_agent.sim.mycobot_nexus_env import (
     write_dry_contract,
 )
 from scripts.mycobot_nexus_smoke import build_parser
+from scripts.verify_mycobot_320_adaptive_kinematic_tree import (
+    verify_adaptive_kinematic_tree,
+)
 
 
 class MyCobotNexusEnvTest(unittest.TestCase):
@@ -168,37 +171,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             scene_path = tmp_path / "render" / "scene.xml"
-            ros_root = tmp_path / "mycobot_ros2"
-            arm_mesh_dir = (
-                ros_root / "mycobot_description" / "urdf" / "mycobot_320_m5_2022"
-            )
-            adaptive_mesh_dir = (
-                ros_root / "mycobot_description" / "urdf" / "pro_adaptive_gripper"
-            )
-            arm_mesh_dir.mkdir(parents=True)
-            adaptive_mesh_dir.mkdir(parents=True)
-            for name in ("base", "link1", "link2", "link3", "link4", "link5", "link6"):
-                (arm_mesh_dir / f"{name}.dae").write_text(
-                    _tiny_collada_triangle(),
-                    encoding="utf-8",
-                )
-            for name in (
-                "gripper_base",
-                "gripper_left1",
-                "gripper_left2",
-                "gripper_left3",
-                "gripper_right1",
-                "gripper_right2",
-                "gripper_right3",
-            ):
-                (adaptive_mesh_dir / f"{name}.dae").write_text(
-                    _tiny_collada_triangle(),
-                    encoding="utf-8",
-                )
-            (arm_mesh_dir / "mycobot_320_m5_2022_adaptive_gripper.urdf").write_text(
-                _minimal_320_adaptive_urdf(),
-                encoding="utf-8",
-            )
+            ros_root = _write_minimal_320_adaptive_ros2_tree(tmp_path)
 
             build_mycobot_nexus_scene_model(
                 model_path=Path(""),
@@ -222,6 +195,22 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertIn("gripper_base.obj", mesh_files)
         self.assertIn("link6.obj", mesh_files)
 
+    def test_320_adaptive_kinematic_tree_verifier_writes_visual_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ros_root = _write_minimal_320_adaptive_ros2_tree(tmp_path)
+            report = verify_adaptive_kinematic_tree(
+                official_gripper_root=ros_root,
+                output_dir=tmp_path / "verify",
+            )
+
+            self.assertEqual(report.status, "passed")
+            self.assertEqual(report.failed_joint_count, 0)
+            self.assertEqual(report.compared_joint_count, 13)
+            self.assertTrue(Path(report.artifacts["json"]).exists())
+            self.assertTrue(Path(report.artifacts["markdown"]).exists())
+            self.assertTrue(Path(report.artifacts["svg"]).exists())
+
     def test_sample_and_sanitize_teacher_action_keep_seven_dim_contract(self) -> None:
         action = sample_mycobot_nexus_action(step=1, total_steps=4)
         self.assertEqual(len(action), 7)
@@ -231,6 +220,38 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertEqual(sanitized[0], 1.0)
         self.assertEqual(sanitized[1], 0.0)
         self.assertTrue(all(math.isfinite(value) for value in sanitized))
+
+
+def _write_minimal_320_adaptive_ros2_tree(tmp_path: Path) -> Path:
+    ros_root = tmp_path / "mycobot_ros2"
+    arm_mesh_dir = ros_root / "mycobot_description" / "urdf" / "mycobot_320_m5_2022"
+    adaptive_mesh_dir = ros_root / "mycobot_description" / "urdf" / "pro_adaptive_gripper"
+    arm_mesh_dir.mkdir(parents=True)
+    adaptive_mesh_dir.mkdir(parents=True)
+    for name in ("base", "link1", "link2", "link3", "link4", "link5", "link6"):
+        (arm_mesh_dir / f"{name}.dae").write_text(
+            _tiny_collada_triangle(),
+            encoding="utf-8",
+        )
+    for name in (
+        "gripper_base",
+        "gripper_left1",
+        "gripper_left2",
+        "gripper_left3",
+        "gripper_right1",
+        "gripper_right2",
+        "gripper_right3",
+    ):
+        (adaptive_mesh_dir / f"{name}.dae").write_text(
+            _tiny_collada_triangle(),
+            encoding="utf-8",
+        )
+    (arm_mesh_dir / "mycobot_320_m5_2022_adaptive_gripper.urdf").write_text(
+        _minimal_320_adaptive_urdf(),
+        encoding="utf-8",
+    )
+    return ros_root
+
 
 def _tiny_collada_triangle() -> str:
     return """
