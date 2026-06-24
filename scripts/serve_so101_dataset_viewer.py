@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-import pyarrow.parquet as pq
+try:
+    import pyarrow.parquet as pq
+except ModuleNotFoundError:  # myCobot JSONL datasets do not require pyarrow.
+    pq = None
 
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
@@ -35,6 +38,19 @@ CAMERA_KEYS = [
     "observation.images.camera3",
 ]
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+MYCOBOT_JOINT_NAMES = [
+    "joint2_to_joint1",
+    "joint3_to_joint2",
+    "joint4_to_joint3",
+    "joint5_to_joint4",
+    "joint6_to_joint5",
+    "joint6output_to_joint6",
+    "gripper_controller",
+]
+SO101_PLATFORM = "so101"
+SO101_PLATFORM_LABEL = "SO101"
+MYCOBOT_PLATFORM = "mycobot"
+MYCOBOT_PLATFORM_LABEL = "MyCobot"
 
 
 def _contract_dataset_roots(repo_root: Path) -> dict[str, Path]:
@@ -68,7 +84,7 @@ def _skill_dataset_roots(repo_root: Path) -> dict[str, Path]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Serve a lightweight SO101 LeRobot dataset browser.")
+    parser = argparse.ArgumentParser(description="Serve a lightweight robot dataset browser.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8768)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -142,7 +158,11 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
         _dataset_catalog_item(repo_root, split, path, category="temporary")
         for split, path in _discover_temporary_datasets(repo_root).items()
     ]
-    for item in [*official_items, *skill_items, *archived_items, *temporary_items]:
+    mycobot_items = [
+        _mycobot_dataset_catalog_item(repo_root, split, path)
+        for split, path in _discover_mycobot_datasets(repo_root).items()
+    ]
+    for item in [*official_items, *skill_items, *archived_items, *temporary_items, *mycobot_items]:
         if item["status"] == "available":
             payload[item["name"]] = item["summary"]
     return {
@@ -167,6 +187,12 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
                 "items": temporary_items,
             },
             {
+                "id": "mycobot",
+                "title": "myCobot teacher POC",
+                "description": "myCobot 320 adaptive-gripper JSONL teacher datasets generated from MuJoCo gates.",
+                "items": mycobot_items,
+            },
+            {
                 "id": "archived",
                 "title": "Archived official",
                 "description": "Older stable datasets kept for comparison.",
@@ -183,6 +209,8 @@ def _dataset_catalog_item(repo_root: Path, split: str, root: Path, *, category: 
         "name": split,
         "root": str(resolved),
         "category": category,
+        "platform": SO101_PLATFORM,
+        "platform_label": SO101_PLATFORM_LABEL,
     }
     try:
         dataset = _dataset(repo_root, split)
@@ -214,6 +242,9 @@ def _dataset_catalog_item(repo_root: Path, split: str, root: Path, *, category: 
 
 def _dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
     return {
+        "dataset_format": "lerobot_parquet",
+        "platform": SO101_PLATFORM,
+        "platform_label": SO101_PLATFORM_LABEL,
         "root": str(dataset["root"]),
         "name": split,
         "episodes": dataset["info"]["total_episodes"],
@@ -268,6 +299,50 @@ def _discover_temporary_datasets(repo_root: Path) -> dict[str, Path]:
     return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
 
 
+def _discover_mycobot_datasets(repo_root: Path) -> dict[str, Path]:
+    discovered = _parse_dataset_env("MYCOBOT_TEMP_DATASETS")
+    seen_paths = {path.resolve() for path in discovered.values()}
+    root = repo_root / "_workspace" / "mycobot_teacher_datasets"
+    if root.exists():
+        for manifest in root.glob("*/manifest.json"):
+            path = manifest.parent
+            resolved = path.resolve()
+            if resolved in seen_paths:
+                continue
+            discovered[_unique_split_name("mycobot_" + _slug(path.name), discovered)] = path
+            seen_paths.add(resolved)
+    return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
+
+
+def _mycobot_dataset_catalog_item(repo_root: Path, split: str, root: Path) -> dict[str, Any]:
+    resolved = _resolve_dataset_path(repo_root, root)
+    base = {
+        "name": split,
+        "root": str(resolved),
+        "category": "temporary",
+        "platform": MYCOBOT_PLATFORM,
+        "platform_label": MYCOBOT_PLATFORM_LABEL,
+    }
+    try:
+        dataset = _mycobot_dataset(resolved)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            **base,
+            "status": "incomplete" if resolved.exists() else "missing",
+            "detail": str(exc),
+            "size_bytes": _dir_size(resolved),
+            "size_human": _format_bytes(_dir_size(resolved)),
+        }
+    summary = _mycobot_dataset_summary(split, dataset)
+    return {
+        **base,
+        "status": "available" if summary["episodes"] > 0 and summary["frames"] > 0 else "incomplete",
+        "detail": "previewable teacher dataset; not LeRobot/SmolVLA training-ready yet",
+        "summary": summary,
+        **summary,
+    }
+
+
 def _official_dataset_roots(repo_root: Path) -> dict[str, Path]:
     env_roots = _parse_dataset_env("SO101_OFFICIAL_DATASETS")
     if env_roots:
@@ -314,6 +389,9 @@ def _safe_mtime(path: Path) -> float:
 
 
 def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dict[str, Any]:
+    mycobot_roots = _discover_mycobot_datasets(repo_root)
+    if split in mycobot_roots:
+        return _mycobot_frame_payload(_resolve_dataset_path(repo_root, mycobot_roots[split]), split, episode, frame)
     dataset = _dataset(repo_root, split)
     episodes = dataset["episodes"]
     if episode < 0 or episode >= len(episodes):
@@ -343,8 +421,112 @@ def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dic
     }
 
 
+def _mycobot_dataset(root: Path) -> dict[str, Any]:
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("format") != "mycobot_jsonl_v1":
+        raise ValueError(f"unsupported myCobot dataset format: {manifest.get('format')}")
+    summaries = manifest.get("episode_summaries") or []
+    return {
+        "root": root,
+        "manifest": manifest,
+        "episode_lengths": [int(row["frames"]) for row in summaries],
+        "size_bytes": _dir_size(root),
+    }
+
+
+def _mycobot_dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
+    manifest = dataset["manifest"]
+    episode_summaries = manifest.get("episode_summaries") or []
+    rendered_frames = sum(int(row.get("rendered_frames") or 0) for row in episode_summaries)
+    return {
+        "type": "mycobot_jsonl",
+        "dataset_format": "mycobot_jsonl_v1",
+        "platform": MYCOBOT_PLATFORM,
+        "platform_label": MYCOBOT_PLATFORM_LABEL,
+        "root": str(dataset["root"]),
+        "name": split,
+        "episodes": int(manifest.get("episodes") or 0),
+        "frames": int(manifest.get("frames") or 0),
+        "fps": manifest.get("fps"),
+        "size_bytes": dataset["size_bytes"],
+        "size_human": _format_bytes(dataset["size_bytes"]),
+        "data_bytes": _dir_size(dataset["root"] / "episodes"),
+        "data_human": _format_bytes(_dir_size(dataset["root"] / "episodes")),
+        "image_bytes": _dir_size(dataset["root"] / "frames"),
+        "image_human": _format_bytes(_dir_size(dataset["root"] / "frames")),
+        "features": ["render"],
+        "image_shapes": {"render": [240, 320, 3]},
+        "episode_lengths": dataset["episode_lengths"],
+        "rendered_frames": rendered_frames,
+        "failed_episodes": manifest.get("failed_episodes") or [],
+        "robot_model": manifest.get("robot_model") or "mycobot_320",
+        "gripper": manifest.get("gripper") or "adaptive",
+        "gate": manifest.get("gate") or "gate8",
+        "training_ready": False,
+    }
+
+
+def _mycobot_frame_payload(root: Path, split: str, episode: int, frame: int) -> dict[str, Any]:
+    dataset = _mycobot_dataset(root)
+    lengths = dataset["episode_lengths"]
+    if episode < 0 or episode >= len(lengths):
+        raise ValueError(f"episode out of range: {episode}")
+    frame = max(0, min(frame, lengths[episode] - 1))
+    episode_path = root / "episodes" / f"episode_{episode:04d}.jsonl"
+    row = _jsonl_row(episode_path, frame)
+    image_path = ""
+    images = {}
+    render_path = row.get("observation", {}).get("images", {}).get("render")
+    if not render_path:
+        render_path = _nearest_mycobot_render_path(root, episode, frame, lengths[episode])
+    if render_path:
+        image_path = str(render_path)
+        image_bytes = (root / render_path).read_bytes()
+        images["render"] = "data:image/bmp;base64," + base64.b64encode(image_bytes).decode("ascii")
+    state_values = [float(value) for value in row.get("observation", {}).get("state", [])]
+    action_values = [float(value) for value in row.get("action", [])]
+    return {
+        "split": split,
+        "episode": episode,
+        "frame": frame,
+        "episode_length": lengths[episode],
+        "row_index": frame,
+        "timestamp": float(row.get("timestamp") or 0.0),
+        "task": row.get("task", ""),
+        "prompt": row.get("prompt") or row.get("task", ""),
+        "phase": row.get("phase", ""),
+        "images": images,
+        "image_path": image_path,
+        "state": dict(zip(MYCOBOT_JOINT_NAMES, state_values, strict=False)),
+        "action": dict(zip(MYCOBOT_JOINT_NAMES, action_values, strict=False)),
+        "info": row.get("info", {}),
+    }
+
+
+def _jsonl_row(path: Path, index: int) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as file:
+        for row_index, line in enumerate(file):
+            if row_index == index:
+                return json.loads(line)
+    raise ValueError(f"frame out of range: {index}")
+
+
+def _nearest_mycobot_render_path(root: Path, episode: int, frame: int, length: int) -> str:
+    frame_dir = root / "frames" / f"episode_{episode:04d}"
+    for offset in range(length):
+        for candidate in (frame - offset, frame + offset):
+            if candidate < 0 or candidate >= length:
+                continue
+            image = frame_dir / f"frame_{candidate:04d}.bmp"
+            if image.exists():
+                return str(image.relative_to(root))
+    return ""
+
+
 @lru_cache(maxsize=4)
 def _dataset(repo_root: Path, split: str) -> dict[str, Any]:
+    if pq is None:
+        raise RuntimeError("pyarrow is required for SO101 LeRobot parquet datasets")
     roots = _dataset_roots(repo_root)
     if split not in roots:
         raise ValueError(f"unknown split: {split}")
@@ -414,7 +596,7 @@ def _index_html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SO101 Dataset Viewer</title>
+  <title>Robot Experiment Manager</title>
   <style>
     :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #16181d; background: #f6f7f9; }
     body { margin: 0; }
@@ -422,7 +604,7 @@ def _index_html() -> str:
     h1 { margin: 0; font-size: 20px; }
     main { padding: 16px 18px; display: grid; gap: 14px; }
     section { background: #fff; border: 1px solid #d9dee8; border-radius: 8px; padding: 12px; }
-    .controls { display: grid; grid-template-columns: 180px 1fr 1fr auto auto auto 100px; gap: 10px; align-items: end; }
+    .controls { display: grid; grid-template-columns: 150px 220px 1fr 1fr auto auto auto 100px; gap: 10px; align-items: end; }
     label { display: grid; gap: 4px; font-size: 12px; color: #596273; }
     select, input, button { font: inherit; border: 1px solid #cfd6e3; border-radius: 6px; padding: 7px 9px; background: #fff; }
     button { cursor: pointer; font-weight: 650; }
@@ -438,15 +620,16 @@ def _index_html() -> str:
   </style>
 </head>
 <body>
-  <header><h1>SO101 Dataset Viewer</h1></header>
+  <header><h1>Robot Experiment Manager</h1></header>
   <main>
     <section>
       <div class="controls">
+        <label>Platform<select id="platform"></select></label>
         <label>Dataset<select id="split"></select></label>
         <label>Episode<input id="episode" type="range" min="0" max="0" value="0"></label>
         <label>Frame<input id="frame" type="range" min="0" max="0" value="0"></label>
         <button id="play">Play</button>
-        <label>FPS<select id="fps"><option value="12" selected>12</option><option value="6">6</option><option value="24">24</option></select></label>
+        <label>FPS<select id="fps"><option value="30" selected>30</option><option value="24">24</option><option value="12">12</option><option value="6">6</option></select></label>
         <button id="prev">Prev</button>
         <button id="next">Next</button>
       </div>
@@ -462,6 +645,7 @@ def _index_html() -> str:
   </main>
   <script>
     let datasets = {};
+    const platform = document.getElementById("platform");
     const split = document.getElementById("split");
     const episode = document.getElementById("episode");
     const frame = document.getElementById("frame");
@@ -473,17 +657,50 @@ def _index_html() -> str:
     const fmt = value => Number(value).toFixed(4);
     let timer = null;
     let loading = false;
+    const knownPlatforms = [
+      { id: "so101", label: "SO101" },
+      { id: "mycobot", label: "MyCobot" },
+    ];
 
     async function init() {
       const payload = await fetch("/api/datasets").then(r => r.json());
       datasets = payload.datasets;
-      split.innerHTML = Object.keys(datasets).map(name => `<option value="${name}">${name}</option>`).join("");
+      syncPlatformOptions();
+      syncDatasetOptions();
       syncEpisodeRange();
       await loadFrame();
     }
 
+    function syncPlatformOptions() {
+      const counts = {};
+      Object.values(datasets).forEach(data => {
+        const id = data.platform || "so101";
+        counts[id] = (counts[id] || 0) + 1;
+      });
+      platform.innerHTML = knownPlatforms.map(({ id, label }) => {
+        const count = counts[id] || 0;
+        return `<option value="${id}">${label}${count ? ` (${count})` : ""}</option>`;
+      }).join("");
+      const firstAvailable = knownPlatforms.find(({ id }) => counts[id]);
+      platform.value = firstAvailable ? firstAvailable.id : knownPlatforms[0].id;
+    }
+
+    function syncDatasetOptions() {
+      const selected = split.value;
+      const names = Object.keys(datasets).filter(name => (datasets[name].platform || "so101") === platform.value);
+      split.innerHTML = names.map(name => `<option value="${name}">${name}</option>`).join("");
+      if (names.includes(selected)) split.value = selected;
+      if (!names.length) {
+        meta.textContent = "No datasets available for this platform.";
+        cameras.innerHTML = "";
+        jointRows.innerHTML = "";
+      }
+    }
+
     function syncEpisodeRange() {
       const data = datasets[split.value];
+      if (!data) return;
+      if (data.fps) fps.value = String(data.fps);
       episode.max = String(data.episodes - 1);
       episode.value = String(Math.min(Number(episode.value), data.episodes - 1));
       syncFrameRange();
@@ -491,6 +708,7 @@ def _index_html() -> str:
 
     function syncFrameRange() {
       const data = datasets[split.value];
+      if (!data) return;
       const length = data.episode_lengths[Number(episode.value)];
       frame.max = String(length - 1);
       frame.value = String(Math.min(Number(frame.value), length - 1));
@@ -498,11 +716,15 @@ def _index_html() -> str:
 
     async function loadFrame() {
       if (loading) return;
+      if (!datasets[split.value]) return;
       loading = true;
       syncFrameRange();
       const url = `/api/frame?split=${split.value}&episode=${episode.value}&frame=${frame.value}`;
       const row = await fetch(url).then(r => r.json()).finally(() => { loading = false; });
-      meta.textContent = `${row.split} | episode ${row.episode}/${datasets[row.split].episodes - 1} | frame ${row.frame}/${row.episode_length - 1} | row ${row.row_index} | t=${row.timestamp.toFixed(3)}s | ${row.task}`;
+      const data = datasets[row.split];
+      const format = data.dataset_format || data.type || "";
+      const readiness = data.training_ready === false ? "preview teacher dataset" : "training dataset";
+      meta.textContent = `${data.platform_label || "Robot"} | ${row.split} | ${format} | ${readiness} | episode ${row.episode}/${data.episodes - 1} | frame ${row.frame}/${row.episode_length - 1} | row ${row.row_index} | t=${row.timestamp.toFixed(3)}s | ${row.task}`;
       cameras.innerHTML = Object.entries(row.images).map(([name, src]) => `
         <figure>
           <figcaption>${name}</figcaption>
@@ -514,6 +736,7 @@ def _index_html() -> str:
       `).join("");
     }
 
+    platform.addEventListener("change", () => { syncDatasetOptions(); syncEpisodeRange(); loadFrame(); });
     split.addEventListener("change", () => { syncEpisodeRange(); loadFrame(); });
     episode.addEventListener("input", () => { frame.value = "0"; loadFrame(); });
     frame.addEventListener("input", loadFrame);
