@@ -382,11 +382,16 @@ def _count_files(root: Path, pattern: str) -> int:
 
 def _loop_tests_payload(export_dir: Path) -> dict[str, Any]:
     manifest = _read_json(export_dir / "manifest.json")
+    loop_tests = [
+        _with_training_source(row)
+        for row in (manifest.get("loop_tests") or [])
+        if isinstance(row, dict)
+    ]
     return {
         "export_dir": str(export_dir),
         "schema_version": manifest.get("schema_version"),
         "summary": manifest.get("summary") or {},
-        "loop_tests": manifest.get("loop_tests") or [],
+        "loop_tests": loop_tests,
     }
 
 
@@ -396,11 +401,65 @@ def _loop_test_detail(export_dir: Path, loop_test_id: str) -> dict[str, Any]:
     if row is None:
         return {"error": f"loop test not found: {loop_test_id}"}
     detail = _read_json(Path(row["manifest_path"]))
+    detail = _with_training_source(detail)
     episodes = []
     for episode in detail.get("episodes") or []:
         timeline_path = Path(episode["timeline_path"])
         episodes.append({**episode, "timeline": _read_jsonl(timeline_path)})
     return {"loop_test": detail, "episodes": episodes}
+
+
+def _with_training_source(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    source = _training_source_from_row(enriched)
+    enriched["training_source"] = source
+    if source.get("training_id"):
+        enriched.setdefault("training_id", source["training_id"])
+    if source.get("checkpoint"):
+        enriched.setdefault("checkpoint", source["checkpoint"])
+    return enriched
+
+
+def _training_source_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    run_dir_value = row.get("run_dir")
+    if not run_dir_value and row.get("manifest_path"):
+        path = Path(str(row["manifest_path"]))
+        parts = list(path.parts)
+        if "loop_test_analyzer_export" in parts:
+            index = parts.index("loop_test_analyzer_export")
+            run_dir_value = str(Path(*parts[:index]))
+    if not run_dir_value and row.get("report_path"):
+        report_path = Path(str(row["report_path"]))
+        try:
+            run_dir_value = str(report_path.parents[2])
+        except IndexError:
+            run_dir_value = None
+    source: dict[str, Any] = {
+        "training_id": None,
+        "run_dir": run_dir_value,
+        "checkpoint": row.get("checkpoint"),
+        "training_step": row.get("training_step"),
+        "dataset_config_name": None,
+        "summary_path": None,
+    }
+    if not run_dir_value:
+        return source
+    run_dir = Path(str(run_dir_value))
+    summary_path = run_dir / "training_run_summary.json"
+    if summary_path.exists():
+        summary = _read_json(summary_path)
+        dataset_config = summary.get("dataset_config") if isinstance(summary.get("dataset_config"), dict) else {}
+        source.update(
+            {
+                "training_id": summary.get("training_id") or run_dir.name,
+                "dataset_config_name": dataset_config.get("name") or summary.get("dataset_config_name"),
+                "summary_path": str(summary_path),
+                "started_at_utc": summary.get("started_at_utc"),
+            }
+        )
+    else:
+        source["training_id"] = run_dir.name
+    return source
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -477,8 +536,10 @@ def _index_html() -> str:
     .raw-payload { border:1px solid #edf0f5; border-radius:6px; padding:8px; margin:8px 0; background:#fbfcfe; }
     .raw-payload summary { padding:0; }
     .raw-payload pre { max-height:360px; }
-    .step-list { display:grid; gap:7px; padding:0 8px 8px; }
-    .step-card { border:1px solid #edf0f5; border-radius:5px; padding:7px; background:#fbfcfe; }
+	    .step-list { display:grid; gap:7px; padding:0 8px 8px; }
+	    .step-card { border:1px solid #edf0f5; border-radius:5px; padding:7px; background:#fbfcfe; }
+	    .test-group { border:1px solid #e5e7eb; border-radius:8px; margin:8px 0; padding:8px; background:#f8fafc; }
+	    .group-title { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:4px; }
     code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
     pre { white-space: pre-wrap; word-break: break-word; max-height: 230px; overflow:auto; background:#f8fafc; border:1px solid #edf0f5; border-radius:5px; padding:8px; margin:6px 0 0; }
     .placeholder { height:112px; display:grid; place-items:center; border:1px dashed var(--border); border-radius:6px; color:var(--muted); background:#fbfcfe; text-align:center; padding:10px; }
@@ -554,18 +615,40 @@ def _index_html() -> str:
     function renderList() {
       const q = el("filter").value.toLowerCase();
       const status = el("statusFilter").value;
-      const rows = state.tests.filter(row => {
-        const text = `${row.checkpoint} ${row.policy_type} ${row.scenario}`.toLowerCase();
-        const statusOk = !status || (status === "success" ? row.success_rate > 0 : !(row.success_rate > 0));
-        return text.includes(q) && statusOk;
-      });
-      el("tests").innerHTML = rows.map(row => `
-        <div class="test ${row.loop_test_id === state.active ? "active" : ""}" onclick="selectTest('${row.loop_test_id}')">
-          <div class="row"><strong>${row.checkpoint}</strong><span class="pill policy">${row.policy_type}</span></div>
-          <div class="muted">step ${row.training_step ?? "-"} · val ${fmt(row.validation_loss)}</div>
-          <div><span class="pill ${row.success_rate > 0 ? "robot" : "fail"}">success ${fmt(row.success_rate)}</span> <span class="muted">${row.status}</span></div>
-        </div>`).join("");
-    }
+	      const rows = state.tests.filter(row => {
+	        const text = `${row.checkpoint} ${row.policy_type} ${row.scenario} ${row.training_source?.training_id || ""} ${row.training_source?.dataset_config_name || ""}`.toLowerCase();
+	        const statusOk = !status || (status === "success" ? row.success_rate > 0 : !(row.success_rate > 0));
+	        return text.includes(q) && statusOk;
+	      });
+	      const groups = groupByTraining(rows);
+	      el("tests").innerHTML = groups.map(group => `
+	        <div class="test-group">
+	          <div class="group-title">
+	            <strong>${escapeHtml(group.trainingId)}</strong>
+	            <span class="pill">${group.rows.length} checkpoints</span>
+	          </div>
+	          <div class="muted">${escapeHtml(group.dataset || "")}</div>
+	          ${group.rows.map(row => `
+	            <div class="test ${row.loop_test_id === state.active ? "active" : ""}" onclick="selectTest('${row.loop_test_id}')">
+	              <div class="row"><strong>${row.checkpoint}</strong><span class="pill policy">${row.policy_type}</span></div>
+	              <div class="muted">step ${row.training_step ?? "-"} · val ${fmt(row.validation_loss)}</div>
+	              <div class="muted">training ${escapeHtml(row.training_source?.training_id || "-")}</div>
+	              <div><span class="pill ${row.success_rate > 0 ? "robot" : "fail"}">success ${fmt(row.success_rate)}</span> <span class="muted">${row.status}</span></div>
+	            </div>`).join("")}
+	        </div>`).join("");
+	    }
+	    function groupByTraining(rows) {
+	      const groups = new Map();
+	      for (const row of rows) {
+	        const source = row.training_source || {};
+	        const key = source.training_id || source.run_dir || "unknown training";
+	        if (!groups.has(key)) {
+	          groups.set(key, { trainingId: key, dataset: source.dataset_config_name || "", rows: [] });
+	        }
+	        groups.get(key).rows.push(row);
+	      }
+	      return Array.from(groups.values());
+	    }
     async function selectTest(id, options = {}) {
       state.active = id;
       state.episode = Number(options.episode || 0);
@@ -583,18 +666,20 @@ def _index_html() -> str:
       const episodeIndex = Math.min(state.episode, Math.max(0, episodes.length - 1));
       state.episode = episodeIndex;
       const ep = episodes[episodeIndex] || { timeline: [] };
-      el("detail").innerHTML = `
-        <div class="header">
-          <h2>${lt.policy_label} · ${lt.checkpoint}</h2>
-          <div class="metrics">
-            <span class="pill policy">scenario ${lt.scenario}</span>
-            <span class="pill">step ${lt.training_step}</span>
+	      el("detail").innerHTML = `
+	        <div class="header">
+	          <h2>${lt.policy_label} · ${lt.checkpoint}</h2>
+	          <div class="metrics">
+	            <span class="pill policy">training ${lt.training_source?.training_id || "-"}</span>
+	            <span class="pill policy">scenario ${lt.scenario}</span>
+	            <span class="pill">step ${lt.training_step}</span>
             <span class="pill">val ${fmt(lt.validation_loss)}</span>
             <span class="pill ${lt.success_rate > 0 ? "robot" : "fail"}">task success ${fmt(lt.success_rate)}</span>
             <span class="pill warn">status means ${lt.status_meaning}</span>
           </div>
-          ${renderEpisodeSelector(episodes, episodeIndex)}
-          <div class="media-actions">
+	          ${renderEpisodeSelector(episodes, episodeIndex)}
+	          ${renderTrainingSource(lt.training_source || {})}
+	          <div class="media-actions">
             <button id="generateMediaBtn" onclick="generateMedia()">Generate / refresh media</button>
             <div class="media-progress">
               <span id="mediaJobStatus" class="status">frames and videos are generated locally on demand</span>
@@ -610,7 +695,21 @@ def _index_html() -> str:
       renderDiagnosticCharts(ep);
       initSyncedPlayers();
       refreshMediaJobStatus();
-    }
+	    }
+	    function renderTrainingSource(source) {
+	      return `<details open>
+	        <summary>Training source</summary>
+	        <div class="detail-body">
+	          <div class="metrics">
+	            <span class="pill policy">training ${escapeHtml(source.training_id || "-")}</span>
+	            <span class="pill">checkpoint ${escapeHtml(source.checkpoint || "-")}</span>
+	            <span class="pill">step ${escapeHtml(source.training_step ?? "-")}</span>
+	          </div>
+	          <div class="muted">${escapeHtml(source.dataset_config_name || "")}</div>
+	          <div class="muted">${escapeHtml(source.run_dir || "")}</div>
+	        </div>
+	      </details>`;
+	    }
     function renderEpisodeSelector(episodes, activeIndex) {
       if (!episodes.length) return `<div class="episode-bar muted">No episodes recorded for this loop test.</div>`;
       const options = episodes.map((episode, index) => {
