@@ -11,6 +11,8 @@ LeRobotDataset.
   `mycobot_description/urdf/mycobot_280_jn/mycobot_280_jn_parallel_gripper.urdf`
 - Official myCobot 320 M5 2022 gripper source:
   `mycobot_description/urdf/mycobot_320_m5_2022/new_mycobot_pro_320_m5_2022_gripper.urdf`
+- Official myCobot 320 M5 2022 adaptive gripper source:
+  `mycobot_description/urdf/mycobot_320_m5_2022/mycobot_320_m5_2022_adaptive_gripper.urdf`
 - Official Pro 450 force-gripper source:
   `mycobot_description/urdf/mycobot_pro_450/mycobot_pro_450_force_gripper.urdf`
 - Official ROS1 MoveIt doc: `https://docs.elephantrobotics.com/docs/gitbook-en/12-ApplicationBaseROS/12.1-ROS1/12.1.5-Moveit/myCobot-280.html`
@@ -108,62 +110,70 @@ Representative verified frames:
 ![myCobot official-gripper teacher grasp side close-up](./mycobot_nexus_official_gripper_side_close.png)
 ![myCobot official-gripper teacher grasp wrist close-up](./mycobot_nexus_official_gripper_wrist_close.png)
 
-### Official 320 M5 2022 Gripper Path
+### Official 320 M5 2022 Adaptive Gripper Path
 
-The official 320 M5 2022 gripper source is
-`mycobot_320_m5_2022/new_mycobot_pro_320_m5_2022_gripper.urdf`, because the
-upstream ROS1 README explicitly documents it as `mycobot 320 m5 2022 gripper`
-and ships a matching RViz screenshot. That URDF includes the full 320 M5 2022
-arm links, the flange-to-gripper joint, and the gripper mimic-joint tree.
+The more precise upstream source for the requested adaptive gripper is the ROS2
+Humble model
+`mycobot_description/urdf/mycobot_320_m5_2022/mycobot_320_m5_2022_adaptive_gripper.urdf`.
+That file keeps the 320 M5 2022 arm meshes under
+`mycobot_320_m5_2022/*.dae` but uses the dedicated
+`pro_adaptive_gripper/*.dae` mesh family for `gripper_base`,
+`gripper_left1/2/3`, and `gripper_right1/2/3`.
 
-Official RViz reference copied from the upstream repo:
+The older ROS1 file
+`mycobot_320_m5_2022/new_mycobot_pro_320_m5_2022_gripper.urdf` remains useful
+as a 320 gripper reference, but it is not the most exact source when the target
+is specifically the upstream "adaptive gripper" model. The POC now exposes both
+profiles:
 
-![Official 320 M5 2022 gripper reference](./mycobot_320_m5_2022_official_gripper_reference.png)
+- `--model-profile 320-m5-2022-gripper`: ROS1 320 M5 2022 gripper URDF.
+- `--model-profile 320-m5-2022-adaptive-gripper`: ROS2 Humble 320 M5 2022
+  adaptive gripper URDF with `pro_adaptive_gripper` meshes.
 
-The implemented path does not graft the 320 gripper onto the 280 MuJoCo arm.
-Instead, `--model-profile 320-m5-2022-gripper` imports the official 320 arm
-URDF tree and converts the official Collada meshes to OBJ for MuJoCo on macOS.
-For the 320 arm links, the converter intentionally uses raw Collada geometry
-vertices instead of baking the Collada `visual_scene` transforms; baking those
-scene transforms and then applying URDF origins again visibly separated the arm
-parts.
+The adaptive gripper is a mimic-linkage assembly driven by
+`gripper_controller` plus follower joints:
+`gripper_base_to_gripper_left2`, `gripper_left3_to_gripper_left1`,
+`gripper_base_to_gripper_right3`, `gripper_base_to_gripper_right2`, and
+`gripper_right3_to_gripper_right1`. The MuJoCo conversion expands that mimic
+mapping into per-joint qpos values and clamps each follower joint to the range
+declared in the imported model so the linkage cannot be driven into obviously
+invalid poses.
 
-The raw upstream mimic-linkage gripper is replaced with a MuJoCo functional
-friction-contact gripper at the official 320 flange: short slide jaws with
-high-friction finger pads, MuJoCo elliptic friction cones, a higher-iteration
-contact solver, and a 5 g dynamic cube. The 320 success condition requires both
-finger pads to contact the cube while lifting it, without using the teacher
-attachment proxy:
+XML conversion and structure check:
+
+```bash
+PYTHONPATH=src python3 - <<'PY'
+from pathlib import Path
+from physical_ai_agent.sim.mycobot_nexus_env import build_mycobot_nexus_scene_model
+
+build_mycobot_nexus_scene_model(
+    model_path=Path(""),
+    scene_path=Path("_workspace/mycobot_nexus_320_adaptive_xml_only/mycobot_nexus_scene.xml"),
+    official_gripper_root=Path("_vendor/mycobot_ros2"),
+    model_profile="320-m5-2022-adaptive-gripper",
+)
+PY
+```
+
+Current local evidence: the generated XML contains the six 320 arm joints, all
+seven adaptive gripper bodies, the six mimic-linkage joints, `left_finger_pad`,
+`right_finger_pad`, `mycobot_tcp_site`, and `task_cube`. This proves source
+routing and scene generation, not yet a visually validated or contact-calibrated
+MuJoCo grasp. On this Mac thread, both default Python and the bundled Codex
+Python lack `mujoco`, so actual render/physics smoke is still pending a
+MuJoCo-capable runtime.
+
+Target render/physics command once MuJoCo is available:
 
 ```bash
 PYTHONPATH=src python3 scripts/mycobot_nexus_smoke.py \
-  --model-profile 320-m5-2022-gripper \
-  --official-gripper-root _vendor/mycobot_ros \
+  --model-profile 320-m5-2022-adaptive-gripper \
+  --official-gripper-root _vendor/mycobot_ros2 \
   --asset-root _vendor/mycobot_mujoco \
-  --output-dir _workspace/mycobot_nexus_320_friction_grasp \
+  --output-dir _workspace/mycobot_nexus_320_adaptive_gripper_grasp \
   --steps 220 \
   --policy grasp-lift
 ```
-
-The verified 320 M5 2022 friction-contact gripper smoke reached
-`success_label=contact_grasp_lift_success`, `grasp_success=true`,
-`cube_lifted=true`, `grasp_attached=false`, `final_cube_z=0.0585`,
-`min_tcp_to_cube_dist=0.0369`, `gripper_cube_contacts=7`, and
-`gripper_cube_contact_pads=2` in 88 steps. This is still a simplified MuJoCo
-functional gripper, not the raw official mimic-linkage gripper and not
-calibrated hardware force closure. The arm assembly no longer has the previous
-large part-separation artifact, but the end-effector remains a functional
-stand-in rather than a finished official gripper assembly. The cube lift is now
-produced by finger-pad contact friction rather than by directly attaching the
-cube to the gripper or by a surrounding form-closure cage.
-
-Representative 320 M5 2022 friction-contact gripper frames:
-
-![myCobot 320 M5 2022 official-gripper zero pose](./mycobot_nexus_320_m5_2022_gripper_zero_pose.png)
-![myCobot 320 M5 2022 friction-contact wide frame](./mycobot_nexus_320_m5_2022_gripper_frame.png)
-![myCobot 320 M5 2022 friction-contact top view](./mycobot_nexus_320_m5_2022_gripper_front_close.png)
-![myCobot 320 M5 2022 friction-contact lift side view](./mycobot_nexus_320_m5_2022_gripper_side_close.png)
-![myCobot 320 M5 2022 friction-contact lift jaw view](./mycobot_nexus_320_m5_2022_gripper_wrist_close.png)
 
 ### Pro 450 Reference Boundary
 

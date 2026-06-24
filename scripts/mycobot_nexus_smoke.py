@@ -41,11 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model-profile",
-        choices=["280-jn", "320-m5-2022-gripper"],
+        choices=["280-jn", "320-m5-2022-gripper", "320-m5-2022-adaptive-gripper"],
         default="280-jn",
         help=(
             "Robot/gripper source profile. 320-m5-2022-gripper imports the official "
-            "mycobot_ros 320 M5 2022 gripper URDF tree."
+            "mycobot_ros 320 M5 2022 gripper URDF tree; "
+            "320-m5-2022-adaptive-gripper imports the ROS2 Humble adaptive gripper tree."
         ),
     )
     parser.add_argument("--steps", type=int, default=8)

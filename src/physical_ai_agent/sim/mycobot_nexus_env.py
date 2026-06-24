@@ -14,7 +14,13 @@ OFFICIAL_GRIPPER_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/parallel_gr
 OFFICIAL_320_URDF_RELATIVE_PATH = Path(
     "mycobot_description/urdf/mycobot_320_m5_2022/new_mycobot_pro_320_m5_2022_gripper.urdf"
 )
+OFFICIAL_320_ADAPTIVE_URDF_RELATIVE_PATH = Path(
+    "mycobot_description/urdf/mycobot_320_m5_2022/mycobot_320_m5_2022_adaptive_gripper.urdf"
+)
 OFFICIAL_320_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/mycobot_320_m5_2022")
+OFFICIAL_320_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH = Path(
+    "mycobot_description/urdf/pro_adaptive_gripper"
+)
 OFFICIAL_GRIPPER_MESH_NAMES = [
     "gripper_base",
     "gripper_left",
@@ -36,6 +42,8 @@ OFFICIAL_320_LINK_NAMES = [
     "gripper_right2",
     "gripper_right3",
 ]
+OFFICIAL_320_ARM_LINK_NAMES = OFFICIAL_320_LINK_NAMES[:7]
+OFFICIAL_320_GRIPPER_LINK_NAMES = OFFICIAL_320_LINK_NAMES[7:]
 MYCOBOT_MODEL_JOINT_NAMES = [
     "joint2_to_joint1",
     "joint3_to_joint2",
@@ -66,14 +74,29 @@ OFFICIAL_GRIPPER_MIMIC = {
     "gripper_base_to_gripper_left": -1.0,
 }
 OFFICIAL_320_GRIPPER_JOINT_NAMES = [
-    "functional_left_finger_slide",
-    "functional_right_finger_slide",
+    "gripper_controller",
+    "gripper_base_to_gripper_left2",
+    "gripper_left3_to_gripper_left1",
+    "gripper_base_to_gripper_right3",
+    "gripper_base_to_gripper_right2",
+    "gripper_right3_to_gripper_right1",
 ]
+OFFICIAL_320_GRIPPER_MIMIC = {
+    "gripper_controller": 1.0,
+    "gripper_base_to_gripper_left2": 1.0,
+    "gripper_left3_to_gripper_left1": -1.0,
+    "gripper_base_to_gripper_right3": -1.0,
+    "gripper_base_to_gripper_right2": -1.0,
+    "gripper_right3_to_gripper_right1": 1.0,
+}
 TASK_CUBE_BODY = "task_cube_body"
 TASK_CUBE_GEOM = "task_cube"
 TASK_CUBE_POS = (-0.25, -0.13, 0.023)
 TASK_CUBE_HALF_SIZE = 0.015
 TCP_SITE = "mycobot_tcp_site"
+MODEL_PROFILE_280_JN = "280-jn"
+MODEL_PROFILE_320_GRIPPER = "320-m5-2022-gripper"
+MODEL_PROFILE_320_ADAPTIVE_GRIPPER = "320-m5-2022-adaptive-gripper"
 
 
 @dataclass(frozen=True)
@@ -147,7 +170,7 @@ class MyCobotNexusEnv:
         self.asset_root = config.asset_root.expanduser()
         self.work_dir = config.work_dir.expanduser()
         self.model_path = self.asset_root / MYCOBOT_MODEL_RELATIVE_PATH
-        if config.model_profile == "320-m5-2022-gripper":
+        if config.model_profile in {MODEL_PROFILE_320_GRIPPER, MODEL_PROFILE_320_ADAPTIVE_GRIPPER}:
             self.model_path = Path("")
         elif not self.model_path.exists():
             raise FileNotFoundError(
@@ -193,6 +216,10 @@ class MyCobotNexusEnv:
             self.model,
             OFFICIAL_320_GRIPPER_JOINT_NAMES,
         )
+        self._uses_official_320_adaptive_gripper = (
+            config.model_profile == MODEL_PROFILE_320_ADAPTIVE_GRIPPER
+            and self._uses_official_320_gripper
+        )
         gripper_joint_names = (
             OFFICIAL_320_GRIPPER_JOINT_NAMES
             if self._uses_official_320_gripper
@@ -206,6 +233,10 @@ class MyCobotNexusEnv:
             self.model,
             gripper_joint_names,
         )
+        self._gripper_low, self._gripper_high = _joint_ranges(
+            self.model,
+            self._gripper_qpos_indices,
+        )
         self._arm_actuator_indices = (
             _named_actuator_indices(
                 mujoco,
@@ -216,11 +247,7 @@ class MyCobotNexusEnv:
             else []
         )
         self._gripper_actuator_indices = (
-            _named_actuator_indices(
-                mujoco,
-                self.model,
-                [f"act_{name}" for name in gripper_joint_names],
-            )
+            []
             if self._uses_official_320_gripper
             else []
         )
@@ -247,7 +274,10 @@ class MyCobotNexusEnv:
         self._mujoco.mj_forward(self.model, self.data)
         self._cube_initial_pos = list(TASK_CUBE_POS)
         if self._uses_official_320_gripper:
+            self._set_gripper(command=-0.4)
+            self._mujoco.mj_forward(self.model, self.data)
             pad_midpoint = self._finger_pad_midpoint()
+            self._set_gripper(command=1.0)
             self._cube_initial_pos = [
                 float(pad_midpoint[0]),
                 float(pad_midpoint[1]),
@@ -307,11 +337,19 @@ class MyCobotNexusEnv:
         import numpy as np
 
         if self._uses_official_320_gripper:
-            pregrasp = [0.0, 0.45, 0.0, 0.0, 0.0, 0.0]
-            lift = [0.0, -0.25, 0.0, 0.0, 0.0, 0.0]
-            close_steps = min(35, max(8, total_steps // 4))
-            gripper = -1.0
-            target_qpos = pregrasp if step < close_steps else lift
+            home = [0.0, 0.22, 0.0, 0.12, 0.0, 0.0]
+            pregrasp = [0.0, 0.45, 0.0, 0.08, 0.0, 0.0]
+            lift = [0.0, -0.25, 0.0, 0.16, 0.0, 0.0]
+            phase = step / max(1, total_steps - 1)
+            if phase < 0.42:
+                target_qpos = _lerp_vector(home, pregrasp, _smoothstep(phase / 0.42))
+                gripper = 1.0
+            elif phase < 0.64:
+                target_qpos = pregrasp
+                gripper = 1.0 - 2.0 * _smoothstep((phase - 0.42) / 0.22)
+            else:
+                target_qpos = _lerp_vector(pregrasp, lift, _smoothstep((phase - 0.64) / 0.36))
+                gripper = -1.0
             return [*target_qpos, gripper]
 
         phase = step / max(1, total_steps - 1)
@@ -414,9 +452,9 @@ class MyCobotNexusEnv:
 
     def _finger_pad_midpoint(self) -> list[float]:
         if self._uses_official_320_gripper:
-            point = self._body_local_point("functional_320_gripper", [-0.012, 0.125, 0.0])
-            if point is not None:
-                return point
+            midpoint = self._geom_midpoint("left_finger_pad", "right_finger_pad")
+            if midpoint is not None:
+                return midpoint
         midpoint = self._geom_midpoint("left_finger_pad", "right_finger_pad")
         if midpoint is not None:
             return midpoint
@@ -550,16 +588,22 @@ class MyCobotNexusEnv:
 
     def _set_gripper(self, *, command: float) -> None:
         if self._uses_official_320_gripper:
-            open_value = 0.035
-            closed_value = -0.012
+            open_value = -1.05 if self._uses_official_320_adaptive_gripper else -0.7
+            closed_value = 0.0 if self._uses_official_320_adaptive_gripper else 0.3
             close_amount = (1.0 - max(-1.0, min(1.0, float(command)))) * 0.5
-            qpos_value = open_value + close_amount * (closed_value - open_value)
-            if self._gripper_actuator_indices:
-                for actuator_index in self._gripper_actuator_indices:
-                    self.data.ctrl[actuator_index] = qpos_value
-            else:
-                for qpos_index in self._gripper_qpos_indices:
-                    self.data.qpos[qpos_index] = qpos_value
+            base_value = open_value + close_amount * (closed_value - open_value)
+            for index, (qpos_index, joint_name) in enumerate(
+                zip(
+                    self._gripper_qpos_indices,
+                    OFFICIAL_320_GRIPPER_JOINT_NAMES,
+                    strict=True,
+                )
+            ):
+                raw_value = base_value * OFFICIAL_320_GRIPPER_MIMIC[joint_name]
+                self.data.qpos[qpos_index] = max(
+                    self._gripper_low[index],
+                    min(self._gripper_high[index], raw_value),
+                )
             return
         if self._uses_official_gripper:
             open_value = -0.007
@@ -723,7 +767,11 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "env": "MyCobotNexusEnv",
         "surface": ["reset(seed)", "step(action)", "render()", "close()"],
         "policies": ["sample", "cube-approach", "grasp-lift"],
-        "model_profiles": ["280-jn", "320-m5-2022-gripper"],
+        "model_profiles": [
+            MODEL_PROFILE_280_JN,
+            MODEL_PROFILE_320_GRIPPER,
+            MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+        ],
         "asset_source": "https://github.com/elephantrobotics/mycobot_mujoco",
         "model_relative_path": str(MYCOBOT_MODEL_RELATIVE_PATH),
         "joint_order": MYCOBOT_TEACHER_JOINT_NAMES,
@@ -734,6 +782,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             "nexus_work_mat",
             "official_parallel_gripper",
             "official_320_m5_2022_gripper",
+            "official_320_m5_2022_adaptive_gripper",
             "official_320_m5_2022_friction_contact_gripper",
             "synthetic_parallel_gripper_fallback",
             "teacher_grasp_attachment_proxy",
@@ -741,6 +790,12 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "official_gripper_asset_source": "https://github.com/elephantrobotics/mycobot_ros",
         "official_gripper_relative_path": str(OFFICIAL_GRIPPER_MESH_RELATIVE_PATH),
         "official_320_m5_2022_gripper_urdf": str(OFFICIAL_320_URDF_RELATIVE_PATH),
+        "official_320_m5_2022_adaptive_gripper_urdf": str(
+            OFFICIAL_320_ADAPTIVE_URDF_RELATIVE_PATH
+        ),
+        "official_320_m5_2022_adaptive_gripper_meshes": str(
+            OFFICIAL_320_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH
+        ),
         "real_robot_execution": "disabled",
         "poc_boundary": (
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
@@ -781,20 +836,33 @@ def sanitize_teacher_action(action: list[float]) -> list[float]:
     return values
 
 
+def _smoothstep(value: float) -> float:
+    clipped = max(0.0, min(1.0, float(value)))
+    return clipped * clipped * (3.0 - 2.0 * clipped)
+
+
+def _lerp_vector(start: list[float], end: list[float], amount: float) -> list[float]:
+    return [
+        float(a) + (float(b) - float(a)) * amount
+        for a, b in zip(start, end, strict=True)
+    ]
+
+
 def build_mycobot_nexus_scene_model(
     *,
     model_path: Path,
     scene_path: Path,
     official_gripper_root: Path | None = None,
-    model_profile: str = "280-jn",
+    model_profile: str = MODEL_PROFILE_280_JN,
 ) -> None:
-    if model_profile == "320-m5-2022-gripper":
+    if model_profile in {MODEL_PROFILE_320_GRIPPER, MODEL_PROFILE_320_ADAPTIVE_GRIPPER}:
         _build_official_320_nexus_scene_model(
             scene_path=scene_path,
             official_gripper_root=official_gripper_root,
+            model_profile=model_profile,
         )
         return
-    if model_profile != "280-jn":
+    if model_profile != MODEL_PROFILE_280_JN:
         raise ValueError(f"unsupported myCobot model profile: {model_profile}")
     tree = ET.parse(model_path)
     root = tree.getroot()
@@ -872,28 +940,54 @@ def _build_official_320_nexus_scene_model(
     *,
     scene_path: Path,
     official_gripper_root: Path | None,
+    model_profile: str,
 ) -> None:
     if official_gripper_root is None:
         raise FileNotFoundError(
-            "official myCobot ROS root is required for model_profile=320-m5-2022-gripper"
+            f"official myCobot ROS root is required for model_profile={model_profile}"
         )
     ros_root = official_gripper_root.expanduser()
-    urdf_path = ros_root / OFFICIAL_320_URDF_RELATIVE_PATH
-    mesh_root = ros_root / OFFICIAL_320_MESH_RELATIVE_PATH
+    urdf_relative_path = (
+        OFFICIAL_320_ADAPTIVE_URDF_RELATIVE_PATH
+        if model_profile == MODEL_PROFILE_320_ADAPTIVE_GRIPPER
+        else OFFICIAL_320_URDF_RELATIVE_PATH
+    )
+    gripper_mesh_relative_path = (
+        OFFICIAL_320_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH
+        if model_profile == MODEL_PROFILE_320_ADAPTIVE_GRIPPER
+        else OFFICIAL_320_MESH_RELATIVE_PATH
+    )
+    urdf_path = ros_root / urdf_relative_path
+    arm_mesh_root = ros_root / OFFICIAL_320_MESH_RELATIVE_PATH
+    gripper_mesh_root = ros_root / gripper_mesh_relative_path
     if not urdf_path.exists():
         raise FileNotFoundError(f"missing official 320 M5 2022 gripper URDF: {urdf_path}")
-    missing = [name for name in OFFICIAL_320_LINK_NAMES if not (mesh_root / f"{name}.dae").exists()]
+    missing_arm = [
+        name for name in OFFICIAL_320_ARM_LINK_NAMES if not (arm_mesh_root / f"{name}.dae").exists()
+    ]
+    missing_gripper = [
+        name
+        for name in OFFICIAL_320_GRIPPER_LINK_NAMES
+        if not (gripper_mesh_root / f"{name}.dae").exists()
+    ]
+    missing = [*missing_arm, *missing_gripper]
     if missing:
         raise FileNotFoundError(
-            "missing official 320 M5 2022 meshes under "
-            f"{mesh_root}: {', '.join(missing)}"
+            "missing official 320 M5 2022 meshes for "
+            f"{model_profile}: {', '.join(missing)}"
         )
 
     obj_dir = scene_path.parent / "official_320_m5_2022_meshes"
     obj_dir.mkdir(parents=True, exist_ok=True)
-    for name in OFFICIAL_320_LINK_NAMES:
+    for name in OFFICIAL_320_ARM_LINK_NAMES:
         _convert_collada_mesh_to_obj(
-            mesh_root / f"{name}.dae",
+            arm_mesh_root / f"{name}.dae",
+            obj_dir / f"{name}.obj",
+            bake_visual_scene=False,
+        )
+    for name in OFFICIAL_320_GRIPPER_LINK_NAMES:
+        _convert_collada_mesh_to_obj(
+            gripper_mesh_root / f"{name}.dae",
             obj_dir / f"{name}.obj",
             bake_visual_scene=False,
         )
@@ -905,7 +999,7 @@ def _build_official_320_nexus_scene_model(
     for joint in joints:
         children_by_parent.setdefault(str(joint["parent"]), []).append(joint)
 
-    root = ET.Element("mujoco", {"model": "official_320_m5_2022_gripper_nexus"})
+    root = ET.Element("mujoco", {"model": f"official_{model_profile}_nexus"})
     ET.SubElement(root, "compiler", {"angle": "radian"})
     ET.SubElement(
         root,
@@ -960,11 +1054,8 @@ def _build_official_320_nexus_scene_model(
         worldbody.append(node)
     base = ET.SubElement(worldbody, "body", {"name": "base", "pos": "0 0 0"})
     _add_urdf_visual_geoms(base, "base", link_visuals)
-    _append_urdf_children(base, "base", children_by_parent, link_visuals, skip_gripper_tree=True)
-    link6 = base.find(".//body[@name='link6']")
-    if link6 is None:
-        raise ValueError("official 320 URDF conversion did not produce link6")
-    link6.append(_functional_320_gripper_node())
+    _append_urdf_children(base, "base", children_by_parent, link_visuals)
+    _add_320_official_gripper_contact_pads(base)
     _add_320_position_actuators(root)
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
@@ -993,20 +1084,6 @@ def _add_320_position_actuators(root: ET.Element) -> None:
                 "ctrllimited": "true",
             },
         )
-    for joint_name in OFFICIAL_320_GRIPPER_JOINT_NAMES:
-        ET.SubElement(
-            actuator,
-            "position",
-            {
-                "name": f"act_{joint_name}",
-                "joint": joint_name,
-                "kp": "12000",
-                "ctrlrange": "-0.012 0.035",
-                "ctrllimited": "true",
-            },
-        )
-
-
 def _urdf_link_visuals(urdf: ET.Element) -> dict[str, list[dict[str, str]]]:
     visuals: dict[str, list[dict[str, str]]] = {}
     for link in urdf.findall("link"):
@@ -1113,93 +1190,33 @@ def _add_urdf_visual_geoms(
         )
 
 
-def _functional_320_gripper_node() -> ET.Element:
-    base = ET.Element(
-        "body",
-        {
-            "name": "functional_320_gripper",
-            "pos": "0 0 0.042",
-            "euler": "1.5708 0 0",
-        },
-    )
-    ET.SubElement(
-        base,
-        "geom",
-        {
-            "name": "functional_320_gripper_base_visual",
-            "type": "mesh",
-            "mesh": "official_320_gripper_base",
-            "pos": "-0.02 0.012 -0.018",
-            "euler": "0 0 1.5708",
-            "contype": "0",
-            "conaffinity": "0",
-        },
-    )
-    ET.SubElement(
-        base,
-        "site",
-        {"name": TCP_SITE, "pos": "0 0.09 0", "size": "0.006", "rgba": "0 0 0 0"},
-    )
-    left = ET.SubElement(base, "body", {"name": "functional_left_finger", "pos": "0 0.085 0.008"})
-    ET.SubElement(
-        left,
-        "joint",
-        {
-            "name": "functional_left_finger_slide",
-            "type": "slide",
-            "axis": "0 0 1",
-            "range": "-0.012 0.035",
-            "limited": "true",
-            "damping": "5.0",
-            "armature": "0.02",
-        },
-    )
-    _functional_320_finger_geoms(left, "left_finger_pad", z_sign=1.0)
-    right = ET.SubElement(
-        base,
-        "body",
-        {"name": "functional_right_finger", "pos": "0 0.085 -0.008"},
-    )
-    ET.SubElement(
-        right,
-        "joint",
-        {
-            "name": "functional_right_finger_slide",
-            "type": "slide",
-            "axis": "0 0 -1",
-            "range": "-0.012 0.035",
-            "limited": "true",
-            "damping": "5.0",
-            "armature": "0.02",
-        },
-    )
-    _functional_320_finger_geoms(right, "right_finger_pad", z_sign=-1.0)
-    return base
+def _add_320_official_gripper_contact_pads(base: ET.Element) -> None:
+    gripper_base = base.find(".//body[@name='gripper_base']")
+    if gripper_base is not None:
+        ET.SubElement(
+            gripper_base,
+            "site",
+            {"name": TCP_SITE, "pos": "0 0.065 -0.018", "size": "0.006", "rgba": "0 0 0 0"},
+        )
+    left = base.find(".//body[@name='gripper_left1']")
+    if left is not None:
+        _add_320_official_finger_pad(left, "left_finger_pad", pos="0.022 -0.0645 0")
+    right = base.find(".//body[@name='gripper_right1']")
+    if right is not None:
+        _add_320_official_finger_pad(right, "right_finger_pad", pos="-0.058 -0.0615 0")
 
 
-def _functional_320_finger_geoms(parent: ET.Element, pad_name: str, *, z_sign: float) -> None:
-    ET.SubElement(
-        parent,
-        "geom",
-        {
-            "name": f"{pad_name}_visual",
-            "type": "box",
-            "pos": f"0 0.038 {0.005 * z_sign}",
-            "size": "0.018 0.045 0.006",
-            "rgba": "0.46 0.45 0.4 1",
-            "contype": "0",
-            "conaffinity": "0",
-        },
-    )
+def _add_320_official_finger_pad(parent: ET.Element, pad_name: str, *, pos: str) -> None:
     ET.SubElement(
         parent,
         "geom",
         {
             "name": pad_name,
             "type": "box",
-            "pos": f"0 0.04 {0.005 * z_sign}",
-            "size": "0.02 0.04 0.012",
-            "rgba": "0.08 0.08 0.08 0.18",
+            "pos": pos,
+            "euler": "0 0 1.5708",
+            "size": "0.016 0.024 0.010",
+            "rgba": "0.08 0.08 0.08 0",
             "friction": "80.0 8.0 8.0",
             "condim": "6",
             "solref": "0.001 1",
