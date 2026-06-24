@@ -34,16 +34,41 @@ This branch adds dry scene-building support for the 280 Pi adaptive profile:
 
 This is a profile/asset-routing gate. It does not yet prove physical fidelity or dataset quality.
 
+
+## Dataset Pipeline Gate
+
+This branch also adds a stricter dataset exporter for the 280 Pi adaptive profile:
+
+```bash
+PYTHONPATH=src:. python3 scripts/export_mycobot_280_pi_adaptive_lerobot_dataset.py \
+  --root _workspace/mycobot_280pi_adaptive_dataset \
+  --input-trace path/to/ros_gazebo_trace.jsonl \
+  --camera-manifest path/to/camera_manifest.json \
+  --repo-id physical-ai-agent/mycobot-280pi-adaptive \
+  --overwrite
+```
+
+The exporter requires two external inputs:
+
+- a JSONL trace with `joint_state`, action or trajectory point, object pose, and contact evidence;
+- a camera manifest whose `top` and `wrist` image paths already exist on disk.
+
+It writes a LeRobot-style folder with `data/frames.jsonl`, `data/episodes.jsonl`, `meta/info.json`, `meta/tasks.jsonl`, `meta/stats.json`, and `meta/smolvla_tiny_smoke_plan.json`.
+
+The success label is computed from object lift plus gripper/object contact evidence, not from a teacher attachment proxy. The exporter refuses missing camera-frame files, so placeholder-image generation is no longer part of this stricter gate.
+
+The SmolVLA output is currently a smoke-plan artifact, not an executed train/eval run, because this local workspace does not have a LeRobot/SmolVLA training environment installed.
+
 ## Remaining Dataset-Quality Work
 
 To turn this from a myCobot POC into a dataset-quality pipeline, the next gates are:
 
 1. Validate against the real official `mycobot_ros` checkout and inspect generated scene geometry.
-2. Capture real ROS/Gazebo traces for joint states, gripper command/state, object pose, and camera timestamps.
-3. Replace placeholder rendered frames with real camera frames from the Camera Flange 2.0 or calibrated external camera.
-4. Add an object pose/contact success oracle rather than only teacher attachment or heuristic lift labels.
-5. Convert episodes into a real LeRobotDataset with synchronized actions, observations, images, timestamps, and metadata.
-6. Run a tiny SmolVLA train/eval smoke over the generated dataset.
+2. Capture real ROS/Gazebo traces for joint states, gripper command/state, object pose, contact evidence, and camera timestamps.
+3. Point the dataset exporter at real Camera Flange 2.0 or calibrated external-camera frames.
+4. Calibrate the object pose/contact oracle against the actual object and gripper collision/contact topics.
+5. Run the generated LeRobot-style dataset through an installed LeRobotDataset loader.
+6. Execute the tiny SmolVLA train/eval smoke from `meta/smolvla_tiny_smoke_plan.json` in a real LeRobot/SmolVLA environment.
 
 ## Known Blockers In This Local Environment
 
