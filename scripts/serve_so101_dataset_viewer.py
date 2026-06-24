@@ -47,6 +47,10 @@ MYCOBOT_JOINT_NAMES = [
     "joint6output_to_joint6",
     "gripper_controller",
 ]
+SO101_PLATFORM = "so101"
+SO101_PLATFORM_LABEL = "SO101"
+MYCOBOT_PLATFORM = "mycobot"
+MYCOBOT_PLATFORM_LABEL = "MyCobot"
 
 
 def _contract_dataset_roots(repo_root: Path) -> dict[str, Path]:
@@ -205,6 +209,8 @@ def _dataset_catalog_item(repo_root: Path, split: str, root: Path, *, category: 
         "name": split,
         "root": str(resolved),
         "category": category,
+        "platform": SO101_PLATFORM,
+        "platform_label": SO101_PLATFORM_LABEL,
     }
     try:
         dataset = _dataset(repo_root, split)
@@ -236,6 +242,9 @@ def _dataset_catalog_item(repo_root: Path, split: str, root: Path, *, category: 
 
 def _dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
     return {
+        "dataset_format": "lerobot_parquet",
+        "platform": SO101_PLATFORM,
+        "platform_label": SO101_PLATFORM_LABEL,
         "root": str(dataset["root"]),
         "name": split,
         "episodes": dataset["info"]["total_episodes"],
@@ -310,7 +319,9 @@ def _mycobot_dataset_catalog_item(repo_root: Path, split: str, root: Path) -> di
     base = {
         "name": split,
         "root": str(resolved),
-        "category": "mycobot",
+        "category": "temporary",
+        "platform": MYCOBOT_PLATFORM,
+        "platform_label": MYCOBOT_PLATFORM_LABEL,
     }
     try:
         dataset = _mycobot_dataset(resolved)
@@ -326,7 +337,7 @@ def _mycobot_dataset_catalog_item(repo_root: Path, split: str, root: Path) -> di
     return {
         **base,
         "status": "available" if summary["episodes"] > 0 and summary["frames"] > 0 else "incomplete",
-        "detail": "ready",
+        "detail": "previewable teacher dataset; not LeRobot/SmolVLA training-ready yet",
         "summary": summary,
         **summary,
     }
@@ -425,8 +436,13 @@ def _mycobot_dataset(root: Path) -> dict[str, Any]:
 
 def _mycobot_dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
     manifest = dataset["manifest"]
+    episode_summaries = manifest.get("episode_summaries") or []
+    rendered_frames = sum(int(row.get("rendered_frames") or 0) for row in episode_summaries)
     return {
         "type": "mycobot_jsonl",
+        "dataset_format": "mycobot_jsonl_v1",
+        "platform": MYCOBOT_PLATFORM,
+        "platform_label": MYCOBOT_PLATFORM_LABEL,
         "root": str(dataset["root"]),
         "name": split,
         "episodes": int(manifest.get("episodes") or 0),
@@ -441,6 +457,12 @@ def _mycobot_dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, A
         "features": ["render"],
         "image_shapes": {"render": [240, 320, 3]},
         "episode_lengths": dataset["episode_lengths"],
+        "rendered_frames": rendered_frames,
+        "failed_episodes": manifest.get("failed_episodes") or [],
+        "robot_model": manifest.get("robot_model") or "mycobot_320",
+        "gripper": manifest.get("gripper") or "adaptive",
+        "gate": manifest.get("gate") or "gate8",
+        "training_ready": False,
     }
 
 
@@ -573,7 +595,7 @@ def _index_html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Robot Dataset Viewer</title>
+  <title>Robot Experiment Manager</title>
   <style>
     :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #16181d; background: #f6f7f9; }
     body { margin: 0; }
@@ -581,7 +603,7 @@ def _index_html() -> str:
     h1 { margin: 0; font-size: 20px; }
     main { padding: 16px 18px; display: grid; gap: 14px; }
     section { background: #fff; border: 1px solid #d9dee8; border-radius: 8px; padding: 12px; }
-    .controls { display: grid; grid-template-columns: 180px 1fr 1fr auto auto auto 100px; gap: 10px; align-items: end; }
+    .controls { display: grid; grid-template-columns: 150px 220px 1fr 1fr auto auto auto 100px; gap: 10px; align-items: end; }
     label { display: grid; gap: 4px; font-size: 12px; color: #596273; }
     select, input, button { font: inherit; border: 1px solid #cfd6e3; border-radius: 6px; padding: 7px 9px; background: #fff; }
     button { cursor: pointer; font-weight: 650; }
@@ -597,10 +619,11 @@ def _index_html() -> str:
   </style>
 </head>
 <body>
-  <header><h1>Robot Dataset Viewer</h1></header>
+  <header><h1>Robot Experiment Manager</h1></header>
   <main>
     <section>
       <div class="controls">
+        <label>Platform<select id="platform"></select></label>
         <label>Dataset<select id="split"></select></label>
         <label>Episode<input id="episode" type="range" min="0" max="0" value="0"></label>
         <label>Frame<input id="frame" type="range" min="0" max="0" value="0"></label>
@@ -621,6 +644,7 @@ def _index_html() -> str:
   </main>
   <script>
     let datasets = {};
+    const platform = document.getElementById("platform");
     const split = document.getElementById("split");
     const episode = document.getElementById("episode");
     const frame = document.getElementById("frame");
@@ -632,17 +656,49 @@ def _index_html() -> str:
     const fmt = value => Number(value).toFixed(4);
     let timer = null;
     let loading = false;
+    const knownPlatforms = [
+      { id: "so101", label: "SO101" },
+      { id: "mycobot", label: "MyCobot" },
+    ];
 
     async function init() {
       const payload = await fetch("/api/datasets").then(r => r.json());
       datasets = payload.datasets;
-      split.innerHTML = Object.keys(datasets).map(name => `<option value="${name}">${name}</option>`).join("");
+      syncPlatformOptions();
+      syncDatasetOptions();
       syncEpisodeRange();
       await loadFrame();
     }
 
+    function syncPlatformOptions() {
+      const counts = {};
+      Object.values(datasets).forEach(data => {
+        const id = data.platform || "so101";
+        counts[id] = (counts[id] || 0) + 1;
+      });
+      platform.innerHTML = knownPlatforms.map(({ id, label }) => {
+        const count = counts[id] || 0;
+        return `<option value="${id}">${label}${count ? ` (${count})` : ""}</option>`;
+      }).join("");
+      const firstAvailable = knownPlatforms.find(({ id }) => counts[id]);
+      platform.value = firstAvailable ? firstAvailable.id : knownPlatforms[0].id;
+    }
+
+    function syncDatasetOptions() {
+      const selected = split.value;
+      const names = Object.keys(datasets).filter(name => (datasets[name].platform || "so101") === platform.value);
+      split.innerHTML = names.map(name => `<option value="${name}">${name}</option>`).join("");
+      if (names.includes(selected)) split.value = selected;
+      if (!names.length) {
+        meta.textContent = "No datasets available for this platform.";
+        cameras.innerHTML = "";
+        jointRows.innerHTML = "";
+      }
+    }
+
     function syncEpisodeRange() {
       const data = datasets[split.value];
+      if (!data) return;
       episode.max = String(data.episodes - 1);
       episode.value = String(Math.min(Number(episode.value), data.episodes - 1));
       syncFrameRange();
@@ -650,6 +706,7 @@ def _index_html() -> str:
 
     function syncFrameRange() {
       const data = datasets[split.value];
+      if (!data) return;
       const length = data.episode_lengths[Number(episode.value)];
       frame.max = String(length - 1);
       frame.value = String(Math.min(Number(frame.value), length - 1));
@@ -657,11 +714,15 @@ def _index_html() -> str:
 
     async function loadFrame() {
       if (loading) return;
+      if (!datasets[split.value]) return;
       loading = true;
       syncFrameRange();
       const url = `/api/frame?split=${split.value}&episode=${episode.value}&frame=${frame.value}`;
       const row = await fetch(url).then(r => r.json()).finally(() => { loading = false; });
-      meta.textContent = `${row.split} | episode ${row.episode}/${datasets[row.split].episodes - 1} | frame ${row.frame}/${row.episode_length - 1} | row ${row.row_index} | t=${row.timestamp.toFixed(3)}s | ${row.task}`;
+      const data = datasets[row.split];
+      const format = data.dataset_format || data.type || "";
+      const readiness = data.training_ready === false ? "preview teacher dataset" : "training dataset";
+      meta.textContent = `${data.platform_label || "Robot"} | ${row.split} | ${format} | ${readiness} | episode ${row.episode}/${data.episodes - 1} | frame ${row.frame}/${row.episode_length - 1} | row ${row.row_index} | t=${row.timestamp.toFixed(3)}s | ${row.task}`;
       cameras.innerHTML = Object.entries(row.images).map(([name, src]) => `
         <figure>
           <figcaption>${name}</figcaption>
@@ -673,6 +734,7 @@ def _index_html() -> str:
       `).join("");
     }
 
+    platform.addEventListener("change", () => { syncDatasetOptions(); syncEpisodeRange(); loadFrame(); });
     split.addEventListener("change", () => { syncEpisodeRange(); loadFrame(); });
     episode.addEventListener("input", () => { frame.value = "0"; loadFrame(); });
     frame.addEventListener("input", loadFrame);

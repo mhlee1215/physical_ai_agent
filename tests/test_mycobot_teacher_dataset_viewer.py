@@ -23,8 +23,17 @@ class MyCobotTeacherDatasetViewerTest(TestCase):
                 "episodes": 1,
                 "frames": 2,
                 "fps": 20,
+                "failed_episodes": [],
+                "robot_model": "mycobot_320",
+                "gripper": "adaptive",
+                "gate": "gate8",
                 "episode_summaries": [
-                    {"episode_index": 0, "frames": 2, "path": "episodes/episode_0000.jsonl"}
+                    {
+                        "episode_index": 0,
+                        "frames": 2,
+                        "rendered_frames": 1,
+                        "path": "episodes/episode_0000.jsonl",
+                    }
                 ],
             }
             (dataset / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -43,8 +52,14 @@ class MyCobotTeacherDatasetViewerTest(TestCase):
             frame = _mycobot_frame_payload(dataset, "mycobot_demo", 0, 1)
 
         self.assertEqual(summary["type"], "mycobot_jsonl")
+        self.assertEqual(summary["dataset_format"], "mycobot_jsonl_v1")
+        self.assertEqual(summary["platform"], "mycobot")
+        self.assertEqual(summary["platform_label"], "MyCobot")
         self.assertEqual(summary["episodes"], 1)
         self.assertEqual(summary["episode_lengths"], [2])
+        self.assertEqual(summary["rendered_frames"], 1)
+        self.assertEqual(summary["failed_episodes"], [])
+        self.assertFalse(summary["training_ready"])
         self.assertEqual(frame["frame"], 1)
         self.assertEqual(frame["phase"], "lift")
         self.assertIn("render", frame["images"])
