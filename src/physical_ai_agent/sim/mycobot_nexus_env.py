@@ -105,6 +105,14 @@ ADAPTIVE_FINGER_PAD_SIZE = (0.014, 0.006, 0.006)
 ADAPTIVE_FINGER_PAD_EULER = (0.0, 0.0, 0.0)
 ADAPTIVE_FINGER_PAD_FRICTION = (80.0, 8.0, 8.0)
 ADAPTIVE_FINGER_PAD_CONDIM = 6
+ADAPTIVE_GATE7_TABLE_ARM_QPOS = (
+    -0.655675253325397,
+    0.810882674174539,
+    0.8439829636723133,
+    0.7977011570207353,
+    -1.4127876896491962,
+    -0.23321018739728538,
+)
 
 
 @dataclass(frozen=True)
@@ -146,6 +154,24 @@ class MyCobotNexusSmokeResult:
     gripper_cube_contacts: int
     gripper_cube_contact_pads: int
     grasp_success: bool
+    trace_path: str
+    frame_path: str
+    report_path: str
+    scene_path: str
+
+
+@dataclass(frozen=True)
+class MyCobotAdaptiveStaticContactResult:
+    status: str
+    steps: int
+    placement_gripper_command: float
+    final_gripper_command: float
+    required_sustained_steps: int
+    best_sustained_contact_steps: int
+    gripper_cube_contacts: int
+    gripper_cube_contact_pads: int
+    initial_cube_position: list[float]
+    final_cube_position: list[float]
     trace_path: str
     frame_path: str
     report_path: str
@@ -764,6 +790,128 @@ def run_mycobot_nexus_smoke(
         gripper_cube_contacts=max_contacts,
         gripper_cube_contact_pads=max_contact_pads,
         grasp_success=grasp_success,
+        trace_path=str(trace_path),
+        frame_path=str(frame_path),
+        report_path=str(report_path),
+        scene_path=scene_path,
+    )
+    report_path.write_text(json.dumps(asdict(result), indent=2, sort_keys=True), encoding="utf-8")
+    return result
+
+
+def run_mycobot_adaptive_static_contact_smoke(
+    *,
+    output_dir: Path,
+    asset_root: Path,
+    official_gripper_root: Path,
+    steps: int = 80,
+    seed: int = 1,
+    width: int = 640,
+    height: int = 480,
+    placement_gripper_command: float = 0.25,
+    final_gripper_command: float = -1.0,
+    required_sustained_steps: int = 15,
+) -> MyCobotAdaptiveStaticContactResult:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = output_dir / "mycobot_adaptive_static_contact_trace.jsonl"
+    frame_path = output_dir / "mycobot_adaptive_static_contact_frame.bmp"
+    report_path = output_dir / "mycobot_adaptive_static_contact_report.json"
+    env = MyCobotNexusEnv(
+        MyCobotNexusConfig(
+            asset_root=asset_root,
+            work_dir=output_dir,
+            official_gripper_root=official_gripper_root,
+            model_profile=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            width=width,
+            height=height,
+        )
+    )
+    records: list[MyCobotNexusStep] = []
+    best_sustained_steps = 0
+    sustained_steps = 0
+    max_contacts = 0
+    max_contact_pads = 0
+    initial_cube_position: list[float] = []
+    final_cube_position: list[float] = []
+    try:
+        env.reset(seed=seed)
+        for qpos_index, value in zip(env._qpos_indices, ADAPTIVE_GATE7_TABLE_ARM_QPOS, strict=True):
+            env.data.qpos[qpos_index] = float(value)
+        if env._uses_official_320_gripper:
+            for actuator_index, value in zip(
+                env._arm_actuator_indices,
+                ADAPTIVE_GATE7_TABLE_ARM_QPOS,
+                strict=True,
+            ):
+                env.data.ctrl[actuator_index] = float(value)
+        env._set_gripper(command=placement_gripper_command)
+        env._mujoco.mj_forward(env.model, env.data)
+        pad_midpoint = env._finger_pad_midpoint()
+        initial_cube_position = [
+            float(pad_midpoint[0]),
+            float(pad_midpoint[1]),
+            float(TASK_CUBE_POS[2]),
+        ]
+        for axis, value in enumerate(initial_cube_position):
+            env.data.qpos[env._cube_freejoint_qpos_index + axis] = float(value)
+        qvel_start = env._cube_freejoint_qvel_index
+        env.data.qvel[qvel_start:qvel_start + 6] = 0.0
+        env._cube_initial_pos = list(initial_cube_position)
+        env._mujoco.mj_forward(env.model, env.data)
+
+        arm_target = list(ADAPTIVE_GATE7_TABLE_ARM_QPOS)
+        denominator = max(steps - 1, 1)
+        for step in range(steps):
+            alpha = step / denominator
+            gripper = placement_gripper_command + alpha * (
+                final_gripper_command - placement_gripper_command
+            )
+            obs, reward, terminated, truncated, info = env.step([*arm_target, gripper])
+            contacts = int(info["gripper_cube_contacts"])
+            contact_pads = int(info["gripper_cube_contact_pads"])
+            max_contacts = max(max_contacts, contacts)
+            max_contact_pads = max(max_contact_pads, contact_pads)
+            if contact_pads >= 2:
+                sustained_steps += 1
+            else:
+                sustained_steps = 0
+            best_sustained_steps = max(best_sustained_steps, sustained_steps)
+            records.append(
+                MyCobotNexusStep(
+                    step=step,
+                    observation=obs,
+                    action=[*arm_target, gripper],
+                    reward=reward,
+                    terminated=terminated,
+                    truncated=truncated,
+                    info=_json_safe_info(info),
+                )
+            )
+        _write_bmp(frame_path, env.render())
+        final_cube_position = env._cube_position()
+    finally:
+        scene_path = str(env.scene_path)
+        env.close()
+
+    with trace_path.open("w", encoding="utf-8") as file:
+        for record in records:
+            file.write(json.dumps(asdict(record), sort_keys=True) + "\n")
+    status = (
+        "passed"
+        if max_contact_pads >= 2 and best_sustained_steps >= required_sustained_steps
+        else "failed"
+    )
+    result = MyCobotAdaptiveStaticContactResult(
+        status=status,
+        steps=len(records),
+        placement_gripper_command=float(placement_gripper_command),
+        final_gripper_command=float(final_gripper_command),
+        required_sustained_steps=int(required_sustained_steps),
+        best_sustained_contact_steps=int(best_sustained_steps),
+        gripper_cube_contacts=int(max_contacts),
+        gripper_cube_contact_pads=int(max_contact_pads),
+        initial_cube_position=initial_cube_position,
+        final_cube_position=final_cube_position,
         trace_path=str(trace_path),
         frame_path=str(frame_path),
         report_path=str(report_path),

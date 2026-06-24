@@ -236,6 +236,31 @@ Stop condition:
 - If the cube is pushed out before both sides contact, return to Gate 5 or
   Gate 6.
 
+Current status: passed by
+`scripts/mycobot_adaptive_static_contact_smoke.py` against the ROS2 Humble
+adaptive gripper source. The gate keeps the arm fixed, places the cube at the
+validated finger-pad x/y position on the table (`z=0.023`), and closes the
+gripper slowly from command `0.25` to `-1.0` over 80 steps. Evidence:
+`gripper_cube_contact_pads=2`, `gripper_cube_contacts=6`, and
+`best_sustained_contact_steps=45` against a requirement of 15 sustained steps.
+This is a static table-contact gate only; it does not claim lift, transport,
+or stable force-closure grasp success.
+
+Rerun command:
+
+```bash
+PYTHONPATH=src /tmp/mycobot_render_venv/bin/python scripts/mycobot_adaptive_static_contact_smoke.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros2 \
+  --output-dir _workspace/gate7_table_contact_smoke \
+  --width 640 \
+  --height 480
+```
+
+![Gate 7 static contact top](./mycobot_320_adaptive_gate7_static_contact_top.png)
+![Gate 7 static contact oblique](./mycobot_320_adaptive_gate7_static_contact_oblique.png)
+![Gate 7 static contact side](./mycobot_320_adaptive_gate7_static_contact_side.png)
+
 ### Gate 8: Natural Arm And Gripper Motion
 
 Question: can the arm and adaptive gripper move together without abrupt jumps?
@@ -255,7 +280,8 @@ Stop condition:
 
 ## Current Next Step
 
-The next implementation should be Gate 7: static contact smoke. It must start
-with the cube between the validated finger contact geoms, keep the arm fixed,
-close the gripper slowly, and require sustained contacts from both sides before
-any arm trajectory tuning.
+The next implementation should be Gate 8: natural arm and gripper motion. It
+must reuse the Gate 7 contact placement/contact criteria, then add a timed
+pregrasp, close, and lift trajectory. The first pass should report contact
+retention during close and lift separately instead of collapsing them into one
+success flag.
