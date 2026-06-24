@@ -117,15 +117,20 @@ Stop condition:
 - If the middle linkage looks flipped, floating, or disconnected, return to
   Gate 2 or Gate 3. Do not proceed to grasp.
 
-Current status: passed by
-`scripts/verify_mycobot_320_adaptive_visual_pose.py` against the ROS2 Humble
-adaptive gripper source. Evidence: 14/14 official links had identical upstream
-URDF zero-pose link origins and generated MuJoCo XML visual centers
-(`max_link_origin_delta=0`, `max_visual_center_delta=0`). The visual evidence
-renders front, side, top, and wrist-close views of the official URDF reference
-beside the generated MuJoCo XML.
+Current status: passed as a source-pose parity check, then corrected after
+human visual inspection. `scripts/verify_mycobot_320_adaptive_visual_pose.py`
+confirmed 14/14 official links had identical upstream URDF zero-pose link
+origins and generated MuJoCo XML visual centers (`max_link_origin_delta=0`,
+`max_visual_center_delta=0`), but that was not sufficient to prove a physically
+plausible render. The MuJoCo compiler now sets `eulerseq="XYZ"` so URDF/RViz
+RPY poses are interpreted consistently; without it, the arm and gripper render
+as visibly broken even though the numeric XML parity gate passes.
 
 ![Gate 4 visual pose evidence](./mycobot_320_adaptive_visual_pose_gate.png)
+
+![Gate 4 eulerseq corrected neutral render](./mycobot_320_adaptive_eulerseq_fix_neutral_open_full.png)
+![Gate 4 eulerseq corrected moved-open render](./mycobot_320_adaptive_eulerseq_fix_moved_open_full.png)
+![Gate 4 eulerseq corrected moved-closed render](./mycobot_320_adaptive_eulerseq_fix_moved_closed_full.png)
 
 ### Gate 5: Mimic Motion Parity
 

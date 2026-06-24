@@ -1008,7 +1008,7 @@ def _build_official_320_nexus_scene_model(
         children_by_parent.setdefault(str(joint["parent"]), []).append(joint)
 
     root = ET.Element("mujoco", {"model": f"official_{model_profile}_nexus"})
-    ET.SubElement(root, "compiler", {"angle": "radian"})
+    ET.SubElement(root, "compiler", {"angle": "radian", "eulerseq": "XYZ"})
     ET.SubElement(
         root,
         "option",

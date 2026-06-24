@@ -192,6 +192,7 @@ class MyCobotNexusEnvTest(unittest.TestCase):
                 model_profile="320-m5-2022-adaptive-gripper",
             )
             scene = ET.parse(scene_path).getroot()
+            compiler = scene.find("compiler")
             names = {element.attrib.get("name") for element in scene.iter()}
             mesh_files = {
                 Path(element.attrib["file"]).name
@@ -199,6 +200,8 @@ class MyCobotNexusEnvTest(unittest.TestCase):
                 if "file" in element.attrib
             }
 
+        self.assertIsNotNone(compiler)
+        self.assertEqual(compiler.attrib.get("eulerseq"), "XYZ")
         self.assertIn("gripper_controller", names)
         self.assertIn("gripper_base_to_gripper_left2", names)
         self.assertIn("gripper_right3_to_gripper_right1", names)
