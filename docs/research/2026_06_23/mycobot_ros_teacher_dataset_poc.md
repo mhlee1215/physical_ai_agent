@@ -182,17 +182,15 @@ inspection then exposed a missed MuJoCo compiler issue: without
 `eulerseq="XYZ"`, URDF/RViz RPY poses were interpreted differently and the arm
 and adaptive gripper rendered as physically broken. The scene builder now
 forces `eulerseq="XYZ"` and the corrected neutral/moved renders are included in
-the adaptive validation ladder. A second visual inspection found that the
-adaptive gripper also needed explicit MuJoCo four-bar loop constraints: the
-upstream URDF mimic-joint tree is now supplemented with invisible
-`equality/connect` loops between `gripper_left2`/`gripper_left1` and
-`gripper_right2`/`gripper_right1`, with body-local site positions derived after
-applying each official visual origin transform. A follow-up top-down check then
-found the contact pads were still using raw mesh coordinates instead of
+the adaptive validation ladder. A later visual inspection found that directly
+adding MuJoCo four-bar `equality/connect` constraints on top of the upstream
+mimic URDF over-constrained the linkage and pulled intermediate parts apart.
+The POC now keeps the official mimic tree as the visual authority and
+re-applies the kinematic mimic pose after each MuJoCo step, while invisible
+finger-pad geoms provide the contact proxy. A follow-up top-down check found
+the contact pads were using raw mesh coordinates instead of
 URDF-visual-origin body-local coordinates. The pads now sit on the
-closed-fingertip contact points, and adaptive gripper position actuators hold
-the closed command across env steps. After 30 closed env steps the measured pad
-gap is `0.000148 m` in XY and `0.000228 m` in 3D. Gate 5 is passed:
+closed-fingertip contact points. Gate 5 is passed:
 `scripts/verify_mycobot_320_adaptive_mimic_motion.py` sampled five
 `gripper_controller` values and showed the official controller direction is
 lower-to-upper = closed-to-open. The jaw gap increases from `0.0505 m` at
@@ -208,6 +206,44 @@ bounds, then verifies parent link, local position, size, friction, `condim`,
 ![myCobot 320 adaptive visual pose gate](./mycobot_320_adaptive_visual_pose_gate.png)
 ![myCobot 320 adaptive mimic motion gate](./mycobot_320_adaptive_mimic_motion_gate.png)
 ![myCobot 320 adaptive collision proxy gate](./mycobot_320_adaptive_collision_proxy_gate.png)
+
+### 10-Episode Adaptive Teacher Dataset
+
+The Gate 8 short grasp-lift trajectory can now be exported as a small
+teacher-data artifact and viewed in the local dataset viewer:
+
+```bash
+PYTHONPATH=src /tmp/mycobot_render_venv/bin/python scripts/export_mycobot_adaptive_teacher_dataset.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros2 \
+  --output-dir _workspace/mycobot_teacher_datasets/mycobot_320_adaptive_gate8_10eps \
+  --episodes 10 \
+  --width 320 \
+  --height 240 \
+  --render-every 4
+```
+
+Current local artifact:
+
+- Dataset root: `_workspace/mycobot_teacher_datasets/mycobot_320_adaptive_gate8_10eps`
+- Format: `mycobot_jsonl_v1`
+- Episodes: `10`
+- Frames: `1600`
+- Rendered frames: `400`
+- Failed episodes: `[]`
+- Size after scene-cache cleanup: about `90 MB`
+
+The existing dataset viewer now also discovers myCobot JSONL datasets under
+`_workspace/mycobot_teacher_datasets/*/manifest.json`:
+
+```bash
+PYTHONPATH=src python3 scripts/serve_so101_dataset_viewer.py \
+  --host 127.0.0.1 \
+  --port 8768
+```
+
+Open `http://127.0.0.1:8768/` and select
+`mycobot_mycobot_320_adaptive_gate8_10eps`.
 
 Target render/physics command once MuJoCo is available:
 

@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-import pyarrow.parquet as pq
+try:
+    import pyarrow.parquet as pq
+except ModuleNotFoundError:  # myCobot JSONL datasets do not require pyarrow.
+    pq = None
 
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
@@ -35,6 +38,15 @@ CAMERA_KEYS = [
     "observation.images.camera3",
 ]
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+MYCOBOT_JOINT_NAMES = [
+    "joint2_to_joint1",
+    "joint3_to_joint2",
+    "joint4_to_joint3",
+    "joint5_to_joint4",
+    "joint6_to_joint5",
+    "joint6output_to_joint6",
+    "gripper_controller",
+]
 
 
 def _contract_dataset_roots(repo_root: Path) -> dict[str, Path]:
@@ -68,7 +80,7 @@ def _skill_dataset_roots(repo_root: Path) -> dict[str, Path]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Serve a lightweight SO101 LeRobot dataset browser.")
+    parser = argparse.ArgumentParser(description="Serve a lightweight robot dataset browser.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8768)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -142,7 +154,11 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
         _dataset_catalog_item(repo_root, split, path, category="temporary")
         for split, path in _discover_temporary_datasets(repo_root).items()
     ]
-    for item in [*official_items, *skill_items, *archived_items, *temporary_items]:
+    mycobot_items = [
+        _mycobot_dataset_catalog_item(repo_root, split, path)
+        for split, path in _discover_mycobot_datasets(repo_root).items()
+    ]
+    for item in [*official_items, *skill_items, *archived_items, *temporary_items, *mycobot_items]:
         if item["status"] == "available":
             payload[item["name"]] = item["summary"]
     return {
@@ -165,6 +181,12 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
                 "title": "Temporary / recently generated",
                 "description": "Smoke or experimental datasets generated while testing new object/grasp variants.",
                 "items": temporary_items,
+            },
+            {
+                "id": "mycobot",
+                "title": "myCobot teacher POC",
+                "description": "myCobot 320 adaptive-gripper JSONL teacher datasets generated from MuJoCo gates.",
+                "items": mycobot_items,
             },
             {
                 "id": "archived",
@@ -268,6 +290,48 @@ def _discover_temporary_datasets(repo_root: Path) -> dict[str, Path]:
     return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
 
 
+def _discover_mycobot_datasets(repo_root: Path) -> dict[str, Path]:
+    discovered = _parse_dataset_env("MYCOBOT_TEMP_DATASETS")
+    seen_paths = {path.resolve() for path in discovered.values()}
+    root = repo_root / "_workspace" / "mycobot_teacher_datasets"
+    if root.exists():
+        for manifest in root.glob("*/manifest.json"):
+            path = manifest.parent
+            resolved = path.resolve()
+            if resolved in seen_paths:
+                continue
+            discovered[_unique_split_name("mycobot_" + _slug(path.name), discovered)] = path
+            seen_paths.add(resolved)
+    return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
+
+
+def _mycobot_dataset_catalog_item(repo_root: Path, split: str, root: Path) -> dict[str, Any]:
+    resolved = _resolve_dataset_path(repo_root, root)
+    base = {
+        "name": split,
+        "root": str(resolved),
+        "category": "mycobot",
+    }
+    try:
+        dataset = _mycobot_dataset(resolved)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            **base,
+            "status": "incomplete" if resolved.exists() else "missing",
+            "detail": str(exc),
+            "size_bytes": _dir_size(resolved),
+            "size_human": _format_bytes(_dir_size(resolved)),
+        }
+    summary = _mycobot_dataset_summary(split, dataset)
+    return {
+        **base,
+        "status": "available" if summary["episodes"] > 0 and summary["frames"] > 0 else "incomplete",
+        "detail": "ready",
+        "summary": summary,
+        **summary,
+    }
+
+
 def _official_dataset_roots(repo_root: Path) -> dict[str, Path]:
     env_roots = _parse_dataset_env("SO101_OFFICIAL_DATASETS")
     if env_roots:
@@ -314,6 +378,9 @@ def _safe_mtime(path: Path) -> float:
 
 
 def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dict[str, Any]:
+    mycobot_roots = _discover_mycobot_datasets(repo_root)
+    if split in mycobot_roots:
+        return _mycobot_frame_payload(_resolve_dataset_path(repo_root, mycobot_roots[split]), split, episode, frame)
     dataset = _dataset(repo_root, split)
     episodes = dataset["episodes"]
     if episode < 0 or episode >= len(episodes):
@@ -343,8 +410,100 @@ def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dic
     }
 
 
+def _mycobot_dataset(root: Path) -> dict[str, Any]:
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("format") != "mycobot_jsonl_v1":
+        raise ValueError(f"unsupported myCobot dataset format: {manifest.get('format')}")
+    summaries = manifest.get("episode_summaries") or []
+    return {
+        "root": root,
+        "manifest": manifest,
+        "episode_lengths": [int(row["frames"]) for row in summaries],
+        "size_bytes": _dir_size(root),
+    }
+
+
+def _mycobot_dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
+    manifest = dataset["manifest"]
+    return {
+        "type": "mycobot_jsonl",
+        "root": str(dataset["root"]),
+        "name": split,
+        "episodes": int(manifest.get("episodes") or 0),
+        "frames": int(manifest.get("frames") or 0),
+        "fps": manifest.get("fps"),
+        "size_bytes": dataset["size_bytes"],
+        "size_human": _format_bytes(dataset["size_bytes"]),
+        "data_bytes": _dir_size(dataset["root"] / "episodes"),
+        "data_human": _format_bytes(_dir_size(dataset["root"] / "episodes")),
+        "image_bytes": _dir_size(dataset["root"] / "frames"),
+        "image_human": _format_bytes(_dir_size(dataset["root"] / "frames")),
+        "features": ["render"],
+        "image_shapes": {"render": [240, 320, 3]},
+        "episode_lengths": dataset["episode_lengths"],
+    }
+
+
+def _mycobot_frame_payload(root: Path, split: str, episode: int, frame: int) -> dict[str, Any]:
+    dataset = _mycobot_dataset(root)
+    lengths = dataset["episode_lengths"]
+    if episode < 0 or episode >= len(lengths):
+        raise ValueError(f"episode out of range: {episode}")
+    frame = max(0, min(frame, lengths[episode] - 1))
+    episode_path = root / "episodes" / f"episode_{episode:04d}.jsonl"
+    row = _jsonl_row(episode_path, frame)
+    image_path = ""
+    images = {}
+    render_path = row.get("observation", {}).get("images", {}).get("render")
+    if not render_path:
+        render_path = _nearest_mycobot_render_path(root, episode, frame, lengths[episode])
+    if render_path:
+        image_path = str(render_path)
+        image_bytes = (root / render_path).read_bytes()
+        images["render"] = "data:image/bmp;base64," + base64.b64encode(image_bytes).decode("ascii")
+    state_values = [float(value) for value in row.get("observation", {}).get("state", [])]
+    action_values = [float(value) for value in row.get("action", [])]
+    return {
+        "split": split,
+        "episode": episode,
+        "frame": frame,
+        "episode_length": lengths[episode],
+        "row_index": frame,
+        "timestamp": float(row.get("timestamp") or 0.0),
+        "task": row.get("task", ""),
+        "phase": row.get("phase", ""),
+        "images": images,
+        "image_path": image_path,
+        "state": dict(zip(MYCOBOT_JOINT_NAMES, state_values, strict=False)),
+        "action": dict(zip(MYCOBOT_JOINT_NAMES, action_values, strict=False)),
+        "info": row.get("info", {}),
+    }
+
+
+def _jsonl_row(path: Path, index: int) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as file:
+        for row_index, line in enumerate(file):
+            if row_index == index:
+                return json.loads(line)
+    raise ValueError(f"frame out of range: {index}")
+
+
+def _nearest_mycobot_render_path(root: Path, episode: int, frame: int, length: int) -> str:
+    frame_dir = root / "frames" / f"episode_{episode:04d}"
+    for offset in range(length):
+        for candidate in (frame - offset, frame + offset):
+            if candidate < 0 or candidate >= length:
+                continue
+            image = frame_dir / f"frame_{candidate:04d}.bmp"
+            if image.exists():
+                return str(image.relative_to(root))
+    return ""
+
+
 @lru_cache(maxsize=4)
 def _dataset(repo_root: Path, split: str) -> dict[str, Any]:
+    if pq is None:
+        raise RuntimeError("pyarrow is required for SO101 LeRobot parquet datasets")
     roots = _dataset_roots(repo_root)
     if split not in roots:
         raise ValueError(f"unknown split: {split}")
@@ -414,7 +573,7 @@ def _index_html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SO101 Dataset Viewer</title>
+  <title>Robot Dataset Viewer</title>
   <style>
     :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #16181d; background: #f6f7f9; }
     body { margin: 0; }
@@ -438,7 +597,7 @@ def _index_html() -> str:
   </style>
 </head>
 <body>
-  <header><h1>SO101 Dataset Viewer</h1></header>
+  <header><h1>Robot Dataset Viewer</h1></header>
   <main>
     <section>
       <div class="controls">

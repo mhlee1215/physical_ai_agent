@@ -710,10 +710,10 @@ class MyCobotNexusEnv:
         camera = self._mujoco.MjvCamera()
         camera.type = self._mujoco.mjtCamera.mjCAMERA_FREE
         if self._uses_official_320_gripper:
-            camera.lookat[:] = [-0.16, 0.20, 0.09]
-            camera.distance = 0.78
-            camera.azimuth = 138.0
-            camera.elevation = -24.0
+            camera.lookat[:] = [-0.16, -0.06, 0.07]
+            camera.distance = 0.46
+            camera.azimuth = 52.0
+            camera.elevation = -32.0
         else:
             camera.lookat[:] = [-0.13, -0.10, 0.11]
             camera.distance = 1.12
