@@ -629,7 +629,7 @@ def _index_html() -> str:
         <label>Episode<input id="episode" type="range" min="0" max="0" value="0"></label>
         <label>Frame<input id="frame" type="range" min="0" max="0" value="0"></label>
         <button id="play">Play</button>
-        <label>FPS<select id="fps"><option value="12" selected>12</option><option value="6">6</option><option value="24">24</option></select></label>
+        <label>FPS<select id="fps"><option value="30" selected>30</option><option value="24">24</option><option value="12">12</option><option value="6">6</option></select></label>
         <button id="prev">Prev</button>
         <button id="next">Next</button>
       </div>
@@ -700,6 +700,7 @@ def _index_html() -> str:
     function syncEpisodeRange() {
       const data = datasets[split.value];
       if (!data) return;
+      if (data.fps) fps.value = String(data.fps);
       episode.max = String(data.episodes - 1);
       episode.value = String(Math.min(Number(episode.value), data.episodes - 1));
       syncFrameRange();

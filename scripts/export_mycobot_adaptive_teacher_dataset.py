@@ -55,10 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--official-gripper-root", type=Path, default=Path("_vendor/mycobot_ros2"))
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=240)
-    parser.add_argument("--render-every", type=int, default=4)
+    parser.add_argument("--render-every", type=int, default=1)
+    parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--pregrasp-steps", type=int, default=24)
     parser.add_argument("--close-steps", type=int, default=72)
-    parser.add_argument("--lift-steps", type=int, default=28)
+    parser.add_argument("--lift-steps", type=int, default=76)
     parser.add_argument("--placement-gripper-command", type=float, default=0.25)
     parser.add_argument("--close-gripper-command", type=float, default=-0.75)
     parser.add_argument("--cube-half-size", type=float, default=0.02)
@@ -75,6 +76,7 @@ def main() -> None:
         official_gripper_root=args.official_gripper_root,
         width=args.width,
         height=args.height,
+        fps=args.fps,
         render_every=args.render_every,
         pregrasp_steps=args.pregrasp_steps,
         close_steps=args.close_steps,
@@ -97,6 +99,7 @@ def export_dataset(
     official_gripper_root: Path,
     width: int,
     height: int,
+    fps: int,
     render_every: int,
     pregrasp_steps: int,
     close_steps: int,
@@ -123,6 +126,7 @@ def export_dataset(
             official_gripper_root=official_gripper_root,
             width=width,
             height=height,
+            fps=fps,
             render_every=render_every,
             pregrasp_steps=pregrasp_steps,
             close_steps=close_steps,
@@ -150,7 +154,7 @@ def export_dataset(
         },
         "episodes": episodes,
         "frames": total_frames,
-        "fps": 20,
+        "fps": fps,
         "render_every": render_every,
         "image_mime_type": "image/bmp",
         "joint_names": JOINT_NAMES,
@@ -164,7 +168,7 @@ def export_dataset(
         },
         "notes": (
             "Gate 8 teacher dataset POC. Episodes start from a natural ready pose, "
-            "approach a 40mm table cube, close the adaptive gripper, and lift faster "
+            "approach a 40mm table cube, close the adaptive gripper, and lift higher "
             "than the initial contact-proof dataset; this is not yet LeRobot parquet."
         ),
     }
@@ -184,6 +188,7 @@ def _export_episode(
     official_gripper_root: Path,
     width: int,
     height: int,
+    fps: int,
     render_every: int,
     pregrasp_steps: int,
     close_steps: int,
@@ -246,6 +251,7 @@ def _export_episode(
                 step_index,
                 "approach",
                 [*arm, placement_gripper_command],
+                fps,
                 render_every,
             )
         close_denominator = max(close_steps - 1, 1)
@@ -261,6 +267,7 @@ def _export_episode(
                 step_index,
                 "close",
                 [*ADAPTIVE_GATE7_TABLE_ARM_QPOS, gripper],
+                fps,
                 render_every,
             )
         lift_denominator = max(lift_steps - 1, 1)
@@ -280,6 +287,7 @@ def _export_episode(
                 step_index,
                 "lift",
                 [*arm, close_gripper_command],
+                fps,
                 render_every,
             )
     finally:
@@ -324,6 +332,7 @@ def _append_step(
     step_index: int,
     phase: str,
     action: list[float],
+    fps: int,
     render_every: int,
 ) -> int:
     if phase == "approach":
@@ -339,7 +348,7 @@ def _append_step(
         {
             "episode_index": episode_index,
             "frame_index": step_index,
-            "timestamp": step_index / 20.0,
+            "timestamp": step_index / float(fps),
             "phase": phase,
             "task": "short_grasp_lift_red_cube",
             "observation": {"state": obs, "images": {"render": image} if image else {}},
@@ -371,8 +380,7 @@ def _resize_scene_cube(env: MyCobotNexusEnv, cube_half_size: float) -> None:
         f"{TASK_CUBE_POS[0]} {TASK_CUBE_POS[1]} {cube_half_size + 0.008}",
     )
     cube_geom.set("size", f"{cube_half_size} {cube_half_size} {cube_half_size}")
-    scale = cube_half_size / 0.015
-    cube_geom.set("mass", f"{0.005 * scale ** 3:.6f}")
+    cube_geom.set("mass", "0.005")
     tree.write(env.scene_path, encoding="utf-8", xml_declaration=True)
     env.model = env._mujoco.MjModel.from_xml_path(str(env.scene_path))
     env.data = env._mujoco.MjData(env.model)
