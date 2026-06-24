@@ -122,6 +122,15 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
         ),
     )
     parser.add_argument(
+        "--checkpoint-retention-policy",
+        choices=["all", "best_val_and_closed_loop"],
+        default="all",
+        help=(
+            "Checkpoint retention policy. best_val_and_closed_loop keeps only "
+            "checkpoints/best_val_loss and checkpoints/best_closed_loop."
+        ),
+    )
+    parser.add_argument(
         "--validation-every-n-train-steps",
         type=int,
         help="Deprecated alias for --validation-interval-steps.",
@@ -277,6 +286,7 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         enabled=bool(cfg.save_checkpoint),
         initial_step=resume_step,
         post_checkpoint_loop_commands=_post_checkpoint_loop_commands(wrapper_args),
+        retention_policy=str(wrapper_args.checkpoint_retention_policy),
     )
     callbacks.append(checkpoint_callback)
     log_every_n_steps = wrapper_args.lightning_log_every_n_steps or max(1, int(cfg.log_freq))
@@ -650,6 +660,73 @@ def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig, wrapper_args: argp
         "cfg.resume is true but no checkpoint path was provided and no checkpoint "
         f"was found under {checkpoint_root}"
     )
+
+
+def _read_json_file(path: Path) -> Any:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _read_jsonl_file(path: Path) -> list[dict[str, Any]]:
+    rows = []
+    if not path.exists():
+        return rows
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+    except OSError:
+        return []
+    return rows
+
+
+def _float_or_none(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _latest_closed_loop_success_for_command(command: list[str], checkpoint: str) -> float | None:
+    run_dir = _command_arg_value(command, "--run-dir")
+    test_id = _command_arg_value(command, "--closed-loop-test-id") or "default"
+    if not run_dir:
+        return None
+    rows = [
+        row
+        for row in _read_jsonl_file(Path(run_dir) / "metrics" / "closed_loop_metrics.jsonl")
+        if str(row.get("checkpoint")) == str(checkpoint)
+        and str(row.get("test_id", "default")) == str(test_id)
+    ]
+    if not rows:
+        return None
+    return _float_or_none(rows[-1].get("success_rate"))
+
+
+def _command_arg_value(command: list[str], flag: str) -> str | None:
+    prefix = f"{flag}="
+    for index, part in enumerate(command):
+        if part == flag and index + 1 < len(command):
+            return str(command[index + 1])
+        if part.startswith(prefix):
+            return part[len(prefix):]
+    return None
 
 
 def _make_dataset(
@@ -1037,6 +1114,14 @@ def _smoothness_ratios(predicted: dict[str, float], teacher: dict[str, float]) -
     }
 
 
+def _scalar_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if torch.is_tensor(value) and value.numel() == 1:
+        return float(value.detach().cpu())
+    return None
+
+
 class _SO101LightningModule:
     def __new__(
         cls,
@@ -1082,6 +1167,7 @@ class _SO101LightningModule:
                 self.log_input_images_every_n_steps = max(0, int(log_input_images_every_n_steps))
                 self.log_input_metadata_every_n_steps = max(0, int(log_input_metadata_every_n_steps))
                 self._last_step_started = 0.0
+                self.last_validation_loss: float | None = None
 
             def forward(self, batch: dict[str, Any]) -> Any:
                 return self.policy.forward(batch)
@@ -1209,6 +1295,7 @@ class _SO101LightningModule:
                         loss.detach().float() if torch.is_tensor(loss) else torch.as_tensor(float(loss))
                         for loss in dataset_losses
                     ]).mean()
+                    self.last_validation_loss = _scalar_float(mean_loss)
                     self._log_validation_scalar(
                         VAL_LOSS_TAG,
                         mean_loss,
@@ -1263,6 +1350,7 @@ class _SO101LightningModule:
                 loss_tag = VAL_LOSS_TAG if dataset_name is None else f"{prefix}/loss"
                 self._log_validation_scalar(loss_tag, loss, batch_size=batch_size, log_step=log_step)
                 if dataset_name is None:
+                    self.last_validation_loss = _scalar_float(loss)
                     self._log_validation_scalar(IMPORTANT_VAL_LOSS_TAG, loss, batch_size=batch_size, log_step=log_step)
                 for key, value in (output_dict or {}).items():
                     if key == "loss":
@@ -1465,6 +1553,7 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             enabled: bool,
             initial_step: int,
             post_checkpoint_loop_commands: list[list[str]] | None,
+            retention_policy: str,
         ) -> None:
             super().__init__()
             self.cfg = cfg
@@ -1475,7 +1564,11 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             self.enabled = enabled
             self.initial_step = max(0, int(initial_step))
             self.post_checkpoint_loop_commands = [list(command) for command in (post_checkpoint_loop_commands or [])]
+            self.retention_policy = retention_policy
             self.saved_steps: set[int] = set()
+            self.retention_state_path = Path(self.cfg.output_dir) / "checkpoints" / "retention_state.json"
+            self.retention_events_path = Path(self.cfg.output_dir) / "checkpoints" / "retention_events.jsonl"
+            self.retention_state = _read_json_file(self.retention_state_path) or {}
 
         def on_train_batch_end(
             self,
@@ -1516,16 +1609,23 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
                 )
                 update_last_checkpoint(checkpoint_dir)
             self.saved_steps.add(step)
-            self._run_post_checkpoint_loop_test(checkpoint_dir=checkpoint_dir, step=step)
+            closed_loop_success = self._run_post_checkpoint_loop_test(checkpoint_dir=checkpoint_dir, step=step)
+            self._apply_retention_policy(
+                checkpoint_dir=checkpoint_dir,
+                step=step,
+                validation_loss=_scalar_float(getattr(pl_module, "last_validation_loss", None)),
+                closed_loop_success=closed_loop_success,
+            )
 
-        def _run_post_checkpoint_loop_test(self, *, checkpoint_dir: Path, step: int) -> None:
+        def _run_post_checkpoint_loop_test(self, *, checkpoint_dir: Path, step: int) -> float | None:
             if not self.post_checkpoint_loop_commands:
-                return
+                return None
             env = {
                 **os.environ,
                 "SO101_CHECKPOINT_DIR": str(checkpoint_dir),
                 "SO101_CHECKPOINT_STEP": str(step),
             }
+            success_values: list[float] = []
             for index, command in enumerate(self.post_checkpoint_loop_commands, start=1):
                 print(
                     f"Running closed-loop test {index}/{len(self.post_checkpoint_loop_commands)} "
@@ -1533,6 +1633,100 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
                     flush=True,
                 )
                 subprocess.run(command, check=True, env=env)
+                success = _latest_closed_loop_success_for_command(command, checkpoint_dir.name)
+                if success is not None:
+                    success_values.append(success)
+            return max(success_values) if success_values else None
+
+        def _apply_retention_policy(
+            self,
+            *,
+            checkpoint_dir: Path,
+            step: int,
+            validation_loss: float | None,
+            closed_loop_success: float | None,
+        ) -> None:
+            if self.retention_policy != "best_val_and_closed_loop":
+                return
+            retained = False
+            if validation_loss is not None:
+                best_val = _float_or_none(self.retention_state.get("best_val_loss"))
+                if best_val is None or validation_loss < best_val:
+                    self._promote_checkpoint(
+                        checkpoint_dir,
+                        "best_val_loss",
+                        {
+                            "kind": "best_val_loss",
+                            "step": step,
+                            "checkpoint": checkpoint_dir.name,
+                            "val_loss": validation_loss,
+                            "previous_best_val_loss": best_val,
+                        },
+                    )
+                    self.retention_state["best_val_loss"] = validation_loss
+                    self.retention_state["best_val_loss_step"] = step
+                    self.retention_state["best_val_loss_source_checkpoint"] = checkpoint_dir.name
+                    retained = True
+            if closed_loop_success is not None:
+                best_loop = _float_or_none(self.retention_state.get("best_closed_loop_success_rate"))
+                if best_loop is None or closed_loop_success > best_loop:
+                    self._promote_checkpoint(
+                        checkpoint_dir,
+                        "best_closed_loop",
+                        {
+                            "kind": "best_closed_loop",
+                            "step": step,
+                            "checkpoint": checkpoint_dir.name,
+                            "success_rate": closed_loop_success,
+                            "previous_best_success_rate": best_loop,
+                        },
+                    )
+                    self.retention_state["best_closed_loop_success_rate"] = closed_loop_success
+                    self.retention_state["best_closed_loop_step"] = step
+                    self.retention_state["best_closed_loop_source_checkpoint"] = checkpoint_dir.name
+                    retained = True
+            self.retention_state["latest_checkpoint_step"] = step
+            self.retention_state["latest_source_checkpoint"] = checkpoint_dir.name
+            self.retention_state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.retention_state_path.write_text(
+                json.dumps(self.retention_state, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            if checkpoint_dir.exists() and checkpoint_dir.name.isdigit():
+                shutil.rmtree(checkpoint_dir)
+                self._append_retention_event(
+                    {
+                        "kind": "pruned_periodic_checkpoint",
+                        "step": step,
+                        "checkpoint": checkpoint_dir.name,
+                        "promoted_this_step": retained,
+                    }
+                )
+            self._refresh_last_retained_checkpoint()
+
+        def _promote_checkpoint(self, checkpoint_dir: Path, name: str, event: dict[str, Any]) -> None:
+            target = Path(self.cfg.output_dir) / "checkpoints" / name
+            tmp = target.with_name(f".{target.name}.tmp")
+            if tmp.exists():
+                shutil.rmtree(tmp)
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(checkpoint_dir, tmp)
+            tmp.rename(target)
+            self._append_retention_event(event)
+
+        def _append_retention_event(self, event: dict[str, Any]) -> None:
+            self.retention_events_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.retention_events_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, sort_keys=True) + "\n")
+
+        def _refresh_last_retained_checkpoint(self) -> None:
+            checkpoint_root = Path(self.cfg.output_dir) / "checkpoints"
+            for name in ("best_val_loss", "best_closed_loop"):
+                target = checkpoint_root / name
+                if target.exists():
+                    update_last_checkpoint(target)
+                    return
 
     return LeRobotCheckpointCallback(**kwargs)
 

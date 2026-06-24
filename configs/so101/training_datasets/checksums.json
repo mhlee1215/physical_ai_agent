@@ -1,6 +1,54 @@
 {
   "algorithm": "sha256",
   "datasets": {
+    "align_fixed_jaw_cube_edge_loop_validation": {
+      "audit_sha256": "4983f0b2717e76739d814d0bac1a337f08639ebace3d136df6cd844c1a4dfe9a",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "2ac13a2f900e5497c2e91b3f6d6a590f0df9aa8d333ec762b8861935a9418b69",
+      "episodes": 10,
+      "export_report_sha256": "a144e0b3b0fd28fef13852b30860be37c6bab7c265061251a22e830a83c00791",
+      "file_count": 7,
+      "frames": 220,
+      "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-loop-validation10-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_loop_validation10_ego_wrist_256_seed118500",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 6127768,
+      "task": "Align the gripper jaws around one visible {color} {shape} edge."
+    },
     "align_fixed_jaw_cube_edge_train": {
       "audit_sha256": "4e705c2cc468f01ee75687dc4e53c17052f200753ca26b551d671b59b0ab6f1d",
       "camera_contract": {
@@ -22,7 +70,7 @@
           "type": "free"
         }
       },
-      "directory_sha256": "e4719158d3cdafc9641266d284982a075a92006f937772c8770e734277f8bedc",
+      "directory_sha256": "8ea46712f75739b4459c99cfa3da4101e88af60b9251534dc3b1ea0fe3aa58c8",
       "episodes": 100,
       "export_report_sha256": "280813e15c884d0455dfaca264f5b5a3a9e3f6b1bc7509cdc1c2df1a7cde01f2",
       "file_count": 7,
@@ -46,7 +94,7 @@
           256
         ]
       },
-      "size_bytes": 61769496,
+      "size_bytes": 61513725,
       "task": "Align the static finger pad with one visible {color} {shape} edge."
     },
     "align_fixed_jaw_cube_edge_val": {
@@ -70,7 +118,7 @@
           "type": "free"
         }
       },
-      "directory_sha256": "b8185c0bb1cf2fcd4a8f77ec4408247336d06d28c3d4c8e86b27543e38d8bb88",
+      "directory_sha256": "a031ef83ad483225364038ada4f7adad7258497d107833df42137adf50329983",
       "episodes": 25,
       "export_report_sha256": "647f2701a955b56612dcd9cc68af19791668dec69a624d424eaacfd7c48465ec",
       "file_count": 7,
@@ -94,8 +142,56 @@
           256
         ]
       },
-      "size_bytes": 15210375,
+      "size_bytes": 15153856,
       "task": "Align the static finger pad with one visible {color} {shape} edge."
+    },
+    "grip_from_edge_cube_loop_validation": {
+      "audit_sha256": "35b1a20ca989298d49ac3923983c56b6a8ac79e62d41cf441bc7a3f17c76c477",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "f6ab85d68bf16da1cd3c1b244c6edcef2b5f556c29cec502c75ade4f7461bee3",
+      "episodes": 10,
+      "export_report_sha256": "96186a2b201c15731fdaafe912b30c6a34a28015615957314d1bb0ae1122c148",
+      "file_count": 7,
+      "frames": 273,
+      "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-loop-validation10-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/grip_from_edge_cube_loop_validation10_ego_wrist_256_seed121000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 7142406,
+      "task": "Close the gripper on the {color} {shape} edge and lift."
     },
     "grip_from_edge_cube_train": {
       "audit_sha256": "f50804b1212bdd0d69bca7f16a162edbcd3adf4e54cd648265e15da676f9a57e",
@@ -118,7 +214,7 @@
           "type": "free"
         }
       },
-      "directory_sha256": "703d2b64c050b8fa4bb40e45c3e92353b80f287c2e91c15ed3b517c2774c7d21",
+      "directory_sha256": "604cb9ff2f60430fabde1096844f1fd1cdb309d9ca62ab83b8c9fc107a9a419a",
       "episodes": 100,
       "export_report_sha256": "7a350f7e040d5b88d3590ec629c6cb0c14ceabd647a93db4f36009ec84859d75",
       "file_count": 7,
@@ -142,7 +238,7 @@
           256
         ]
       },
-      "size_bytes": 74854152,
+      "size_bytes": 74594248,
       "task": "Keep the static finger pad at the {color} {shape} edge, close the gripper, and lift."
     },
     "grip_from_edge_cube_val": {
@@ -166,7 +262,7 @@
           "type": "free"
         }
       },
-      "directory_sha256": "e12a09d6bf23dae0fc7cddc6c19f0f1a0207fab69ed563f8be0c12945d82f3ec",
+      "directory_sha256": "7c021ef1ded76fd797405eba887a2c3379f5abd8aed948a3c1a454cf24b0f53f",
       "episodes": 25,
       "export_report_sha256": "1481d3f53b5e8cab7cdf215b767f331074a75282ff2e028672fc4903ca41bb85",
       "file_count": 7,
@@ -190,8 +286,200 @@
           256
         ]
       },
-      "size_bytes": 17980951,
+      "size_bytes": 17923819,
       "task": "Keep the static finger pad at the {color} {shape} edge, close the gripper, and lift."
+    },
+    "move_and_align_cube_edge_loop_validation": {
+      "audit_sha256": "82c205b9254879e36651c628c7fe2e013743130a375e8922c287b17ea9fc196b",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "0ffab2d2c332ba4cc442111bcd8125c2b03589c66e89335714ba2648d3cb2649",
+      "episodes": 10,
+      "export_report_sha256": "54ada699f131142055a2acc6c7c7984c05e8183e401fd619243968ad43ab40ba",
+      "file_count": 7,
+      "frames": 680,
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-loop-validation10-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_loop_validation10_ego_wrist_256_seed123500",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 19985882,
+      "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it."
+    },
+    "move_and_align_cube_edge_train": {
+      "audit_sha256": "1825ca21ce69b35ee7bb621fe6ccc7ab586ed9348157d6addb50ac8f6824eded",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "073fe81182dc2f7039edb02acf4f167aad35f952e5fb66890462ad9bf9f7a50c",
+      "episodes": 100,
+      "export_report_sha256": "6cdb5c9f2ef7b73214c093fb6e530b6699c7ecccfce3e1b54b7e310763dc3a10",
+      "file_count": 8,
+      "frames": 6800,
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train100-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train100_ego_wrist_256_seed122000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 197876483,
+      "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it."
+    },
+    "move_and_align_cube_edge_val": {
+      "audit_sha256": "32862b93e590ea20d19e74dad9864cf827d3fd0ba5b5f2b365280fa01df933b7",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "1a3c83e3f2f75e0ed526ef767cd7fb985c4012f7701180ab27eba05c6eda1a96",
+      "episodes": 25,
+      "export_report_sha256": "c7290ecae78fd8f5d07d22932d92d9653ec1560c20a483d051d60c76856434f5",
+      "file_count": 7,
+      "frames": 1700,
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-valid25-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_valid25_ego_wrist_256_seed123000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 48735962,
+      "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it."
+    },
+    "move_over_cube_edge_loop_validation": {
+      "audit_sha256": "acc0ce506b4c3318e1fb62e6673453994c830370972a1e1f1a645ee473bf4326",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "e7829db2e7ba72a754250cd921922654452e3925a19b720ced9bfb2d7bd612b8",
+      "episodes": 10,
+      "export_report_sha256": "dabd9120a4733959874de20cae594663784b8dc64c99dbd0956b0791392a3f83",
+      "file_count": 7,
+      "frames": 520,
+      "repo_id": "physical-ai-agent/so101-move-over-cube-edge-loop-validation10-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_over_cube_edge_loop_validation10_ego_wrist_256_seed116500",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 17966313,
+      "task": "Move the gripper above one visible {color} {shape} edge."
     },
     "move_over_cube_edge_train": {
       "audit_sha256": "2ed68c1fe245af6c88c6989318f51e86775056546d55c5eb5922c710f841af1c",
@@ -214,7 +502,7 @@
           "type": "free"
         }
       },
-      "directory_sha256": "6ae1f4daf35ff7d61c63879e2e2a764e670ae9d79aaa3c6e6dd4b787991f5e6a",
+      "directory_sha256": "6b1369271e6c6660176e140c140a6f04c25c0f254ad0ce0cee70060d07d54e99",
       "episodes": 100,
       "export_report_sha256": "5b6ac83b9500467f3d95e69e6e58b3ae257251254949075817311e1c6fcae099",
       "file_count": 8,
@@ -238,7 +526,7 @@
           256
         ]
       },
-      "size_bytes": 184508427,
+      "size_bytes": 184253383,
       "task": "Move the static finger pad above one visible {color} {shape} edge."
     },
     "move_over_cube_edge_val": {
@@ -262,7 +550,7 @@
           "type": "free"
         }
       },
-      "directory_sha256": "d34ea09bc1e6036e44936eeac95b1b851519b581650b256a0bcdb1fbeaf89b9d",
+      "directory_sha256": "ac681fa9b15173289ffe80785f67fe696877fbaf1a9b686dc6cc4ab28aab6008",
       "episodes": 25,
       "export_report_sha256": "1718499c3f32ef3a1028e1379bde56874c6613a5d5eee579d12fa20c9a42d7ea",
       "file_count": 7,
@@ -286,7 +574,7 @@
           256
         ]
       },
-      "size_bytes": 44169941,
+      "size_bytes": 44113450,
       "task": "Move the static finger pad above one visible {color} {shape} edge."
     },
     "move_over_cube_train": {

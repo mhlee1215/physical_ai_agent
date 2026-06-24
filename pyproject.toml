@@ -38,6 +38,7 @@ ml = [
   "torch>=2.3",
   "lightning>=2.4",
   "tensorboard>=2.17",
+  "moviepy>=1.0.3,<2",
   "transformers>=4.43",
 ]
 smolvla = [

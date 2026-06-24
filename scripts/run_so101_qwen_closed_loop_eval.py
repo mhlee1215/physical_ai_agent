@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--seed", type=int, default=98100)
     parser.add_argument("--start-contract", default="default_reset")
+    parser.add_argument(
+        "--start-report-path",
+        type=Path,
+        help="SO101 export report whose episode order is replayed exactly for closed-loop starts.",
+    )
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     parser.add_argument("--allow-download", action="store_true")
     parser.add_argument("--max-steps-per-primitive", type=int, default=None)
@@ -131,6 +136,7 @@ def main() -> None:
             ),
             env_config=_env_config_metadata_for_args(args),
             start_contract=args.start_contract,
+            start_report_path=args.start_report_path,
             precondition_plan=precondition_plan,
             env_factory=_env_factory_for_args(args),
         )

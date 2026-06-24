@@ -113,42 +113,64 @@
     "env_id": "MuJoCoPickLift-v1",
     "task_prompt": "pick and lift the green cube",
     "qwen_object": "green cube",
+    "env_object_color": "green",
     "base_seed": 98100,
     "valid_mask_checkpoint": "_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt",
     "success_metric": "qwen_edge_chain final success/grasp/lift metrics",
     "test_cases": [
       {
-        "id": "move_align_pick_up",
-        "description": "Requires move, align, and pick up primitives to succeed.",
-        "episodes": 5,
+        "id": "move_over_cube_edge",
+        "description": "Starts from the first frame of the move_over_cube_edge loop_validation split and runs only the move_over_cube_edge primitive.",
+        "episodes": 10,
         "steps": 120,
         "seed": 98100,
-        "start_contract": "full_chain_reset",
-        "task_prompt": "pick and lift the green cube",
+        "start_contract": "move_over_cube_edge",
+        "start_dataset": {
+          "name": "move_over_cube_edge_loop_validation",
+          "repo_id": "physical-ai-agent/so101-move-over-cube-edge-loop-validation10-ego-wrist-256",
+          "root": "_workspace/so101_lerobot/move_over_cube_edge_loop_validation10_ego_wrist_256_seed116500",
+          "expected_episodes": 10
+        },
+        "task_prompt": "Move the gripper above one visible green cube edge.",
         "qwen_object": "green cube",
-        "plan_json": "configs/agent/qwen3_so101_tool_plan_move_align_pick_up_green_cube.json"
+        "env_object_color": "green",
+        "plan_json": "configs/agent/qwen3_so101_tool_plan_move_over_cube_edge_green_cube.json"
       },
       {
-        "id": "align_pick_up",
-        "description": "Starts close enough that align and pick up primitives should be sufficient.",
-        "episodes": 5,
+        "id": "align_fixed_jaw_cube_edge",
+        "description": "Starts from the first frame of the align_fixed_jaw_cube_edge loop_validation split and runs only the align_fixed_jaw_cube_edge primitive.",
+        "episodes": 10,
         "steps": 120,
         "seed": 98200,
-        "start_contract": "align_pick_reset",
-        "task_prompt": "align with and lift the green cube",
+        "start_contract": "align_fixed_jaw_cube_edge",
+        "start_dataset": {
+          "name": "align_fixed_jaw_cube_edge_loop_validation",
+          "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-loop-validation10-ego-wrist-256",
+          "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_loop_validation10_ego_wrist_256_seed118500",
+          "expected_episodes": 10
+        },
+        "task_prompt": "Align the gripper jaws around one visible green cube edge.",
         "qwen_object": "green cube",
-        "plan_json": "configs/agent/qwen3_so101_tool_plan_align_pick_up_green_cube.json"
+        "env_object_color": "green",
+        "plan_json": "configs/agent/qwen3_so101_tool_plan_align_fixed_jaw_cube_edge_green_cube.json"
       },
       {
-        "id": "pick_up_only",
-        "description": "Starts from the pick-up primitive distribution and only requires pick up.",
-        "episodes": 5,
+        "id": "grip_from_edge_cube",
+        "description": "Starts from the first frame of the grip_from_edge_cube loop_validation split and runs only the grip_from_edge_cube primitive.",
+        "episodes": 10,
         "steps": 120,
         "seed": 98300,
-        "start_contract": "pick_up_reset",
-        "task_prompt": "lift the green cube",
+        "start_contract": "grip_from_edge_cube",
+        "start_dataset": {
+          "name": "grip_from_edge_cube_loop_validation",
+          "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-loop-validation10-ego-wrist-256",
+          "root": "_workspace/so101_lerobot/grip_from_edge_cube_loop_validation10_ego_wrist_256_seed121000",
+          "expected_episodes": 10
+        },
+        "task_prompt": "Close the gripper on the green cube edge and lift.",
         "qwen_object": "green cube",
-        "plan_json": "configs/agent/qwen3_so101_tool_plan_pick_up_green_cube.json"
+        "env_object_color": "green",
+        "plan_json": "configs/agent/qwen3_so101_tool_plan_grip_from_edge_cube_green_cube.json"
       }
     ]
   }

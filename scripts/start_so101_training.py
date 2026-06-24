@@ -65,6 +65,10 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--run-dir", type=Path, default=DEFAULT_ROOT / "runs" / "latest_lightning")
     parser.add_argument(
+        "--training-id",
+        help="Stable local ID for this training run. Defaults to the run directory name.",
+    )
+    parser.add_argument(
         "--dataset-config",
         type=Path,
         help="JSON file defining train/validation LeRobot datasets and training defaults.",
@@ -230,6 +234,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         stop(args.lock_file, timeout_s=20.0)
 
     run_dir = args.run_dir.resolve()
+    training_id = _training_id(args.training_id, run_dir)
     log_dir = run_dir / "logs"
     metrics_dir = run_dir / "metrics"
     tensorboard_dir = run_dir / "tensorboard"
@@ -323,6 +328,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
 
     launch_plan = {
         "operation": "start_so101_training",
+        "training_id": training_id,
         "run_dir": str(run_dir),
         "train_output_dir": str(train_output_dir),
         "lock_file": str(args.lock_file.resolve()),
@@ -387,6 +393,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "progress_monitor_pid": progress_monitor.pid if progress_monitor else None,
     }
     _write_json(args.lock_file, record)
+    _update_training_registry(repo_root, record)
     current = status(args.lock_file)
     print(json.dumps(current, indent=2, sort_keys=True) if args.json else _human_status(current))
     return 0
@@ -407,7 +414,7 @@ def _apply_start_preset(args: argparse.Namespace, passthrough: list[str], *, rep
         args.runtime_platform = "macos"
         args.training_device = "mps"
         args.closed_loop_every_epochs = 1
-        args.closed_loop_episodes = 5
+        args.closed_loop_episodes = 10
         args.closed_loop_steps = 120
         args.closed_loop_env_id = "MuJoCoPickLift-v1"
         args.closed_loop_mujoco_gl = "glfw"
@@ -472,6 +479,7 @@ def _write_training_run_summary(path: Path, launch_plan: dict[str, Any]) -> None
         key: launch_plan.get(key)
         for key in (
             "operation",
+            "training_id",
             "run_dir",
             "train_output_dir",
             "lock_file",
@@ -494,6 +502,43 @@ def _write_training_run_summary(path: Path, launch_plan: dict[str, Any]) -> None
     summary["training_run_summary_path"] = str(path)
     summary["written_at_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     _write_json(path, summary)
+
+
+def _training_id(value: str | None, run_dir: Path) -> str:
+    raw = value or run_dir.name
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(raw).strip())
+    text = text.strip("._-")
+    if not text:
+        text = run_dir.name
+    return text
+
+
+def _update_training_registry(repo_root: Path, record: dict[str, Any]) -> None:
+    registry_path = repo_root / DEFAULT_ROOT / "training_runs_index.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry = _read_json(registry_path)
+    if not isinstance(registry, dict):
+        registry = {"runs": []}
+    runs = registry.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    training_id = str(record.get("training_id") or _training_id(None, Path(str(record.get("run_dir") or "run"))))
+    compact = {
+        "training_id": training_id,
+        "run_dir": record.get("run_dir"),
+        "training_run_summary_path": record.get("training_run_summary_path"),
+        "dataset_config_name": ((record.get("dataset_config") or {}).get("name") if isinstance(record.get("dataset_config"), dict) else None),
+        "started_at_utc": record.get("started_at_utc"),
+        "tensorboard_url": record.get("tensorboard_url"),
+        "mobile_tensorboard_url": record.get("mobile_tensorboard_url"),
+        "train_pid": record.get("train_pid"),
+        "tensorboard_pid": record.get("tensorboard_pid"),
+    }
+    runs = [row for row in runs if not (isinstance(row, dict) and row.get("training_id") == training_id)]
+    runs.append(compact)
+    registry["runs"] = runs
+    registry["updated_at_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _write_json(registry_path, registry)
 
 
 def stop(lock_file: Path, *, timeout_s: float, json_output: bool = False) -> int:
@@ -992,6 +1037,7 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
         ("batch_size", "batch_size"),
         ("policy_repo_id", "policy.repo_id"),
         ("lightning_precision", "lightning-precision"),
+        ("checkpoint_retention_policy", "checkpoint-retention-policy"),
     ):
         if name in training:
             value = training[name]
@@ -1643,16 +1689,21 @@ def _apply_closed_loop_test_case(base: list[str], test_case: dict[str, Any]) -> 
         cmd = _replace_or_append_arg(cmd, "--closed-loop-steps", str(int(test_case["steps"])))
     if "seed" in test_case:
         cmd = _replace_or_append_arg(cmd, "--closed-loop-seed", str(int(test_case["seed"])))
+    if test_case.get("success_metric"):
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-success-metric", str(test_case["success_metric"]))
+    if test_case.get("success_threshold") is not None:
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-success-threshold", str(float(test_case["success_threshold"])))
     if test_case.get("start_contract"):
         cmd = _replace_or_append_arg(cmd, "--closed-loop-start-contract", str(test_case["start_contract"]))
+    start_report_path = _closed_loop_start_report_path(test_case)
+    if start_report_path:
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-start-report-path", start_report_path)
     if test_case.get("task_prompt"):
         cmd = _replace_or_append_arg(cmd, "--closed-loop-task-prompt", str(test_case["task_prompt"]))
     if test_case.get("qwen_object"):
         cmd = _replace_or_append_arg(cmd, "--qwen-object", str(test_case["qwen_object"]))
     if test_case.get("env_object_color"):
         cmd = _replace_or_append_arg(cmd, "--qwen-env-object-color", str(test_case["env_object_color"]))
-    else:
-        cmd = _remove_arg_with_value(cmd, "--qwen-env-object-color")
     if test_case.get("plan_json"):
         cmd = _remove_arg_with_value(cmd, "--qwen-response-json")
         cmd = _replace_or_append_arg(cmd, "--qwen-plan-json", str(test_case["plan_json"]))
@@ -1664,6 +1715,15 @@ def _apply_closed_loop_test_case(base: list[str], test_case: dict[str, Any]) -> 
     else:
         cmd = _remove_arg_with_value(cmd, "--closed-loop-precondition-plan-json")
     return cmd
+
+
+def _closed_loop_start_report_path(test_case: dict[str, Any]) -> str | None:
+    if test_case.get("start_report_path"):
+        return str(test_case["start_report_path"])
+    dataset = test_case.get("start_dataset")
+    if isinstance(dataset, dict) and dataset.get("root"):
+        return str(Path(str(dataset["root"])) / "so101_lerobot_export_report.json")
+    return None
 
 
 def _replace_or_append_arg(cmd: list[str], flag: str, value: str) -> list[str]:

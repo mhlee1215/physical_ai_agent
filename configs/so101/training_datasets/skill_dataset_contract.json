@@ -72,6 +72,12 @@
         "repo_id": "physical-ai-agent/so101-move-over-cube-edge-valid25-ego-wrist-256",
         "root": "_workspace/so101_lerobot/move_over_cube_edge_valid25_ego_wrist_256_seed116000",
         "expected_episodes": 25
+      },
+      "loop_validation": {
+        "repo_id": "physical-ai-agent/so101-move-over-cube-edge-loop-validation10-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/move_over_cube_edge_loop_validation10_ego_wrist_256_seed116500",
+        "expected_episodes": 10,
+        "object_color": "green"
       }
     },
     "align_fixed_jaw_cube_edge": {
@@ -87,6 +93,33 @@
         "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-valid25-ego-wrist-256",
         "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_valid25_ego_wrist_256_seed118000",
         "expected_episodes": 25
+      },
+      "loop_validation": {
+        "repo_id": "physical-ai-agent/so101-align-fixed-jaw-cube-edge-loop-validation10-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_loop_validation10_ego_wrist_256_seed118500",
+        "expected_episodes": 10,
+        "object_color": "green"
+      }
+    },
+    "move_and_align_cube_edge": {
+      "task": "move_and_align_cube_edge",
+      "description": "Start from home with the gripper fully closed, move above one visible cube edge, open and align the gripper jaws around that edge, and end at the grip_from_edge_cube start pose.",
+      "start_mode": "home_closed_to_fixed_jaw_at_cube_edge_open",
+      "train": {
+        "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train100-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train100_ego_wrist_256_seed122000",
+        "expected_episodes": 100
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-valid25-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/move_and_align_cube_edge_valid25_ego_wrist_256_seed123000",
+        "expected_episodes": 25
+      },
+      "loop_validation": {
+        "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-loop-validation10-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/move_and_align_cube_edge_loop_validation10_ego_wrist_256_seed123500",
+        "expected_episodes": 10,
+        "object_color": "green"
       }
     },
     "grip_from_edge_cube": {
@@ -102,6 +135,12 @@
         "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-valid25-ego-wrist-256",
         "root": "_workspace/so101_lerobot/grip_from_edge_cube_valid25_ego_wrist_256_seed120000",
         "expected_episodes": 25
+      },
+      "loop_validation": {
+        "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-loop-validation10-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/grip_from_edge_cube_loop_validation10_ego_wrist_256_seed121000",
+        "expected_episodes": 10,
+        "object_color": "green"
       }
     }
   }

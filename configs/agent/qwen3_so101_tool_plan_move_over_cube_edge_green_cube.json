@@ -2,16 +2,16 @@
   "plan": {
     "calls": [
       {
-        "fn": "pick_up",
+        "fn": "move",
         "index": 0,
         "max_steps": 120,
         "object": "green cube",
-        "primitive_id": "grip_from_edge_cube",
-        "prompt": "Close the gripper on the green cube edge and lift."
+        "primitive_id": "move_over_cube_edge",
+        "prompt": "Move the gripper above one visible green cube edge."
       }
     ],
     "model": "qwen3-vl-8b-instruct-mlx",
-    "task": "Close the gripper on the green cube edge and lift.",
+    "task": "Move the gripper above one visible green cube edge.",
     "thinking_mode": "non-thinking"
   }
 }

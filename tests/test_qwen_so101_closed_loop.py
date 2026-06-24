@@ -309,8 +309,11 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
         }
         cases = [
             ("full_chain_reset", "move_over_cube_edge", "move_over_cube_edge_q_start", 98100),
+            ("move_over_cube_edge", "move_over_cube_edge", "move_over_cube_edge_q_start", 98100),
             ("align_pick_reset", "align_fixed_jaw_cube_edge", "align_fixed_jaw_q_start", 98200),
+            ("align_fixed_jaw_cube_edge", "align_fixed_jaw_cube_edge", "align_fixed_jaw_q_start", 98200),
             ("pick_up_reset", "grip_from_edge_cube", "grip_from_edge_q_start", 98300),
+            ("grip_from_edge_cube", "grip_from_edge_cube", "grip_from_edge_q_start", 98300),
         ]
         for contract, skill, phase, seed in cases:
             with self.subTest(contract=contract, skill=skill):
@@ -323,7 +326,7 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                 report = json.loads(report_path.read_text(encoding="utf-8"))
                 green = [episode for episode in report["episodes"] if episode.get("object_color") == "green"]
                 candidates = green or report["episodes"]
-                expected = candidates[seed % len(candidates)]
+                expected = candidates[0]
                 wrapper = Wrapper()
 
                 with patch(
@@ -334,6 +337,8 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                         env=wrapper,
                         start_contract=contract,
                         seed=seed,
+                        episode_index=0,
+                        object_color="green",
                     )
 
                 self.assertEqual(state["mode"], "exported_dataset_qpos")
@@ -342,11 +347,240 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                 self.assertEqual(state["dataset_skill"], skill)
                 self.assertEqual(state["dataset_split"], "validation")
                 self.assertEqual(state["dataset_object_color"], "green")
+                self.assertEqual(state["dataset_selection"], "episode_index")
+                self.assertEqual(state["dataset_candidate_index"], 0)
                 self.assertEqual(wrapper.env.reset_seed, expected["seed"])
                 self.assertEqual(
                     wrapper.env.qpos,
                     [float(value) for value in expected["q_start"]],
                 )
+
+    def test_start_contract_episode_index_selects_matching_validation_episode_order(self) -> None:
+        class ActionSpace:
+            low = [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+            high = [1.0, 1.0, 1.0, 1.0, 1.0, 2.0]
+
+        class GymEnv:
+            action_space = ActionSpace()
+
+            def __init__(self) -> None:
+                self.unwrapped = self
+                self.qpos = None
+                self.reset_seed = None
+
+            def reset(self, *, seed=None):
+                self.reset_seed = seed
+                return [0.0]
+
+        class Wrapper:
+            def __init__(self) -> None:
+                self.env = GymEnv()
+
+        def set_qpos(env, qpos):
+            env.qpos = [float(value) for value in qpos]
+
+        report_path = Path(
+            "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/"
+            "datasets/grip_from_edge_cube/validation/so101_lerobot_export_report.json"
+        )
+        if not report_path.exists():
+            self.skipTest("local SO101 grip_from_edge_cube validation report is not available")
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        green = [
+            (index, episode)
+            for index, episode in enumerate(report["episodes"])
+            if episode.get("object_color") == "green"
+        ]
+        self.assertGreaterEqual(len(green), 2)
+        source_index, expected = green[1]
+        wrapper = Wrapper()
+
+        with patch(
+            "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_export_helpers",
+            return_value={"_set_qpos": set_qpos, "_current_qpos": lambda env: env.qpos},
+        ):
+            state = _apply_start_contract_to_env(
+                env=wrapper,
+                start_contract="grip_from_edge_cube",
+                seed=98300,
+                episode_index=1,
+                object_color="green",
+            )
+
+        self.assertEqual(state["dataset_selection"], "episode_index")
+        self.assertEqual(state["dataset_candidate_index"], 1)
+        self.assertEqual(state["dataset_source_index"], source_index)
+        self.assertEqual(wrapper.env.reset_seed, expected["seed"])
+        self.assertEqual(wrapper.env.qpos, [float(value) for value in expected["q_start"]])
+
+    def test_start_contract_replays_explicit_closed_loop_report_episode_order(self) -> None:
+        class ActionSpace:
+            low = [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+            high = [1.0, 1.0, 1.0, 1.0, 1.0, 2.0]
+
+        class GymEnv:
+            action_space = ActionSpace()
+
+            def __init__(self) -> None:
+                self.unwrapped = self
+                self.qpos = None
+                self.reset_seed = None
+
+            def reset(self, *, seed=None):
+                self.reset_seed = seed
+                return [0.0]
+
+        class Wrapper:
+            def __init__(self) -> None:
+                self.env = GymEnv()
+
+        def set_qpos(env, qpos):
+            env.qpos = [float(value) for value in qpos]
+
+        with TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "so101_lerobot_export_report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "episodes": [
+                            {
+                                "seed": 500,
+                                "object_color": "green",
+                                "object_shape": "cube",
+                                "task": "first",
+                                "q_start": [0, 0, 0, 0, 0, 0],
+                            },
+                            {
+                                "seed": 501,
+                                "object_color": "green",
+                                "object_shape": "cube",
+                                "task": "second",
+                                "q_start": [1, 2, 3, 4, 5, 6],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            wrapper = Wrapper()
+            with patch(
+                "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_export_helpers",
+                return_value={"_set_qpos": set_qpos, "_current_qpos": lambda env: env.qpos},
+            ):
+                state = _apply_start_contract_to_env(
+                    env=wrapper,
+                    start_contract="grip_from_edge_cube",
+                    seed=98300,
+                    episode_index=1,
+                    object_color="green",
+                    start_report_path=report_path,
+                )
+
+        self.assertTrue(state["dataset_report_explicit"])
+        self.assertEqual(state["source"], "explicit_loop_validation_first_frame_q_start")
+        self.assertEqual(state["dataset_split"], "loop_validation")
+        self.assertEqual(state["dataset_selection"], "episode_index")
+        self.assertEqual(state["dataset_candidate_index"], 1)
+        self.assertEqual(state["dataset_source_index"], 1)
+        self.assertEqual(state["dataset_episode_seed"], 501)
+        self.assertEqual(state["dataset_task"], "second")
+        self.assertEqual(wrapper.env.qpos, [1, 2, 3, 4, 5, 6])
+
+    def test_loop_validation_splits_replay_their_first_frame_states(self) -> None:
+        try:
+            import pandas as pd
+        except Exception as exc:  # pragma: no cover - optional artifact dependency
+            self.skipTest(f"pandas/parquet reader is not available: {exc}")
+
+        class ActionSpace:
+            low = [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+            high = [1.0, 1.0, 1.0, 1.0, 1.0, 2.0]
+
+        class GymEnv:
+            action_space = ActionSpace()
+
+            def __init__(self) -> None:
+                self.unwrapped = self
+                self.qpos = None
+                self.reset_seed = None
+
+            def reset(self, *, seed=None):
+                self.reset_seed = seed
+                return [0.0]
+
+        class Wrapper:
+            def __init__(self) -> None:
+                self.env = GymEnv()
+
+        def set_qpos(env, qpos):
+            env.qpos = [float(value) for value in qpos]
+
+        cases = [
+            (
+                "move_over_cube_edge",
+                Path("_workspace/so101_lerobot/move_over_cube_edge_loop_validation10_ego_wrist_256_seed116500"),
+                "Move the gripper above one visible green cube edge.",
+            ),
+            (
+                "align_fixed_jaw_cube_edge",
+                Path("_workspace/so101_lerobot/align_fixed_jaw_cube_edge_loop_validation10_ego_wrist_256_seed118500"),
+                "Align the gripper jaws around one visible green cube edge.",
+            ),
+            (
+                "grip_from_edge_cube",
+                Path("_workspace/so101_lerobot/grip_from_edge_cube_loop_validation10_ego_wrist_256_seed121000"),
+                "Close the gripper on the green cube edge and lift.",
+            ),
+        ]
+        helpers = {"_set_qpos": set_qpos, "_current_qpos": lambda env: env.qpos}
+
+        for contract, root, expected_task in cases:
+            with self.subTest(contract=contract):
+                report_path = root / "so101_lerobot_export_report.json"
+                data_path = root / "data" / "chunk-000" / "file-000.parquet"
+                if not report_path.exists() or not data_path.exists():
+                    self.skipTest(f"closed-loop test artifact is not available for {contract}: {root}")
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                self.assertEqual(len(report.get("episodes", [])), 10)
+                dataframe = pd.read_parquet(
+                    data_path,
+                    columns=["episode_index", "frame_index", "observation.state"],
+                )
+                first_frames = dataframe[dataframe["frame_index"] == 0].sort_values("episode_index")
+                self.assertEqual(len(first_frames), 10)
+
+                for episode_index in (0, 1, 9):
+                    episode = report["episodes"][episode_index]
+                    first_state = first_frames[first_frames["episode_index"] == episode_index].iloc[0][
+                        "observation.state"
+                    ]
+                    self.assertEqual([float(value) for value in first_state], [float(value) for value in episode["q_start"]])
+
+                    wrapper = Wrapper()
+                    with patch(
+                        "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_export_helpers",
+                        return_value=helpers,
+                    ):
+                        state = _apply_start_contract_to_env(
+                            env=wrapper,
+                            start_contract=contract,
+                            seed=98100 + episode_index,
+                            episode_index=episode_index,
+                            object_color="green",
+                            start_report_path=report_path,
+                        )
+
+                    self.assertEqual(state["source"], "explicit_loop_validation_first_frame_q_start")
+                    self.assertEqual(state["dataset_split"], "loop_validation")
+                    self.assertEqual(state["dataset_report"], str(report_path))
+                    self.assertEqual(state["dataset_selection"], "episode_index")
+                    self.assertEqual(state["dataset_candidate_index"], episode_index)
+                    self.assertEqual(state["dataset_source_index"], episode_index)
+                    self.assertEqual(state["dataset_object_color"], "green")
+                    self.assertEqual(state["dataset_object_shape"], "cube")
+                    self.assertEqual(state["dataset_task"], expected_task)
+                    self.assertEqual(wrapper.env.reset_seed, episode["seed"])
+                    self.assertEqual(wrapper.env.qpos, [float(value) for value in episode["q_start"]])
 
     def test_start_contracts_do_not_fallback_to_wrong_skill_when_export_exists(self) -> None:
         class ActionSpace:
@@ -398,6 +632,8 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                         env=wrapper,
                         start_contract=contract,
                         seed=98100,
+                        episode_index=0,
+                        object_color="green",
                     )
                 self.assertEqual(state["mode"], "exported_dataset_qpos")
                 self.assertTrue(state["applied"])

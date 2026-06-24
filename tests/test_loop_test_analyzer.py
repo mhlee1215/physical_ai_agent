@@ -257,34 +257,34 @@ class LoopTestAnalyzerTest(unittest.TestCase):
                         "closed_loop": {
                             "test_cases": [
                                 {
-                                    "id": "move_align_pick_up",
-                                    "description": "Requires move, align, and pick up primitives to succeed.",
-                                    "episodes": 5,
+                                    "id": "move_over_cube_edge",
+                                    "description": "Move primitive closed-loop test.",
+                                    "episodes": 10,
                                     "steps": 120,
                                     "seed": 98100,
-                                    "start_contract": "full_chain_reset",
-                                    "task_prompt": "pick and lift the green cube",
-                                    "plan_json": "configs/agent/qwen3_so101_tool_plan_move_align_pick_up_green_cube.json",
+                                    "start_contract": "move_over_cube_edge",
+                                    "task_prompt": "Move the gripper above one visible green cube edge.",
+                                    "plan_json": "configs/agent/qwen3_so101_tool_plan_move_over_cube_edge_green_cube.json",
                                 },
                                 {
-                                    "id": "align_pick_up",
-                                    "description": "Starts close enough that align and pick up primitives should be sufficient.",
-                                    "episodes": 5,
+                                    "id": "align_fixed_jaw_cube_edge",
+                                    "description": "Align primitive closed-loop test.",
+                                    "episodes": 10,
                                     "steps": 120,
                                     "seed": 98200,
-                                    "start_contract": "align_pick_reset",
-                                    "task_prompt": "align with and lift the green cube",
-                                    "plan_json": "configs/agent/qwen3_so101_tool_plan_align_pick_up_green_cube.json",
+                                    "start_contract": "align_fixed_jaw_cube_edge",
+                                    "task_prompt": "Align the gripper jaws around one visible green cube edge.",
+                                    "plan_json": "configs/agent/qwen3_so101_tool_plan_align_fixed_jaw_cube_edge_green_cube.json",
                                 },
                                 {
-                                    "id": "pick_up_only",
-                                    "description": "Starts from the pick-up primitive distribution and only requires pick up.",
-                                    "episodes": 5,
+                                    "id": "grip_from_edge_cube",
+                                    "description": "Grip primitive closed-loop test.",
+                                    "episodes": 10,
                                     "steps": 120,
                                     "seed": 98300,
-                                    "start_contract": "pick_up_reset",
-                                    "task_prompt": "lift the green cube",
-                                    "plan_json": "configs/agent/qwen3_so101_tool_plan_pick_up_green_cube.json",
+                                    "start_contract": "grip_from_edge_cube",
+                                    "task_prompt": "Close the gripper on the green cube edge and lift.",
+                                    "plan_json": "configs/agent/qwen3_so101_tool_plan_grip_from_edge_cube_green_cube.json",
                                 },
                             ]
                         }
@@ -293,7 +293,7 @@ class LoopTestAnalyzerTest(unittest.TestCase):
                 encoding="utf-8",
             )
             run_dir = repo_root / "_workspace" / "so101_training" / "runs" / "debug_run"
-            loop_dir = run_dir / "closed_loop_evals" / "qwen_chain_pick_up_only_seed98300_000086"
+            loop_dir = run_dir / "closed_loop_evals" / "qwen_chain_grip_from_edge_cube_seed98300_000086"
             episode_dir = loop_dir
             media_dir = episode_dir / "media"
             policy_dir = media_dir / "policy_inputs"
@@ -341,15 +341,15 @@ class LoopTestAnalyzerTest(unittest.TestCase):
                         "status": "passed",
                         "env_id": "MuJoCoPickLift-v1",
                         "seed": 98300,
-                        "start_contract": "pick_up_reset",
+                        "start_contract": "grip_from_edge_cube",
                         "success_rate": 0.0,
                         "episodes_completed": 1,
                         "camera_contract": {
                             "observation.images.camera1": "egocentric_cam",
                             "observation.images.camera2": "wrist_cam",
                         },
-                        "plan": {"task": "lift the green cube", "calls": []},
-                        "qwen_prompts": {"user": "Task: lift the green cube"},
+                        "plan": {"task": "Close the gripper on the green cube edge and lift.", "calls": []},
+                        "qwen_prompts": {"user": "Task: Close the gripper on the green cube edge and lift."},
                         "episodes": [
                             {
                                 "episode": 0,
@@ -380,14 +380,15 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertEqual(listing["exports"][0]["id"], "official_qwen_edge_test_cases")
         self.assertEqual(
             [item["test_case_id"] for item in listing["exports"][0]["loop_tests"]],
-            ["move_align_pick_up", "align_pick_up", "pick_up_only"],
+            ["move_over_cube_edge", "align_fixed_jaw_cube_edge", "grip_from_edge_cube"],
         )
         self.assertEqual(listing["exports"][0]["loop_tests"][0]["status"], "not_run")
         self.assertEqual(pick_item["checkpoint"], "000086")
         self.assertEqual(pick_item["configured_seed"], 98300)
-        self.assertEqual(pick_item["start_contract"], "pick_up_reset")
-        self.assertEqual(pick_item["loop_test_id"], "qwen_chain_pick_up_only_seed98300_000086")
-        self.assertEqual(detail["plan"]["task"], "lift the green cube")
+        self.assertEqual(pick_item["start_contract"], "grip_from_edge_cube")
+        self.assertEqual(pick_item["loop_test_id"], "qwen_chain_grip_from_edge_cube_seed98300_000086")
+        self.assertEqual(pick_item["scenario"], "Close the gripper on the green cube edge and lift.")
+        self.assertEqual(detail["plan"]["task"], "Close the gripper on the green cube edge and lift.")
         self.assertEqual(detail["step"]["policy_input_prompt"], "Close the gripper on the green cube edge and lift.")
         self.assertIn("egocentric_cam", detail["images"]["policy_inputs"])
         self.assertIn("data:image/png;base64", detail["images"]["policy_inputs"]["egocentric_cam"])
@@ -406,7 +407,7 @@ class LoopTestAnalyzerTest(unittest.TestCase):
                 repo_root,
                 "/api/loop-frame"
                 "?export=official_qwen_edge_test_cases"
-                "&loop=qwen_chain_pick_up_only_seed98300_000086"
+                "&loop=qwen_chain_grip_from_edge_cube_seed98300_000086"
                 "&episode=0"
                 "&step=0",
             )
@@ -423,11 +424,12 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertIn("loopPlaybackTick", html)
         self.assertEqual(listing["source"], "official_closed_loop_test_cases")
         pick_item = listing["exports"][0]["loop_tests"][2]
-        self.assertEqual(pick_item["test_case_id"], "pick_up_only")
+        self.assertEqual(pick_item["test_case_id"], "grip_from_edge_cube")
         self.assertEqual(pick_item["configured_seed"], 98300)
-        self.assertEqual(pick_item["start_contract"], "pick_up_reset")
+        self.assertEqual(pick_item["start_contract"], "grip_from_edge_cube")
+        self.assertEqual(pick_item["scenario"], "Close the gripper on the green cube edge and lift.")
         self.assertFalse(pick_item["loop_test_id"] == "")
-        self.assertEqual(preview["loop_test"]["id"], "qwen_chain_pick_up_only_seed98300_000086")
+        self.assertEqual(preview["loop_test"]["id"], "qwen_chain_grip_from_edge_cube_seed98300_000086")
         self.assertEqual(preview["step"]["policy_input_prompt"], "Close the gripper on the green cube edge and lift.")
         self.assertIn("egocentric_cam", preview["images"]["policy_inputs"])
         self.assertIn("egocentric_cam", preview["start_images"]["policy_inputs"])
@@ -436,8 +438,104 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertIn("top_down", preview["images"]["robot_frames"])
         self.assertIn("top_down", preview["start_images"]["robot_frames"])
         self.assertTrue(preview["images"]["policy_inputs"]["egocentric_cam"].startswith("data:image/png;base64,"))
+
+    def test_dataset_viewer_does_not_rewrite_report_plan_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir) / "physical_ai_agent"
+            _write_viewer_closed_loop_fixture(repo_root)
+            report_path = (
+                repo_root
+                / "_workspace"
+                / "so101_training"
+                / "runs"
+                / "debug_run"
+                / "closed_loop_evals"
+                / "qwen_chain_grip_from_edge_cube_seed98300_000086"
+                / "qwen_closed_loop_eval_report.json"
+            )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["plan"]["task"] = "stale report prompt"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            preview = _handle_viewer_request(
+                repo_root,
+                "/api/loop-frame"
+                "?export=official_qwen_edge_test_cases"
+                "&loop=qwen_chain_grip_from_edge_cube_seed98300_000086"
+                "&episode=0"
+                "&step=0",
+            )
+
+        self.assertEqual(preview["loop_test"]["scenario"], "Close the gripper on the green cube edge and lift.")
+        self.assertEqual(preview["plan"]["task"], "stale report prompt")
         self.assertTrue(preview["start_images"]["policy_inputs"]["egocentric_cam"].startswith("data:image/png;base64,"))
         self.assertEqual(preview["step"]["media_available"], True)
+
+    def test_dataset_viewer_official_roots_include_qwen_edge_train_and_validation_lists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir) / "physical_ai_agent"
+            config_dir = repo_root / "configs" / "so101" / "training_datasets"
+            config_dir.mkdir(parents=True)
+            for rel in (
+                "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/move_over_cube_edge/train",
+                "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/align_fixed_jaw_cube_edge/train",
+                "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/grip_from_edge_cube/train",
+                "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/move_over_cube_edge/validation",
+                "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/align_fixed_jaw_cube_edge/validation",
+                "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/grip_from_edge_cube/validation",
+            ):
+                (repo_root / rel).mkdir(parents=True)
+            (config_dir / "qwen_edge_primitives.json").write_text(
+                json.dumps(
+                    {
+                        "train_datasets": [
+                            {
+                                "name": "move_over_cube_edge_train",
+                                "root": "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/move_over_cube_edge/train",
+                            },
+                            {
+                                "name": "align_fixed_jaw_cube_edge_train",
+                                "root": "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/align_fixed_jaw_cube_edge/train",
+                            },
+                            {
+                                "name": "grip_from_edge_cube_train",
+                                "root": "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/grip_from_edge_cube/train",
+                            },
+                        ],
+                        "validation_dataset": {
+                            "hf_merge_sources": [
+                                {
+                                    "name": "move_over_cube_edge_val",
+                                    "hf_path_in_repo": "datasets/move_over_cube_edge/validation",
+                                },
+                                {
+                                    "name": "align_fixed_jaw_cube_edge_val",
+                                    "hf_path_in_repo": "datasets/align_fixed_jaw_cube_edge/validation",
+                                },
+                                {
+                                    "name": "grip_from_edge_cube_val",
+                                    "hf_path_in_repo": "datasets/grip_from_edge_cube/validation",
+                                },
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            roots = dataset_viewer._official_dataset_roots(repo_root)
+
+        self.assertEqual(
+            set(roots),
+            {
+                "move_over_cube_edge_train",
+                "align_fixed_jaw_cube_edge_train",
+                "grip_from_edge_cube_train",
+                "move_over_cube_edge_val",
+                "align_fixed_jaw_cube_edge_val",
+                "grip_from_edge_cube_val",
+            },
+        )
 
     def test_media_job_status_round_trips_in_export_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -558,37 +656,37 @@ def _write_viewer_closed_loop_fixture(repo_root: Path) -> None:
                 "closed_loop": {
                     "test_cases": [
                         {
-                            "id": "move_align_pick_up",
-                            "description": "Requires move, align, and pick up primitives to succeed.",
-                            "episodes": 5,
+                            "id": "move_over_cube_edge",
+                            "description": "Move primitive closed-loop test.",
+                            "episodes": 10,
                             "steps": 120,
                             "seed": 98100,
-                            "start_contract": "full_chain_reset",
-                            "task_prompt": "pick and lift the green cube",
+                            "start_contract": "move_over_cube_edge",
+                            "task_prompt": "Move the gripper above one visible green cube edge.",
                             "env_object_color": "green",
-                            "plan_json": "configs/agent/qwen3_so101_tool_plan_move_align_pick_up_green_cube.json",
+                            "plan_json": "configs/agent/qwen3_so101_tool_plan_move_over_cube_edge_green_cube.json",
                         },
                         {
-                            "id": "align_pick_up",
-                            "description": "Starts close enough that align and pick up primitives should be sufficient.",
-                            "episodes": 5,
+                            "id": "align_fixed_jaw_cube_edge",
+                            "description": "Align primitive closed-loop test.",
+                            "episodes": 10,
                             "steps": 120,
                             "seed": 98200,
-                            "start_contract": "align_pick_reset",
-                            "task_prompt": "align with and lift the green cube",
+                            "start_contract": "align_fixed_jaw_cube_edge",
+                            "task_prompt": "Align the gripper jaws around one visible green cube edge.",
                             "env_object_color": "green",
-                            "plan_json": "configs/agent/qwen3_so101_tool_plan_align_pick_up_green_cube.json",
+                            "plan_json": "configs/agent/qwen3_so101_tool_plan_align_fixed_jaw_cube_edge_green_cube.json",
                         },
                         {
-                            "id": "pick_up_only",
-                            "description": "Starts from the pick-up primitive distribution and only requires pick up.",
-                            "episodes": 5,
+                            "id": "grip_from_edge_cube",
+                            "description": "Grip primitive closed-loop test.",
+                            "episodes": 10,
                             "steps": 120,
                             "seed": 98300,
-                            "start_contract": "pick_up_reset",
-                            "task_prompt": "lift the green cube",
+                            "start_contract": "grip_from_edge_cube",
+                            "task_prompt": "Close the gripper on the green cube edge and lift.",
                             "env_object_color": "green",
-                            "plan_json": "configs/agent/qwen3_so101_tool_plan_pick_up_green_cube.json",
+                            "plan_json": "configs/agent/qwen3_so101_tool_plan_grip_from_edge_cube_green_cube.json",
                         },
                     ]
                 }
@@ -597,7 +695,7 @@ def _write_viewer_closed_loop_fixture(repo_root: Path) -> None:
         encoding="utf-8",
     )
     run_dir = repo_root / "_workspace" / "so101_training" / "runs" / "debug_run"
-    loop_dir = run_dir / "closed_loop_evals" / "qwen_chain_pick_up_only_seed98300_000086"
+    loop_dir = run_dir / "closed_loop_evals" / "qwen_chain_grip_from_edge_cube_seed98300_000086"
     media_dir = loop_dir / "media"
     policy_dir = media_dir / "policy_inputs"
     robot_dir = media_dir / "robot_frames"
@@ -643,14 +741,14 @@ def _write_viewer_closed_loop_fixture(repo_root: Path) -> None:
                 "env_id": "MuJoCoPickLift-v1",
                 "env_config": {"object_shape": "cube", "object_color": "green", "n_distractors": 0},
                 "seed": 98300,
-                "start_contract": "pick_up_reset",
+                "start_contract": "grip_from_edge_cube",
                 "success_rate": 0.0,
                 "episodes_completed": 1,
                 "camera_contract": {
                     "observation.images.camera1": "egocentric_cam",
                     "observation.images.camera2": "wrist_cam",
                 },
-                "plan": {"task": "lift the green cube", "calls": []},
+                "plan": {"task": "Close the gripper on the green cube edge and lift.", "calls": []},
                 "episodes": [
                     {
                         "episode": 0,

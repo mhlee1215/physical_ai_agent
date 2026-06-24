@@ -134,6 +134,7 @@ def run_closed_loop_plan(
     artifact_config: LoopArtifactConfig | None = None,
     env_config: dict[str, Any] | None = None,
     start_contract: str = "default_reset",
+    start_report_path: Path | None = None,
     precondition_plan: SO101ToolPlan | None = None,
     env_factory: EnvFactory = SO101NexusEnv,
     policy_loader: PolicyLoader = _load_pretrained_policy,
@@ -186,6 +187,7 @@ def run_closed_loop_plan(
                     artifact_config=artifact_config or LoopArtifactConfig(),
                     env_config=env_config or {},
                     start_contract=start_contract,
+                    start_report_path=start_report_path,
                     precondition_calls=precondition_calls,
                     batch_builder=batch_builder,
                 )
@@ -208,6 +210,7 @@ def run_closed_loop_plan(
         "env_id": env_id,
         "env_config": env_config or {},
         "start_contract": start_contract,
+        "start_report_path": str(start_report_path) if start_report_path else None,
         "precondition_plan": plan_to_dict(precondition_plan) if precondition_plan else None,
         "camera_contract": {
             "observation.images.camera1": "egocentric_cam",
@@ -264,6 +267,7 @@ def _run_episode(
     artifact_config: LoopArtifactConfig,
     env_config: dict[str, Any],
     start_contract: str,
+    start_report_path: Path | None,
     precondition_calls: list[SO101PrimitiveCall],
     batch_builder: BatchBuilder,
 ) -> dict[str, Any]:
@@ -284,6 +288,9 @@ def _run_episode(
             env=env,
             start_contract=start_contract,
             seed=seed,
+            episode_index=episode,
+            object_color=_start_contract_object_color(env_config),
+            start_report_path=start_report_path,
         )
         if start_state.get("observation") is not None:
             obs = start_state["observation"]
@@ -412,6 +419,7 @@ def _run_episode(
                         "probs": valid_mask_probs,
                     },
                     "observation": obs,
+                    "sim_snapshot": _snapshot_sim_state_or_none(env),
                     "action": action,
                     "reward": float(reward),
                     "terminated": bool(terminated),
@@ -617,7 +625,15 @@ def _run_precondition_call(
     return summary, obs, total_reward, final_info, bool(terminated), bool(truncated)
 
 
-def _apply_start_contract_to_env(*, env: Any, start_contract: str, seed: int) -> dict[str, Any]:
+def _apply_start_contract_to_env(
+    *,
+    env: Any,
+    start_contract: str,
+    seed: int,
+    episode_index: int | None = None,
+    object_color: str | None = None,
+    start_report_path: Path | None = None,
+) -> dict[str, Any]:
     contract = str(start_contract or "default_reset")
     if contract == "default_reset":
         return {"contract": contract, "applied": False, "mode": "env_reset"}
@@ -630,14 +646,25 @@ def _apply_start_contract_to_env(*, env: Any, start_contract: str, seed: int) ->
             "reason": "env has no gymnasium unwrapped simulator",
         }
     try:
-        qpos, details = _dataset_backed_start_qpos(gym_env, contract=contract, seed=seed)
+        qpos, details = _dataset_backed_start_qpos(
+            gym_env,
+            contract=contract,
+            seed=seed,
+            episode_index=episode_index,
+            object_color=object_color,
+            start_report_path=start_report_path,
+        )
         if qpos is None and contract == "full_chain_reset":
             return {"contract": contract, "applied": False, "mode": "env_reset", **details}
         if qpos is None:
             qpos, details = _fixed_jaw_edge_start_qpos(gym_env, contract=contract, seed=seed)
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"failed to apply SO101 start_contract={contract!r}: {_short_error(exc)}") from exc
-    _set_sim_qpos(gym_env, qpos)
+    sim_snapshot = details.get("sim_snapshot") if isinstance(details, dict) else None
+    if sim_snapshot:
+        _restore_sim_state(gym_env, sim_snapshot)
+    else:
+        _set_sim_qpos(gym_env, qpos)
     observation = _current_sim_qpos(gym_env)
     details.update(
         {
@@ -657,18 +684,31 @@ def _gym_env_or_none(env: Any) -> Any | None:
     return None
 
 
-def _dataset_backed_start_qpos(gym_env: Any, *, contract: str, seed: int) -> tuple[Any | None, dict[str, Any]]:
+def _dataset_backed_start_qpos(
+    gym_env: Any,
+    *,
+    contract: str,
+    seed: int,
+    episode_index: int | None = None,
+    object_color: str | None = None,
+    start_report_path: Path | None = None,
+) -> tuple[Any | None, dict[str, Any]]:
     if not callable(getattr(gym_env, "reset", None)):
         return None, {}
     mapping = {
         "full_chain_reset": ("move_over_cube_edge", "validation", "move_over_cube_edge_q_start"),
+        "move_over_cube_edge": ("move_over_cube_edge", "validation", "move_over_cube_edge_q_start"),
         "align_pick_reset": ("align_fixed_jaw_cube_edge", "validation", "align_fixed_jaw_q_start"),
+        "align_fixed_jaw_cube_edge": ("align_fixed_jaw_cube_edge", "validation", "align_fixed_jaw_q_start"),
+        "move_and_align_cube_edge": ("move_and_align_cube_edge", "validation", "move_and_align_q_start"),
         "pick_up_reset": ("grip_from_edge_cube", "validation", "grip_from_edge_q_start"),
+        "grip_from_edge_cube": ("grip_from_edge_cube", "validation", "grip_from_edge_q_start"),
     }
     if contract not in mapping:
         return None, {}
     skill, split, phase = mapping[contract]
-    report_path = (
+    explicit_report = start_report_path is not None
+    report_path = Path(start_report_path) if start_report_path is not None else (
         Path.cwd()
         / "_workspace"
         / "hf_datasets"
@@ -678,15 +718,35 @@ def _dataset_backed_start_qpos(gym_env: Any, *, contract: str, seed: int) -> tup
         / split
         / "so101_lerobot_export_report.json"
     )
+    dataset_split = "loop_validation" if explicit_report else split
     if not report_path.exists():
         return None, {}
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    episodes = [episode for episode in report.get("episodes", []) if isinstance(episode, dict) and episode.get("q_start")]
-    green_episodes = [episode for episode in episodes if episode.get("object_color") == "green"]
-    candidates = green_episodes or episodes
+    indexed_episodes = [
+        (index, episode)
+        for index, episode in enumerate(report.get("episodes", []))
+        if isinstance(episode, dict) and episode.get("q_start")
+    ]
+    color = str(object_color or "green").strip().lower()
+    color_episodes = [
+        (index, episode)
+        for index, episode in indexed_episodes
+        if str(episode.get("object_color") or "").strip().lower() == color
+    ]
+    candidates = color_episodes or indexed_episodes
     if not candidates:
         return None, {}
-    selected = candidates[int(seed) % len(candidates)]
+    if episode_index is not None:
+        selection_index = int(episode_index)
+        if explicit_report and selection_index >= len(candidates):
+            raise ValueError(
+                f"closed-loop start report {report_path} has {len(candidates)} matching episodes; "
+                f"cannot replay episode_index={selection_index}"
+            )
+        selection_index = selection_index % len(candidates)
+    else:
+        selection_index = int(seed) % len(candidates)
+    source_index, selected = candidates[selection_index]
     dataset_seed = selected.get("seed")
     if dataset_seed is not None:
         gym_env.reset(seed=int(dataset_seed))
@@ -694,20 +754,33 @@ def _dataset_backed_start_qpos(gym_env: Any, *, contract: str, seed: int) -> tup
     return q_start, {
         "phase": phase,
         "mode": "exported_dataset_qpos",
-        "source": "exported_validation_dataset_q_start",
+        "source": "explicit_loop_validation_first_frame_q_start" if explicit_report else "exported_validation_dataset_q_start",
         "dataset_skill": skill,
-        "dataset_split": split,
+        "dataset_split": dataset_split,
         "dataset_report": str(report_path),
+        "dataset_report_explicit": explicit_report,
         "dataset_episode_seed": dataset_seed,
-        "dataset_episode_index": selected.get("episode_index"),
+        "dataset_episode_index": selected.get("episode_index", source_index),
+        "dataset_source_index": source_index,
+        "dataset_candidate_index": selection_index,
+        "dataset_candidate_count": len(candidates),
+        "dataset_selection": "episode_index" if episode_index is not None else "seed_modulo",
         "dataset_object_color": selected.get("object_color"),
         "dataset_object_shape": selected.get("object_shape"),
         "dataset_task": selected.get("task"),
         "q_start": q_start,
+        "sim_snapshot": selected.get("sim_snapshot"),
         "q_edge": selected.get("q_edge"),
         "q_above": selected.get("q_above"),
-        "static_edge_error": _jsonable_info(selected.get("start_static_edge_error")),
+        "static_edge_error": _jsonable_info(selected.get("start_static_edge_error") or {}),
     }
+
+
+def _start_contract_object_color(env_config: dict[str, Any]) -> str | None:
+    color = env_config.get("object_color") if isinstance(env_config, dict) else None
+    if color is None or str(color) == "dataset_seeded_high_contrast":
+        return "green"
+    return str(color)
 
 
 def _fixed_jaw_edge_start_qpos(gym_env: Any, *, contract: str, seed: int) -> tuple[Any, dict[str, Any]]:
@@ -726,11 +799,11 @@ def _fixed_jaw_edge_start_qpos(gym_env: Any, *, contract: str, seed: int) -> tup
         move_target_z_offset=0.06,
     )
     low = gym_env.action_space.low
-    if contract == "align_pick_reset":
+    if contract in {"align_pick_reset", "align_fixed_jaw_cube_edge"}:
         q_start = q_above.copy()
         q_start[-1] = float(low[-1])
         phase = "edge_above_closed_gripper"
-    elif contract == "pick_up_reset":
+    elif contract in {"pick_up_reset", "grip_from_edge_cube"}:
         q_start = q_edge.copy()
         q_start[-1] = helpers["_open_gripper_value"](gym_env)
         phase = "edge_contact_open_gripper"
@@ -787,6 +860,45 @@ def _set_sim_qpos(gym_env: Any, qpos: Any) -> None:
 def _current_sim_qpos(gym_env: Any) -> list[float]:
     helpers = _fixed_jaw_export_helpers()
     return [float(value) for value in helpers["_current_qpos"](gym_env)]
+
+
+def _snapshot_sim_state_or_none(env: Any) -> dict[str, list[float]] | None:
+    gym_env = _gym_env_or_none(env)
+    if gym_env is None:
+        return None
+    unwrapped = getattr(gym_env, "unwrapped", gym_env)
+    data = getattr(unwrapped, "data", None)
+    if data is None:
+        return None
+    snapshot: dict[str, list[float]] = {}
+    for key in ("qpos", "qvel", "ctrl"):
+        values = getattr(data, key, None)
+        if values is not None:
+            snapshot[key] = [float(value) for value in values]
+    return snapshot or None
+
+
+def _restore_sim_state(gym_env: Any, snapshot: dict[str, Any]) -> None:
+    unwrapped = getattr(gym_env, "unwrapped", gym_env)
+    data = getattr(unwrapped, "data", None)
+    if data is None:
+        raise RuntimeError("cannot restore simulator state: env has no data")
+    for key in ("qpos", "qvel", "ctrl"):
+        if key not in snapshot:
+            continue
+        target = getattr(data, key, None)
+        if target is None:
+            continue
+        values = list(snapshot[key])
+        if len(values) != len(target):
+            raise ValueError(f"sim_snapshot.{key} length {len(values)} does not match env {key} length {len(target)}")
+        target[:] = values
+    try:
+        import mujoco
+
+        mujoco.mj_forward(unwrapped.model, data)
+    except Exception:
+        pass
 
 
 def _override_policy_rollout_config(

@@ -148,6 +148,16 @@ Closed-loop test case workflow:
   post-checkpoint loop command per case. `scripts/serve_so101_dataset_viewer.py`
   reads the same `closed_loop.test_cases` catalog and attaches the latest
   matching rollout artifact if one exists.
+- Official closed-loop test episodes are dataset-backed identities, not a loose
+  seed modulo reset. Keep train and validation splits unchanged, create a
+  separate `loop_validation` split when the user asks for exact loop-test
+  alignment, and point each official test case at that split through
+  `start_dataset.root` or `start_report_path`. Episode `i` must initialize from
+  the `i`th matching exported episode in that closed-loop report, filtered by
+  `env_object_color` when present. Closed-loop reports must keep the selected
+  `dataset_source_index`, `dataset_candidate_index`, `dataset_episode_seed`,
+  object metadata, and prompt so the viewer can prove alignment with the
+  corresponding split.
 - Do not rename, remove, or reinterpret closed-loop test cases without explicit
   user approval. Treat them like dataset splits: config first, artifacts second.
 

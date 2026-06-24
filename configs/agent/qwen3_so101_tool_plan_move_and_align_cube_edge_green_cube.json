@@ -1,0 +1,17 @@
+{
+  "plan": {
+    "calls": [
+      {
+        "fn": "move",
+        "index": 0,
+        "max_steps": 120,
+        "object": "green cube",
+        "primitive_id": "move_and_align_cube_edge",
+        "prompt": "Move above one visible green cube edge and align the gripper jaws around it."
+      }
+    ],
+    "model": "qwen3-vl-8b-instruct-mlx",
+    "task": "Move above one visible green cube edge and align the gripper jaws around it.",
+    "thinking_mode": "non-thinking"
+  }
+}

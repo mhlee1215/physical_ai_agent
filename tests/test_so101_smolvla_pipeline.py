@@ -370,10 +370,55 @@ class SO101SmolVLAPipelineTest(TestCase):
 
         self.assertIn("writer.add_video", source)
         self.assertIn("rollout_{camera_name}", source)
+        self.assertIn("_closed_loop_frame_label", source)
         self.assertIn('"camera1"', source)
         self.assertIn('"camera2"', source)
         self.assertIn("observation.images.camera1", source)
         self.assertIn("observation.images.camera2", source)
+
+    def test_training_monitor_overlays_episode_and_frame_on_closed_loop_rollout(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "step_0007_egocentric_cam.png"
+            Image.new("RGB", (96, 64), color=(255, 255, 255)).save(image_path)
+            trace_path = root / "trace.jsonl"
+            trace_path.write_text(
+                json.dumps(
+                    {
+                        "episode": 2,
+                        "global_step": 7,
+                        "prompt": "Close the gripper on the green cube edge and lift.",
+                        "image_feature_mapping": {"observation.images.camera1": "egocentric_cam"},
+                        "media": {"policy_input_images": {"egocentric_cam": str(image_path)}},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            report = {"episodes": [{"episode": 2, "trace_path": str(trace_path)}]}
+
+            frames = monitor._closed_loop_policy_camera_frames(
+                report,
+                "observation.images.camera1",
+                max_frames=4,
+            )
+            self.assertEqual(
+                frames,
+                [(image_path, "ep 002 | frame 007\nprompt: Close the gripper on the green cube edge...")],
+            )
+            self.assertEqual(
+                monitor._short_closed_loop_prompt("  close   the   gripper  "),
+                "close the gripper",
+            )
+
+            video = monitor._frames_to_tensorboard_video(frames)
+            self.assertIsNotNone(video)
+            self.assertEqual(tuple(video.shape), (1, 1, 3, 64, 96))
+            self.assertLess(int(video[0, 0, :, 0, 0].max()), 20)
 
     def test_training_monitor_uses_macos_safe_mujoco_gl(self) -> None:
         sys.path.insert(0, str(Path("scripts").resolve()))
@@ -924,6 +969,10 @@ class SO101SmolVLAPipelineTest(TestCase):
             "Align the gripper jaws around one visible {color} {shape} edge.",
         )
         self.assertEqual(
+            COLOR_SHAPE_SKILL_TASK_TEMPLATES["move_and_align_cube_edge"],
+            "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
+        )
+        self.assertEqual(
             COLOR_SHAPE_SKILL_TASK_TEMPLATES["grip_from_edge_cube"],
             "Close the gripper on the {color} {shape} edge and lift.",
         )
@@ -1132,8 +1181,126 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--training-run-summary-path", train_cmd)
             self.assertEqual(
                 [case["id"] for case in payload["dataset_config"]["closed_loop"]["test_cases"]],
-                ["move_align_pick_up", "align_pick_up", "pick_up_only"],
+                ["move_over_cube_edge", "align_fixed_jaw_cube_edge", "grip_from_edge_cube"],
             )
+
+    def test_single_training_launcher_records_stable_training_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "dataset_config.json"
+            train_root = Path(tmpdir) / "train"
+            val_root = Path(tmpdir) / "val"
+            train_root.mkdir()
+            val_root.mkdir()
+            config.write_text(
+                json.dumps(
+                    {
+                        "name": "tiny_grip_debug",
+                        "train_dataset": {
+                            "name": "grip_from_edge_cube_train",
+                            "repo_id": "physical-ai-agent/train",
+                            "root": str(train_root),
+                        },
+                        "validation_dataset": {
+                            "name": "grip_from_edge_cube_val",
+                            "repo_id": "physical-ai-agent/val",
+                            "root": str(val_root),
+                        },
+                        "training": {"steps_per_epoch": 10, "policy_push_to_hub": False},
+                        "closed_loop": {
+                            "runner": "qwen_chain",
+                            "task_prompt": "Close the gripper on the green cube edge and lift.",
+                            "valid_mask_checkpoint": "_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt",
+                            "test_cases": [
+                                {
+                                    "id": "grip_from_edge_cube",
+                                    "episodes": 10,
+                                    "seed": 98300,
+                                    "start_contract": "grip_from_edge_cube",
+                                    "task_prompt": "Close the gripper on the green cube edge and lift.",
+                                    "plan_json": "configs/agent/qwen3_so101_tool_plan_grip_from_edge_cube_green_cube.json",
+                                }
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--json",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--training-id",
+                    "debug.grip.001",
+                    "--dataset-config",
+                    str(config),
+                    "--use-local-dataset-roots",
+                    "--runtime-platform",
+                    "macos",
+                    "--training-device",
+                    "mps",
+                    "--closed-loop-runner",
+                    "qwen_chain",
+                    "--closed-loop-every-epochs",
+                    "1",
+                    "--closed-loop-policy",
+                    "best_or_periodic",
+                    "--",
+                    "--steps=20",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["training_id"], "debug.grip.001")
+            self.assertEqual(payload["dataset_config"]["name"], "tiny_grip_debug")
+
+    def test_training_manager_lists_runs_by_training_id(self) -> None:
+        _ensure_scripts_on_path()
+        import serve_so101_training_manager as manager
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir) / "repo"
+            run_dir = repo_root / "_workspace" / "so101_training" / "runs" / "debug_run"
+            run_dir.mkdir(parents=True)
+            summary_path = run_dir / "training_run_summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "training_id": "debug.grip.001",
+                        "run_dir": str(run_dir),
+                        "dataset_config": {"name": "tiny_grip_debug", "task": "grip_from_edge_cube"},
+                        "tensorboard_url": "http://127.0.0.1:6015/",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            metrics_dir = run_dir / "metrics"
+            metrics_dir.mkdir()
+            (metrics_dir / "training_metrics.jsonl").write_text('{"step": 1, "loss": 0.2}\n', encoding="utf-8")
+            (metrics_dir / "validation_metrics.jsonl").write_text('{"step": 1, "loss": 0.3}\n', encoding="utf-8")
+            (metrics_dir / "closed_loop_metrics.jsonl").write_text(
+                '{"step": 1, "test_id": "grip_from_edge_cube", "success_rate": 0.4}\n',
+                encoding="utf-8",
+            )
+
+            listing = manager._runs_payload(repo_root)
+            detail = manager._run_detail(repo_root, "debug.grip.001")
+
+        self.assertEqual(listing["runs"][0]["training_id"], "debug.grip.001")
+        self.assertEqual(listing["runs"][0]["latest_train_loss"], 0.2)
+        self.assertEqual(listing["runs"][0]["latest_val_loss"], 0.3)
+        self.assertEqual(detail["metrics"]["closed_loop"][0]["test_id"], "grip_from_edge_cube")
 
     def test_single_training_launcher_uses_linux_runpod_runtime_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1811,11 +1978,11 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(closed_loop["execution_policy"], "qwen_edge_chain")
         self.assertEqual(closed_loop["env_id"], "MuJoCoPickLift-v1")
         self.assertEqual(closed_loop["qwen_object"], "green cube")
-        self.assertNotIn("env_object_color", closed_loop)
+        self.assertEqual(closed_loop["env_object_color"], "green")
         self.assertIn("valid_mask_checkpoint", closed_loop)
         self.assertTrue(str(closed_loop["valid_mask_checkpoint"]).endswith("valid_mask_head.pt"))
 
-    def test_qwen_edge_closed_loop_test_cases_are_explicit_and_five_episode(self) -> None:
+    def test_qwen_edge_loop_validation_cases_match_primitive_dataset_names(self) -> None:
         config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
         self.assertIn("test_cases", config["closed_loop"])
         self.assertNotIn("suites", config["closed_loop"])
@@ -1823,33 +1990,48 @@ class SO101SmolVLAPipelineTest(TestCase):
 
         self.assertEqual(
             [test_case["id"] for test_case in test_cases],
-            ["move_align_pick_up", "align_pick_up", "pick_up_only"],
+            ["move_over_cube_edge", "align_fixed_jaw_cube_edge", "grip_from_edge_cube"],
         )
         expected_calls = {
-            "move_align_pick_up": ["move", "align", "pick_up"],
-            "align_pick_up": ["align", "pick_up"],
-            "pick_up_only": ["pick_up"],
+            "move_over_cube_edge": ["move"],
+            "align_fixed_jaw_cube_edge": ["align"],
+            "grip_from_edge_cube": ["pick_up"],
+        }
+        expected_closed_loop_roots = {
+            "move_over_cube_edge": "_workspace/so101_lerobot/move_over_cube_edge_loop_validation10_ego_wrist_256_seed116500",
+            "align_fixed_jaw_cube_edge": "_workspace/so101_lerobot/align_fixed_jaw_cube_edge_loop_validation10_ego_wrist_256_seed118500",
+            "grip_from_edge_cube": "_workspace/so101_lerobot/grip_from_edge_cube_loop_validation10_ego_wrist_256_seed121000",
         }
         for test_case in test_cases:
             with self.subTest(test_case=test_case["id"]):
-                self.assertEqual(test_case["episodes"], 5)
+                self.assertEqual(test_case["episodes"], 10)
                 self.assertIn("seed", test_case)
-                self.assertIn("start_contract", test_case)
+                self.assertEqual(test_case["start_contract"], test_case["id"])
+                self.assertIn("loop_validation split", test_case["description"])
                 self.assertEqual(test_case["qwen_object"], "green cube")
-                self.assertNotIn("env_object_color", test_case)
+                self.assertEqual(test_case["env_object_color"], "green")
+                self.assertIn("start_dataset", test_case)
+                self.assertEqual(test_case["start_dataset"]["name"], f"{test_case['id']}_loop_validation")
+                self.assertEqual(test_case["start_dataset"]["expected_episodes"], 10)
+                self.assertEqual(test_case["start_dataset"]["root"], expected_closed_loop_roots[test_case["id"]])
+                self.assertTrue(test_case["start_dataset"]["repo_id"].endswith("loop-validation10-ego-wrist-256"))
                 plan_path = Path(test_case["plan_json"])
                 self.assertTrue(plan_path.exists(), str(plan_path))
                 plan = json.loads(plan_path.read_text(encoding="utf-8"))["plan"]
                 self.assertEqual([call["fn"] for call in plan["calls"]], expected_calls[test_case["id"]])
                 self.assertTrue(all(call["object"] == "green cube" for call in plan["calls"]))
                 self.assertNotIn("precondition_plan_json", test_case)
+                self.assertEqual(len(plan["calls"]), 1)
+                self.assertEqual(plan["task"], test_case["task_prompt"])
+                self.assertEqual(plan["calls"][0]["primitive_id"], test_case["id"])
+                self.assertEqual(plan["calls"][0]["prompt"], test_case["task_prompt"])
         self.assertEqual([test_case["seed"] for test_case in test_cases], [98100, 98200, 98300])
         self.assertEqual(
             [test_case["start_contract"] for test_case in test_cases],
-            ["full_chain_reset", "align_pick_reset", "pick_up_reset"],
+            ["move_over_cube_edge", "align_fixed_jaw_cube_edge", "grip_from_edge_cube"],
         )
 
-    def test_qwen_edge_closed_loop_test_case_commands_use_case_seed_and_start_contract(self) -> None:
+    def test_qwen_edge_loop_validation_case_commands_use_case_seed_and_start_contract(self) -> None:
         _ensure_scripts_on_path()
         import start_so101_training
 
@@ -1878,7 +2060,12 @@ class SO101SmolVLAPipelineTest(TestCase):
                     command[command.index("--closed-loop-start-contract") + 1],
                     test_case["start_contract"],
                 )
-                self.assertNotIn("--qwen-env-object-color", command)
+                self.assertIn("--closed-loop-start-report-path", command)
+                self.assertEqual(
+                    command[command.index("--closed-loop-start-report-path") + 1],
+                    str(Path(test_case["start_dataset"]["root"]) / "so101_lerobot_export_report.json"),
+                )
+                self.assertEqual(command[command.index("--qwen-env-object-color") + 1], "green")
                 self.assertNotIn("--closed-loop-precondition-plan-json", command)
 
     def test_qwen_edge_primitives_training_uses_virtual_merge_only(self) -> None:
@@ -1913,11 +2100,11 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--validation-datasets-json", lightning_source)
         self.assertIn("train-dataset-source-spans-json", launcher_source)
         self.assertIn("_post_checkpoint_loop_commands", launcher_source)
-        self.assertIn("_closed_loop_test_cases", launcher_source)
+        self.assertIn("_loop_validation_cases", launcher_source)
         self.assertIn("--closed-loop-test-id", launcher_source)
         self.assertIn("--closed-loop-start-contract", launcher_source)
         self.assertIn("IMPORTANT_CLOSED_LOOP_SUCCESS_RATE_TAG", monitor_source)
-        self.assertIn("closed_loop_test_id", monitor_source)
+        self.assertIn("loop_validation_id", monitor_source)
 
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (
@@ -2027,9 +2214,10 @@ class SO101SmolVLAPipelineTest(TestCase):
             ("skill_dataset_contract", Path("configs/so101/training_datasets/skill_dataset_contract.json")),
         ):
             contract = json.loads(contract_path.read_text(encoding="utf-8"))
-            for dataset_name in contract["datasets"]:
-                expected_keys.add((contract_name, dataset_name, "train"))
-                expected_keys.add((contract_name, dataset_name, "validation"))
+            for dataset_name, dataset in contract["datasets"].items():
+                for split_name, split in dataset.items():
+                    if isinstance(split, dict) and split.get("repo_id") and split.get("root"):
+                        expected_keys.add((contract_name, dataset_name, split_name))
 
         self.assertEqual(recipe_keys, expected_keys)
         self.assertEqual(recipes["camera_pose_source"], "physical_ai_agent.sim.so101_camera_input.EGOCENTRIC_CAMERA1_POSE")
@@ -2110,7 +2298,13 @@ class SO101SmolVLAPipelineTest(TestCase):
         expected_checksum_keys = set()
         for contract in contracts:
             for dataset_name, dataset_spec in contract["datasets"].items():
-                for split_name, suffix in (("train", "train"), ("validation", "val")):
+                for split_name, suffix in (
+                    ("train", "train"),
+                    ("validation", "val"),
+                    ("loop_validation", "loop_validation"),
+                ):
+                    if split_name not in dataset_spec:
+                        continue
                     checksum_key = f"{dataset_name}_{suffix}"
                     expected_checksum_keys.add(checksum_key)
                     dataset = checksums["datasets"][checksum_key]
