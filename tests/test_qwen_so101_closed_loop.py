@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from physical_ai_agent.agent_core.qwen_so101_closed_loop import (
     LoopArtifactConfig,
@@ -39,25 +40,41 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
 
     def test_mock_closed_loop_executes_plan_in_one_env(self) -> None:
         with TemporaryDirectory() as tmpdir:
-            report = run_closed_loop_plan(
-                plan=_plan(),
-                output_dir=Path(tmpdir),
-                default_policy_path=None,
-                primitive_policy_paths={
-                    "move_over_cube_edge": "move_policy",
-                    "align_fixed_jaw_cube_edge": "align_policy",
-                    "grip_from_edge_cube": "grip_policy",
-                },
-                episodes=1,
-                seed=7,
-                device="cpu",
-                local_files_only=True,
-                max_steps_per_primitive=2,
-                artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
-                env_factory=FakeEnv,
-                policy_loader=fake_policy_loader,
-                batch_builder=fake_batch_builder,
-            )
+            seen_camera_batches = []
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=_plan(),
+                    output_dir=Path(tmpdir),
+                    default_policy_path=None,
+                    primitive_policy_paths={
+                        "move_over_cube_edge": "move_policy",
+                        "align_fixed_jaw_cube_edge": "align_policy",
+                        "grip_from_edge_cube": "grip_policy",
+                    },
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    max_steps_per_primitive=2,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_config={"object_shape": "cube", "object_color": "green", "n_distractors": 0},
+                    env_factory=FakeEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=lambda *args, **kwargs: fake_batch_builder(
+                        *args,
+                        seen_camera_batches=seen_camera_batches,
+                        **kwargs,
+                    ),
+                )
             trace_rows = _read_jsonl(Path(report["episodes"][0]["trace_path"]))
             primitive_ids = [
                 row["primitive_id"]
@@ -70,9 +87,15 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
         self.assertIsNone(report["episodes"][0]["media_root"])
         self.assertEqual(report["loop_artifact_config"]["enabled"], True)
         self.assertEqual(report["loop_artifact_config"]["render_media"], False)
+        self.assertEqual(report["env_config"]["object_color"], "green")
+        self.assertEqual(trace_rows[0]["render_replay"]["env_config"]["object_color"], "green")
+        self.assertEqual(trace_rows[0]["policy_input_camera_names"], ["egocentric_cam", "wrist_cam"])
         self.assertEqual(trace_rows[0]["media"]["render_mode"], "deferred")
         self.assertEqual(trace_rows[0]["media"]["policy_input_images"], {})
         self.assertIsNone(trace_rows[0]["media"]["robot_frame"])
+        self.assertTrue(seen_camera_batches)
+        self.assertTrue(all("egocentric_cam" in batch for batch in seen_camera_batches))
+        self.assertTrue(all("wrist_cam" in batch for batch in seen_camera_batches))
         self.assertEqual(report["success_rate"], 1.0)
         self.assertEqual(report["policy_rollout_config"]["chunk_size"], 50)
         self.assertEqual(report["policy_rollout_config"]["n_action_steps"], 15)
@@ -88,6 +111,36 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                 "grip_from_edge_cube",
             ],
         )
+
+    def test_closed_loop_blocks_when_policy_cameras_are_missing(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=_plan(),
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    max_steps_per_primitive=2,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=fake_batch_builder,
+                )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("policy camera render failed", report["blocker"])
 
 
 def _plan() -> SO101ToolPlan:
@@ -131,8 +184,18 @@ def fake_policy_loader(policy_path: str, local_files_only: bool, device: str) ->
     return FakePolicy(policy_path)
 
 
-def fake_batch_builder(policy, observation, camera_pixels=None, instruction=None, local_files_only=True):
-    del policy, observation, camera_pixels, instruction, local_files_only
+def fake_batch_builder(
+    policy,
+    observation,
+    camera_pixels=None,
+    instruction=None,
+    local_files_only=True,
+    *,
+    seen_camera_batches=None,
+):
+    del policy, observation, instruction, local_files_only
+    if seen_camera_batches is not None:
+        seen_camera_batches.append(dict(camera_pixels or {}))
     return {}, {}
 
 
