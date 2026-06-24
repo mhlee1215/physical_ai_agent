@@ -21,6 +21,9 @@ from scripts.verify_mycobot_320_adaptive_kinematic_tree import (
 from scripts.verify_mycobot_320_adaptive_mesh_transform import (
     verify_adaptive_mesh_transform,
 )
+from scripts.verify_mycobot_320_adaptive_mimic_motion import (
+    verify_adaptive_mimic_motion,
+)
 from scripts.verify_mycobot_320_adaptive_visual_pose import (
     verify_adaptive_visual_pose,
 )
@@ -246,6 +249,23 @@ class MyCobotNexusEnvTest(unittest.TestCase):
             self.assertEqual(report.status, "passed")
             self.assertEqual(report.failed_link_count, 0)
             self.assertEqual(report.compared_link_count, 14)
+            self.assertTrue(Path(report.artifacts["json"]).exists())
+            self.assertTrue(Path(report.artifacts["markdown"]).exists())
+            self.assertTrue(Path(report.artifacts["svg"]).exists())
+
+    def test_320_adaptive_mimic_motion_verifier_writes_visual_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ros_root = _write_minimal_320_adaptive_ros2_tree(tmp_path)
+            report = verify_adaptive_mimic_motion(
+                official_gripper_root=ros_root,
+                output_dir=tmp_path / "verify_mimic_motion",
+            )
+
+            self.assertEqual(report.status, "passed")
+            self.assertTrue(report.controller_increase_opens)
+            self.assertLess(report.closed_jaw_gap_xy, report.open_jaw_gap_xy)
+            self.assertEqual(report.sample_count, 5)
             self.assertTrue(Path(report.artifacts["json"]).exists())
             self.assertTrue(Path(report.artifacts["markdown"]).exists())
             self.assertTrue(Path(report.artifacts["svg"]).exists())

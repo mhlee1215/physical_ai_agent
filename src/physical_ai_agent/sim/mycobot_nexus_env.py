@@ -588,8 +588,8 @@ class MyCobotNexusEnv:
 
     def _set_gripper(self, *, command: float) -> None:
         if self._uses_official_320_gripper:
-            open_value = -1.05 if self._uses_official_320_adaptive_gripper else -0.7
-            closed_value = 0.0 if self._uses_official_320_adaptive_gripper else 0.3
+            open_value = 0.0 if self._uses_official_320_adaptive_gripper else -0.7
+            closed_value = -1.05 if self._uses_official_320_adaptive_gripper else 0.3
             close_amount = (1.0 - max(-1.0, min(1.0, float(command)))) * 0.5
             base_value = open_value + close_amount * (closed_value - open_value)
             for index, (qpos_index, joint_name) in enumerate(

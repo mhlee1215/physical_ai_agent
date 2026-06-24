@@ -144,6 +144,17 @@ Stop condition:
 - If closing increases the jaw gap, do not compensate with cube placement.
   Fix mimic mapping or command convention first.
 
+Current status: passed by
+`scripts/verify_mycobot_320_adaptive_mimic_motion.py` against the ROS2 Humble
+adaptive gripper source. Evidence: five `gripper_controller` samples expanded
+all official follower joints and showed that increasing controller value opens
+the jaw. The upstream range lower end is closed (`-1.11`, jaw gap `0.0505 m`)
+and the upper end is open (`0.0`, jaw gap `0.1510 m`). The MuJoCo command
+convention was corrected so adaptive command `+1` maps to open `0.0`, and
+adaptive command `-1` maps to closed `-1.05`.
+
+![Gate 5 mimic motion evidence](./mycobot_320_adaptive_mimic_motion_gate.png)
+
 ### Gate 6: Collision Proxy Design
 
 Question: are contact geoms attached to the correct finger link frames?
@@ -197,7 +208,7 @@ Stop condition:
 
 ## Current Next Step
 
-The next implementation should be Gate 5: mimic motion parity. It must sample
-the upstream `gripper_controller` range, expand follower joint values, and show
-open/middle/closed gripper views before any contact-pad, cube-placement,
-friction, or trajectory tuning.
+The next implementation should be Gate 6: collision proxy design. It must
+derive contact geoms from the validated finger-link frames and record local
+positions, sizes, friction, and link ownership before any cube-placement,
+friction, or arm-trajectory tuning.

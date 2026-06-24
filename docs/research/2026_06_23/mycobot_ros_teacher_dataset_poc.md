@@ -178,11 +178,17 @@ contact/grasp behavior. Gate 4 is passed as a zero-pose reference check:
 `scripts/verify_mycobot_320_adaptive_visual_pose.py` compared upstream ROS2
 URDF link/visual poses with the generated MuJoCo XML and found 14/14 links
 identical (`max_link_origin_delta=0`, `max_visual_center_delta=0`). The next
-adaptive-gripper risk is mimic motion parity, not contact tuning.
+adaptive-gripper risk was mimic motion parity, not contact tuning. Gate 5 is
+passed: `scripts/verify_mycobot_320_adaptive_mimic_motion.py` sampled five
+`gripper_controller` values and showed the official controller direction is
+lower-to-upper = closed-to-open. The jaw gap increases from `0.0505 m` at
+`-1.11` to `0.1510 m` at `0.0`, so the adaptive MuJoCo command mapping was
+corrected to `+1=open` and `-1=closed`.
 
 ![myCobot 320 adaptive kinematic tree gate](./mycobot_320_adaptive_kinematic_tree_gate.png)
 ![myCobot 320 adaptive mesh transform gate](./mycobot_320_adaptive_mesh_transform_gate.png)
 ![myCobot 320 adaptive visual pose gate](./mycobot_320_adaptive_visual_pose_gate.png)
+![myCobot 320 adaptive mimic motion gate](./mycobot_320_adaptive_mimic_motion_gate.png)
 
 Target render/physics command once MuJoCo is available:
 
