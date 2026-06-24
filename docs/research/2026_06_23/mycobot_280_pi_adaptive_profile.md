@@ -35,6 +35,28 @@ This branch adds dry scene-building support for the 280 Pi adaptive profile:
 This is a profile/asset-routing gate. It does not yet prove physical fidelity or dataset quality.
 
 
+
+## Capture Contract Gate
+
+Before running the dataset exporter, verify the capture itself:
+
+```bash
+PYTHONPATH=src:. python3 scripts/verify_mycobot_280_pi_capture_contract.py \
+  --input-trace path/to/ros_gazebo_trace.jsonl \
+  --camera-manifest path/to/camera_manifest.json \
+  --output-dir _workspace/mycobot_280pi_capture_contract_verify
+```
+
+This gate checks that every frame has:
+
+- monotonic timestamp evidence;
+- the 280 Pi joint order plus a matching action or trajectory point;
+- object pose evidence for the success oracle;
+- contact evidence from gripper/object contacts;
+- existing `top` and `wrist` camera image files.
+
+A passing capture-contract report is still not a calibration claim. It only proves the recorded artifacts are complete enough for the stricter LeRobot-style dataset export.
+
 ## Dataset Pipeline Gate
 
 This branch also adds a stricter dataset exporter for the 280 Pi adaptive profile:
