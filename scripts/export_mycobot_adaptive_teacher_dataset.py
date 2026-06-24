@@ -57,9 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--height", type=int, default=240)
     parser.add_argument("--render-every", type=int, default=1)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--pregrasp-steps", type=int, default=24)
-    parser.add_argument("--close-steps", type=int, default=72)
-    parser.add_argument("--lift-steps", type=int, default=76)
+    parser.add_argument("--pregrasp-steps", type=int, default=48)
+    parser.add_argument("--close-steps", type=int, default=84)
+    parser.add_argument("--lift-steps", type=int, default=92)
     parser.add_argument("--placement-gripper-command", type=float, default=0.25)
     parser.add_argument("--close-gripper-command", type=float, default=-0.75)
     parser.add_argument("--cube-half-size", type=float, default=0.02)
@@ -144,7 +144,7 @@ def export_dataset(
         "dataset_id": output_dir.name,
         "robot": "myCobot 320 M5 2022 + adaptive gripper",
         "task": "short_grasp_lift_red_cube",
-        "trajectory": "natural_ready_fast_grasp_lift",
+        "trajectory": "natural_ready_smooth_full_arm_lift",
         "cube_half_size": cube_half_size,
         "success_criteria": {
             "close_best_sustained_contact_steps": 15,
@@ -168,8 +168,8 @@ def export_dataset(
         },
         "notes": (
             "Gate 8 teacher dataset POC. Episodes start from a natural ready pose, "
-            "approach a 40mm table cube, close the adaptive gripper, and lift higher "
-            "than the initial contact-proof dataset; this is not yet LeRobot parquet."
+            "use full-frame 30fps rendering, move continuously through approach, "
+            "grasp, and lift, and keep a full-arm camera view; this is not yet LeRobot parquet."
         ),
     }
     (output_dir / "manifest.json").write_text(
