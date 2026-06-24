@@ -89,6 +89,16 @@ Stop condition:
 
 - Do not infer pad locations from a visually suspect mesh assembly.
 
+Current status: passed by
+`scripts/verify_mycobot_320_adaptive_mesh_transform.py` against the ROS2
+Humble adaptive gripper source. Evidence: 14/14 arm and adaptive-gripper meshes
+had identical raw-geometry and baked-visual-scene OBJ bounds
+(`max_center_delta=0`, `max_span_delta=0`). The selected conversion mode remains
+`raw_geometry`, and the mesh conversion path is not the current suspect for the
+bad gripper assembly.
+
+![Gate 3 mesh transform evidence](./mycobot_320_adaptive_mesh_transform_gate.png)
+
 ### Gate 4: Reference Visual Pose
 
 Question: does zero pose look like the official model?
@@ -177,7 +187,7 @@ Stop condition:
 
 ## Current Next Step
 
-The next implementation should be Gate 3: mesh transform parity. This must
-decide raw-vs-baked Collada conversion for the adaptive gripper meshes using
-reference visual evidence before any contact-pad, cube-placement, friction, or
-trajectory tuning.
+The next implementation should be Gate 4: reference visual pose. It must render
+or otherwise inspect the upstream ROS2 adaptive URDF reference pose, then
+compare the MuJoCo conversion from multiple views before any contact-pad,
+cube-placement, friction, or trajectory tuning.

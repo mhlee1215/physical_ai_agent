@@ -166,11 +166,18 @@ MuJoCo-capable runtime.
 Further adaptive-gripper work must follow
 [`mycobot_320_adaptive_gripper_validation_ladder.md`](./mycobot_320_adaptive_gripper_validation_ladder.md).
 Do not tune contact pads, cube placement, friction, or arm trajectory until the
-mesh transform parity, visual pose, and mimic motion gates have passed. Gate 2
-is now passed: `scripts/verify_mycobot_320_adaptive_kinematic_tree.py` compared
-13/13 upstream arm/adaptive-gripper joints against the generated MuJoCo tree.
+visual pose and mimic motion gates have passed. Gate 2 is now passed:
+`scripts/verify_mycobot_320_adaptive_kinematic_tree.py` compared 13/13 upstream
+arm/adaptive-gripper joints against the generated MuJoCo tree. Gate 3 is also
+passed: `scripts/verify_mycobot_320_adaptive_mesh_transform.py` compared 14/14
+official arm/adaptive-gripper meshes and found raw-geometry and
+baked-visual-scene Collada conversion bounds to be numerically identical
+(`max_center_delta=0`, `max_span_delta=0`). That rules out DAE bake mode as the
+current gripper-assembly suspect, but it does not yet prove the visual pose or
+contact/grasp behavior.
 
 ![myCobot 320 adaptive kinematic tree gate](./mycobot_320_adaptive_kinematic_tree_gate.png)
+![myCobot 320 adaptive mesh transform gate](./mycobot_320_adaptive_mesh_transform_gate.png)
 
 Target render/physics command once MuJoCo is available:
 

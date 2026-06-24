@@ -18,6 +18,9 @@ from scripts.mycobot_nexus_smoke import build_parser
 from scripts.verify_mycobot_320_adaptive_kinematic_tree import (
     verify_adaptive_kinematic_tree,
 )
+from scripts.verify_mycobot_320_adaptive_mesh_transform import (
+    verify_adaptive_mesh_transform,
+)
 
 
 class MyCobotNexusEnvTest(unittest.TestCase):
@@ -207,6 +210,23 @@ class MyCobotNexusEnvTest(unittest.TestCase):
             self.assertEqual(report.status, "passed")
             self.assertEqual(report.failed_joint_count, 0)
             self.assertEqual(report.compared_joint_count, 13)
+            self.assertTrue(Path(report.artifacts["json"]).exists())
+            self.assertTrue(Path(report.artifacts["markdown"]).exists())
+            self.assertTrue(Path(report.artifacts["svg"]).exists())
+
+    def test_320_adaptive_mesh_transform_verifier_writes_visual_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ros_root = _write_minimal_320_adaptive_ros2_tree(tmp_path)
+            report = verify_adaptive_mesh_transform(
+                official_gripper_root=ros_root,
+                output_dir=tmp_path / "verify_meshes",
+            )
+
+            self.assertEqual(report.status, "passed")
+            self.assertEqual(report.failed_mesh_count, 0)
+            self.assertEqual(report.compared_mesh_count, 14)
+            self.assertEqual(report.selected_transform_mode, "raw_geometry")
             self.assertTrue(Path(report.artifacts["json"]).exists())
             self.assertTrue(Path(report.artifacts["markdown"]).exists())
             self.assertTrue(Path(report.artifacts["svg"]).exists())
