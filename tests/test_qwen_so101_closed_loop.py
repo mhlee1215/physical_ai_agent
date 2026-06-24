@@ -615,28 +615,49 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
             del args, kwargs
             raise AssertionError("exported validation q_start should be used before IK fallback")
 
-        for contract in ("full_chain_reset", "align_pick_reset", "pick_up_reset"):
-            with self.subTest(contract=contract):
-                wrapper = Wrapper()
-                with (
-                    patch(
-                        "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_export_helpers",
-                        return_value=helpers,
-                    ),
-                    patch(
-                        "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_edge_start_qpos",
-                        side_effect=unexpected_fixed_jaw_start,
-                    ),
-                ):
-                    state = _apply_start_contract_to_env(
-                        env=wrapper,
-                        start_contract=contract,
-                        seed=98100,
-                        episode_index=0,
-                        object_color="green",
-                    )
-                self.assertEqual(state["mode"], "exported_dataset_qpos")
-                self.assertTrue(state["applied"])
+        with TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "so101_lerobot_export_report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "episodes": [
+                            {
+                                "episode_index": 0,
+                                "seed": 98100,
+                                "object_color": "green",
+                                "object_shape": "cube",
+                                "q_start": [0, 1, 2, 3, 4, 5],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            for contract in ("full_chain_reset", "align_pick_reset", "pick_up_reset"):
+                with self.subTest(contract=contract):
+                    wrapper = Wrapper()
+                    with (
+                        patch(
+                            "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_export_helpers",
+                            return_value=helpers,
+                        ),
+                        patch(
+                            "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_edge_start_qpos",
+                            side_effect=unexpected_fixed_jaw_start,
+                        ),
+                    ):
+                        state = _apply_start_contract_to_env(
+                            env=wrapper,
+                            start_contract=contract,
+                            seed=98100,
+                            episode_index=0,
+                            object_color="green",
+                            start_report_path=report_path,
+                        )
+                    self.assertEqual(state["mode"], "exported_dataset_qpos")
+                    self.assertEqual(state["source"], "explicit_loop_validation_first_frame_q_start")
+                    self.assertTrue(state["applied"])
 
 
 def _plan() -> SO101ToolPlan:
