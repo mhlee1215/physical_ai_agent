@@ -113,6 +113,14 @@ ADAPTIVE_GATE7_TABLE_ARM_QPOS = (
     -1.4127876896491962,
     -0.23321018739728538,
 )
+ADAPTIVE_GATE8_LIFT_ARM_QPOS = (
+    -1.0817487541686395,
+    1.2650681863929847,
+    0.5655833702793307,
+    1.2470797343323703,
+    -1.3210836913320143,
+    -0.6780218616382665,
+)
 
 
 @dataclass(frozen=True)
@@ -172,6 +180,28 @@ class MyCobotAdaptiveStaticContactResult:
     gripper_cube_contact_pads: int
     initial_cube_position: list[float]
     final_cube_position: list[float]
+    trace_path: str
+    frame_path: str
+    report_path: str
+    scene_path: str
+
+
+@dataclass(frozen=True)
+class MyCobotAdaptiveGraspLiftResult:
+    status: str
+    steps: int
+    close_gripper_command: float
+    required_close_sustained_steps: int
+    required_lift_sustained_steps: int
+    required_final_lift: float
+    close_best_sustained_contact_steps: int
+    lift_best_sustained_contact_steps: int
+    lift_two_pad_contact_steps: int
+    final_gripper_cube_contact_pads: int
+    final_gripper_cube_contacts: int
+    initial_cube_position: list[float]
+    final_cube_position: list[float]
+    final_cube_lift: float
     trace_path: str
     frame_path: str
     report_path: str
@@ -919,6 +949,181 @@ def run_mycobot_adaptive_static_contact_smoke(
     )
     report_path.write_text(json.dumps(asdict(result), indent=2, sort_keys=True), encoding="utf-8")
     return result
+
+
+def run_mycobot_adaptive_grasp_lift_smoke(
+    *,
+    output_dir: Path,
+    asset_root: Path,
+    official_gripper_root: Path,
+    seed: int = 1,
+    width: int = 640,
+    height: int = 480,
+    pregrasp_steps: int = 20,
+    close_steps: int = 80,
+    lift_steps: int = 60,
+    placement_gripper_command: float = 0.25,
+    close_gripper_command: float = -0.7,
+    required_close_sustained_steps: int = 15,
+    required_lift_sustained_steps: int = 30,
+    required_final_lift: float = 0.025,
+) -> MyCobotAdaptiveGraspLiftResult:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = output_dir / "mycobot_adaptive_grasp_lift_trace.jsonl"
+    frame_path = output_dir / "mycobot_adaptive_grasp_lift_frame.bmp"
+    report_path = output_dir / "mycobot_adaptive_grasp_lift_report.json"
+    env = MyCobotNexusEnv(
+        MyCobotNexusConfig(
+            asset_root=asset_root,
+            work_dir=output_dir,
+            official_gripper_root=official_gripper_root,
+            model_profile=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            width=width,
+            height=height,
+        )
+    )
+    records: list[dict[str, Any]] = []
+    initial_cube_position: list[float] = []
+    final_cube_position: list[float] = []
+    try:
+        env.reset(seed=seed)
+        _set_adaptive_gate_arm_pose(env, ADAPTIVE_GATE7_TABLE_ARM_QPOS)
+        env._set_gripper(command=placement_gripper_command)
+        env._mujoco.mj_forward(env.model, env.data)
+        pad_midpoint = env._finger_pad_midpoint()
+        initial_cube_position = [
+            float(pad_midpoint[0]),
+            float(pad_midpoint[1]),
+            float(TASK_CUBE_POS[2]),
+        ]
+        for axis, value in enumerate(initial_cube_position):
+            env.data.qpos[env._cube_freejoint_qpos_index + axis] = float(value)
+        qvel_start = env._cube_freejoint_qvel_index
+        env.data.qvel[qvel_start:qvel_start + 6] = 0.0
+        env._cube_initial_pos = list(initial_cube_position)
+        env._mujoco.mj_forward(env.model, env.data)
+
+        step_index = 0
+        for _ in range(pregrasp_steps):
+            obs, reward, terminated, truncated, info = env.step(
+                [*ADAPTIVE_GATE7_TABLE_ARM_QPOS, placement_gripper_command]
+            )
+            records.append(_phase_record("pregrasp", step_index, obs, reward, terminated, truncated, info))
+            step_index += 1
+        close_denominator = max(close_steps - 1, 1)
+        for step in range(close_steps):
+            alpha = step / close_denominator
+            gripper = placement_gripper_command + alpha * (
+                close_gripper_command - placement_gripper_command
+            )
+            obs, reward, terminated, truncated, info = env.step(
+                [*ADAPTIVE_GATE7_TABLE_ARM_QPOS, gripper]
+            )
+            records.append(_phase_record("close", step_index, obs, reward, terminated, truncated, info))
+            step_index += 1
+        lift_denominator = max(lift_steps - 1, 1)
+        for step in range(lift_steps):
+            alpha = _smoothstep(step / lift_denominator)
+            arm = _lerp_vector(
+                list(ADAPTIVE_GATE7_TABLE_ARM_QPOS),
+                list(ADAPTIVE_GATE8_LIFT_ARM_QPOS),
+                alpha,
+            )
+            obs, reward, terminated, truncated, info = env.step([*arm, close_gripper_command])
+            records.append(_phase_record("lift", step_index, obs, reward, terminated, truncated, info))
+            step_index += 1
+        _write_bmp(frame_path, env.render())
+        final_cube_position = env._cube_position()
+    finally:
+        scene_path = str(env.scene_path)
+        env.close()
+
+    close_infos = [record["info"] for record in records if record["phase"] == "close"]
+    lift_infos = [record["info"] for record in records if record["phase"] == "lift"]
+    close_best = _best_sustained_two_pad_contact(close_infos)
+    lift_best = _best_sustained_two_pad_contact(lift_infos)
+    lift_two_pad_steps = sum(
+        1 for info in lift_infos if int(info.get("gripper_cube_contact_pads", 0)) >= 2
+    )
+    final_info = records[-1]["info"] if records else {}
+    final_lift = (
+        float(final_cube_position[2]) - float(initial_cube_position[2])
+        if final_cube_position and initial_cube_position
+        else 0.0
+    )
+    status = (
+        "passed"
+        if close_best >= required_close_sustained_steps
+        and lift_best >= required_lift_sustained_steps
+        and int(final_info.get("gripper_cube_contact_pads", 0)) >= 2
+        and final_lift >= required_final_lift
+        else "failed"
+    )
+    with trace_path.open("w", encoding="utf-8") as file:
+        for record in records:
+            file.write(json.dumps(record, sort_keys=True) + "\n")
+    result = MyCobotAdaptiveGraspLiftResult(
+        status=status,
+        steps=len(records),
+        close_gripper_command=float(close_gripper_command),
+        required_close_sustained_steps=int(required_close_sustained_steps),
+        required_lift_sustained_steps=int(required_lift_sustained_steps),
+        required_final_lift=float(required_final_lift),
+        close_best_sustained_contact_steps=int(close_best),
+        lift_best_sustained_contact_steps=int(lift_best),
+        lift_two_pad_contact_steps=int(lift_two_pad_steps),
+        final_gripper_cube_contact_pads=int(final_info.get("gripper_cube_contact_pads", 0)),
+        final_gripper_cube_contacts=int(final_info.get("gripper_cube_contacts", 0)),
+        initial_cube_position=initial_cube_position,
+        final_cube_position=final_cube_position,
+        final_cube_lift=float(final_lift),
+        trace_path=str(trace_path),
+        frame_path=str(frame_path),
+        report_path=str(report_path),
+        scene_path=scene_path,
+    )
+    report_path.write_text(json.dumps(asdict(result), indent=2, sort_keys=True), encoding="utf-8")
+    return result
+
+
+def _set_adaptive_gate_arm_pose(env: MyCobotNexusEnv, qpos: tuple[float, ...]) -> None:
+    for qpos_index, value in zip(env._qpos_indices, qpos, strict=True):
+        env.data.qpos[qpos_index] = float(value)
+    if env._uses_official_320_gripper:
+        for actuator_index, value in zip(env._arm_actuator_indices, qpos, strict=True):
+            env.data.ctrl[actuator_index] = float(value)
+
+
+def _phase_record(
+    phase: str,
+    step: int,
+    observation: list[float],
+    reward: float,
+    terminated: bool,
+    truncated: bool,
+    info: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "phase": phase,
+        "step": step,
+        "observation": observation,
+        "reward": reward,
+        "terminated": terminated,
+        "truncated": truncated,
+        "info": _json_safe_info(info),
+    }
+
+
+def _best_sustained_two_pad_contact(infos: list[dict[str, Any]]) -> int:
+    best = 0
+    current = 0
+    for info in infos:
+        if int(info.get("gripper_cube_contact_pads", 0)) >= 2:
+            current += 1
+        else:
+            current = 0
+        best = max(best, current)
+    return best
 
 
 def mycobot_nexus_contract() -> dict[str, Any]:

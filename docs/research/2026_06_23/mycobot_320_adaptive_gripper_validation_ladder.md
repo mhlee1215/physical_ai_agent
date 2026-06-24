@@ -278,10 +278,35 @@ Stop condition:
 - If the arm sweeps the cube before close, reduce or remove pre-close arm
   motion. Do not solve this by moving the cube to an implausible place.
 
+Current status: passed by
+`scripts/mycobot_adaptive_grasp_lift_smoke.py` against the ROS2 Humble adaptive
+gripper source. The gate reuses the Gate 7 table placement, holds a fixed
+pregrasp pose, closes from command `0.25` to `-0.7`, then executes a short
+smooth lift trajectory while holding the gripper command. Evidence:
+`close_best_sustained_contact_steps=27`, `lift_best_sustained_contact_steps=60`,
+`lift_two_pad_contact_steps=60`, `final_gripper_cube_contact_pads=2`,
+`final_gripper_cube_contacts=6`, and `final_cube_lift=0.0367 m`. This is a
+short grasp-lift gate; it does not claim stable transport or placement.
+
+Rerun command:
+
+```bash
+PYTHONPATH=src /tmp/mycobot_render_venv/bin/python scripts/mycobot_adaptive_grasp_lift_smoke.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros2 \
+  --output-dir _workspace/gate8_grasp_lift_smoke \
+  --width 640 \
+  --height 480
+```
+
+![Gate 8 grasp lift oblique](./mycobot_320_adaptive_gate8_grasp_lift_oblique.png)
+![Gate 8 grasp lift side](./mycobot_320_adaptive_gate8_grasp_lift_side.png)
+![Gate 8 grasp lift top](./mycobot_320_adaptive_gate8_grasp_lift_top.png)
+
 ## Current Next Step
 
-The next implementation should be Gate 8: natural arm and gripper motion. It
-must reuse the Gate 7 contact placement/contact criteria, then add a timed
-pregrasp, close, and lift trajectory. The first pass should report contact
-retention during close and lift separately instead of collapsing them into one
-success flag.
+Gate 8 completes the current adaptive-gripper validation ladder. The next POC
+step should move from single-object smoke validation to teacher dataset capture:
+record the Gate 8 trajectory as timestamped observations/actions, keep the
+contact/lift metrics in episode metadata, and reject episodes that fail the
+Gate 8 thresholds.
