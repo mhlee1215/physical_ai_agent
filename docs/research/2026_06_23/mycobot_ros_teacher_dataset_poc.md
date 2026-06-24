@@ -174,10 +174,15 @@ official arm/adaptive-gripper meshes and found raw-geometry and
 baked-visual-scene Collada conversion bounds to be numerically identical
 (`max_center_delta=0`, `max_span_delta=0`). That rules out DAE bake mode as the
 current gripper-assembly suspect, but it does not yet prove the visual pose or
-contact/grasp behavior.
+contact/grasp behavior. Gate 4 is passed as a zero-pose reference check:
+`scripts/verify_mycobot_320_adaptive_visual_pose.py` compared upstream ROS2
+URDF link/visual poses with the generated MuJoCo XML and found 14/14 links
+identical (`max_link_origin_delta=0`, `max_visual_center_delta=0`). The next
+adaptive-gripper risk is mimic motion parity, not contact tuning.
 
 ![myCobot 320 adaptive kinematic tree gate](./mycobot_320_adaptive_kinematic_tree_gate.png)
 ![myCobot 320 adaptive mesh transform gate](./mycobot_320_adaptive_mesh_transform_gate.png)
+![myCobot 320 adaptive visual pose gate](./mycobot_320_adaptive_visual_pose_gate.png)
 
 Target render/physics command once MuJoCo is available:
 

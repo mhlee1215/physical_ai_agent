@@ -117,6 +117,16 @@ Stop condition:
 - If the middle linkage looks flipped, floating, or disconnected, return to
   Gate 2 or Gate 3. Do not proceed to grasp.
 
+Current status: passed by
+`scripts/verify_mycobot_320_adaptive_visual_pose.py` against the ROS2 Humble
+adaptive gripper source. Evidence: 14/14 official links had identical upstream
+URDF zero-pose link origins and generated MuJoCo XML visual centers
+(`max_link_origin_delta=0`, `max_visual_center_delta=0`). The visual evidence
+renders front, side, top, and wrist-close views of the official URDF reference
+beside the generated MuJoCo XML.
+
+![Gate 4 visual pose evidence](./mycobot_320_adaptive_visual_pose_gate.png)
+
 ### Gate 5: Mimic Motion Parity
 
 Question: does one gripper command move all adaptive gripper links in the
@@ -187,7 +197,7 @@ Stop condition:
 
 ## Current Next Step
 
-The next implementation should be Gate 4: reference visual pose. It must render
-or otherwise inspect the upstream ROS2 adaptive URDF reference pose, then
-compare the MuJoCo conversion from multiple views before any contact-pad,
-cube-placement, friction, or trajectory tuning.
+The next implementation should be Gate 5: mimic motion parity. It must sample
+the upstream `gripper_controller` range, expand follower joint values, and show
+open/middle/closed gripper views before any contact-pad, cube-placement,
+friction, or trajectory tuning.
