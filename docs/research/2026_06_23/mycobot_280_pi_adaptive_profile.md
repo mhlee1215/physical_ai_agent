@@ -41,6 +41,9 @@ This is a profile/asset-routing gate. It does not yet prove physical fidelity or
 
 The merged 320 adaptive path has two physics gates that this 280 Pi branch is now wired to reuse:
 
+For the side-by-side evidence boundary, see
+[`mycobot_280_vs_320_adaptive_parity_report.md`](./mycobot_280_vs_320_adaptive_parity_report.md).
+
 
 Preflight local readiness before running either physics gate:
 
