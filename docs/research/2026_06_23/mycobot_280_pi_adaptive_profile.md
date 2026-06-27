@@ -41,6 +41,18 @@ This is a profile/asset-routing gate. It does not yet prove physical fidelity or
 
 The merged 320 adaptive path has two physics gates that this 280 Pi branch is now wired to reuse:
 
+
+Preflight local readiness before running either physics gate:
+
+```bash
+PYTHONPATH=src:. python3 scripts/check_mycobot_280_pi_gate8_readiness.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros \
+  --output _workspace/mycobot_280_pi_gate8_readiness/report.json
+```
+
+On the current Codex WSL workspace this preflight is blocked because `mujoco`, `_vendor/mycobot_mujoco`, and `_vendor/mycobot_ros` are not available. That is an execution-environment blocker, not evidence that the 280 profile failed physics.
+
 ```bash
 PYTHONPATH=src:. python3 scripts/mycobot_280_pi_adaptive_static_contact_smoke.py \
   --asset-root _vendor/mycobot_mujoco \
