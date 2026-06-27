@@ -1,0 +1,17 @@
+{
+  "plan": {
+    "calls": [
+      {
+        "fn": "move",
+        "index": 0,
+        "max_steps": 120,
+        "object": "green cube",
+        "primitive_id": "move_over_cube_edge",
+        "prompt": "Move the gripper above one visible green cube edge."
+      }
+    ],
+    "model": "qwen3-vl-8b-instruct-mlx",
+    "task": "Move the gripper above one visible green cube edge.",
+    "thinking_mode": "non-thinking"
+  }
+}

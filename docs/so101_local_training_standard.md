@@ -34,6 +34,20 @@ explicitly chooses another experiment.
 
 ## Evaluation
 
+- Local training visibility must use one TensorBoard process only. The default
+  launcher surface is exactly the training process plus one TensorBoard process.
+  Do not start extra dashboard, GPU monitor, progress monitor, watcher,
+  alternate TensorBoard, or ad hoc polling service unless the user explicitly
+  asks for that one-off tool. If the TensorBoard view is stale or wrong, stop
+  and restart only the TensorBoard process attached to the current run logdir.
+  Always report both the local TensorBoard URL and the same-Wi-Fi mobile
+  TensorBoard URL.
+- Training, supervised evaluation, and loop test are all mandatory. The training
+  process owns the sequence; do not use an external polling monitor as the
+  default mechanism for discovering checkpoints or triggering loop tests.
+  Checkpoint-triggered loop tests use the one-shot
+  `scripts/run_so101_training_loop_test.py` entrypoint from inside the training
+  callback.
 - `pick_up_cube` is the scenario.
 - `qwen_edge_chain` is the execution/validation policy.
 - Qwen routes `move -> align -> pick_up`; SmolVLA produces robot actions.
@@ -52,6 +66,10 @@ explicitly chooses another experiment.
   `--closed-loop-runner qwen_chain` so the `pick_up_cube` scenario is evaluated
   through the Qwen `move -> align -> pick_up` chain, not the legacy single-skill
   picklift smoke evaluator.
+- Training-time closed-loop tests must always run exactly 10 episodes by
+  default. Keep `--closed-loop-episodes 10` for launcher and monitor defaults;
+  use a different count only when the user explicitly requests a labeled
+  one-off run.
 - Loop tests must record analyzer artifacts by default. Keep
   `--record-loop-artifacts` enabled for Qwen-chain validation so every loop test
   preserves raw Qwen payloads, rollout config, action-chunk metadata, and the

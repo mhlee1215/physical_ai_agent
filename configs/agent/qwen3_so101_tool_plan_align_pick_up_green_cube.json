@@ -1,0 +1,25 @@
+{
+  "plan": {
+    "calls": [
+      {
+        "fn": "align",
+        "index": 0,
+        "max_steps": 120,
+        "object": "green cube",
+        "primitive_id": "align_fixed_jaw_cube_edge",
+        "prompt": "Align the gripper jaws around one visible green cube edge."
+      },
+      {
+        "fn": "pick_up",
+        "index": 1,
+        "max_steps": 120,
+        "object": "green cube",
+        "primitive_id": "grip_from_edge_cube",
+        "prompt": "Close the gripper on the green cube edge and lift."
+      }
+    ],
+    "model": "qwen3-vl-8b-instruct-mlx",
+    "task": "align and lift the green cube",
+    "thinking_mode": "non-thinking"
+  }
+}

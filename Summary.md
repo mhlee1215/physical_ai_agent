@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-06-18
+Last updated: 2026-06-23
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -64,10 +64,10 @@ paper-facing concepts:
 - Checkpoint retention policy for this lane is validation-best checkpoint plus
   one latest checkpoint for crash recovery. Do not keep every checkpoint unless
   the user explicitly asks for archival storage.
-- Supervised validation loss may run after checkpoint save on CPU. Closed-loop
-  evaluation is intentionally sparse: run it only when a checkpoint becomes the
-  new validation-best candidate, or for explicit manual checks, and avoid
-  overlapping full CUDA closed-loop rollouts with active GPU training.
+- Supervised validation loss and closed-loop evaluation are mandatory parts of
+  the SO101 training lane. The training process should own the sequence:
+  train, run supervised evaluation, save checkpoint, then run the scheduled
+  loop test. Do not replace this with an external polling monitor.
 - Current observed best validation checkpoint is `001490` (`val_loss=0.083125`).
   Checkpoint `002682` saved and validated but did not improve
   (`val_loss=0.139522`), so training was stopped as likely overfitting.
@@ -95,6 +95,15 @@ paper-facing concepts:
   not authoritative; verify `torch.backends.mps.is_available()` and launch
   MPS training from an unsandboxed/external runtime. Keep deterministic logs,
   TensorBoard events, checkpoints, and monitor artifacts under `_workspace/`.
+- User policy: for this `physical_ai_agent` repo, executable local work that
+  materially depends on real runtime access should be launched outside the Codex
+  sandbox by default. This standing approval covers repo-local training,
+  evaluation, closed-loop tests, MuJoCo/MPS runs, TensorBoard, dataset/viewer
+  servers, and executable verification commands. Do not pause to ask again in
+  chat before these launches; request the required unsandboxed tool execution
+  directly and keep logs/artifacts under `_workspace/`. This does not authorize
+  destructive cleanup, secret disclosure, remote spending/resource creation, or
+  broad network/download actions unless the user explicitly requests them.
 - Local SO101 training standard: use
   `docs/so101_local_training_standard.md` before starting local training. The
   current standard lane is `primitive training with qwen validation v1`: one
@@ -103,11 +112,12 @@ paper-facing concepts:
   MPS, and `--num_workers=0` unless multiprocessing has been proven safe for
   the current dataset wrappers. `scripts/start_so101_training.py` records this
   standard in every dry-run/start/status payload as `local_training_standard`.
-- User policy: SO101 training, supervised validation, and closed-loop tests
-  must stay runnable on both local macOS and Linux/RunPod through the canonical
-  launcher. The runtime contract is `macos => mps + MuJoCo glfw` and
-  `linux/RunPod => cuda + MuJoCo egl`; dry-run both profiles or run the targeted
-  command-contract tests before treating a training PR as ready.
+- User policy: SO101 training, supervised evaluation, and loop test are all
+  mandatory. They must stay runnable on both local macOS and Linux/RunPod
+  through the canonical launcher. The runtime contract is
+  `macos => mps + MuJoCo glfw` and `linux/RunPod => cuda + MuJoCo egl`; dry-run
+  both profiles or run the targeted command-contract tests before treating a
+  training PR as ready.
 - User policy: SO101 loop tests must record analyzer artifacts by default.
   Qwen-chain loop validation should preserve raw Qwen request/response payloads,
   rollout `policy_rollout_config`, action-chunk metadata, and seed/action/state
@@ -115,6 +125,25 @@ paper-facing concepts:
   should not render PNG/MP4 media by default; generate frames/videos locally
   from saved traces when inspection needs them. Disable recording only for
   explicitly labeled lightweight smoke/debug runs, not for validation evidence.
+- User policy: SO101 training-time closed-loop validation must run exactly 10
+  episodes by default. Keep `--closed-loop-episodes 10` in launcher and monitor
+  paths unless the user explicitly asks for a labeled one-off smoke/debug count.
+- User policy: local SO101 training visibility must use one TensorBoard process
+  only. The default launcher surface is exactly the training process plus one
+  TensorBoard process. Do not start extra dashboards, GPU monitors, progress
+  monitors, watchers, alternate TensorBoards, or ad hoc polling services unless
+  the user explicitly asks for that one-off tool. If the TensorBoard view is
+  stale or wrong, stop and restart only that TensorBoard process for the current
+  run logdir. Closed-loop tests must be invoked from the training process after
+  checkpoint/evaluation events through `scripts/run_so101_training_loop_test.py`,
+  not by a separate polling monitor.
+- User policy: whenever TensorBoard is started or reported, provide both the
+  local URL and the same-Wi-Fi mobile TensorBoard URL.
+- User policy: Qwen-chain SO101 loop tests must use the valid-mask termination
+  head, not fixed-length primitive execution. Provide
+  `closed_loop.valid_mask_checkpoint` in dataset config or
+  `--closed-loop-valid-mask-checkpoint` on the launcher; missing valid-mask
+  configuration is a contract failure for validation loop tests.
 - RunPod experiment-data storage policy: past remote experiment results are not
   needed. Starting now, every new RunPod data-generation, training, evaluation,
   and closed-loop run must end with a local download, local verification, and
@@ -127,7 +156,9 @@ paper-facing concepts:
   dataset bundle `mhlee1215/so101-nexus-sim-dataset`, then start training
   through `scripts/start_so101_training.py`. Training configs now point at HF
   subfolders; the launcher downloads the configured subfolder from HF before
-  training and passes that downloaded path to LeRobot. For test/debug work only,
+  training and passes that downloaded path to LeRobot. For private HF dataset
+  upload/download, use `HF_TOKEN` from `.env` or the active runtime; do not rely
+  on `HF_API_TOKEN` as the canonical token name. For test/debug work only,
   `--use-local-dataset-roots` keeps the config's local `root` values and skips
   HF resolution. RunPod should be used as the CUDA training/evaluation worker,
   not the primary MuJoCo/LeRobot dataset exporter, unless local export is

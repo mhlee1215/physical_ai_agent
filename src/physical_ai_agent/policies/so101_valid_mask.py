@@ -95,6 +95,8 @@ class SO101ValidMaskHead(torch.nn.Module):
         chunk_tensor = torch.as_tensor(action_chunk, dtype=torch.float32, device=state_tensor.device)
         if state_tensor.ndim == 1:
             state_tensor = state_tensor.unsqueeze(0)
+        if state_tensor.ndim > 2:
+            state_tensor = state_tensor.flatten(start_dim=1)
         if chunk_tensor.ndim == 2:
             chunk_tensor = chunk_tensor.unsqueeze(0)
         chunk_tensor = _pad_or_trim_action_chunk(chunk_tensor, self.config.chunk_size, self.config.action_dim)

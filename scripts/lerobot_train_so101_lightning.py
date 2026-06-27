@@ -5,6 +5,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -48,6 +49,9 @@ from physical_ai_agent.so101_lerobot_concat import (
     validate_lerobot_dataset_infos,
 )
 
+VAL_LOSS_TAG = "val/loss"
+IMPORTANT_VAL_LOSS_TAG = "important/val_loss"
+
 
 def main() -> None:
     wrapper_args, lerobot_args = _parse_wrapper_args()
@@ -72,14 +76,24 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--so101-image-camera-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-image-patch-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-image-patch-mask-ratio", type=float, default=0.0)
+    parser.add_argument("--so101-image-color-jitter", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--so101-image-sharpness-jitter", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--so101-image-affine-degrees", type=float, default=0.0)
+    parser.add_argument("--so101-image-affine-translate", type=float, default=0.0)
     parser.add_argument("--so101-gpu-image-augmentation", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--so101-action-prefix-loss-steps", type=int, default=0)
     parser.add_argument("--so101-action-prefix-loss-weight", type=float, default=1.0)
     parser.add_argument("--so101-image-cache-dir", type=Path)
     parser.add_argument("--train-datasets-json")
+    parser.add_argument("--train-dataset-source-spans-json")
     parser.add_argument("--validation-image-cache-dir", type=Path)
     parser.add_argument("--so101-augmentation-report", type=Path)
     parser.add_argument("--tensorboard-log-dir", type=Path)
+    parser.add_argument(
+        "--training-run-summary-path",
+        type=Path,
+        help="JSON launch summary written by start_so101_training.py and mirrored into TensorBoard text.",
+    )
     parser.add_argument("--lightning-precision", default="16-mixed")
     parser.add_argument("--lightning-accelerator", default="auto")
     parser.add_argument("--lightning-devices", default="auto")
@@ -88,8 +102,34 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--lightning-fast-dev-run", action="store_true")
     parser.add_argument("--validation-dataset-root", type=Path)
     parser.add_argument("--validation-dataset-repo-id")
+    parser.add_argument("--validation-datasets-json")
     parser.add_argument("--validation-batch-size", type=int)
     parser.add_argument("--validation-num-workers", type=int, default=0)
+    parser.add_argument(
+        "--so101-resume-checkpoint-path",
+        type=Path,
+        help=(
+            "SO101 wrapper resume checkpoint directory. This is kept separate "
+            "from the LeRobot CLI because some installed LeRobot versions expose "
+            "cfg.checkpoint_path in config but not as an argparse flag."
+        ),
+    )
+    parser.add_argument(
+        "--post-checkpoint-loop-command-json",
+        help=(
+            "JSON argv list to run inside the training loop immediately after "
+            "a checkpoint is saved. Used for mandatory one-shot closed-loop tests."
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint-retention-policy",
+        choices=["all", "best_val_and_closed_loop"],
+        default="all",
+        help=(
+            "Checkpoint retention policy. best_val_and_closed_loop keeps only "
+            "checkpoints/best_val_loss and checkpoints/best_closed_loop."
+        ),
+    )
     parser.add_argument(
         "--validation-every-n-train-steps",
         type=int,
@@ -133,6 +173,10 @@ def _apply_augmentation_env(args: argparse.Namespace) -> None:
     os.environ["SO101_IMAGE_CAMERA_DROPOUT_PROB"] = str(args.so101_image_camera_dropout_prob)
     os.environ["SO101_IMAGE_PATCH_DROPOUT_PROB"] = str(args.so101_image_patch_dropout_prob)
     os.environ["SO101_IMAGE_PATCH_MASK_RATIO"] = str(args.so101_image_patch_mask_ratio)
+    os.environ["SO101_IMAGE_COLOR_JITTER"] = "1" if args.so101_image_color_jitter else "0"
+    os.environ["SO101_IMAGE_SHARPNESS_JITTER"] = "1" if args.so101_image_sharpness_jitter else "0"
+    os.environ["SO101_IMAGE_AFFINE_DEGREES"] = str(args.so101_image_affine_degrees)
+    os.environ["SO101_IMAGE_AFFINE_TRANSLATE"] = str(args.so101_image_affine_translate)
     os.environ["SO101_GPU_IMAGE_AUGMENTATION"] = "1" if args.so101_gpu_image_augmentation else "0"
     if args.so101_image_cache_dir is not None:
         os.environ["SO101_IMAGE_CACHE_DIR"] = str(args.so101_image_cache_dir)
@@ -179,24 +223,25 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     optimizer, scheduler = make_optimizer_and_scheduler(cfg, policy)
     resume_step = 0
     if cfg.resume:
-        checkpoint_path = _resolve_resume_checkpoint_path(cfg)
+        checkpoint_path = _resolve_resume_checkpoint_path(cfg, wrapper_args)
         resume_step, optimizer, scheduler = load_training_state(checkpoint_path, optimizer, scheduler)
         logging.info("Resumed LeRobot training state from %s at step %s", checkpoint_path, resume_step)
         print(f"Resumed LeRobot training state from {checkpoint_path} at step {resume_step}", flush=True)
 
     dataloader = _make_dataloader(cfg, dataset)
     validation_dataloader = _make_validation_dataloader(cfg, wrapper_args)
+    validation_dataset_loaders = _make_validation_dataset_dataloaders(cfg, wrapper_args)
     validation_step_interval = _validation_step_interval(wrapper_args)
     validation_epoch_interval = _validation_epoch_interval(wrapper_args, validation_step_interval)
     logging.info(
         "Validation schedule: enabled=%s step_interval=%s epoch_interval=%s",
-        validation_dataloader is not None,
+        validation_dataloader is not None or bool(validation_dataset_loaders),
         validation_step_interval,
         validation_epoch_interval,
     )
     print(
         "Validation schedule: "
-        f"enabled={validation_dataloader is not None} "
+        f"enabled={validation_dataloader is not None or bool(validation_dataset_loaders)} "
         f"step_interval={validation_step_interval} "
         f"epoch_interval={validation_epoch_interval}",
         flush=True,
@@ -212,6 +257,7 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         action_prefix_loss_steps=int(wrapper_args.so101_action_prefix_loss_steps),
         action_prefix_loss_weight=float(wrapper_args.so101_action_prefix_loss_weight),
         validation_dataloader=validation_dataloader,
+        validation_dataset_loaders=validation_dataset_loaders,
         validation_step_interval=validation_step_interval,
         validation_epoch_interval=validation_epoch_interval,
         input_image_cameras=_parse_csv(wrapper_args.log_input_image_cameras),
@@ -221,6 +267,14 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     )
     tb_log_dir = (wrapper_args.tensorboard_log_dir or cfg.output_dir / "tensorboard").resolve()
     logger = TensorBoardLogger(save_dir=str(tb_log_dir), name="so101_smolvla", version="")
+    _log_training_run_texts(
+        logger=logger,
+        summary_path=wrapper_args.training_run_summary_path,
+        cfg=cfg,
+        augmentation=augmentation,
+        wrapper_args=wrapper_args,
+        lerobot_args=sys.argv[1:],
+    )
     callbacks = []
     checkpoint_callback = _make_lerobot_checkpoint_callback(
         lightning.Callback,
@@ -231,6 +285,8 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         save_freq=int(cfg.save_freq),
         enabled=bool(cfg.save_checkpoint),
         initial_step=resume_step,
+        post_checkpoint_loop_commands=_post_checkpoint_loop_commands(wrapper_args),
+        retention_policy=str(wrapper_args.checkpoint_retention_policy),
     )
     callbacks.append(checkpoint_callback)
     log_every_n_steps = wrapper_args.lightning_log_every_n_steps or max(1, int(cfg.log_freq))
@@ -281,7 +337,312 @@ def _import_tensorboard_logger() -> Any:
     return TensorBoardLogger
 
 
-def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig) -> Path:
+def _log_training_run_texts(
+    *,
+    logger: Any,
+    summary_path: Path | None,
+    cfg: TrainPipelineConfig,
+    augmentation: SamplingAugmentationConfig,
+    wrapper_args: argparse.Namespace,
+    lerobot_args: list[str],
+) -> None:
+    experiment = getattr(logger, "experiment", None)
+    if experiment is None or not hasattr(experiment, "add_text"):
+        return
+    summary = _load_training_run_summary(summary_path)
+    sections = {
+        "training/summary": _training_summary_markdown(summary, cfg=cfg, summary_path=summary_path),
+        "training/datasets": _training_datasets_markdown(summary),
+        "training/closed_loop": _training_closed_loop_markdown(summary),
+        "training/augmentation": _training_augmentation_markdown(summary, augmentation=augmentation),
+        "training/runtime": _training_runtime_markdown(summary, wrapper_args=wrapper_args, cfg=cfg),
+        "training/command": _training_command_markdown(summary, lerobot_args=lerobot_args),
+    }
+    for tag, text in sections.items():
+        experiment.add_text(tag, text, global_step=0)
+
+
+def _load_training_run_summary(summary_path: Path | None) -> dict[str, Any]:
+    if summary_path is None:
+        return {}
+    try:
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"summary_path": str(summary_path), "summary_load_error": "file not found"}
+    except json.JSONDecodeError as exc:
+        return {"summary_path": str(summary_path), "summary_load_error": str(exc)}
+
+
+def _training_summary_markdown(
+    summary: dict[str, Any],
+    *,
+    cfg: TrainPipelineConfig,
+    summary_path: Path | None,
+) -> str:
+    dataset_config = _summary_mapping(summary.get("dataset_config"))
+    training = _summary_mapping(dataset_config.get("training"))
+    closed_loop = _summary_mapping(dataset_config.get("closed_loop"))
+    rows = {
+        "run_dir": summary.get("run_dir", ""),
+        "summary_path": str(summary_path) if summary_path is not None else "",
+        "policy_type": getattr(cfg.policy, "type", ""),
+        "policy_repo_id": training.get("policy_repo_id") or getattr(cfg.policy, "repo_id", ""),
+        "output_dir": str(cfg.output_dir),
+        "steps": getattr(cfg, "steps", ""),
+        "save_freq": getattr(cfg, "save_freq", ""),
+        "batch_size": training.get("batch_size", getattr(cfg, "batch_size", "")),
+        "validation_interval_epochs": _arg_value(summary.get("train_cmd"), "--validation-interval-epochs"),
+        "validation_interval_steps": _arg_value(summary.get("train_cmd"), "--validation-interval-steps"),
+        "closed_loop_policy": _arg_value(summary.get("post_checkpoint_loop_cmd"), "--closed-loop-policy"),
+        "closed_loop_runner": closed_loop.get("runner", ""),
+        "tensorboard_url": summary.get("tensorboard_url", ""),
+        "mobile_tensorboard_url": summary.get("mobile_tensorboard_url", ""),
+    }
+    return _markdown_table("SO101 Training Summary", rows)
+
+
+def _training_datasets_markdown(summary: dict[str, Any]) -> str:
+    dataset_config = _summary_mapping(summary.get("dataset_config"))
+    lines = ["### SO101 Dataset Contract", ""]
+    if dataset_config.get("name"):
+        lines.append(f"- config: `{dataset_config.get('name')}`")
+    if dataset_config.get("task"):
+        lines.append(f"- task: `{dataset_config.get('task')}`")
+    if dataset_config.get("scenario"):
+        lines.append(f"- scenario: `{dataset_config.get('scenario')}`")
+    lines.append("")
+    camera_contract = _summary_mapping(dataset_config.get("camera_contract"))
+    if camera_contract:
+        lines.append("#### Cameras")
+        lines.extend(_dict_table_lines(camera_contract))
+        lines.append("")
+    train_datasets = dataset_config.get("train_datasets")
+    if isinstance(train_datasets, list):
+        lines.append("#### Train Datasets")
+        lines.extend(_dataset_table_lines(train_datasets))
+        lines.append("")
+    train_dataset = dataset_config.get("train_dataset")
+    if isinstance(train_dataset, dict):
+        lines.append("#### Train Dataset")
+        lines.extend(_dataset_table_lines([train_dataset]))
+        lines.append("")
+    validation = _summary_mapping(dataset_config.get("validation_dataset"))
+    validation_sources = validation.get("hf_resolved_sources") or validation.get("hf_merge_sources")
+    if isinstance(validation_sources, list):
+        lines.append("#### Validation Datasets")
+        lines.extend(_dataset_table_lines(validation_sources))
+    elif validation:
+        lines.append("#### Validation Dataset")
+        lines.extend(_dataset_table_lines([validation]))
+    return "\n".join(lines).strip()
+
+
+def _training_closed_loop_markdown(summary: dict[str, Any]) -> str:
+    dataset_config = _summary_mapping(summary.get("dataset_config"))
+    closed_loop = _summary_mapping(dataset_config.get("closed_loop"))
+    lines = ["### Closed-Loop Evaluation", ""]
+    lines.extend(
+        _dict_table_lines(
+            {
+                "runner": closed_loop.get("runner", ""),
+                "env_id": closed_loop.get("env_id", ""),
+                "task_prompt": closed_loop.get("task_prompt", ""),
+                "qwen_object": closed_loop.get("qwen_object", ""),
+                "valid_mask_checkpoint": closed_loop.get("valid_mask_checkpoint", ""),
+                "success_metric": closed_loop.get("success_metric", ""),
+            }
+        )
+    )
+    test_cases = closed_loop.get("test_cases")
+    if isinstance(test_cases, list):
+        lines.extend(["", "#### Test Cases", "", "| id | episodes | steps | seed | start_contract | task_prompt | plan_json |", "| --- | ---: | ---: | ---: | --- | --- | --- |"])
+        for test_case in test_cases:
+            if not isinstance(test_case, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    _escape_md(
+                        test_case.get(key, "")
+                    )
+                    for key in ("id", "episodes", "steps", "seed", "start_contract", "task_prompt", "plan_json")
+                )
+                + " |"
+            )
+    commands = summary.get("post_checkpoint_loop_cmds")
+    if isinstance(commands, list) and commands:
+        lines.extend(["", "#### Expanded Loop Commands", ""])
+        for index, command in enumerate(commands, start=1):
+            lines.append(f"```text\n# loop command {index}\n{_shell_join(command)}\n```")
+    return "\n".join(lines).strip()
+
+
+def _training_augmentation_markdown(
+    summary: dict[str, Any],
+    *,
+    augmentation: SamplingAugmentationConfig,
+) -> str:
+    dataset_config = _summary_mapping(summary.get("dataset_config"))
+    configured = _summary_mapping(dataset_config.get("augmentation"))
+    actual = {
+        field.name: getattr(augmentation, field.name)
+        for field in dataclasses.fields(augmentation)
+        if hasattr(augmentation, field.name)
+    }
+    lines = ["### Train-Time Augmentation", "", "Validation and closed-loop inputs are unaugmented.", ""]
+    if configured:
+        lines.append("#### Configured")
+        lines.extend(_dict_table_lines(configured))
+        lines.append("")
+    lines.append("#### Effective Environment")
+    lines.extend(_dict_table_lines(actual))
+    return "\n".join(lines).strip()
+
+
+def _training_runtime_markdown(
+    summary: dict[str, Any],
+    *,
+    wrapper_args: argparse.Namespace,
+    cfg: TrainPipelineConfig,
+) -> str:
+    rows = {
+        "runtime_platform": _summary_mapping(summary.get("runtime_contract")).get("runtime_platform", ""),
+        "training_device": _summary_mapping(summary.get("runtime_contract")).get("training_device", ""),
+        "lightning_accelerator": wrapper_args.lightning_accelerator,
+        "lightning_devices": wrapper_args.lightning_devices,
+        "lightning_precision": wrapper_args.lightning_precision,
+        "resume": getattr(cfg, "resume", ""),
+        "resume_checkpoint": wrapper_args.so101_resume_checkpoint_path or "",
+        "local_training_standard": _summary_mapping(summary.get("local_training_standard")).get("name", ""),
+        "train_log": _summary_mapping(summary.get("logs")).get("train", ""),
+        "tensorboard_log": _summary_mapping(summary.get("logs")).get("tensorboard", ""),
+    }
+    return _markdown_table("Runtime", rows)
+
+
+def _training_command_markdown(summary: dict[str, Any], *, lerobot_args: list[str]) -> str:
+    train_cmd = summary.get("train_cmd")
+    lines = ["### Training Command", ""]
+    if isinstance(train_cmd, list):
+        lines.append(f"```text\n{_shell_join(train_cmd)}\n```")
+    else:
+        lines.append(f"```text\n{_shell_join([sys.argv[0], *lerobot_args])}\n```")
+    tensorboard_cmd = summary.get("tensorboard_cmd")
+    if isinstance(tensorboard_cmd, list):
+        lines.extend(["", "### TensorBoard Command", "", f"```text\n{_shell_join(tensorboard_cmd)}\n```"])
+    cache_cmds = summary.get("cache_build_cmds")
+    if isinstance(cache_cmds, list) and cache_cmds:
+        lines.extend(["", "### Cache Build Commands", ""])
+        for command in cache_cmds:
+            if isinstance(command, list):
+                lines.append(f"```text\n{_shell_join(command)}\n```")
+    return "\n".join(lines).strip()
+
+
+def _summary_mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _markdown_table(title: str, rows: dict[str, Any]) -> str:
+    lines = [f"### {title}", "", "| key | value |", "| --- | --- |"]
+    for key, value in rows.items():
+        lines.append(f"| `{_escape_md(key)}` | {_escape_md(value)} |")
+    return "\n".join(lines)
+
+
+def _dict_table_lines(rows: dict[str, Any]) -> list[str]:
+    lines = ["| key | value |", "| --- | --- |"]
+    for key, value in rows.items():
+        lines.append(f"| `{_escape_md(key)}` | {_escape_md(value)} |")
+    return lines
+
+
+def _dataset_table_lines(rows: list[Any]) -> list[str]:
+    lines = ["| name | repo_id | root | episodes | frames | hf_path |", "| --- | --- | --- | ---: | ---: | --- |"]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                _escape_md(row.get(key, ""))
+                for key in ("name", "repo_id", "root", "expected_episodes", "expected_frames", "hf_path_in_repo")
+            )
+            + " |"
+        )
+    return lines
+
+
+def _arg_value(command: Any, flag: str) -> str:
+    if not isinstance(command, list):
+        return ""
+    prefix = f"{flag}="
+    for index, part in enumerate(command):
+        if not isinstance(part, str):
+            continue
+        if part == flag and index + 1 < len(command):
+            return str(command[index + 1])
+        if part.startswith(prefix):
+            return part[len(prefix):]
+    return ""
+
+
+def _shell_join(command: list[Any]) -> str:
+    return " ".join(shlex_quote(str(part)) for part in command)
+
+
+def shlex_quote(value: str) -> str:
+    if not value:
+        return "''"
+    if re.fullmatch(r"[A-Za-z0-9_@%+=:,./-]+", value):
+        return value
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _escape_md(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value, sort_keys=True)
+    text = str(value)
+    return text.replace("|", "\\|").replace("\n", "<br>")
+
+
+def _post_checkpoint_loop_command(args: argparse.Namespace) -> list[str] | None:
+    if not args.post_checkpoint_loop_command_json:
+        return None
+    try:
+        command = json.loads(args.post_checkpoint_loop_command_json)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--post-checkpoint-loop-command-json must be a JSON list: {exc}") from exc
+    if not isinstance(command, list) or not command or not all(isinstance(part, str) for part in command):
+        raise SystemExit("--post-checkpoint-loop-command-json must be a non-empty JSON list of strings")
+    return list(command)
+
+
+def _post_checkpoint_loop_commands(args: argparse.Namespace) -> list[list[str]]:
+    if not args.post_checkpoint_loop_command_json:
+        return []
+    try:
+        payload = json.loads(args.post_checkpoint_loop_command_json)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--post-checkpoint-loop-command-json must be JSON: {exc}") from exc
+    if isinstance(payload, list) and payload and all(isinstance(part, str) for part in payload):
+        return [list(payload)]
+    if isinstance(payload, list) and all(
+        isinstance(command, list) and command and all(isinstance(part, str) for part in command)
+        for command in payload
+    ):
+        return [list(command) for command in payload]
+    raise SystemExit(
+        "--post-checkpoint-loop-command-json must be either one argv JSON list "
+        "or a JSON list of argv lists"
+    )
+
+
+def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace) -> Path:
+    if wrapper_args.so101_resume_checkpoint_path is not None:
+        return Path(wrapper_args.so101_resume_checkpoint_path)
     if cfg.checkpoint_path is not None:
         return Path(cfg.checkpoint_path)
     checkpoint_root = Path(cfg.output_dir) / "checkpoints"
@@ -301,6 +662,73 @@ def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig) -> Path:
     )
 
 
+def _read_json_file(path: Path) -> Any:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _read_jsonl_file(path: Path) -> list[dict[str, Any]]:
+    rows = []
+    if not path.exists():
+        return rows
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+    except OSError:
+        return []
+    return rows
+
+
+def _float_or_none(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _latest_closed_loop_success_for_command(command: list[str], checkpoint: str) -> float | None:
+    run_dir = _command_arg_value(command, "--run-dir")
+    test_id = _command_arg_value(command, "--closed-loop-test-id") or "default"
+    if not run_dir:
+        return None
+    rows = [
+        row
+        for row in _read_jsonl_file(Path(run_dir) / "metrics" / "closed_loop_metrics.jsonl")
+        if str(row.get("checkpoint")) == str(checkpoint)
+        and str(row.get("test_id", "default")) == str(test_id)
+    ]
+    if not rows:
+        return None
+    return _float_or_none(rows[-1].get("success_rate"))
+
+
+def _command_arg_value(command: list[str], flag: str) -> str | None:
+    prefix = f"{flag}="
+    for index, part in enumerate(command):
+        if part == flag and index + 1 < len(command):
+            return str(command[index + 1])
+        if part.startswith(prefix):
+            return part[len(prefix):]
+    return None
+
+
 def _make_dataset(
     cfg: TrainPipelineConfig,
     augmentation: SamplingAugmentationConfig,
@@ -315,6 +743,9 @@ def _make_dataset(
         dataset = PredecodedImageCacheDataset(dataset, Path(cache_dir))
     if augmentation.enabled and not augmentation.gpu_image_augmentation:
         dataset = SamplingAugmentedDataset(dataset, augmentation)
+    source_spans = _train_dataset_source_spans(wrapper_args)
+    if source_spans:
+        dataset = _SourceAnnotatedDataset(dataset, source_spans)
     return dataset
 
 
@@ -333,6 +764,69 @@ def _train_dataset_entries(wrapper_args: argparse.Namespace) -> list[dict[str, A
             raise SystemExit(f"--train-datasets-json[{index}] must be an object")
         result.append(dict(entry))
     return result
+
+
+def _train_dataset_source_spans(wrapper_args: argparse.Namespace) -> list[dict[str, Any]]:
+    if not wrapper_args.train_dataset_source_spans_json:
+        return []
+    try:
+        entries = json.loads(wrapper_args.train_dataset_source_spans_json)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--train-dataset-source-spans-json must be valid JSON: {exc}") from exc
+    if not isinstance(entries, list):
+        raise SystemExit("--train-dataset-source-spans-json must be a JSON list")
+    result = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"--train-dataset-source-spans-json[{index}] must be an object")
+        if not entry.get("name"):
+            raise SystemExit(f"--train-dataset-source-spans-json[{index}] must include name")
+        length = entry.get("length", entry.get("expected_frames"))
+        if length is None:
+            raise SystemExit(f"--train-dataset-source-spans-json[{index}] must include length or expected_frames")
+        result.append({"name": str(entry["name"]), "length": int(length)})
+    return result
+
+
+class _SourceAnnotatedDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset: Any, source_spans: list[dict[str, Any]]) -> None:
+        self.dataset = dataset
+        self.source_names = [str(span["name"]) for span in source_spans]
+        self.source_lengths = [int(span["length"]) for span in source_spans]
+        self.source_ends: list[int] = []
+        total = 0
+        for length in self.source_lengths:
+            total += max(0, int(length))
+            self.source_ends.append(total)
+        if total != len(dataset):
+            raise SystemExit(
+                "--train-dataset-source-spans-json total length does not match train dataset length: "
+                f"spans={total} dataset={len(dataset)}"
+            )
+        self.meta = getattr(dataset, "meta")
+        self.root = getattr(dataset, "root", None)
+        self.repo_id = getattr(dataset, "repo_id", None)
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        item = dict(self.dataset[index])
+        source_index = self.source_index(index)
+        item.setdefault("dataset_index", source_index)
+        item.setdefault("dataset_name", self.source_names[source_index])
+        start = 0 if source_index == 0 else self.source_ends[source_index - 1]
+        item.setdefault("dataset_local_index", int(index) - start)
+        return item
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.dataset, name)
+
+    def source_index(self, index: int) -> int:
+        for source_index, end in enumerate(self.source_ends):
+            if index < end:
+                return source_index
+        raise IndexError(index)
 
 
 def _make_concat_train_dataset(
@@ -475,6 +969,61 @@ def _make_validation_dataloader(
     )
 
 
+def _make_validation_dataset_dataloaders(
+    cfg: TrainPipelineConfig,
+    wrapper_args: argparse.Namespace,
+) -> dict[str, torch.utils.data.DataLoader]:
+    entries = _validation_dataset_entries(wrapper_args)
+    if not entries:
+        return {}
+    loaders: dict[str, torch.utils.data.DataLoader] = {}
+    for index, entry in enumerate(entries):
+        name = str(entry.get("name") or entry.get("repo_id") or f"validation_dataset_{index}")
+        repo_id = str(entry.get("repo_id") or wrapper_args.validation_dataset_repo_id or cfg.dataset.repo_id)
+        root = Path(str(entry["root"]))
+        metadata = LeRobotDatasetMetadata(repo_id, root=root)
+        delta_timestamps = resolve_delta_timestamps(cfg.policy, metadata)
+        dataset: Any = LeRobotDataset(
+            repo_id,
+            root=root,
+            delta_timestamps=delta_timestamps,
+            video_backend=cfg.dataset.video_backend,
+        )
+        cache_dir = entry.get("image_cache_dir")
+        if cache_dir:
+            dataset = PredecodedImageCacheDataset(dataset, Path(str(cache_dir)))
+        loaders[name] = torch.utils.data.DataLoader(
+            dataset,
+            num_workers=wrapper_args.validation_num_workers,
+            batch_size=wrapper_args.validation_batch_size or cfg.batch_size,
+            shuffle=False,
+            pin_memory=str(cfg.policy.device) == "cuda",
+            drop_last=False,
+            prefetch_factor=2 if wrapper_args.validation_num_workers > 0 else None,
+            persistent_workers=wrapper_args.validation_num_workers > 0,
+        )
+    return loaders
+
+
+def _validation_dataset_entries(wrapper_args: argparse.Namespace) -> list[dict[str, Any]]:
+    if not wrapper_args.validation_datasets_json:
+        return []
+    try:
+        entries = json.loads(wrapper_args.validation_datasets_json)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--validation-datasets-json must be valid JSON: {exc}") from exc
+    if not isinstance(entries, list):
+        raise SystemExit("--validation-datasets-json must be a JSON list")
+    result = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"--validation-datasets-json[{index}] must be an object")
+        if "root" not in entry:
+            raise SystemExit(f"--validation-datasets-json[{index}] must include root")
+        result.append(dict(entry))
+    return result
+
+
 def _validation_step_interval(args: argparse.Namespace) -> int:
     value = args.validation_interval_steps
     if value is None:
@@ -565,6 +1114,14 @@ def _smoothness_ratios(predicted: dict[str, float], teacher: dict[str, float]) -
     }
 
 
+def _scalar_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if torch.is_tensor(value) and value.numel() == 1:
+        return float(value.detach().cpu())
+    return None
+
+
 class _SO101LightningModule:
     def __new__(
         cls,
@@ -579,6 +1136,7 @@ class _SO101LightningModule:
         action_prefix_loss_steps: int,
         action_prefix_loss_weight: float,
         validation_dataloader: torch.utils.data.DataLoader | None,
+        validation_dataset_loaders: dict[str, torch.utils.data.DataLoader],
         validation_step_interval: int,
         validation_epoch_interval: int,
         input_image_cameras: tuple[str, ...],
@@ -598,15 +1156,18 @@ class _SO101LightningModule:
                 self.action_prefix_loss_steps = max(0, int(action_prefix_loss_steps))
                 self.action_prefix_loss_weight = max(0.0, float(action_prefix_loss_weight))
                 self.validation_dataloader = validation_dataloader
+                self.validation_dataset_loaders = validation_dataset_loaders
                 self.validation_step_interval = max(0, int(validation_step_interval))
                 self.validation_epoch_interval = max(0, int(validation_epoch_interval))
                 self.validation_iter: Any | None = None
+                self.validation_dataset_iters: dict[str, Any] = {}
                 self.initial_step = max(0, int(initial_step))
                 self.train_batches_seen = self.initial_step
                 self.input_image_cameras = input_image_cameras
                 self.log_input_images_every_n_steps = max(0, int(log_input_images_every_n_steps))
                 self.log_input_metadata_every_n_steps = max(0, int(log_input_metadata_every_n_steps))
                 self._last_step_started = 0.0
+                self.last_validation_loss: float | None = None
 
             def forward(self, batch: dict[str, Any]) -> Any:
                 return self.policy.forward(batch)
@@ -617,9 +1178,15 @@ class _SO101LightningModule:
                 raw_batch = batch
                 batch = self.preprocessor(batch)
                 dataloading_s = time.perf_counter() - self._last_step_started if self._last_step_started else 0.0
+                pre_augmented_images = None
                 if self.augmentation.enabled and self.augmentation.gpu_image_augmentation:
+                    pre_augmented_images = _clone_image_tensors_for_logging(batch, self.input_image_cameras)
                     augment_batch_on_device(batch, self.augmentation)
-                self._log_input_images(batch, split="train")
+                if pre_augmented_images is not None:
+                    self._log_input_images(pre_augmented_images, split="train", tag_prefix="input")
+                    self._log_input_images(batch, split="train", tag_prefix="augmented_input")
+                else:
+                    self._log_input_images(batch, split="train", tag_prefix="input")
                 self._log_input_metadata(raw_batch, batch, split="train")
                 loss, output_dict = _forward_policy_with_optional_prefix_loss(
                     self.policy,
@@ -629,31 +1196,36 @@ class _SO101LightningModule:
                 )
                 batch_size = _batch_size(batch)
                 update_s = time.perf_counter() - started
-                self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True, batch_size=batch_size)
-                self.log("important/train_loss", loss, on_step=True, on_epoch=False, batch_size=batch_size)
-                self.log("train/batch_size", float(batch_size), on_step=True, on_epoch=False, batch_size=batch_size)
-                self.log("train/update_s", update_s, on_step=True, on_epoch=False, batch_size=batch_size)
-                self.log("train/data_s", dataloading_s, on_step=True, on_epoch=False, batch_size=batch_size)
-                self.log(
+                train_log_step = self.train_batches_seen + 1
+                self._log_train_scalar("train/loss", loss, batch_size=batch_size, log_step=train_log_step)
+                self._log_train_scalar(
+                    "important/train_loss",
+                    loss,
+                    batch_size=batch_size,
+                    log_step=train_log_step,
+                )
+                self.log("train/loss_progbar", loss, on_step=True, on_epoch=False, prog_bar=True, batch_size=batch_size)
+                self._log_train_dataset_losses(raw_batch, batch, batch_size=batch_size)
+                self._log_train_scalar("train/batch_size", float(batch_size), batch_size=batch_size, log_step=train_log_step)
+                self._log_train_scalar("train/update_s", update_s, batch_size=batch_size, log_step=train_log_step)
+                self._log_train_scalar("train/data_s", dataloading_s, batch_size=batch_size, log_step=train_log_step)
+                self._log_train_scalar(
                     "train/update_s_per_sample",
                     _seconds_per_sample(update_s, batch_size),
-                    on_step=True,
-                    on_epoch=False,
                     batch_size=batch_size,
+                    log_step=train_log_step,
                 )
-                self.log(
+                self._log_train_scalar(
                     "train/data_s_per_sample",
                     _seconds_per_sample(dataloading_s, batch_size),
-                    on_step=True,
-                    on_epoch=False,
                     batch_size=batch_size,
+                    log_step=train_log_step,
                 )
-                self.log(
+                self._log_train_scalar(
                     "train/samples_per_s",
                     _samples_per_second(batch_size, update_s),
-                    on_step=True,
-                    on_epoch=False,
                     batch_size=batch_size,
+                    log_step=train_log_step,
                 )
                 self._log_system_metrics(batch_size=batch_size)
                 for key, value in (output_dict or {}).items():
@@ -662,9 +1234,19 @@ class _SO101LightningModule:
                     if torch.is_tensor(value) and value.numel() == 1:
                         value = value.detach()
                     if isinstance(value, (int, float)):
-                        self.log(f"train/{key}", float(value), on_step=True, on_epoch=False, batch_size=batch_size)
+                        self._log_train_scalar(
+                            f"train/{key}",
+                            float(value),
+                            batch_size=batch_size,
+                            log_step=train_log_step,
+                        )
                     elif torch.is_tensor(value) and value.numel() == 1:
-                        self.log(f"train/{key}", value, on_step=True, on_epoch=False, batch_size=batch_size)
+                        self._log_train_scalar(
+                            f"train/{key}",
+                            value,
+                            batch_size=batch_size,
+                            log_step=train_log_step,
+                        )
                 self.train_batches_seen += 1
                 self._run_step_validation_if_due(completed_step=self.train_batches_seen)
                 self._last_step_started = time.perf_counter()
@@ -675,26 +1257,60 @@ class _SO101LightningModule:
                 if step != 1 and step % 50 != 0:
                     return
                 for tag, value in _system_metrics_for_current_process().items():
-                    self.log(tag, value, on_step=True, on_epoch=False, batch_size=batch_size)
+                    self._log_train_scalar(tag, value, batch_size=batch_size, log_step=step)
 
             def on_train_epoch_end(self) -> None:
-                if self.validation_dataloader is None or self.validation_epoch_interval <= 0:
+                if not self._has_validation_loaders() or self.validation_epoch_interval <= 0:
                     return
                 epoch = int(getattr(self.trainer, "current_epoch", 0)) + 1
                 if epoch > 0 and epoch % self.validation_epoch_interval == 0:
                     self._run_scheduled_validation(log_step=self._absolute_step())
 
             def _run_step_validation_if_due(self, *, completed_step: int) -> None:
-                if self.validation_dataloader is None or self.validation_step_interval <= 0:
+                if not self._has_validation_loaders() or self.validation_step_interval <= 0:
                     return
                 if completed_step > 0 and completed_step % self.validation_step_interval == 0:
                     self._run_scheduled_validation(log_step=completed_step)
 
             def _run_scheduled_validation(self, *, log_step: int) -> None:
-                if self.validation_iter is None:
-                    self.validation_iter = cycle(self.validation_dataloader)
-                print(f"Running validation batch at step {log_step}", flush=True)
-                self.run_validation_batch(next(self.validation_iter), log_step=log_step)
+                dataset_losses = []
+                if self.validation_dataloader is not None:
+                    if self.validation_iter is None:
+                        self.validation_iter = cycle(self.validation_dataloader)
+                    print(f"Running validation batch at step {log_step}", flush=True)
+                    self.run_validation_batch(next(self.validation_iter), log_step=log_step)
+                for name, dataloader in self.validation_dataset_loaders.items():
+                    if name not in self.validation_dataset_iters:
+                        self.validation_dataset_iters[name] = cycle(dataloader)
+                    print(f"Running validation batch for {name} at step {log_step}", flush=True)
+                    dataset_losses.append(
+                        self.run_validation_batch(
+                        next(self.validation_dataset_iters[name]),
+                        log_step=log_step,
+                        dataset_name=name,
+                        )
+                    )
+                if self.validation_dataloader is None and dataset_losses:
+                    mean_loss = torch.stack([
+                        loss.detach().float() if torch.is_tensor(loss) else torch.as_tensor(float(loss))
+                        for loss in dataset_losses
+                    ]).mean()
+                    self.last_validation_loss = _scalar_float(mean_loss)
+                    self._log_validation_scalar(
+                        VAL_LOSS_TAG,
+                        mean_loss,
+                        batch_size=1,
+                        log_step=log_step,
+                    )
+                    self._log_validation_scalar(
+                        IMPORTANT_VAL_LOSS_TAG,
+                        mean_loss,
+                        batch_size=1,
+                        log_step=log_step,
+                    )
+
+            def _has_validation_loaders(self) -> bool:
+                return self.validation_dataloader is not None or bool(self.validation_dataset_loaders)
 
             def configure_optimizers(self) -> Any:
                 if self._scheduler is None:
@@ -708,13 +1324,19 @@ class _SO101LightningModule:
                     },
                 }
 
-            def run_validation_batch(self, batch: dict[str, Any], *, log_step: int | None = None) -> Any:
+            def run_validation_batch(
+                self,
+                batch: dict[str, Any],
+                *,
+                log_step: int | None = None,
+                dataset_name: str | None = None,
+            ) -> Any:
                 was_training = self.policy.training
                 self.policy.eval()
                 with torch.no_grad():
                     raw_batch = batch
                     batch = self.preprocessor(batch)
-                    self._log_input_images(batch, split="val", log_step=log_step)
+                    self._log_input_images(batch, split="val", log_step=log_step, tag_prefix="input")
                     self._log_input_metadata(raw_batch, batch, split="val", log_step=log_step)
                     loss, output_dict = _forward_policy_with_optional_prefix_loss(
                         self.policy,
@@ -724,22 +1346,65 @@ class _SO101LightningModule:
                     )
                     jitter_metrics = _action_chunk_jitter_metrics(self.policy, batch)
                 batch_size = _batch_size(batch)
-                self._log_validation_scalar("val/loss", loss, batch_size=batch_size, log_step=log_step)
-                self._log_validation_scalar("important/val_loss", loss, batch_size=batch_size, log_step=log_step)
+                prefix = "val" if dataset_name is None else f"val/datasets/{_safe_tag(dataset_name)}"
+                loss_tag = VAL_LOSS_TAG if dataset_name is None else f"{prefix}/loss"
+                self._log_validation_scalar(loss_tag, loss, batch_size=batch_size, log_step=log_step)
+                if dataset_name is None:
+                    self.last_validation_loss = _scalar_float(loss)
+                    self._log_validation_scalar(IMPORTANT_VAL_LOSS_TAG, loss, batch_size=batch_size, log_step=log_step)
                 for key, value in (output_dict or {}).items():
                     if key == "loss":
                         continue
-                    self._log_validation_scalar(f"val/{key}", value, batch_size=batch_size, log_step=log_step)
-                self._log_action_jitter_metrics(jitter_metrics, batch_size=batch_size, log_step=log_step)
+                    self._log_validation_scalar(f"{prefix}/{key}", value, batch_size=batch_size, log_step=log_step)
+                if dataset_name is None:
+                    self._log_action_jitter_metrics(jitter_metrics, batch_size=batch_size, log_step=log_step)
                 if was_training:
                     self.policy.train()
                 self._log_validation_scalar(
-                    "val/batch_size",
+                    f"{prefix}/batch_size",
                     float(batch_size),
                     batch_size=batch_size,
                     log_step=log_step,
                 )
                 return loss
+
+            def _log_train_dataset_losses(
+                self,
+                raw_batch: dict[str, Any],
+                processed_batch: dict[str, Any],
+                *,
+                batch_size: int,
+            ) -> None:
+                names = _batch_dataset_names(raw_batch)
+                if not names:
+                    return
+                unique_names = []
+                for name in names:
+                    if name not in unique_names:
+                        unique_names.append(name)
+                was_training = self.policy.training
+                with torch.no_grad():
+                    for name in unique_names:
+                        indexes = [idx for idx, value in enumerate(names) if value == name]
+                        if not indexes:
+                            continue
+                        subset = _subset_batch(processed_batch, indexes)
+                        if not subset:
+                            continue
+                        loss, _output_dict = _forward_policy_with_optional_prefix_loss(
+                            self.policy,
+                            subset,
+                            prefix_steps=self.action_prefix_loss_steps,
+                            prefix_weight=self.action_prefix_loss_weight,
+                        )
+                        self._log_validation_scalar(
+                            f"train/datasets/{_safe_tag(name)}/loss",
+                            loss,
+                            batch_size=len(indexes),
+                            log_step=self.train_batches_seen + 1,
+                        )
+                if was_training:
+                    self.policy.train()
 
             def _log_validation_scalar(
                 self,
@@ -765,12 +1430,28 @@ class _SO101LightningModule:
                     return
                 self.log(tag, scalar, on_step=True, on_epoch=False, batch_size=batch_size)
 
+            def _log_train_scalar(
+                self,
+                tag: str,
+                value: Any,
+                *,
+                batch_size: int,
+                log_step: int,
+            ) -> None:
+                self._log_validation_scalar(
+                    tag,
+                    value,
+                    batch_size=batch_size,
+                    log_step=log_step,
+                )
+
             def _log_input_images(
                 self,
                 batch: dict[str, Any],
                 *,
                 split: str,
                 log_step: int | None = None,
+                tag_prefix: str = "input",
             ) -> None:
                 if self.log_input_images_every_n_steps <= 0:
                     return
@@ -789,7 +1470,7 @@ class _SO101LightningModule:
                     image = _tensorboard_image_grid(batch[key]) if split == "val" else _tensorboard_image(batch[key])
                     if image is None:
                         continue
-                    experiment.add_image(f"{split}/input_{camera}", image, global_step=step)
+                    experiment.add_image(f"{split}/{tag_prefix}_{camera}", image, global_step=step)
 
             def _log_input_metadata(
                 self,
@@ -871,6 +1552,8 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             save_freq: int,
             enabled: bool,
             initial_step: int,
+            post_checkpoint_loop_commands: list[list[str]] | None,
+            retention_policy: str,
         ) -> None:
             super().__init__()
             self.cfg = cfg
@@ -880,7 +1563,12 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             self.save_freq = max(1, int(save_freq))
             self.enabled = enabled
             self.initial_step = max(0, int(initial_step))
+            self.post_checkpoint_loop_commands = [list(command) for command in (post_checkpoint_loop_commands or [])]
+            self.retention_policy = retention_policy
             self.saved_steps: set[int] = set()
+            self.retention_state_path = Path(self.cfg.output_dir) / "checkpoints" / "retention_state.json"
+            self.retention_events_path = Path(self.cfg.output_dir) / "checkpoints" / "retention_events.jsonl"
+            self.retention_state = _read_json_file(self.retention_state_path) or {}
 
         def on_train_batch_end(
             self,
@@ -921,6 +1609,124 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
                 )
                 update_last_checkpoint(checkpoint_dir)
             self.saved_steps.add(step)
+            closed_loop_success = self._run_post_checkpoint_loop_test(checkpoint_dir=checkpoint_dir, step=step)
+            self._apply_retention_policy(
+                checkpoint_dir=checkpoint_dir,
+                step=step,
+                validation_loss=_scalar_float(getattr(pl_module, "last_validation_loss", None)),
+                closed_loop_success=closed_loop_success,
+            )
+
+        def _run_post_checkpoint_loop_test(self, *, checkpoint_dir: Path, step: int) -> float | None:
+            if not self.post_checkpoint_loop_commands:
+                return None
+            env = {
+                **os.environ,
+                "SO101_CHECKPOINT_DIR": str(checkpoint_dir),
+                "SO101_CHECKPOINT_STEP": str(step),
+            }
+            success_values: list[float] = []
+            for index, command in enumerate(self.post_checkpoint_loop_commands, start=1):
+                print(
+                    f"Running closed-loop test {index}/{len(self.post_checkpoint_loop_commands)} "
+                    f"after checkpoint step {step}",
+                    flush=True,
+                )
+                subprocess.run(command, check=True, env=env)
+                success = _latest_closed_loop_success_for_command(command, checkpoint_dir.name)
+                if success is not None:
+                    success_values.append(success)
+            return max(success_values) if success_values else None
+
+        def _apply_retention_policy(
+            self,
+            *,
+            checkpoint_dir: Path,
+            step: int,
+            validation_loss: float | None,
+            closed_loop_success: float | None,
+        ) -> None:
+            if self.retention_policy != "best_val_and_closed_loop":
+                return
+            retained = False
+            if validation_loss is not None:
+                best_val = _float_or_none(self.retention_state.get("best_val_loss"))
+                if best_val is None or validation_loss < best_val:
+                    self._promote_checkpoint(
+                        checkpoint_dir,
+                        "best_val_loss",
+                        {
+                            "kind": "best_val_loss",
+                            "step": step,
+                            "checkpoint": checkpoint_dir.name,
+                            "val_loss": validation_loss,
+                            "previous_best_val_loss": best_val,
+                        },
+                    )
+                    self.retention_state["best_val_loss"] = validation_loss
+                    self.retention_state["best_val_loss_step"] = step
+                    self.retention_state["best_val_loss_source_checkpoint"] = checkpoint_dir.name
+                    retained = True
+            if closed_loop_success is not None:
+                best_loop = _float_or_none(self.retention_state.get("best_closed_loop_success_rate"))
+                if best_loop is None or closed_loop_success > best_loop:
+                    self._promote_checkpoint(
+                        checkpoint_dir,
+                        "best_closed_loop",
+                        {
+                            "kind": "best_closed_loop",
+                            "step": step,
+                            "checkpoint": checkpoint_dir.name,
+                            "success_rate": closed_loop_success,
+                            "previous_best_success_rate": best_loop,
+                        },
+                    )
+                    self.retention_state["best_closed_loop_success_rate"] = closed_loop_success
+                    self.retention_state["best_closed_loop_step"] = step
+                    self.retention_state["best_closed_loop_source_checkpoint"] = checkpoint_dir.name
+                    retained = True
+            self.retention_state["latest_checkpoint_step"] = step
+            self.retention_state["latest_source_checkpoint"] = checkpoint_dir.name
+            self.retention_state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.retention_state_path.write_text(
+                json.dumps(self.retention_state, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            if checkpoint_dir.exists() and checkpoint_dir.name.isdigit():
+                shutil.rmtree(checkpoint_dir)
+                self._append_retention_event(
+                    {
+                        "kind": "pruned_periodic_checkpoint",
+                        "step": step,
+                        "checkpoint": checkpoint_dir.name,
+                        "promoted_this_step": retained,
+                    }
+                )
+            self._refresh_last_retained_checkpoint()
+
+        def _promote_checkpoint(self, checkpoint_dir: Path, name: str, event: dict[str, Any]) -> None:
+            target = Path(self.cfg.output_dir) / "checkpoints" / name
+            tmp = target.with_name(f".{target.name}.tmp")
+            if tmp.exists():
+                shutil.rmtree(tmp)
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(checkpoint_dir, tmp)
+            tmp.rename(target)
+            self._append_retention_event(event)
+
+        def _append_retention_event(self, event: dict[str, Any]) -> None:
+            self.retention_events_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.retention_events_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, sort_keys=True) + "\n")
+
+        def _refresh_last_retained_checkpoint(self) -> None:
+            checkpoint_root = Path(self.cfg.output_dir) / "checkpoints"
+            for name in ("best_val_loss", "best_closed_loop"):
+                target = checkpoint_root / name
+                if target.exists():
+                    update_last_checkpoint(target)
+                    return
 
     return LeRobotCheckpointCallback(**kwargs)
 
@@ -1018,6 +1824,55 @@ def _batch_size(batch: dict[str, Any]) -> int:
         if hasattr(value, "shape") and len(value.shape) > 0:
             return int(value.shape[0])
     return 1
+
+
+def _batch_dataset_names(batch: dict[str, Any]) -> list[str]:
+    value = batch.get("dataset_name")
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    if torch.is_tensor(value):
+        return [str(item) for item in value.detach().cpu().tolist()]
+    return []
+
+
+def _subset_batch(batch: dict[str, Any], indexes: list[int]) -> dict[str, Any]:
+    if not indexes:
+        return {}
+    index_tensor_cache: dict[str, torch.Tensor] = {}
+
+    def subset_value(value: Any) -> Any:
+        if torch.is_tensor(value):
+            if value.ndim == 0 or int(value.shape[0]) < max(indexes) + 1:
+                return value
+            cache_key = f"{value.device}:{len(indexes)}:{','.join(str(i) for i in indexes)}"
+            if cache_key not in index_tensor_cache:
+                index_tensor_cache[cache_key] = torch.as_tensor(indexes, dtype=torch.long, device=value.device)
+            return value.index_select(0, index_tensor_cache[cache_key])
+        if isinstance(value, list) and len(value) >= max(indexes) + 1:
+            return [value[index] for index in indexes]
+        if isinstance(value, tuple) and len(value) >= max(indexes) + 1:
+            return tuple(value[index] for index in indexes)
+        return value
+
+    return {key: subset_value(value) for key, value in batch.items()}
+
+
+def _clone_image_tensors_for_logging(batch: dict[str, Any], cameras: tuple[str, ...]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for camera in cameras:
+        key = f"observation.images.{camera}"
+        value = batch.get(key)
+        if torch.is_tensor(value):
+            result[key] = value.detach().clone()
+    return result
+
+
+def _safe_tag(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "dataset"
 
 
 def _seconds_per_sample(seconds: float, batch_size: int) -> float:

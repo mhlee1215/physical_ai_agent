@@ -1,0 +1,4 @@
+interface:
+  display_name: "Robot Experiment Manager"
+  short_description: "Operate robot dataset and rollout dashboards"
+  default_prompt: "Use $robot-experiment-manager to update or inspect the robot experiment dashboard."

@@ -5,6 +5,7 @@ from bisect import bisect_right
 from pathlib import Path
 from typing import Any, Sequence
 
+import numpy as np
 import torch
 
 
@@ -20,8 +21,19 @@ REQUIRED_SO101_FEATURE_KEYS = (
 )
 
 
+class _MetaWithAggregatedStats:
+    """Forward dataset metadata while replacing stats with virtual-merge stats."""
+
+    def __init__(self, base_meta: Any, stats: dict[str, dict[str, np.ndarray]]) -> None:
+        self._base_meta = base_meta
+        self.stats = stats
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._base_meta, name)
+
+
 class LeRobotConcatDataset(torch.utils.data.ConcatDataset):
-    """Virtual LeRobot dataset merge that preserves the first dataset metadata."""
+    """Virtual LeRobot dataset merge with aggregate metadata statistics."""
 
     def __init__(self, datasets: Sequence[Any], names: Sequence[str] | None = None) -> None:
         if not datasets:
@@ -31,7 +43,10 @@ class LeRobotConcatDataset(torch.utils.data.ConcatDataset):
         empty_sources = [index for index, length in enumerate(self.source_lengths) if length <= 0]
         if empty_sources:
             raise ValueError(f"LeRobotConcatDataset child datasets must be non-empty: {empty_sources}")
-        self.meta = datasets[0].meta
+        self.meta = _MetaWithAggregatedStats(
+            datasets[0].meta,
+            aggregate_lerobot_dataset_stats(datasets),
+        )
         self.repo_id = "+".join(str(getattr(dataset, "repo_id", f"dataset_{index}")) for index, dataset in enumerate(datasets))
         self.root = [str(getattr(dataset, "root", "")) for dataset in datasets]
         self.names = list(names or [f"dataset_{index}" for index in range(len(datasets))])
@@ -50,6 +65,16 @@ class LeRobotConcatDataset(torch.utils.data.ConcatDataset):
             "dataset_name": self.names[dataset_index],
             "local_index": index - previous_size,
         }
+
+    def __getitem__(self, index: int) -> Any:
+        item = super().__getitem__(index)
+        if isinstance(item, dict):
+            source = self.source_for_index(index)
+            item = dict(item)
+            item["dataset_index"] = int(source["dataset_index"])
+            item["dataset_name"] = str(source["dataset_name"])
+            item["dataset_local_index"] = int(source["local_index"])
+        return item
 
     def balanced_sample_weights(self) -> torch.Tensor:
         """Return per-frame weights whose total mass is equal per child dataset."""
@@ -78,6 +103,42 @@ class LeRobotConcatDataset(torch.utils.data.ConcatDataset):
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.datasets[0], name)
+
+
+def aggregate_lerobot_dataset_stats(datasets: Sequence[Any]) -> dict[str, dict[str, np.ndarray]]:
+    """Aggregate child LeRobot metadata stats for virtual merged training.
+
+    LeRobot normalizers consume ``dataset.meta.stats`` even when the samples are
+    read from a virtual concat dataset. Using the first child stats is unsafe
+    when a primitive has a near-constant action dimension, such as the closed
+    gripper in move-only data.
+    """
+
+    if not datasets:
+        raise ValueError("cannot aggregate stats for an empty dataset list")
+    stats_list = []
+    for index, dataset in enumerate(datasets):
+        meta = getattr(dataset, "meta", None)
+        stats = getattr(meta, "stats", None)
+        if not isinstance(stats, dict) or not stats:
+            raise ValueError(f"dataset_{index}: missing LeRobot metadata stats")
+        stats_list.append(_stats_to_numpy(stats))
+    try:
+        from lerobot.datasets.compute_stats import aggregate_stats
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError("LeRobot is required to aggregate virtual dataset stats") from exc
+    return aggregate_stats(stats_list)
+
+
+def _stats_to_numpy(stats: dict[str, Any]) -> dict[str, dict[str, np.ndarray]]:
+    converted: dict[str, dict[str, np.ndarray]] = {}
+    for feature_key, feature_stats in stats.items():
+        if not isinstance(feature_stats, dict):
+            continue
+        converted[feature_key] = {}
+        for stat_key, value in feature_stats.items():
+            converted[feature_key][stat_key] = np.asarray(value)
+    return converted
 
 
 def validate_lerobot_dataset_infos(entries: Sequence[dict[str, Any]]) -> dict[str, Any]:

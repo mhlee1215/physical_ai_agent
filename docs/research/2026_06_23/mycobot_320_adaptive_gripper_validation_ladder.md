@@ -132,6 +132,38 @@ as visibly broken even though the numeric XML parity gate passes.
 ![Gate 4 eulerseq corrected moved-open render](./mycobot_320_adaptive_eulerseq_fix_moved_open_full.png)
 ![Gate 4 eulerseq corrected moved-closed render](./mycobot_320_adaptive_eulerseq_fix_moved_closed_full.png)
 
+Follow-up correction: a direct MuJoCo closed-loop conversion was attempted and
+then removed. The upstream URDF expresses the adaptive gripper as a mimic-joint
+tree for ROS/RViz, while the real mechanism is a closed linkage. Adding
+`equality/connect` loop constraints on top of the official mimic tree made the
+visual links fight the generated MuJoCo constraints during closed commands; the
+rendered gripper looked under-assembled, with intermediate links visibly pulled
+apart. The POC now keeps the official mimic tree as the visual authority and
+re-applies the kinematic mimic pose after each MuJoCo step. That preserves the
+official assembly while the separate invisible finger-pad geoms provide the
+contact proxy for cube experiments.
+
+![Gate 4 adaptive four-bar open](./mycobot_320_adaptive_fourbar_open_gripper.png)
+![Gate 4 adaptive four-bar mid](./mycobot_320_adaptive_fourbar_mid_gripper.png)
+![Gate 4 adaptive four-bar closed](./mycobot_320_adaptive_fourbar_closed_gripper.png)
+![Gate 4 adaptive four-bar full view](./mycobot_320_adaptive_fourbar_open_full.png)
+
+Second follow-up correction: the original contact pads were also in the wrong
+coordinate frame. They used raw DAE mesh coordinates, but the MuJoCo bodies use
+the official URDF visual origin transform first. The pads are now placed on the
+closed-fingertip contact points in body-local coordinates:
+`left_finger_pad=(0.00093, 0.04795, 0.00381)` and
+`right_finger_pad=(-0.00567, 0.04202, 0.00390)`. The adaptive gripper mimic
+followers are not clamped by their passive joint limits during kinematic pose
+application because the official controller lower bound (`-1.11`) expands past
+some follower limits. Clamping the followers left the jaw partially open and
+made the closed pose look wrong. With the unclamped official mimic expression,
+the closed gripper stays assembled after arm motion.
+
+![Gate 4 adaptive mimic closed top after move](./mycobot_320_adaptive_mimic_closed_top_after_move.png)
+![Gate 4 adaptive mimic closed oblique after move](./mycobot_320_adaptive_mimic_closed_oblique_after_move.png)
+![Gate 4 adaptive mimic closed side after move](./mycobot_320_adaptive_mimic_closed_side_after_move.png)
+
 ### Gate 5: Mimic Motion Parity
 
 Question: does one gripper command move all adaptive gripper links in the
@@ -156,7 +188,7 @@ all official follower joints and showed that increasing controller value opens
 the jaw. The upstream range lower end is closed (`-1.11`, jaw gap `0.0505 m`)
 and the upper end is open (`0.0`, jaw gap `0.1510 m`). The MuJoCo command
 convention was corrected so adaptive command `+1` maps to open `0.0`, and
-adaptive command `-1` maps to closed `-1.05`.
+adaptive command `-1` maps to closed `-1.11`.
 
 ![Gate 5 mimic motion evidence](./mycobot_320_adaptive_mimic_motion_gate.png)
 
@@ -204,6 +236,31 @@ Stop condition:
 - If the cube is pushed out before both sides contact, return to Gate 5 or
   Gate 6.
 
+Current status: passed by
+`scripts/mycobot_adaptive_static_contact_smoke.py` against the ROS2 Humble
+adaptive gripper source. The gate keeps the arm fixed, places the cube at the
+validated finger-pad x/y position on the table (`z=0.023`), and closes the
+gripper slowly from command `0.25` to `-1.0` over 80 steps. Evidence:
+`gripper_cube_contact_pads=2`, `gripper_cube_contacts=6`, and
+`best_sustained_contact_steps=45` against a requirement of 15 sustained steps.
+This is a static table-contact gate only; it does not claim lift, transport,
+or stable force-closure grasp success.
+
+Rerun command:
+
+```bash
+PYTHONPATH=src /tmp/mycobot_render_venv/bin/python scripts/mycobot_adaptive_static_contact_smoke.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros2 \
+  --output-dir _workspace/gate7_table_contact_smoke \
+  --width 640 \
+  --height 480
+```
+
+![Gate 7 static contact top](./mycobot_320_adaptive_gate7_static_contact_top.png)
+![Gate 7 static contact oblique](./mycobot_320_adaptive_gate7_static_contact_oblique.png)
+![Gate 7 static contact side](./mycobot_320_adaptive_gate7_static_contact_side.png)
+
 ### Gate 8: Natural Arm And Gripper Motion
 
 Question: can the arm and adaptive gripper move together without abrupt jumps?
@@ -221,9 +278,35 @@ Stop condition:
 - If the arm sweeps the cube before close, reduce or remove pre-close arm
   motion. Do not solve this by moving the cube to an implausible place.
 
+Current status: passed by
+`scripts/mycobot_adaptive_grasp_lift_smoke.py` against the ROS2 Humble adaptive
+gripper source. The gate reuses the Gate 7 table placement, holds a fixed
+pregrasp pose, closes from command `0.25` to `-0.7`, then executes a short
+smooth lift trajectory while holding the gripper command. Evidence:
+`close_best_sustained_contact_steps=27`, `lift_best_sustained_contact_steps=60`,
+`lift_two_pad_contact_steps=60`, `final_gripper_cube_contact_pads=2`,
+`final_gripper_cube_contacts=6`, and `final_cube_lift=0.0367 m`. This is a
+short grasp-lift gate; it does not claim stable transport or placement.
+
+Rerun command:
+
+```bash
+PYTHONPATH=src /tmp/mycobot_render_venv/bin/python scripts/mycobot_adaptive_grasp_lift_smoke.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros2 \
+  --output-dir _workspace/gate8_grasp_lift_smoke \
+  --width 640 \
+  --height 480
+```
+
+![Gate 8 grasp lift oblique](./mycobot_320_adaptive_gate8_grasp_lift_oblique.png)
+![Gate 8 grasp lift side](./mycobot_320_adaptive_gate8_grasp_lift_side.png)
+![Gate 8 grasp lift top](./mycobot_320_adaptive_gate8_grasp_lift_top.png)
+
 ## Current Next Step
 
-The next implementation should be Gate 7: static contact smoke. It must start
-with the cube between the validated finger contact geoms, keep the arm fixed,
-close the gripper slowly, and require sustained contacts from both sides before
-any arm trajectory tuning.
+Gate 8 completes the current adaptive-gripper validation ladder. The next POC
+step should move from single-object smoke validation to teacher dataset capture:
+record the Gate 8 trajectory as timestamped observations/actions, keep the
+contact/lift metrics in episode metadata, and reject episodes that fail the
+Gate 8 thresholds.
