@@ -11,6 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from physical_ai_agent.sim.mycobot_nexus_env import (  # noqa: E402
+    MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+    MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
     run_mycobot_adaptive_grasp_lift_smoke,
 )
 
@@ -45,6 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         help="Local clone containing the ROS2 Humble myCobot 320 adaptive gripper URDF.",
     )
+    parser.add_argument(
+        "--model-profile",
+        choices=[MODEL_PROFILE_320_ADAPTIVE_GRIPPER, MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER],
+        default=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+        help="Adaptive myCobot source profile to run through this gate.",
+    )
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
@@ -64,6 +72,7 @@ def main() -> None:
         output_dir=args.output_dir,
         asset_root=args.asset_root,
         official_gripper_root=args.official_gripper_root,
+        model_profile=args.model_profile,
         seed=args.seed,
         width=args.width,
         height=args.height,

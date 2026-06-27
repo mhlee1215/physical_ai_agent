@@ -861,6 +861,7 @@ def run_mycobot_adaptive_static_contact_smoke(
     output_dir: Path,
     asset_root: Path,
     official_gripper_root: Path,
+    model_profile: str = MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
     steps: int = 80,
     seed: int = 1,
     width: int = 640,
@@ -878,7 +879,7 @@ def run_mycobot_adaptive_static_contact_smoke(
             asset_root=asset_root,
             work_dir=output_dir,
             official_gripper_root=official_gripper_root,
-            model_profile=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            model_profile=model_profile,
             width=width,
             height=height,
         )
@@ -983,6 +984,7 @@ def run_mycobot_adaptive_grasp_lift_smoke(
     output_dir: Path,
     asset_root: Path,
     official_gripper_root: Path,
+    model_profile: str = MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
     seed: int = 1,
     width: int = 640,
     height: int = 480,
@@ -1004,7 +1006,7 @@ def run_mycobot_adaptive_grasp_lift_smoke(
             asset_root=asset_root,
             work_dir=output_dir,
             official_gripper_root=official_gripper_root,
-            model_profile=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            model_profile=model_profile,
             width=width,
             height=height,
         )
@@ -1196,11 +1198,11 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "real_robot_execution": "disabled",
         "poc_boundary": (
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
-            "Nexus-style cube scene. The preferred gripper path uses official "
+            "Nexus-style cube scene. The preferred legacy gripper path uses official "
             "mycobot_ros 280 JN parallel-gripper visual meshes with transparent "
-            "contact pads. The 320 M5 2022 profile uses the official 320 arm "
-            "URDF plus a functional friction-contact gripper at the official "
-            "flange; its grasp-lift success requires both finger pads to contact "
+            "contact pads. The 320 M5 2022 and 280 Pi adaptive profiles use official "
+            "arm/adaptive-gripper URDF sources plus functional friction-contact "
+            "finger pads; grasp-lift success requires both finger pads to contact "
             "the cube without teacher attachment."
         ),
     }

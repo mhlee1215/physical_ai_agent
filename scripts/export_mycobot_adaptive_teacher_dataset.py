@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from physical_ai_agent.sim.mycobot_nexus_env import (  # noqa: E402
     ADAPTIVE_GATE7_TABLE_ARM_QPOS,
     ADAPTIVE_GATE8_LIFT_ARM_QPOS,
+    MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
     MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
     TASK_CUBE_BODY,
     TASK_CUBE_GEOM,
@@ -28,7 +29,7 @@ from physical_ai_agent.sim.mycobot_nexus_env import (  # noqa: E402
 )
 
 
-JOINT_NAMES = [
+MYCOBOT_320_ADAPTIVE_JOINT_NAMES = [
     "joint2_to_joint1",
     "joint3_to_joint2",
     "joint4_to_joint3",
@@ -37,7 +38,29 @@ JOINT_NAMES = [
     "joint6output_to_joint6",
     "gripper_controller",
 ]
+MYCOBOT_280_PI_ADAPTIVE_JOINT_NAMES = [
+    "joint2_to_joint1",
+    "joint3_to_joint2",
+    "joint4_to_joint3",
+    "joint5_to_joint4",
+    "joint6_to_joint5",
+    "joint7_to_joint6",
+    "gripper_controller",
+]
+JOINT_NAMES = MYCOBOT_320_ADAPTIVE_JOINT_NAMES
 NATURAL_READY_ARM_QPOS = (0.0, 0.28, -0.18, 0.16, 0.0, 0.0)
+
+
+def _joint_names_for_profile(model_profile: str) -> list[str]:
+    if model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER:
+        return MYCOBOT_280_PI_ADAPTIVE_JOINT_NAMES
+    return MYCOBOT_320_ADAPTIVE_JOINT_NAMES
+
+
+def _robot_label(model_profile: str) -> str:
+    if model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER:
+        return "myCobot 280 Pi + adaptive gripper"
+    return "myCobot 320 M5 2022 + adaptive gripper"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--asset-root", type=Path, default=Path("_vendor/mycobot_mujoco"))
     parser.add_argument("--official-gripper-root", type=Path, default=Path("_vendor/mycobot_ros2"))
+    parser.add_argument(
+        "--model-profile",
+        choices=[MODEL_PROFILE_320_ADAPTIVE_GRIPPER, MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER],
+        default=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+        help="Adaptive myCobot profile to export from the Gate 8 trajectory.",
+    )
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=240)
     parser.add_argument("--render-every", type=int, default=1)
@@ -74,6 +103,7 @@ def main() -> None:
         seed=args.seed,
         asset_root=args.asset_root,
         official_gripper_root=args.official_gripper_root,
+        model_profile=args.model_profile,
         width=args.width,
         height=args.height,
         fps=args.fps,
@@ -97,6 +127,7 @@ def export_dataset(
     seed: int,
     asset_root: Path,
     official_gripper_root: Path,
+    model_profile: str,
     width: int,
     height: int,
     fps: int,
@@ -124,6 +155,7 @@ def export_dataset(
             seed=seed + episode_index,
             asset_root=asset_root,
             official_gripper_root=official_gripper_root,
+            model_profile=model_profile,
             width=width,
             height=height,
             fps=fps,
@@ -142,7 +174,8 @@ def export_dataset(
     manifest = {
         "format": "mycobot_jsonl_v1",
         "dataset_id": output_dir.name,
-        "robot": "myCobot 320 M5 2022 + adaptive gripper",
+        "robot": _robot_label(model_profile),
+        "model_profile": model_profile,
         "task": "short_grasp_lift_red_cube",
         "trajectory": "natural_ready_smooth_full_arm_lift",
         "cube_half_size": cube_half_size,
@@ -157,8 +190,8 @@ def export_dataset(
         "fps": fps,
         "render_every": render_every,
         "image_mime_type": "image/bmp",
-        "joint_names": JOINT_NAMES,
-        "action_names": JOINT_NAMES,
+        "joint_names": _joint_names_for_profile(model_profile),
+        "action_names": _joint_names_for_profile(model_profile),
         "episode_summaries": episode_summaries,
         "failed_episodes": failed_episodes,
         "viewer": {
@@ -186,6 +219,7 @@ def _export_episode(
     seed: int,
     asset_root: Path,
     official_gripper_root: Path,
+    model_profile: str,
     width: int,
     height: int,
     fps: int,
@@ -206,7 +240,7 @@ def _export_episode(
             asset_root=asset_root,
             work_dir=scene_cache,
             official_gripper_root=official_gripper_root,
-            model_profile=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            model_profile=model_profile,
             width=width,
             height=height,
         )

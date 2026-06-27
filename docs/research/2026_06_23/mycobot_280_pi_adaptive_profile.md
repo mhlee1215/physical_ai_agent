@@ -36,6 +36,40 @@ This is a profile/asset-routing gate. It does not yet prove physical fidelity or
 
 
 
+
+## Gate 7/8 Parity Target
+
+The merged 320 adaptive path has two physics gates that this 280 Pi branch is now wired to reuse:
+
+```bash
+PYTHONPATH=src:. python3 scripts/mycobot_280_pi_adaptive_static_contact_smoke.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros \
+  --output-dir _workspace/mycobot_280_pi_gate7_static_contact
+
+PYTHONPATH=src:. python3 scripts/mycobot_280_pi_adaptive_grasp_lift_smoke.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros \
+  --output-dir _workspace/mycobot_280_pi_gate8_grasp_lift
+```
+
+Gate 7 checks fixed-arm table contact: place the cube under the validated adaptive finger pads, close slowly, and require sustained two-pad contact. Gate 8 checks short grasp-lift: hold/pregrasp, close, lift, and require sustained close contact, sustained lift contact, two final contact pads, and final cube lift above threshold.
+
+The 280 wrappers default to `model_profile=280-pi-adaptive-gripper` and the ROS1 `mycobot_ros` asset root, while the shared 320 scripts keep their proven 320 default. This means the next real execution can compare 320 and 280 with the same contact/lift metrics rather than a different scoring rule.
+
+A 280 Gate 8 teacher dataset wrapper is also wired:
+
+```bash
+PYTHONPATH=src:. python3 scripts/export_mycobot_280_pi_adaptive_teacher_dataset.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros \
+  --output-dir _workspace/mycobot_teacher_datasets/mycobot_280_pi_adaptive_gate8_10eps \
+  --episodes 10 \
+  --render-every 4
+```
+
+This is not yet a passed 280 physics claim in the current workspace. It is the parity entrypoint and manifest wiring. Actual Gate 7/8 pass evidence still requires a MuJoCo-capable Python plus the official `mycobot_mujoco` and `mycobot_ros` assets.
+
 ## Capture Contract Gate
 
 Before running the dataset exporter, verify the capture itself:
