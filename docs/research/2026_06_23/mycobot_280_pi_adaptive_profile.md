@@ -128,6 +128,19 @@ It writes a LeRobot-style folder with `data/frames.jsonl`, `data/episodes.jsonl`
 
 The success label is computed from object lift plus gripper/object contact evidence, not from a teacher attachment proxy. The exporter refuses missing camera-frame files, so placeholder-image generation is no longer part of this stricter gate.
 
+When a LeRobot runtime is available, convert that stricter JSONL export into a native `LeRobotDataset`:
+
+```bash
+PYTHONPATH=src:. python3 scripts/convert_mycobot_280_pi_adaptive_jsonl_to_lerobot.py \
+  --source-root _workspace/mycobot_280pi_adaptive_dataset \
+  --output-root _workspace/mycobot_280pi_adaptive_lerobot_native \
+  --repo-id physical-ai-agent/mycobot-280pi-adaptive \
+  --require-lerobot \
+  --overwrite
+```
+
+Without `--require-lerobot`, the converter writes a blocked report if the `lerobot` package is not installed. With `--require-lerobot`, it fails fast so a cloud or robot workstation job cannot silently skip the native dataset conversion.
+
 The SmolVLA output is currently a smoke-plan artifact, not an executed train/eval run, because this local workspace does not have a LeRobot/SmolVLA training environment installed.
 
 ## Remaining Dataset-Quality Work
