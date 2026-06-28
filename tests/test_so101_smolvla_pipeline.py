@@ -371,6 +371,11 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("save_valid_mask_head", names)
         self.assertIn("augment_batch_on_device", names)
         self.assertIn("_action_chunk_jitter_metrics", names)
+        self.assertIn("_tensorboard_image_with_visual_servo_target", names)
+        self.assertIn("_tensorboard_image_grid_with_visual_servo_target", names)
+        self.assertIn("_draw_visual_servo_target_on_image", names)
+        self.assertIn("visual_servo.camera1_visible", constants)
+        self.assertIn("visual_servo.camera2_visible", constants)
 
     def test_lightning_validation_dataloader_returns_dataloader(self) -> None:
         source = Path("scripts/lerobot_train_so101_lightning.py").read_text(encoding="utf-8")

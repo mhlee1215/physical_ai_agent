@@ -1671,7 +1671,11 @@ class _SO101LightningModule:
                     key = f"observation.images.{camera}"
                     if key not in batch:
                         continue
-                    image = _tensorboard_image_grid(batch[key]) if split == "val" else _tensorboard_image(batch[key])
+                    image = (
+                        _tensorboard_image_grid_with_visual_servo_target(batch, camera)
+                        if split == "val"
+                        else _tensorboard_image_with_visual_servo_target(batch, camera)
+                    )
                     if image is None:
                         continue
                     experiment.add_image(f"{split}/{tag_prefix}_{camera}", image, global_step=step)
@@ -2174,6 +2178,10 @@ def _clone_image_tensors_for_logging(batch: dict[str, Any], cameras: tuple[str, 
         value = batch.get(key)
         if torch.is_tensor(value):
             result[key] = value.detach().clone()
+        for label_key in (f"visual_servo.{camera}", f"visual_servo.{camera}_visible"):
+            label_value = batch.get(label_key)
+            if torch.is_tensor(label_value):
+                result[label_key] = label_value.detach().clone()
     return result
 
 
@@ -2339,6 +2347,16 @@ def _tensorboard_image(value: Any) -> torch.Tensor | None:
     return image.clamp(0.0, 1.0)
 
 
+def _tensorboard_image_with_visual_servo_target(batch: dict[str, Any], camera: str) -> torch.Tensor | None:
+    image = _tensorboard_image(batch.get(f"observation.images.{camera}"))
+    if image is None:
+        return None
+    target = _first_visual_servo_target(batch, camera)
+    if target is None:
+        return image
+    return _draw_visual_servo_target_on_image(image, target)
+
+
 def _tensorboard_image_grid(value: Any, *, max_images: int = 16) -> torch.Tensor | None:
     if not torch.is_tensor(value):
         return None
@@ -2372,6 +2390,105 @@ def _tensorboard_image_grid(value: Any, *, max_images: int = 16) -> torch.Tensor
         col = index % cols
         grid[:, row * h : (row + 1) * h, col * w : (col + 1) * w] = image
     return grid
+
+
+def _tensorboard_image_grid_with_visual_servo_target(
+    batch: dict[str, Any],
+    camera: str,
+    *,
+    max_images: int = 16,
+) -> torch.Tensor | None:
+    value = batch.get(f"observation.images.{camera}")
+    if not torch.is_tensor(value):
+        return None
+    tensor = value.detach()
+    if tensor.ndim == 3:
+        return _tensorboard_image_with_visual_servo_target(batch, camera)
+    while tensor.ndim > 4:
+        tensor = tensor[0]
+    if tensor.ndim != 4:
+        return _tensorboard_image_with_visual_servo_target(batch, camera)
+    if tensor.shape[1] not in (1, 3, 4) and tensor.shape[-1] in (1, 3, 4):
+        tensor = tensor.permute(0, 3, 1, 2)
+    if tensor.shape[1] == 4:
+        tensor = tensor[:, :3]
+    if tensor.shape[1] not in (1, 3):
+        return _tensorboard_image_with_visual_servo_target(batch, camera)
+    images = tensor[: max(1, int(max_images))].float().cpu()
+    if images.numel() == 0:
+        return None
+    if float(images.max()) > 2.0:
+        images = images / 255.0
+    elif float(images.min()) < 0.0:
+        images = (images + 1.0) / 2.0
+    images = images.clamp(0.0, 1.0)
+    targets = _visual_servo_targets(batch, camera, limit=int(images.shape[0]))
+    if targets:
+        images = images.clone()
+        for index, target in targets.items():
+            images[index] = _draw_visual_servo_target_on_image(images[index], target)
+    rows = int(max(1, round(float(images.shape[0]) ** 0.5)))
+    cols = int((images.shape[0] + rows - 1) // rows)
+    c, h, w = int(images.shape[1]), int(images.shape[2]), int(images.shape[3])
+    grid = torch.zeros((c, rows * h, cols * w), dtype=images.dtype)
+    for index, image in enumerate(images):
+        row = index // cols
+        col = index % cols
+        grid[:, row * h : (row + 1) * h, col * w : (col + 1) * w] = image
+    return grid
+
+
+def _first_visual_servo_target(batch: dict[str, Any], camera: str) -> tuple[float, float] | None:
+    targets = _visual_servo_targets(batch, camera, limit=1)
+    return targets.get(0)
+
+
+def _visual_servo_targets(batch: dict[str, Any], camera: str, *, limit: int) -> dict[int, tuple[float, float]]:
+    target_value = batch.get(f"visual_servo.{camera}")
+    visible_value = batch.get(f"visual_servo.{camera}_visible")
+    if not torch.is_tensor(target_value):
+        return {}
+    target = target_value.detach().float().cpu()
+    visible = visible_value.detach().bool().cpu() if torch.is_tensor(visible_value) else torch.ones(target.shape[:1], dtype=torch.bool)
+    if target.ndim == 1:
+        target = target.unsqueeze(0)
+    if visible.ndim == 0:
+        visible = visible.unsqueeze(0)
+    result: dict[int, tuple[float, float]] = {}
+    for index in range(min(int(limit), int(target.shape[0]), int(visible.shape[0]))):
+        if not bool(visible[index]) or target.shape[-1] < 2:
+            continue
+        dx = float(target[index, 0].clamp(-1.0, 1.0))
+        dy = float(target[index, 1].clamp(-1.0, 1.0))
+        result[index] = (dx, dy)
+    return result
+
+
+def _draw_visual_servo_target_on_image(image: torch.Tensor, target: tuple[float, float]) -> torch.Tensor:
+    if image.ndim != 3 or image.shape[0] not in (1, 3):
+        return image
+    result = image.clone()
+    _, height, width = result.shape
+    if height <= 0 or width <= 0:
+        return result
+    dx, dy = target
+    x = int(round((width - 1) * (0.5 + 0.5 * dx)))
+    y = int(round((height - 1) * (0.5 + 0.5 * dy)))
+    x = max(0, min(width - 1, x))
+    y = max(0, min(height - 1, y))
+    color = torch.tensor([1.0, 0.9, 0.0], dtype=result.dtype)
+    if result.shape[0] == 1:
+        color = color[:1]
+    radius = max(2, min(height, width) // 24)
+    x0, x1 = max(0, x - radius), min(width, x + radius + 1)
+    y0, y1 = max(0, y - radius), min(height, y + radius + 1)
+    result[:, y, x0:x1] = color[:, None]
+    result[:, y0:y1, x] = color[:, None]
+    result[:, y0, x0:x1] = color[:, None]
+    result[:, y1 - 1, x0:x1] = color[:, None]
+    result[:, y0:y1, x0] = color[:, None]
+    result[:, y0:y1, x1 - 1] = color[:, None]
+    return result.clamp(0.0, 1.0)
 
 
 def _camera_contract_markdown() -> str:
