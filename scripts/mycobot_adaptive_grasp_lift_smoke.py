@@ -59,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pregrasp-steps", type=int, default=20)
     parser.add_argument("--close-steps", type=int, default=80)
     parser.add_argument("--lift-steps", type=int, default=60)
+    parser.add_argument("--placement-gripper-command", type=float, default=0.25)
     parser.add_argument("--close-gripper-command", type=float, default=-0.7)
     parser.add_argument("--required-close-sustained-steps", type=int, default=15)
     parser.add_argument("--required-lift-sustained-steps", type=int, default=30)
@@ -79,6 +80,7 @@ def main() -> None:
         pregrasp_steps=args.pregrasp_steps,
         close_steps=args.close_steps,
         lift_steps=args.lift_steps,
+        placement_gripper_command=args.placement_gripper_command,
         close_gripper_command=args.close_gripper_command,
         required_close_sustained_steps=args.required_close_sustained_steps,
         required_lift_sustained_steps=args.required_lift_sustained_steps,

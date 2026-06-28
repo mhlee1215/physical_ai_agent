@@ -9,6 +9,7 @@ from physical_ai_agent.sim.mycobot_nexus_env import (
     MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
     MYCOBOT_TEACHER_JOINT_NAMES,
     OFFICIAL_GRIPPER_MESH_NAMES,
+    _collada_triangle_indices,
     build_mycobot_nexus_scene_model,
     mycobot_nexus_contract,
     sample_mycobot_nexus_action,
@@ -373,6 +374,30 @@ class MyCobotNexusEnvTest(unittest.TestCase):
         self.assertEqual(sanitized[0], 1.0)
         self.assertEqual(sanitized[1], 0.0)
         self.assertTrue(all(math.isfinite(value) for value in sanitized))
+
+    def test_collada_polygon_indices_are_triangulated(self) -> None:
+        root = ET.fromstring(
+            """
+            <COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema">
+              <library_geometries>
+                <geometry id="quad"><mesh>
+                  <polygons count="1">
+                    <input offset="0" semantic="VERTEX" source="#v" />
+                    <input offset="1" semantic="TEXCOORD" source="#uv" />
+                    <p>0 0 1 1 2 2 3 3</p>
+                  </polygons>
+                </mesh></geometry>
+              </library_geometries>
+            </COLLADA>
+            """
+        )
+        namespace = {"c": root.tag.partition("}")[0].strip("{")}
+        mesh = root.find(".//c:mesh", namespace)
+
+        self.assertEqual(
+            _collada_triangle_indices(mesh, namespace),
+            [(0, 1, 2), (0, 2, 3)],
+        )
 
 
 

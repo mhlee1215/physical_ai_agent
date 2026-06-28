@@ -30,6 +30,9 @@ def build_parser():
             if "MYCOBOT_ROS_ROOT" in os.environ
             else Path("_vendor/mycobot_ros")
         ),
+        steps=500,
+        placement_gripper_command=1.0,
+        final_gripper_command=-0.12,
     )
     return parser
 
