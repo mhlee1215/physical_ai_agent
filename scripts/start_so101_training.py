@@ -166,11 +166,16 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
         default=None,
     )
     parser.add_argument("--closed-loop-task-prompt")
+    parser.add_argument(
+        "--closed-loop-action-contract-mode",
+        choices=["processor", "legacy", "processor_dataset_clamp", "processor_delta_q", "visual_servo_delta_q"],
+        help="Action conversion mode for closed-loop evaluator. Defaults to config closed_loop.action_contract_mode or processor.",
+    )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--loop-artifact-width", type=int, default=128)
-    parser.add_argument("--loop-artifact-height", type=int, default=128)
+    parser.add_argument("--loop-artifact-width", type=int, default=256)
+    parser.add_argument("--loop-artifact-height", type=int, default=256)
     parser.add_argument("--loop-artifact-fps", type=int, default=12)
     parser.add_argument("--loop-artifact-every-n-steps", type=int, default=1)
     parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
@@ -1046,6 +1051,13 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
             updated = _ensure_arg(updated, cli_name, str(value))
     if "policy_push_to_hub" in training:
         updated = _ensure_arg(updated, "policy.push_to_hub", str(bool(training["policy_push_to_hub"])).lower())
+    visual_servo = config.get("visual_servo") or {}
+    if not isinstance(visual_servo, dict):
+        raise SystemExit("dataset config visual_servo must be an object")
+    if "loss_weight" in visual_servo:
+        updated = _ensure_arg(updated, "so101-visual-servo-loss-weight", str(visual_servo["loss_weight"]))
+    if "hidden_dim" in visual_servo:
+        updated = _ensure_arg(updated, "so101-visual-servo-hidden-dim", str(visual_servo["hidden_dim"]))
     cache = config.get("predecoded_image_cache") or {}
     if not isinstance(cache, dict):
         raise SystemExit("dataset config predecoded_image_cache must be an object")
@@ -1057,6 +1069,8 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
             continue
         if name in cache and cache.get(name) not in (None, False, {}):
             updated = _ensure_arg(updated, cli_name, str(_resolve_cache_dir(cache, name)))
+    if train.get("grid_bin_sidecar"):
+        updated = _ensure_arg(updated, "train-grid-bin-sidecar", str(train["grid_bin_sidecar"]))
     tensorboard = config.get("tensorboard") or {}
     if not isinstance(tensorboard, dict):
         raise SystemExit("dataset config tensorboard must be an object")
@@ -1572,6 +1586,8 @@ def _progress_monitor_command(
         str(getattr(args, "closed_loop_policy_n_action_steps", 15)),
         "--policy-num-steps",
         str(getattr(args, "closed_loop_policy_num_steps", 10)),
+        "--closed-loop-action-contract-mode",
+        _closed_loop_action_contract_mode(args, dataset_config),
         "--local-files-only",
     ]
     closed_loop_subgoal_sequence = getattr(args, "closed_loop_subgoal_sequence", None)
@@ -1677,6 +1693,9 @@ def _closed_loop_test_cases(dataset_config: dict[str, Any] | None) -> list[dict[
             raise SystemExit(f"closed_loop.{source_key}[{index}] must be an object")
         result.append(dict(test_case))
     return result
+
+
+_loop_validation_cases = _closed_loop_test_cases
 
 
 def _apply_closed_loop_test_case(base: list[str], test_case: dict[str, Any]) -> list[str]:
@@ -1825,6 +1844,16 @@ def _closed_loop_valid_mask_checkpoint(args: argparse.Namespace, dataset_config:
     return None
 
 
+def _closed_loop_action_contract_mode(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    value = getattr(args, "closed_loop_action_contract_mode", None)
+    if value:
+        return str(value)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("action_contract_mode"):
+        return str(closed_loop["action_contract_mode"])
+    return "processor"
+
+
 def _qwen_response_json(dataset_config: dict[str, Any]) -> Path | None:
     closed_loop = dataset_config.get("closed_loop") or {}
     if isinstance(closed_loop, dict) and closed_loop.get("qwen_response_json"):
@@ -1886,11 +1915,18 @@ def _cache_build_commands(
                 commands.append(_cache_build_command(python, repo_root, dataset, Path(str(dataset["image_cache_dir"]))))
     else:
         dataset = config.get("train_dataset") or {}
-        if "train" in cache and isinstance(dataset, dict) and "root" in dataset and "repo_id" in dataset:
+        train_cache = cache.get("train")
+        if (
+            train_cache not in (None, False, {})
+            and isinstance(dataset, dict)
+            and "root" in dataset
+            and "repo_id" in dataset
+        ):
             commands.append(_cache_build_command(python, repo_root, dataset, _resolve_cache_dir(cache, "train")))
     for split, dataset_key in (("validation", "validation_dataset"),):
         dataset = config.get(dataset_key) or {}
-        if split not in cache or not isinstance(dataset, dict):
+        split_cache = cache.get(split)
+        if split_cache in (None, False, {}) or not isinstance(dataset, dict):
             continue
         if "root" not in dataset or "repo_id" not in dataset:
             continue

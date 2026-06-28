@@ -43,7 +43,22 @@ from physical_ai_agent.lerobot_sampling_augmentation import (
     augment_batch_on_device,
     write_sampling_augmentation_report,
 )
+from physical_ai_agent.policies.so101_valid_mask import (
+    SO101ValidMaskConfig,
+    SO101ValidMaskHead,
+    load_valid_mask_head,
+    save_valid_mask_head,
+    valid_labels_from_action_is_pad,
+)
+from physical_ai_agent.policies.so101_visual_servo_head import (
+    SO101VisualServoHead,
+    SO101VisualServoHeadConfig,
+    load_visual_servo_head,
+    save_visual_servo_head,
+    visual_servo_loss,
+)
 from physical_ai_agent.so101_lerobot_concat import (
+    GridBinBalancedDataset,
     LeRobotConcatDataset,
     validate_compatible_lerobot_datasets,
     validate_lerobot_dataset_infos,
@@ -83,7 +98,12 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--so101-gpu-image-augmentation", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--so101-action-prefix-loss-steps", type=int, default=0)
     parser.add_argument("--so101-action-prefix-loss-weight", type=float, default=1.0)
+    parser.add_argument("--so101-valid-mask-loss-weight", type=float, default=0.05)
+    parser.add_argument("--so101-valid-mask-hidden-dim", type=int, default=128)
+    parser.add_argument("--so101-visual-servo-loss-weight", type=float, default=0.0)
+    parser.add_argument("--so101-visual-servo-hidden-dim", type=int, default=128)
     parser.add_argument("--so101-image-cache-dir", type=Path)
+    parser.add_argument("--train-grid-bin-sidecar", type=Path)
     parser.add_argument("--train-datasets-json")
     parser.add_argument("--train-dataset-source-spans-json")
     parser.add_argument("--validation-image-cache-dir", type=Path)
@@ -220,11 +240,23 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     if cfg.peft is not None:
         policy = policy.wrap_with_peft(peft_cli_overrides=dataclasses.asdict(cfg.peft))
     preprocessor, postprocessor = _make_processors(cfg, dataset, policy)
+    valid_mask_head = _make_valid_mask_head(
+        policy=policy,
+        hidden_dim=int(wrapper_args.so101_valid_mask_hidden_dim),
+    )
+    visual_servo_head = _make_visual_servo_head(
+        hidden_dim=int(wrapper_args.so101_visual_servo_hidden_dim),
+        device=getattr(policy.config, "device", "cpu"),
+    )
     optimizer, scheduler = make_optimizer_and_scheduler(cfg, policy)
+    _add_valid_mask_head_to_optimizer(optimizer, valid_mask_head)
+    _add_visual_servo_head_to_optimizer(optimizer, visual_servo_head)
     resume_step = 0
     if cfg.resume:
         checkpoint_path = _resolve_resume_checkpoint_path(cfg, wrapper_args)
         resume_step, optimizer, scheduler = load_training_state(checkpoint_path, optimizer, scheduler)
+        _load_valid_mask_head_if_available(valid_mask_head, checkpoint_path)
+        _load_visual_servo_head_if_available(visual_servo_head, checkpoint_path)
         logging.info("Resumed LeRobot training state from %s at step %s", checkpoint_path, resume_step)
         print(f"Resumed LeRobot training state from {checkpoint_path} at step {resume_step}", flush=True)
 
@@ -250,6 +282,10 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         LightningModule=LightningModule,
         cfg=cfg,
         policy=policy,
+        valid_mask_head=valid_mask_head,
+        valid_mask_loss_weight=float(wrapper_args.so101_valid_mask_loss_weight),
+        visual_servo_head=visual_servo_head,
+        visual_servo_loss_weight=float(wrapper_args.so101_visual_servo_loss_weight),
         preprocessor=preprocessor,
         optimizer=optimizer,
         scheduler=scheduler,
@@ -743,6 +779,9 @@ def _make_dataset(
         dataset = PredecodedImageCacheDataset(dataset, Path(cache_dir))
     if augmentation.enabled and not augmentation.gpu_image_augmentation:
         dataset = SamplingAugmentedDataset(dataset, augmentation)
+    dataset = _maybe_wrap_visual_servo_labels(dataset, getattr(dataset, "root", None))
+    if wrapper_args.train_grid_bin_sidecar is not None:
+        dataset = GridBinBalancedDataset(dataset, wrapper_args.train_grid_bin_sidecar)
     source_spans = _train_dataset_source_spans(wrapper_args)
     if source_spans:
         dataset = _SourceAnnotatedDataset(dataset, source_spans)
@@ -829,6 +868,64 @@ class _SourceAnnotatedDataset(torch.utils.data.Dataset):
         raise IndexError(index)
 
 
+class _VisualServoLabelDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset: Any, dataset_root: Path) -> None:
+        self.dataset = dataset
+        self.dataset_root = Path(dataset_root)
+        sidecar = self.dataset_root / "meta" / "visual_servo_labels" / "camera1_camera2_green_cube.parquet"
+        if not sidecar.exists():
+            raise FileNotFoundError(sidecar)
+        import pandas as pd
+
+        table = pd.read_parquet(sidecar).set_index("index")
+        self.labels = table
+        self.meta = getattr(dataset, "meta")
+        self.root = getattr(dataset, "root", dataset_root)
+        self.repo_id = getattr(dataset, "repo_id", None)
+        for name in (
+            "disable_episode_aware_sampler",
+            "requires_grid_bin_balanced_sampler",
+            "requires_dataset_balanced_sampler",
+        ):
+            if hasattr(dataset, name):
+                setattr(self, name, getattr(dataset, name))
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        item = dict(self.dataset[index])
+        dataset_index = int(item.get("index", index))
+        try:
+            row = self.labels.loc[dataset_index]
+        except Exception:
+            return item
+        item["visual_servo.camera1"] = torch.tensor(
+            [row.get("camera1_dx_norm", 0.0), row.get("camera1_dy_norm", 0.0), row.get("camera1_edge_angle_error", 0.0)],
+            dtype=torch.float32,
+        )
+        item["visual_servo.camera1_visible"] = torch.tensor(bool(row.get("camera1_visible", False)))
+        item["visual_servo.camera2"] = torch.tensor(
+            [row.get("camera2_dx_norm", 0.0), row.get("camera2_dy_norm", 0.0), row.get("camera2_edge_angle_error", 0.0)],
+            dtype=torch.float32,
+        )
+        item["visual_servo.camera2_visible"] = torch.tensor(bool(row.get("camera2_visible", False)))
+        item["visual_servo.stop_label"] = torch.tensor(float(bool(row.get("stop_label", False))), dtype=torch.float32)
+        return item
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.dataset, name)
+
+
+def _maybe_wrap_visual_servo_labels(dataset: Any, root: Any) -> Any:
+    if root is None:
+        return dataset
+    try:
+        return _VisualServoLabelDataset(dataset, Path(str(root)))
+    except FileNotFoundError:
+        return dataset
+
+
 def _make_concat_train_dataset(
     cfg: TrainPipelineConfig,
     augmentation: SamplingAugmentationConfig,
@@ -861,6 +958,7 @@ def _make_concat_train_dataset(
             dataset = PredecodedImageCacheDataset(dataset, Path(str(cache_dir)))
         if augmentation.enabled and not augmentation.gpu_image_augmentation:
             dataset = SamplingAugmentedDataset(dataset, augmentation)
+        dataset = _maybe_wrap_visual_servo_labels(dataset, root)
         datasets.append(dataset)
         names.append(name)
     validate_compatible_lerobot_datasets(datasets)
@@ -901,7 +999,14 @@ def _make_processors(cfg: TrainPipelineConfig, dataset: Any, policy: Any) -> tup
 
 
 def _make_dataloader(cfg: TrainPipelineConfig, dataset: Any) -> torch.utils.data.DataLoader:
-    if getattr(dataset, "requires_dataset_balanced_sampler", False):
+    if getattr(dataset, "requires_grid_bin_balanced_sampler", False):
+        sampler = dataset.make_grid_bin_balanced_sampler(
+            num_samples=len(dataset),
+            drop_n_last_frames=int(getattr(cfg.policy, "drop_n_last_frames", 0) or 0),
+        )
+        shuffle = False
+        print("Train sampler: camera_grid_bin_balanced", flush=True)
+    elif getattr(dataset, "requires_dataset_balanced_sampler", False):
         sampler = dataset.make_dataset_balanced_sampler(num_samples=len(dataset))
         shuffle = False
         logging.info(
@@ -957,6 +1062,7 @@ def _make_validation_dataloader(
     )
     if wrapper_args.validation_image_cache_dir is not None:
         dataset = PredecodedImageCacheDataset(dataset, wrapper_args.validation_image_cache_dir)
+    dataset = _maybe_wrap_visual_servo_labels(dataset, wrapper_args.validation_dataset_root)
     return torch.utils.data.DataLoader(
         dataset,
         num_workers=wrapper_args.validation_num_workers,
@@ -992,6 +1098,7 @@ def _make_validation_dataset_dataloaders(
         cache_dir = entry.get("image_cache_dir")
         if cache_dir:
             dataset = PredecodedImageCacheDataset(dataset, Path(str(cache_dir)))
+        dataset = _maybe_wrap_visual_servo_labels(dataset, root)
         loaders[name] = torch.utils.data.DataLoader(
             dataset,
             num_workers=wrapper_args.validation_num_workers,
@@ -1122,6 +1229,67 @@ def _scalar_float(value: Any) -> float | None:
     return None
 
 
+def _make_valid_mask_head(*, policy: Any, hidden_dim: int) -> SO101ValidMaskHead:
+    config = getattr(policy, "config", None)
+    state_dim = int(getattr(getattr(config, "robot_state_feature", None), "shape", [6])[0])
+    action_dim = int(getattr(getattr(config, "action_feature", None), "shape", [6])[0])
+    chunk_size = int(getattr(config, "chunk_size", 50))
+    device = getattr(config, "device", "cpu")
+    head = SO101ValidMaskHead(
+        SO101ValidMaskConfig(
+            state_dim=state_dim,
+            action_dim=action_dim,
+            chunk_size=chunk_size,
+            hidden_dim=int(hidden_dim),
+        )
+    )
+    return head.to(device)
+
+
+def _make_visual_servo_head(*, hidden_dim: int, device: Any = "cpu") -> SO101VisualServoHead:
+    return SO101VisualServoHead(SO101VisualServoHeadConfig(hidden_dim=int(hidden_dim))).to(device)
+
+
+def _load_valid_mask_head_if_available(head: SO101ValidMaskHead, checkpoint_path: Path) -> None:
+    head_path = Path(checkpoint_path) / "valid_mask_head.pt"
+    if not head_path.exists():
+        return
+    loaded = load_valid_mask_head(head_path, device=str(_module_device(head)))
+    head.load_state_dict(loaded.state_dict())
+
+
+def _load_visual_servo_head_if_available(head: SO101VisualServoHead, checkpoint_path: Path) -> None:
+    head_path = Path(checkpoint_path) / "visual_servo_head.pt"
+    if not head_path.exists():
+        return
+    loaded = load_visual_servo_head(head_path, device=str(_module_device(head)))
+    head.load_state_dict(loaded.state_dict())
+
+
+def _add_valid_mask_head_to_optimizer(optimizer: Any, head: SO101ValidMaskHead | None) -> None:
+    if head is None:
+        return
+    param_groups = getattr(optimizer, "param_groups", [])
+    if not param_groups:
+        return
+    existing_params = {id(param) for group in param_groups for param in group.get("params", [])}
+    params = [param for param in head.parameters() if param.requires_grad and id(param) not in existing_params]
+    if not params:
+        return
+    param_groups[0]["params"].extend(params)
+
+
+def _add_visual_servo_head_to_optimizer(optimizer: Any, head: SO101VisualServoHead | None) -> None:
+    _add_valid_mask_head_to_optimizer(optimizer, head)  # same optimizer wiring
+
+
+def _module_device(module: Any) -> torch.device:
+    try:
+        return next(module.parameters()).device
+    except StopIteration:
+        return torch.device("cpu")
+
+
 class _SO101LightningModule:
     def __new__(
         cls,
@@ -1129,6 +1297,10 @@ class _SO101LightningModule:
         LightningModule: type[Any],
         cfg: TrainPipelineConfig,
         policy: Any,
+        valid_mask_head: SO101ValidMaskHead | None,
+        valid_mask_loss_weight: float,
+        visual_servo_head: SO101VisualServoHead | None,
+        visual_servo_loss_weight: float,
         preprocessor: Any,
         optimizer: Any,
         scheduler: Any,
@@ -1149,6 +1321,10 @@ class _SO101LightningModule:
                 super().__init__()
                 self.cfg = cfg
                 self.policy = policy
+                self.valid_mask_head = valid_mask_head
+                self.valid_mask_loss_weight = max(0.0, float(valid_mask_loss_weight))
+                self.visual_servo_head = visual_servo_head
+                self.visual_servo_loss_weight = max(0.0, float(visual_servo_loss_weight))
                 self.preprocessor = preprocessor
                 self._optimizer = optimizer
                 self._scheduler = scheduler
@@ -1177,8 +1353,14 @@ class _SO101LightningModule:
                 self.policy.train()
                 raw_batch = batch
                 batch = self.preprocessor(batch)
+                _copy_visual_servo_labels(raw_batch, batch)
                 dataloading_s = time.perf_counter() - self._last_step_started if self._last_step_started else 0.0
                 pre_augmented_images = None
+                visual_servo_aux_loss, visual_servo_metrics = visual_servo_loss(
+                    self.visual_servo_head,
+                    batch,
+                    weight=self.visual_servo_loss_weight,
+                )
                 if self.augmentation.enabled and self.augmentation.gpu_image_augmentation:
                     pre_augmented_images = _clone_image_tensors_for_logging(batch, self.input_image_cameras)
                     augment_batch_on_device(batch, self.augmentation)
@@ -1193,7 +1375,14 @@ class _SO101LightningModule:
                     batch,
                     prefix_steps=self.action_prefix_loss_steps,
                     prefix_weight=self.action_prefix_loss_weight,
+                    valid_mask_head=self.valid_mask_head,
+                    valid_mask_loss_weight=self.valid_mask_loss_weight,
                 )
+                if visual_servo_aux_loss is not None:
+                    loss = loss + visual_servo_aux_loss
+                    output_dict = dict(output_dict)
+                    output_dict.update(visual_servo_metrics)
+                    output_dict["loss"] = _detach_scalar(loss)
                 batch_size = _batch_size(batch)
                 update_s = time.perf_counter() - started
                 train_log_step = self.train_batches_seen + 1
@@ -1336,6 +1525,7 @@ class _SO101LightningModule:
                 with torch.no_grad():
                     raw_batch = batch
                     batch = self.preprocessor(batch)
+                    _copy_visual_servo_labels(raw_batch, batch)
                     self._log_input_images(batch, split="val", log_step=log_step, tag_prefix="input")
                     self._log_input_metadata(raw_batch, batch, split="val", log_step=log_step)
                     loss, output_dict = _forward_policy_with_optional_prefix_loss(
@@ -1343,7 +1533,19 @@ class _SO101LightningModule:
                         batch,
                         prefix_steps=self.action_prefix_loss_steps,
                         prefix_weight=self.action_prefix_loss_weight,
+                        valid_mask_head=self.valid_mask_head,
+                        valid_mask_loss_weight=self.valid_mask_loss_weight,
                     )
+                    visual_servo_aux_loss, visual_servo_metrics = visual_servo_loss(
+                        self.visual_servo_head,
+                        batch,
+                        weight=self.visual_servo_loss_weight,
+                    )
+                    if visual_servo_aux_loss is not None:
+                        loss = loss + visual_servo_aux_loss
+                        output_dict = dict(output_dict)
+                        output_dict.update(visual_servo_metrics)
+                        output_dict["loss"] = _detach_scalar(loss)
                     jitter_metrics = _action_chunk_jitter_metrics(self.policy, batch)
                 batch_size = _batch_size(batch)
                 prefix = "val" if dataset_name is None else f"val/datasets/{_safe_tag(dataset_name)}"
@@ -1396,6 +1598,8 @@ class _SO101LightningModule:
                             subset,
                             prefix_steps=self.action_prefix_loss_steps,
                             prefix_weight=self.action_prefix_loss_weight,
+                            valid_mask_head=self.valid_mask_head,
+                            valid_mask_loss_weight=self.valid_mask_loss_weight,
                         )
                         self._log_validation_scalar(
                             f"train/datasets/{_safe_tag(name)}/loss",
@@ -1607,6 +1811,26 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
                     preprocessor=self.preprocessor,
                     postprocessor=self.postprocessor,
                 )
+                if getattr(pl_module, "valid_mask_head", None) is not None:
+                    save_valid_mask_head(
+                        checkpoint_dir / "valid_mask_head.pt",
+                        pl_module.valid_mask_head,
+                        metadata={
+                            "step": step,
+                            "label_source": "action_is_pad_as_termination_proxy",
+                            "loss_tag": "valid_mask_loss",
+                        },
+                    )
+                if getattr(pl_module, "visual_servo_head", None) is not None:
+                    save_visual_servo_head(
+                        checkpoint_dir / "visual_servo_head.pt",
+                        pl_module.visual_servo_head,
+                        metadata={
+                            "step": step,
+                            "label_source": "visual_servo_labels_sidecar",
+                            "loss_tag": "visual_servo_loss",
+                        },
+                    )
                 update_last_checkpoint(checkpoint_dir)
             self.saved_steps.add(step)
             closed_loop_success = self._run_post_checkpoint_loop_test(checkpoint_dir=checkpoint_dir, step=step)
@@ -1737,17 +1961,82 @@ def _forward_policy_with_optional_prefix_loss(
     *,
     prefix_steps: int,
     prefix_weight: float,
+    valid_mask_head: SO101ValidMaskHead | None = None,
+    valid_mask_loss_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     if prefix_steps <= 0 or prefix_weight == 1.0 or getattr(policy, "name", None) != "smolvla":
-        return policy.forward(batch)
+        return _add_valid_mask_auxiliary_loss(
+            policy.forward(batch),
+            valid_mask_head=valid_mask_head,
+            batch=batch,
+            weight=valid_mask_loss_weight,
+        )
     if not all(hasattr(policy, name) for name in ("prepare_images", "prepare_state", "prepare_action")):
-        return policy.forward(batch)
-    return _forward_smolvla_with_prefix_loss(
+        return _add_valid_mask_auxiliary_loss(
+            policy.forward(batch),
+            valid_mask_head=valid_mask_head,
+            batch=batch,
+            weight=valid_mask_loss_weight,
+        )
+    action_loss, loss_dict = _forward_smolvla_with_prefix_loss(
         policy,
         batch,
         prefix_steps=prefix_steps,
         prefix_weight=prefix_weight,
     )
+    return _add_valid_mask_auxiliary_loss(
+        (action_loss, loss_dict),
+        valid_mask_head=valid_mask_head,
+        batch=batch,
+        weight=valid_mask_loss_weight,
+    )
+
+
+def _add_valid_mask_auxiliary_loss(
+    policy_output: Any,
+    *,
+    valid_mask_head: SO101ValidMaskHead | None,
+    batch: dict[str, Any],
+    weight: float,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    action_loss, loss_dict = _normalize_policy_loss_output(policy_output)
+    if valid_mask_head is None or float(weight) <= 0.0 or batch.get("action_is_pad") is None:
+        return action_loss, loss_dict
+    state = batch[OBS_STATE]
+    action = batch[ACTION]
+    labels = valid_labels_from_action_is_pad(batch.get("action_is_pad")).to(device=state.device)
+    logits = valid_mask_head(state, action)
+    labels = labels[:, : logits.shape[1]]
+    valid_mask_loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+    valid_probs = torch.sigmoid(logits.detach())
+    valid_pred = (valid_probs >= 0.5).to(dtype=labels.dtype)
+    valid_mask_accuracy = (valid_pred == labels).float().mean()
+    total_loss = action_loss + float(weight) * valid_mask_loss
+    loss_dict = dict(loss_dict)
+    loss_dict["action_loss"] = _detach_scalar(action_loss)
+    loss_dict["valid_mask_loss"] = _detach_scalar(valid_mask_loss)
+    loss_dict["valid_mask_loss_weight"] = float(weight)
+    loss_dict["valid_mask_accuracy"] = _detach_scalar(valid_mask_accuracy)
+    loss_dict["loss"] = _detach_scalar(total_loss)
+    return total_loss, loss_dict
+
+
+def _normalize_policy_loss_output(policy_output: Any) -> tuple[torch.Tensor, dict[str, Any]]:
+    if isinstance(policy_output, tuple) and len(policy_output) == 2:
+        loss, loss_dict = policy_output
+        return loss, dict(loss_dict or {})
+    if isinstance(policy_output, dict) and "loss" in policy_output:
+        loss = policy_output["loss"]
+        return loss, dict(policy_output)
+    if torch.is_tensor(policy_output):
+        return policy_output, {"loss": _detach_scalar(policy_output)}
+    raise TypeError(f"Unsupported policy loss output type: {type(policy_output)!r}")
+
+
+def _detach_scalar(value: Any) -> float:
+    if torch.is_tensor(value):
+        return float(value.detach().float().cpu())
+    return float(value)
 
 
 def _forward_smolvla_with_prefix_loss(
@@ -1824,6 +2113,23 @@ def _batch_size(batch: dict[str, Any]) -> int:
         if hasattr(value, "shape") and len(value.shape) > 0:
             return int(value.shape[0])
     return 1
+
+
+def _copy_visual_servo_labels(source: dict[str, Any], target: dict[str, Any]) -> None:
+    device = target.get(OBS_STATE).device if torch.is_tensor(target.get(OBS_STATE)) else None
+    for key in (
+        "visual_servo.camera1",
+        "visual_servo.camera1_visible",
+        "visual_servo.camera2",
+        "visual_servo.camera2_visible",
+        "visual_servo.stop_label",
+    ):
+        value = source.get(key)
+        if value is None:
+            continue
+        if torch.is_tensor(value) and device is not None:
+            value = value.to(device=device)
+        target[key] = value
 
 
 def _batch_dataset_names(batch: dict[str, Any]) -> list[str]:

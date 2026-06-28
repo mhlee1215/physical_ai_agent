@@ -125,6 +125,32 @@ def main() -> None:
         help="Reject move_over_cube episodes whose final TCP/cube world-z offset is smaller than this.",
     )
     parser.add_argument(
+        "--terminal-hold-steps",
+        type=int,
+        default=0,
+        help="Append this many final hold frames for fixed-jaw primitive datasets.",
+    )
+    parser.add_argument(
+        "--move-and-align-near-target-correction-ratio",
+        type=float,
+        default=0.0,
+        help="For move_and_align_cube_edge, export this fraction as near-target correction trajectories.",
+    )
+    parser.add_argument("--edge-contact-xy-success-threshold", type=float, default=0.012)
+    parser.add_argument("--edge-contact-parallel-success-threshold-deg", type=float, default=8.0)
+    parser.add_argument(
+        "--near-target-joint-std",
+        type=float,
+        default=0.075,
+        help="Joint perturbation std for generated near-target correction trajectories.",
+    )
+    parser.add_argument(
+        "--near-target-xy-std",
+        type=float,
+        default=0.025,
+        help="Cartesian XY perturbation std for generated near-target correction trajectories.",
+    )
+    parser.add_argument(
         "--pick-start-joint-std",
         type=float,
         default=0.035,
@@ -167,10 +193,49 @@ def main() -> None:
         help="Maximum candidate seeds to try, as episodes * multiplier.",
     )
     parser.add_argument(
+        "--grid-balance-size",
+        type=int,
+        default=0,
+        help="If >0, only save episodes whose start camera centroid falls in a requested grid bin.",
+    )
+    parser.add_argument(
+        "--grid-balance-target-per-bin",
+        type=int,
+        default=0,
+        help="Required saved episodes per requested grid bin. Requires --grid-balance-bins.",
+    )
+    parser.add_argument(
+        "--grid-balance-bins",
+        default="",
+        help="Comma-separated camera1 grid bins to balance, for example '5,6,7,9,10,11'.",
+    )
+    parser.add_argument(
+        "--grid-balance-spawn-lookup",
+        action="store_true",
+        help="Precompute world-XY -> camera1 grid-bin candidates and sample those instead of seed rejection.",
+    )
+    parser.add_argument(
+        "--grid-balance-teacher-feasible-lookup",
+        action="store_true",
+        help="Filter spawn lookup candidates to coordinates that pass the fixed-jaw teacher policy-view filter.",
+    )
+    parser.add_argument("--grid-lookup-max-candidates-per-bin", type=int, default=0)
+    parser.add_argument("--grid-lookup-x-min", type=float, default=-0.10)
+    parser.add_argument("--grid-lookup-x-max", type=float, default=0.55)
+    parser.add_argument("--grid-lookup-y-min", type=float, default=-0.45)
+    parser.add_argument("--grid-lookup-y-max", type=float, default=0.45)
+    parser.add_argument("--grid-lookup-resolution", type=int, default=21)
+    parser.add_argument(
         "--target-object-color",
         choices=["red", "orange", "yellow", "green", "blue", "purple", "black", "white"],
         help="Only export episodes whose target object has this color.",
     )
+    parser.add_argument("--spawn-center-x", type=float, default=0.15)
+    parser.add_argument("--spawn-center-y", type=float, default=0.0)
+    parser.add_argument("--spawn-min-radius", type=float, default=0.10)
+    parser.add_argument("--spawn-max-radius", type=float, default=0.30)
+    parser.add_argument("--spawn-angle-half-range-deg", type=float, default=90.0)
+    parser.add_argument("--object-half-sizes", default="0.0125,0.015,0.0175")
     parser.add_argument("--no-camera3-duplicate", action="store_true")
     args = parser.parse_args()
 
@@ -198,6 +263,12 @@ def main() -> None:
         closed_gripper_prob=args.closed_gripper_prob,
         move_gripper_profile=args.move_gripper_profile,
         move_min_actual_z=args.move_min_actual_z,
+        terminal_hold_steps=args.terminal_hold_steps,
+        move_and_align_near_target_correction_ratio=args.move_and_align_near_target_correction_ratio,
+        edge_contact_xy_success_threshold=args.edge_contact_xy_success_threshold,
+        edge_contact_parallel_success_threshold_deg=args.edge_contact_parallel_success_threshold_deg,
+        near_target_joint_std=args.near_target_joint_std,
+        near_target_xy_std=args.near_target_xy_std,
         pick_start_joint_std=args.pick_start_joint_std,
         pick_correction_steps=args.pick_correction_steps,
         pick_start_min_abs_y=args.pick_start_min_abs_y,
@@ -205,7 +276,23 @@ def main() -> None:
         pick_start_min_actual_abs_y=args.pick_start_min_actual_abs_y,
         pick_start_min_actual_z=args.pick_start_min_actual_z,
         max_attempt_multiplier=args.max_attempt_multiplier,
+        grid_balance_size=args.grid_balance_size,
+        grid_balance_target_per_bin=args.grid_balance_target_per_bin,
+        grid_balance_bins=args.grid_balance_bins,
+        grid_balance_spawn_lookup=args.grid_balance_spawn_lookup,
+        grid_balance_teacher_feasible_lookup=args.grid_balance_teacher_feasible_lookup,
+        grid_lookup_max_candidates_per_bin=args.grid_lookup_max_candidates_per_bin,
+        grid_lookup_x_min=args.grid_lookup_x_min,
+        grid_lookup_x_max=args.grid_lookup_x_max,
+        grid_lookup_y_min=args.grid_lookup_y_min,
+        grid_lookup_y_max=args.grid_lookup_y_max,
+        grid_lookup_resolution=args.grid_lookup_resolution,
         target_object_color=args.target_object_color,
+        spawn_center=(args.spawn_center_x, args.spawn_center_y),
+        spawn_min_radius=args.spawn_min_radius,
+        spawn_max_radius=args.spawn_max_radius,
+        spawn_angle_half_range_deg=args.spawn_angle_half_range_deg,
+        object_half_sizes=_parse_float_list(args.object_half_sizes),
         include_camera3_duplicate=not args.no_camera3_duplicate,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
@@ -236,6 +323,12 @@ def export_teacher_rollouts(
     closed_gripper_prob: float = 0.45,
     move_gripper_profile: str = "balanced",
     move_min_actual_z: float = 0.0,
+    terminal_hold_steps: int = 0,
+    move_and_align_near_target_correction_ratio: float = 0.0,
+    edge_contact_xy_success_threshold: float = 0.012,
+    edge_contact_parallel_success_threshold_deg: float = 8.0,
+    near_target_joint_std: float = 0.075,
+    near_target_xy_std: float = 0.025,
     pick_start_joint_std: float = 0.035,
     pick_correction_steps: int = 18,
     pick_start_min_abs_y: float = 0.018,
@@ -243,7 +336,23 @@ def export_teacher_rollouts(
     pick_start_min_actual_abs_y: float = 0.015,
     pick_start_min_actual_z: float = 0.0,
     max_attempt_multiplier: int = 8,
+    grid_balance_size: int = 0,
+    grid_balance_target_per_bin: int = 0,
+    grid_balance_bins: str = "",
+    grid_balance_spawn_lookup: bool = False,
+    grid_balance_teacher_feasible_lookup: bool = False,
+    grid_lookup_max_candidates_per_bin: int = 0,
+    grid_lookup_x_min: float = -0.10,
+    grid_lookup_x_max: float = 0.55,
+    grid_lookup_y_min: float = -0.45,
+    grid_lookup_y_max: float = 0.45,
+    grid_lookup_resolution: int = 21,
     target_object_color: str | None = None,
+    spawn_center: tuple[float, float] = (0.15, 0.0),
+    spawn_min_radius: float = 0.10,
+    spawn_max_radius: float = 0.30,
+    spawn_angle_half_range_deg: float = 90.0,
+    object_half_sizes: tuple[float, ...] = (0.0125, 0.015, 0.0175),
     include_camera3_duplicate: bool = True,
 ) -> dict[str, Any]:
     import shutil
@@ -275,13 +384,76 @@ def export_teacher_rollouts(
     if skill_mode not in SKILL_TASKS:
         raise ValueError(f"unknown skill_mode: {skill_mode}")
     task_template = COLOR_SHAPE_SKILL_TASK_TEMPLATES[skill_mode]
+    balance_bins = _parse_grid_balance_bins(grid_balance_bins)
+    balance_enabled = int(grid_balance_size) > 0 or int(grid_balance_target_per_bin) > 0 or bool(balance_bins)
+    if balance_enabled:
+        if int(grid_balance_size) <= 0:
+            raise ValueError("--grid-balance-size must be >0 when grid balancing is enabled")
+        if int(grid_balance_target_per_bin) <= 0:
+            raise ValueError("--grid-balance-target-per-bin must be >0 when grid balancing is enabled")
+        if not balance_bins:
+            raise ValueError("--grid-balance-bins is required when grid balancing is enabled")
+        episodes = int(grid_balance_target_per_bin) * len(balance_bins)
+    balance_counts = {int(bin_id): 0 for bin_id in balance_bins}
 
     config = WristEgoServoConfig(width=width, height=height)
-    env = make_high_contrast_picklift_env()
+    env = make_high_contrast_picklift_env(
+        target_object_color=target_object_color,
+        object_half_sizes=object_half_sizes,
+        spawn_center=spawn_center,
+        spawn_min_radius=spawn_min_radius,
+        spawn_max_radius=spawn_max_radius,
+        spawn_angle_half_range_deg=spawn_angle_half_range_deg,
+    )
     policy_renderers = _make_policy_renderers(env, config)
     teacher_renderers = _make_teacher_renderers(env, config)
     action_space_low = np.asarray(env.action_space.low, dtype=np.float32).copy()
     action_space_high = np.asarray(env.action_space.high, dtype=np.float32).copy()
+    spawn_lookup: dict[int, list[list[float]]] = {}
+    spawn_lookup_next = {int(bin_id): 0 for bin_id in balance_bins}
+    if balance_enabled and grid_balance_spawn_lookup:
+        env.reset(seed=seed)
+        print(
+            f"[so101-lerobot] building camera1 spawn lookup "
+            f"resolution={int(grid_lookup_resolution)} bins={balance_bins}",
+            flush=True,
+        )
+        spawn_lookup = _build_camera1_spawn_lookup(
+            env,
+            policy_renderers,
+            grid_size=int(grid_balance_size),
+            x_min=float(grid_lookup_x_min),
+            x_max=float(grid_lookup_x_max),
+            y_min=float(grid_lookup_y_min),
+            y_max=float(grid_lookup_y_max),
+            resolution=int(grid_lookup_resolution),
+        )
+        for candidates_xy in spawn_lookup.values():
+            candidates_xy.sort(
+                key=lambda xy: (float(xy[0]) - float(spawn_center[0])) ** 2
+                + (float(xy[1]) - float(spawn_center[1])) ** 2
+            )
+        if grid_balance_teacher_feasible_lookup:
+            print("[so101-lerobot] filtering spawn lookup by teacher feasibility", flush=True)
+            spawn_lookup = _filter_spawn_lookup_for_teacher_feasibility(
+                env,
+                policy_renderers,
+                config=config,
+                spawn_lookup=spawn_lookup,
+                seed=seed,
+                move_target_z_offset=move_target_z_offset,
+                edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
+                edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
+                max_candidates_per_bin=int(grid_lookup_max_candidates_per_bin),
+            )
+        missing = [int(bin_id) for bin_id in balance_bins if not spawn_lookup.get(int(bin_id))]
+        if missing:
+            raise RuntimeError(f"camera1 spawn lookup has no candidates for bins: {missing}")
+        print(
+            "[so101-lerobot] camera1 spawn lookup "
+            + json.dumps({str(key): len(value) for key, value in sorted(spawn_lookup.items())}, sort_keys=True),
+            flush=True,
+        )
     exported = 0
     attempted = 0
     skipped = []
@@ -290,15 +462,39 @@ def export_teacher_rollouts(
         candidate_seed = seed
         while exported < episodes and attempted < episodes * max_attempt_multiplier:
             attempted += 1
-            env.reset(seed=candidate_seed)
+            if attempted % 50 == 0:
+                print(
+                    f"[so101-lerobot] attempts={attempted} exported={exported}/{episodes} "
+                    f"grid_counts={json.dumps({str(k): int(v) for k, v in sorted(balance_counts.items())}, sort_keys=True)}",
+                    flush=True,
+                )
+            desired_grid_bin = None
+            forced_spawn_xy = None
+            if spawn_lookup:
+                remaining = [bin_id for bin_id in balance_bins if balance_counts[int(bin_id)] < int(grid_balance_target_per_bin)]
+                if not remaining:
+                    break
+                min_count = min(balance_counts[int(bin_id)] for bin_id in remaining)
+                least_filled = [int(bin_id) for bin_id in remaining if balance_counts[int(bin_id)] == min_count]
+                desired_grid_bin = least_filled[(attempted - 1) % len(least_filled)]
+                candidates_xy = spawn_lookup[desired_grid_bin]
+                next_index = spawn_lookup_next[desired_grid_bin]
+                forced_spawn_xy = candidates_xy[next_index % len(candidates_xy)]
+                spawn_lookup_next[desired_grid_bin] = next_index + 1
+            episode_seed = candidate_seed
+            candidate_seed += 1
+            if forced_spawn_xy is not None and len(forced_spawn_xy) >= 3:
+                episode_seed = int(forced_spawn_xy[2])
+            env.reset(seed=episode_seed)
+            if forced_spawn_xy is not None:
+                _set_target_object_xy(env, forced_spawn_xy)
             reset_home_qpos = _current_qpos(env).astype(np.float32)
             target_object = _target_object_metadata(env)
             episode_task = _format_skill_task(skill_mode, target_object)
-            candidate_seed += 1
             if target_object_color and target_object["color"] != target_object_color:
                 skipped.append(
                     {
-                        "seed": candidate_seed - 1,
+                        "seed": episode_seed,
                         "reason": "target_object_color_mismatch",
                         "object_color": target_object["color"],
                         "required_object_color": target_object_color,
@@ -309,8 +505,43 @@ def export_teacher_rollouts(
             visible, search_steps = sweep_until_visible(env, policy_renderers, max_sweeps=config.max_sweeps)
             teacher_visible = teacher_visible or object_visible_to_teacher(env, teacher_renderers, config=config)
             if not visible:
-                skipped.append({"seed": candidate_seed - 1, "reason": "not_visible_after_sweep"})
+                skipped.append({"seed": episode_seed, "reason": "not_visible_after_sweep"})
                 continue
+            if balance_enabled and not _grid_balance_needs_teacher_candidate_for_start(
+                skill_mode=skill_mode,
+                episode_index=exported,
+                move_and_align_near_target_correction_ratio=move_and_align_near_target_correction_ratio,
+            ):
+                grid_bin = _camera1_grid_bin_at_qpos(
+                    env,
+                    policy_renderers,
+                    qpos=reset_home_qpos,
+                    grid_size=int(grid_balance_size),
+                )
+                if grid_bin not in balance_counts:
+                    skipped.append(
+                        {
+                            "seed": episode_seed,
+                            "reason": "grid_balance_bin_not_requested_pre_teacher",
+                            "grid_bin": grid_bin,
+                            "desired_grid_bin": desired_grid_bin,
+                            "forced_spawn_xy": forced_spawn_xy,
+                            "requested_bins": sorted(balance_counts),
+                        }
+                    )
+                    continue
+                if balance_counts[grid_bin] >= int(grid_balance_target_per_bin):
+                    skipped.append(
+                        {
+                            "seed": episode_seed,
+                            "reason": "grid_balance_bin_full_pre_teacher",
+                            "grid_bin": grid_bin,
+                            "desired_grid_bin": desired_grid_bin,
+                            "forced_spawn_xy": forced_spawn_xy,
+                            "target_per_bin": int(grid_balance_target_per_bin),
+                        }
+                    )
+                    continue
             if skill_mode in FIXED_JAW_SKILL_MODES:
                 candidates = _make_fast_fixed_jaw_teacher_targets(env)
             else:
@@ -329,7 +560,7 @@ def export_teacher_rollouts(
                     move_target_z_offset=move_target_z_offset,
                 )
             if not candidates:
-                skipped.append({"seed": candidate_seed - 1, "reason": "no_successful_teacher_candidate"})
+                skipped.append({"seed": episode_seed, "reason": "no_successful_teacher_candidate"})
                 continue
             best = max(candidates, key=lambda item: float(item["meta"].get("score", -1e9)))
             summary = _write_teacher_episode(
@@ -338,7 +569,7 @@ def export_teacher_rollouts(
                 renderers=policy_renderers,
                 q_open=np.asarray(best["q_open"], dtype=np.float32),
                 q_lift=np.asarray(best["q_lift"], dtype=np.float32),
-                seed=candidate_seed - 1,
+                seed=episode_seed,
                 search_steps=search_steps,
                 teacher_visible=teacher_visible,
                 best_meta=dict(best["meta"]),
@@ -358,6 +589,12 @@ def export_teacher_rollouts(
                 closed_gripper_prob=closed_gripper_prob,
                 move_gripper_profile=move_gripper_profile,
                 move_min_actual_z=move_min_actual_z,
+                terminal_hold_steps=terminal_hold_steps,
+                move_and_align_near_target_correction_ratio=move_and_align_near_target_correction_ratio,
+                edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
+                edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
+                near_target_joint_std=near_target_joint_std,
+                near_target_xy_std=near_target_xy_std,
                 pick_start_joint_std=pick_start_joint_std,
                 pick_correction_steps=pick_correction_steps,
                 pick_start_min_abs_y=pick_start_min_abs_y,
@@ -372,19 +609,49 @@ def export_teacher_rollouts(
             summary["target_object"] = target_object
             summary["object_color"] = target_object["color"]
             summary["object_shape"] = target_object["shape"]
+            if forced_spawn_xy is not None:
+                summary["forced_spawn_xy"] = [float(forced_spawn_xy[0]), float(forced_spawn_xy[1])]
+                summary["desired_grid_bin"] = desired_grid_bin
             if summary["success"]:
+                if balance_enabled:
+                    grid_bin = _summary_start_grid_bin(summary, grid_size=int(grid_balance_size))
+                    summary["grid_balance_bin"] = grid_bin
+                    if grid_bin not in balance_counts:
+                        dataset.clear_episode_buffer()
+                        skipped.append(
+                            {
+                                "seed": episode_seed,
+                                "reason": "grid_balance_bin_not_requested",
+                                "grid_bin": grid_bin,
+                                "requested_bins": sorted(balance_counts),
+                            }
+                        )
+                        continue
+                    if balance_counts[grid_bin] >= int(grid_balance_target_per_bin):
+                        dataset.clear_episode_buffer()
+                        skipped.append(
+                            {
+                                "seed": episode_seed,
+                                "reason": "grid_balance_bin_full",
+                                "grid_bin": grid_bin,
+                                "target_per_bin": int(grid_balance_target_per_bin),
+                            }
+                        )
+                        continue
+                    balance_counts[grid_bin] += 1
                 dataset.save_episode()
                 exported += 1
                 episode_summaries.append(summary)
                 print(
                     f"[so101-lerobot] exported {exported}/{episodes} "
                     f"seed={summary['seed']} frames={summary['frames']} "
-                    f"mode={summary['best_meta'].get('mode')}",
+                    f"mode={summary['best_meta'].get('mode')} "
+                    f"grid_bin={summary.get('grid_balance_bin')}",
                     flush=True,
                 )
             else:
                 dataset.clear_episode_buffer()
-                skipped.append({"seed": candidate_seed - 1, "reason": "teacher_replay_failed", **summary})
+                skipped.append({"seed": episode_seed, "reason": "teacher_replay_failed", **summary})
     finally:
         for renderer in [*policy_renderers.values(), *teacher_renderers.values()]:
             renderer.close()
@@ -409,6 +676,22 @@ def export_teacher_rollouts(
         "requested_episodes": episodes,
         "exported_episodes": exported,
         "attempted_seeds": attempted,
+        "grid_balance": {
+            "enabled": bool(balance_enabled),
+            "grid_size": int(grid_balance_size),
+            "target_per_bin": int(grid_balance_target_per_bin),
+            "requested_bins": sorted(balance_counts),
+            "accepted_counts": {str(key): int(value) for key, value in sorted(balance_counts.items())},
+            "spawn_lookup": {
+                "enabled": bool(spawn_lookup),
+                "resolution": int(grid_lookup_resolution),
+                "x_range": [float(grid_lookup_x_min), float(grid_lookup_x_max)],
+                "y_range": [float(grid_lookup_y_min), float(grid_lookup_y_max)],
+                "candidate_counts": {str(key): len(value) for key, value in sorted(spawn_lookup.items())},
+                "teacher_feasible_filter": bool(grid_balance_teacher_feasible_lookup),
+                "max_candidates_per_bin": int(grid_lookup_max_candidates_per_bin),
+            },
+        },
         "fps": fps,
         "use_videos": use_videos,
         "teacher_style": teacher_style,
@@ -425,6 +708,12 @@ def export_teacher_rollouts(
             "closed_gripper_prob": float(closed_gripper_prob),
             "move_gripper_profile": str(move_gripper_profile),
             "move_min_actual_z": float(move_min_actual_z),
+            "terminal_hold_steps": int(terminal_hold_steps),
+            "move_and_align_near_target_correction_ratio": float(move_and_align_near_target_correction_ratio),
+            "edge_contact_xy_success_threshold": float(edge_contact_xy_success_threshold),
+            "edge_contact_parallel_success_threshold_deg": float(edge_contact_parallel_success_threshold_deg),
+            "near_target_joint_std": float(near_target_joint_std),
+            "near_target_xy_std": float(near_target_xy_std),
             "pick_start_joint_std": float(pick_start_joint_std),
             "pick_correction_steps": int(pick_correction_steps),
             "pick_start_min_abs_y": float(pick_start_min_abs_y),
@@ -432,6 +721,11 @@ def export_teacher_rollouts(
             "pick_start_min_actual_abs_y": float(pick_start_min_actual_abs_y),
             "pick_start_min_actual_z": float(pick_start_min_actual_z),
             "target_object_color": target_object_color,
+            "spawn_center": [float(spawn_center[0]), float(spawn_center[1])],
+            "spawn_min_radius": float(spawn_min_radius),
+            "spawn_max_radius": float(spawn_max_radius),
+            "spawn_angle_half_range_deg": float(spawn_angle_half_range_deg),
+            "object_half_sizes": [float(value) for value in object_half_sizes],
         },
         "camera3_duplicate": {
             "enabled": bool(include_camera3_duplicate),
@@ -460,6 +754,16 @@ def export_teacher_rollouts(
             "producer": "raw SO101 qpos target in simulator action-space units",
             "expected_smolvla_mode": "MEAN_STD from LeRobotDataset stats",
             "manual_scaling_applied": False,
+        },
+        "dataset_generation_augmentation": {
+            "kind": "teacher_trajectory_generation",
+            "terminal_hold_included": int(terminal_hold_steps) > 0,
+            "terminal_hold_steps": int(terminal_hold_steps),
+            "near_target_correction_included": float(move_and_align_near_target_correction_ratio) > 0.0,
+            "near_target_correction_ratio": float(move_and_align_near_target_correction_ratio),
+            "near_target_joint_std": float(near_target_joint_std),
+            "near_target_xy_std": float(near_target_xy_std),
+            "note": "This is dataset generation augmentation, distinct from train-time image/state augmentation.",
         },
         "episodes": episode_summaries,
         "skipped": skipped,
@@ -498,6 +802,12 @@ def _write_teacher_episode(
     closed_gripper_prob: float,
     move_gripper_profile: str,
     move_min_actual_z: float,
+    terminal_hold_steps: int,
+    move_and_align_near_target_correction_ratio: float,
+    edge_contact_xy_success_threshold: float,
+    edge_contact_parallel_success_threshold_deg: float,
+    near_target_joint_std: float,
+    near_target_xy_std: float,
     pick_start_joint_std: float,
     pick_correction_steps: int,
     pick_start_min_abs_y: float,
@@ -588,6 +898,12 @@ def _write_teacher_episode(
             episode_index=episode_index,
             random_start_joint_std=random_start_joint_std,
             move_target_z_offset=move_target_z_offset,
+            terminal_hold_steps=terminal_hold_steps,
+            move_and_align_near_target_correction_ratio=move_and_align_near_target_correction_ratio,
+            edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
+            edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
+            near_target_joint_std=near_target_joint_std,
+            near_target_xy_std=near_target_xy_std,
             task=task,
             include_camera3_duplicate=include_camera3_duplicate,
             reset_home_qpos=reset_home_qpos,
@@ -659,6 +975,188 @@ def _format_skill_task(skill_mode: str, target_object: dict[str, Any]) -> str:
         color=target_object["color"],
         shape=target_object["shape"],
     )
+
+
+def _parse_grid_balance_bins(raw: str) -> list[int]:
+    if not raw.strip():
+        return []
+    bins = []
+    for part in raw.split(","):
+        text = part.strip()
+        if not text:
+            continue
+        bins.append(int(text))
+    return sorted(set(bins))
+
+
+def _parse_float_list(raw: str) -> tuple[float, ...]:
+    values = tuple(float(part.strip()) for part in raw.split(",") if part.strip())
+    if not values:
+        raise ValueError("expected at least one float")
+    return values
+
+
+def _set_target_object_xy(env: Any, xy: list[float] | tuple[float, float] | np.ndarray) -> None:
+    import mujoco
+
+    unwrapped = env.unwrapped
+    slot = unwrapped._slots[int(unwrapped._target_slot_idx)]
+    addr = int(slot.qpos_addr)
+    unwrapped.data.qpos[addr : addr + 2] = np.asarray(xy, dtype=float)[:2]
+    unwrapped.data.qpos[addr + 2] = float(slot.spawn_z)
+    unwrapped.data.qvel[:] = 0.0
+    mujoco.mj_forward(unwrapped.model, unwrapped.data)
+    if hasattr(unwrapped, "_refresh_reset_reference_state"):
+        unwrapped._refresh_reset_reference_state()
+
+
+def _build_camera1_spawn_lookup(
+    env: Any,
+    renderers: dict[str, Any],
+    *,
+    grid_size: int,
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+    resolution: int,
+) -> dict[int, list[list[float]]]:
+    resolution = max(2, int(resolution))
+    lookup: dict[int, list[list[float]]] = {}
+    snapshot = _snapshot_sim_state(env)
+    try:
+        for x in np.linspace(float(x_min), float(x_max), resolution):
+            for y in np.linspace(float(y_min), float(y_max), resolution):
+                _set_target_object_xy(env, [float(x), float(y)])
+                visibility = _object_visibility_in_camera(env, renderers["egocentric_cam"], "egocentric_cam")
+                centroid = visibility.get("normalized_centroid")
+                if not visibility.get("visible") or centroid is None:
+                    continue
+                bx = min(grid_size - 1, max(0, int(float(centroid[0]) * grid_size)))
+                by = min(grid_size - 1, max(0, int(float(centroid[1]) * grid_size)))
+                lookup.setdefault(int(by * grid_size + bx), []).append([float(x), float(y)])
+    finally:
+        _restore_sim_state(env, snapshot)
+    return lookup
+
+
+def _filter_spawn_lookup_for_teacher_feasibility(
+    env: Any,
+    renderers: dict[str, Any],
+    *,
+    config: WristEgoServoConfig,
+    spawn_lookup: dict[int, list[list[float]]],
+    seed: int,
+    move_target_z_offset: float,
+    edge_contact_xy_success_threshold: float,
+    edge_contact_parallel_success_threshold_deg: float,
+    max_candidates_per_bin: int,
+) -> dict[int, list[list[float]]]:
+    filtered_lookup: dict[int, list[list[float]]] = {}
+    max_candidates_per_bin = max(0, int(max_candidates_per_bin))
+    for bin_id, candidates_xy in sorted(spawn_lookup.items()):
+        accepted: list[list[float]] = []
+        for index, xy in enumerate(candidates_xy):
+            candidate_seed = int(seed) + int(bin_id) * 1000 + index
+            env.reset(seed=candidate_seed)
+            _set_target_object_xy(env, xy)
+            visible, _search_steps = sweep_until_visible(env, renderers, max_sweeps=config.max_sweeps)
+            if not visible:
+                continue
+            candidates = _filter_fixed_jaw_move_candidates_in_policy_view(
+                env,
+                renderers=renderers,
+                candidates=_make_fast_fixed_jaw_teacher_targets(env),
+                move_target_z_offset=move_target_z_offset,
+            )
+            if not _has_success_contract_fixed_jaw_candidate(
+                env,
+                candidates,
+                edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
+                edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
+            ):
+                continue
+            accepted.append([float(xy[0]), float(xy[1])])
+            if max_candidates_per_bin and len(accepted) >= max_candidates_per_bin:
+                break
+        filtered_lookup[int(bin_id)] = accepted
+        print(
+            f"[so101-lerobot] teacher-feasible lookup bin={int(bin_id)} "
+            f"{len(accepted)}/{len(candidates_xy)}",
+            flush=True,
+        )
+    return filtered_lookup
+
+
+def _has_success_contract_fixed_jaw_candidate(
+    env: Any,
+    candidates: list[dict[str, Any]],
+    *,
+    edge_contact_xy_success_threshold: float,
+    edge_contact_parallel_success_threshold_deg: float,
+) -> bool:
+    snapshot = _snapshot_sim_state(env)
+    try:
+        for candidate in candidates:
+            meta = dict(candidate.get("meta") or {})
+            if float(meta.get("finger_axis_parallel_angle_deg", 180.0)) > float(edge_contact_parallel_success_threshold_deg):
+                continue
+            q_edge = _make_fixed_jaw_edge_qpos(env, np.asarray(candidate["q_open"], dtype=np.float32), meta)
+            q_edge[-1] = _open_gripper_value(env)
+            _set_qpos(env, q_edge)
+            if float(_static_finger_edge_error(env, meta)["xy_error"]) <= float(edge_contact_xy_success_threshold):
+                return True
+    finally:
+        _restore_sim_state(env, snapshot)
+    return False
+
+
+def _summary_start_grid_bin(summary: dict[str, Any], *, grid_size: int) -> int | None:
+    visibility = (
+        summary.get("start_policy_camera_visibility", {})
+        .get("camera1", {})
+    )
+    centroid = visibility.get("normalized_centroid")
+    if not visibility.get("visible") or centroid is None:
+        return None
+    x = min(grid_size - 1, max(0, int(float(centroid[0]) * grid_size)))
+    y = min(grid_size - 1, max(0, int(float(centroid[1]) * grid_size)))
+    return int(y * grid_size + x)
+
+
+def _grid_balance_needs_teacher_candidate_for_start(
+    *,
+    skill_mode: str,
+    episode_index: int,
+    move_and_align_near_target_correction_ratio: float,
+) -> bool:
+    if skill_mode != "move_and_align_cube_edge":
+        return skill_mode in {"align_fixed_jaw_cube_edge", "grip_from_edge_cube"}
+    ratio = float(np.clip(move_and_align_near_target_correction_ratio, 0.0, 1.0))
+    if ratio <= 0.0:
+        return False
+    return ratio >= 1.0 or (int(episode_index) % max(1, int(round(1.0 / ratio)))) == 0
+
+
+def _camera1_grid_bin_at_qpos(
+    env: Any,
+    renderers: dict[str, Any],
+    *,
+    qpos: np.ndarray,
+    grid_size: int,
+) -> int | None:
+    snapshot = _snapshot_sim_state(env)
+    try:
+        _set_qpos(env, qpos)
+        visibility = _object_visibility_in_camera(env, renderers["egocentric_cam"], "egocentric_cam")
+    finally:
+        _restore_sim_state(env, snapshot)
+    centroid = visibility.get("normalized_centroid")
+    if not visibility.get("visible") or centroid is None:
+        return None
+    x = min(grid_size - 1, max(0, int(float(centroid[0]) * grid_size)))
+    y = min(grid_size - 1, max(0, int(float(centroid[1]) * grid_size)))
+    return int(y * grid_size + x)
 
 
 def _make_fast_fixed_jaw_teacher_targets(env: Any) -> list[dict[str, Any]]:
@@ -1324,6 +1822,12 @@ def _write_fixed_jaw_edge_episode(
     episode_index: int,
     random_start_joint_std: float,
     move_target_z_offset: float,
+    terminal_hold_steps: int,
+    move_and_align_near_target_correction_ratio: float,
+    edge_contact_xy_success_threshold: float,
+    edge_contact_parallel_success_threshold_deg: float,
+    near_target_joint_std: float,
+    near_target_xy_std: float,
     task: str,
     include_camera3_duplicate: bool,
     reset_home_qpos: np.ndarray | None,
@@ -1348,11 +1852,28 @@ def _write_fixed_jaw_edge_episode(
         phases = [("align", q_start, q_edge, max(1, int(approach_steps))), ("settle", q_edge, q_edge, max(0, int(settle_steps)))]
         success_kind = "edge_contact"
     elif skill_mode == "move_and_align_cube_edge":
-        q_start = _make_home_closed_start_qpos(env, reset_home_qpos)
+        near_target_ratio = float(np.clip(move_and_align_near_target_correction_ratio, 0.0, 1.0))
+        use_near_target = near_target_ratio > 0.0 and (
+            near_target_ratio >= 1.0 or (int(episode_index) % max(1, int(round(1.0 / near_target_ratio)))) == 0
+        )
+        if use_near_target:
+            q_start = _make_near_target_fixed_jaw_correction_qpos(
+                env,
+                q_edge=q_edge,
+                seed=seed,
+                episode_index=episode_index,
+                joint_std=near_target_joint_std,
+                xy_std=near_target_xy_std,
+            )
+            trajectory_variant = "near_target_correction"
+        else:
+            q_start = _make_home_closed_start_qpos(env, reset_home_qpos)
+            trajectory_variant = "generated_teacher"
         q_edge = q_edge.copy()
         q_edge[-1] = _open_gripper_value(env)
+        phase_steps = max(1, int(approach_steps)) if use_near_target else max(1, int(approach_steps)) * 2
         phases = [
-            ("move_align", q_start, q_edge, max(1, int(approach_steps)) * 2),
+            ("move_align", q_start, q_edge, phase_steps),
             ("settle", q_edge, q_edge, max(0, int(settle_steps))),
         ]
         success_kind = "edge_contact_parallel"
@@ -1368,6 +1889,11 @@ def _write_fixed_jaw_edge_episode(
         success_kind = "pick_success"
     else:
         raise ValueError(f"unknown fixed jaw skill mode: {skill_mode}")
+    if int(terminal_hold_steps) > 0 and skill_mode != "grip_from_edge_cube":
+        hold_target = np.asarray(phases[-1][2] if phases[-1][2] is not None else phases[-1][1], dtype=np.float32)
+        phases.append(("terminal_hold", hold_target, hold_target, int(terminal_hold_steps)))
+    if "trajectory_variant" not in locals():
+        trajectory_variant = "generated_teacher"
 
     _set_qpos(env, q_start)
     start_static_edge_error = _static_finger_edge_error(env, best_meta)
@@ -1435,8 +1961,9 @@ def _write_fixed_jaw_edge_episode(
         )
     elif success_kind == "edge_contact_parallel":
         task_success = bool(
-            final_static_edge_error["xy_error"] <= 0.012
-            and float(best_meta.get("finger_axis_parallel_angle_deg", 180.0)) <= 8.0
+            final_static_edge_error["xy_error"] <= float(edge_contact_xy_success_threshold)
+            and float(best_meta.get("finger_axis_parallel_angle_deg", 180.0))
+            <= float(edge_contact_parallel_success_threshold_deg)
         )
     else:
         task_success = bool(final_static_edge_error["xy_error"] <= 0.015)
@@ -1470,6 +1997,13 @@ def _write_fixed_jaw_edge_episode(
         "final_tcp_to_obj_delta": [float(value) for value in final_tcp_to_obj_delta],
         "teacher_style": "staged_fixed_jaw_skill",
         "skill_mode": skill_mode,
+        "trajectory_variant": trajectory_variant,
+        "dataset_generation_augmentation": {
+            "terminal_hold_steps": int(terminal_hold_steps),
+            "near_target_correction": trajectory_variant == "near_target_correction",
+            "near_target_joint_std": float(near_target_joint_std),
+            "near_target_xy_std": float(near_target_xy_std),
+        },
         "fixed_jaw_reference": "static_finger_pad",
         "phase_counts": phase_counts,
         "mean_action_delta": float(np.mean(action_deltas)) if action_deltas else 0.0,
@@ -1656,6 +2190,31 @@ def _make_roll_misaligned_fixed_jaw_qpos(
         target[4] = float(edge[4] + offset)
     target[-1] = _open_gripper_value(env)
     return np.clip(target, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
+def _make_near_target_fixed_jaw_correction_qpos(
+    env: Any,
+    *,
+    q_edge: np.ndarray,
+    seed: int,
+    episode_index: int,
+    joint_std: float,
+    xy_std: float,
+) -> np.ndarray:
+    rng = np.random.default_rng(int(seed) + 73091 + int(episode_index) * 17)
+    target = np.asarray(q_edge, dtype=np.float32).copy()
+    jitter = rng.normal(0.0, max(0.0, float(joint_std)), size=target.shape).astype(np.float32)
+    if jitter.shape[0] >= 6:
+        jitter[-1] = 0.0
+    if jitter.shape[0] > 4:
+        roll_offsets = np.asarray([0.28, -0.28, 0.42, -0.42, 0.18, -0.18], dtype=np.float32)
+        jitter[4] += float(roll_offsets[int(episode_index) % len(roll_offsets)])
+    start = np.clip(target + jitter, env.action_space.low, env.action_space.high).astype(np.float32)
+    if float(xy_std) > 0.0:
+        xy_offset = rng.normal(0.0, float(xy_std), size=2)
+        start = _offset_qpos_by_cartesian(env, start, np.asarray([xy_offset[0], xy_offset[1], 0.0], dtype=float), steps=8)
+    start[-1] = float(env.action_space.low[-1])
+    return np.clip(start, env.action_space.low, env.action_space.high).astype(np.float32)
 
 
 def _make_home_closed_start_qpos(env: Any, reset_home_qpos: np.ndarray | None) -> np.ndarray:

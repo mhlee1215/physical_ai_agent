@@ -385,6 +385,54 @@
       "size_bytes": 197876483,
       "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it."
     },
+    "move_and_align_cube_edge_v2_train": {
+      "audit_sha256": "d2b1169d45469c7205447b79043ddf4156d67447784c677ad5e33e5fa1d05474",
+      "camera_contract": {
+        "observation.images.camera1": "egocentric_cam",
+        "observation.images.camera2": "wrist_cam",
+        "observation.images.camera3": "wrist_cam duplicate"
+      },
+      "camera_pose_contract": {
+        "observation.images.camera1": {
+          "azimuth": 270,
+          "distance": 0.63,
+          "elevation": -82,
+          "lookat": [
+            0.245,
+            0.11,
+            0.035
+          ],
+          "rotation_degrees": 90,
+          "type": "free"
+        }
+      },
+      "directory_sha256": "8363722cf8cd6516ece9ec4c792ebd719106c9d9358f786e3ff4cf7c4c31c6f2",
+      "episodes": 300,
+      "export_report_sha256": "cddde6750e1989e797f680f6e3e1694325d94f70d82b4c42659fbe9b9354038a",
+      "file_count": 13,
+      "frames": 21600,
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-300-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_300_ego_wrist_256_seed124000",
+      "sample_shapes": {
+        "observation.images.camera1": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera2": [
+          3,
+          256,
+          256
+        ],
+        "observation.images.camera3": [
+          3,
+          256,
+          256
+        ]
+      },
+      "size_bytes": 570523058,
+      "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it."
+    },
     "move_and_align_cube_edge_val": {
       "audit_sha256": "32862b93e590ea20d19e74dad9864cf827d3fd0ba5b5f2b365280fa01df933b7",
       "camera_contract": {

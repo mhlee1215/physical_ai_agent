@@ -9,6 +9,7 @@ from unittest.mock import patch
 from physical_ai_agent.agent_core.qwen_so101_closed_loop import (
     LoopArtifactConfig,
     _apply_start_contract_to_env,
+    _execution_horizon_from_valid_probs,
     parse_primitive_policy_routes,
     resolve_policy_routes,
     run_closed_loop_plan,
@@ -118,6 +119,195 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                 "grip_from_edge_cube",
             ],
         )
+
+    def test_valid_mask_is_requeried_at_action_step_boundaries(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[
+                SO101PrimitiveCall(
+                    0,
+                    "move",
+                    "green cube",
+                    "move_and_align_cube_edge",
+                    "move and align prompt",
+                    40,
+                )
+            ],
+        )
+        valid_mask_head = SequenceValidMaskHead(
+            [
+                [1.0] * 50,
+                [1.0] * 50,
+                [1.0] * 50,
+            ]
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    policy_n_action_steps=15,
+                    valid_mask_head=valid_mask_head,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=fake_batch_builder,
+                )
+            trace_rows = _read_jsonl(Path(report["episodes"][0]["trace_path"]))
+
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["episodes"][0]["steps"], 40)
+        self.assertEqual(valid_mask_head.calls, 3)
+        self.assertEqual(
+            [decision["budget"] for decision in report["episodes"][0]["primitive_summaries"][0]["valid_mask"]["decisions"]],
+            [15, 15, 10],
+        )
+        self.assertEqual(
+            [row["valid_mask"]["chunk_start_primitive_step"] for row in trace_rows if row["primitive_step"] in {0, 15, 30}],
+            [0, 15, 30],
+        )
+
+    def test_valid_mask_stop_ends_primitive_after_current_chunk_decision(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[
+                SO101PrimitiveCall(
+                    0,
+                    "move",
+                    "green cube",
+                    "move_and_align_cube_edge",
+                    "move and align prompt",
+                    40,
+                )
+            ],
+        )
+        valid_mask_head = SequenceValidMaskHead(
+            [
+                [1.0] * 50,
+                [1.0, 0.1, 0.1, *([0.0] * 47)],
+            ]
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    policy_n_action_steps=15,
+                    valid_mask_head=valid_mask_head,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=fake_batch_builder,
+                )
+
+        primitive = report["episodes"][0]["primitive_summaries"][0]
+        self.assertEqual(report["episodes"][0]["steps"], 16)
+        self.assertEqual(valid_mask_head.calls, 2)
+        self.assertEqual(primitive["valid_mask"]["reason"], "valid_mask_stop")
+        self.assertEqual([decision["budget"] for decision in primitive["valid_mask"]["decisions"]], [15, 1])
+
+    def test_valid_mask_stop_after_current_chunk_horizon_does_not_end_primitive(self) -> None:
+        horizon, reason = _execution_horizon_from_valid_probs(
+            [1.0] * 15 + [0.0, 0.0],
+            max_horizon=15,
+            threshold=0.5,
+            consecutive=2,
+        )
+
+        self.assertEqual(horizon, 15)
+        self.assertEqual(reason, "max_horizon")
+
+    def test_fixed_horizon_closed_loop_runs_without_valid_mask_head(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[
+                SO101PrimitiveCall(
+                    0,
+                    "move",
+                    "green cube",
+                    "move_and_align_cube_edge",
+                    "move and align prompt",
+                    40,
+                )
+            ],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    max_steps_per_primitive=40,
+                    policy_n_action_steps=15,
+                    valid_mask_head=None,
+                    valid_mask_checkpoint=None,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=fake_batch_builder,
+                )
+
+        primitive = report["episodes"][0]["primitive_summaries"][0]
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["valid_mask"]["mode"], "fixed_horizon")
+        self.assertEqual(report["valid_mask"]["required_for_loop_test"], False)
+        self.assertEqual(report["episodes"][0]["steps"], 40)
+        self.assertEqual(primitive["valid_mask"]["reason"], "max_horizon")
+        self.assertEqual(
+            [decision["budget"] for decision in primitive["valid_mask"]["decisions"]],
+            [15, 15, 10],
+        )
+        self.assertTrue(all(decision["reason"] == "fixed_horizon" for decision in primitive["valid_mask"]["decisions"]))
 
     def test_closed_loop_blocks_when_policy_cameras_are_missing(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -700,15 +890,48 @@ class FakePolicy:
         return [[[0.0] * 6 for _index in range(50)]]
 
 
+class FakePolicyExecutor:
+    processor_source = "fake_processor"
+    preprocessor = None
+    postprocessor = None
+
+    def __init__(self, policy_path: str) -> None:
+        self.policy = FakePolicy(policy_path)
+
+    def select_action_with_trace(self, observation):
+        del observation
+        action = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+        return {
+            "action": action,
+            "raw_action": action,
+            "postprocessed_action": action,
+            "processor_source": self.processor_source,
+            "preprocessor_steps": [],
+            "postprocessor_steps": [],
+        }
+
+
 class FakeValidMaskHead:
     def predict_valid_probs(self, state, action_chunk):
         del state, action_chunk
-        return [[1.0, 0.1, 0.1, *([0.0] * 47)]]
+        return [[0.1, 0.1, *([0.0] * 48)]]
+
+
+class SequenceValidMaskHead:
+    def __init__(self, sequences: list[list[float]]) -> None:
+        self.sequences = list(sequences)
+        self.calls = 0
+
+    def predict_valid_probs(self, state, action_chunk):
+        del state, action_chunk
+        index = min(self.calls, len(self.sequences) - 1)
+        self.calls += 1
+        return [self.sequences[index]]
 
 
 def fake_policy_loader(policy_path: str, local_files_only: bool, device: str) -> FakePolicy:
     del local_files_only, device
-    return FakePolicy(policy_path)
+    return FakePolicyExecutor(policy_path)
 
 
 def fake_batch_builder(

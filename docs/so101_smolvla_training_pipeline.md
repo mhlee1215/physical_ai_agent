@@ -148,6 +148,38 @@ Use `scripts/so101_dataset_manifest.py validate <manifest>` in CI and after
 dataset generation. Use `from-export-report` to turn an exporter report into a
 validated manifest.
 
+### Move-And-Align V2 Dataset-Generation Augmentation
+
+For `move_and_align_cube_edge`, keep train-time augmentation separate from
+dataset-generation augmentation. The v2 dataset is:
+
+```text
+move_and_align_cube_edge_train_v2
+  - generated teacher trajectories
+  - terminal hold included
+  - near-target correction included
+```
+
+The reproducible export recipe is
+`configs/so101/training_datasets/export_recipes.json` entry
+`move_and_align_cube_edge_train_v2`. It writes:
+
+```text
+_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_300_ego_wrist_256_seed124000
+```
+
+The intended composition is 300 episodes:
+
+- about half standard generated teacher trajectories from the home-closed
+  start distribution;
+- about half near-target correction trajectories that start close to the
+  aligned edge pose with joint/XY perturbations;
+- 20 terminal hold frames after the target edge-aligned pose.
+
+This is not on-the-fly image/state augmentation. It changes the teacher
+trajectory distribution so the policy sees target-near correction and
+goal-hold behavior during supervised training.
+
 ## Teacher/Student Gap
 
 The pick-place teacher can use privileged simulator state to generate stable

@@ -79,6 +79,12 @@ def main() -> None:
     )
     parser.add_argument("--closed-loop-task-prompt")
     parser.add_argument(
+        "--closed-loop-action-contract-mode",
+        choices=["processor", "legacy", "processor_dataset_clamp", "processor_delta_q", "visual_servo_delta_q"],
+        default="processor",
+        help="Action conversion mode forwarded to the closed-loop policy evaluator.",
+    )
+    parser.add_argument(
         "--closed-loop-eval-skill-mode",
         choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
         default="picklift",
@@ -86,8 +92,8 @@ def main() -> None:
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--loop-artifact-width", type=int, default=128)
-    parser.add_argument("--loop-artifact-height", type=int, default=128)
+    parser.add_argument("--loop-artifact-width", type=int, default=256)
+    parser.add_argument("--loop-artifact-height", type=int, default=256)
     parser.add_argument("--loop-artifact-fps", type=int, default=12)
     parser.add_argument("--loop-artifact-every-n-steps", type=int, default=1)
     parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
@@ -303,6 +309,11 @@ def _run_closed_loop_eval(
     return _run_picklift_closed_loop_eval(args, run_dir, checkpoint, policy_path)
 
 
+def _checkpoint_valid_mask_head(policy_path: Path) -> Path | None:
+    candidate = Path(policy_path).parent / "valid_mask_head.pt"
+    return candidate if candidate.exists() else None
+
+
 def _run_picklift_closed_loop_eval(
     args: argparse.Namespace,
     run_dir: Path,
@@ -355,8 +366,9 @@ def _run_picklift_closed_loop_eval(
     ]
     if args.closed_loop_subgoal_sequence:
         cmd.extend(["--subgoal-sequence", args.closed_loop_subgoal_sequence])
-    if args.closed_loop_valid_mask_checkpoint:
-        cmd.extend(["--valid-mask-checkpoint", str(args.closed_loop_valid_mask_checkpoint)])
+    valid_mask_checkpoint = _checkpoint_valid_mask_head(policy_path) or args.closed_loop_valid_mask_checkpoint
+    if valid_mask_checkpoint:
+        cmd.extend(["--valid-mask-checkpoint", str(valid_mask_checkpoint)])
     if args.closed_loop_task_prompt:
         cmd.extend(["--task-prompt", args.closed_loop_task_prompt])
     if args.closed_loop_eval_skill_mode == "pick_from_top_cube":
@@ -390,7 +402,8 @@ def _run_qwen_chain_closed_loop_eval(
     checkpoint: str,
     policy_path: Path,
 ) -> dict[str, Any]:
-    if args.closed_loop_valid_mask_checkpoint is None:
+    valid_mask_checkpoint = _checkpoint_valid_mask_head(policy_path) or args.closed_loop_valid_mask_checkpoint
+    if valid_mask_checkpoint is None:
         raise RuntimeError("qwen_chain closed-loop requires --closed-loop-valid-mask-checkpoint")
     closed_loop_test_id = str(getattr(args, "closed_loop_test_id", "default") or "default")
     output_dir = run_dir / "closed_loop_evals" / (
@@ -427,8 +440,10 @@ def _run_qwen_chain_closed_loop_eval(
         str(args.policy_n_action_steps),
         "--policy-num-steps",
         str(args.policy_num_steps),
+        "--action-contract-mode",
+        getattr(args, "closed_loop_action_contract_mode", "processor"),
         "--valid-mask-checkpoint",
-        str(args.closed_loop_valid_mask_checkpoint),
+        str(valid_mask_checkpoint),
         "--valid-mask-threshold",
         str(args.closed_loop_valid_mask_threshold),
         "--valid-mask-consecutive",
@@ -764,6 +779,7 @@ def _append_closed_loop_metric(run_dir: Path, checkpoint: str, report: dict[str,
         "step": _checkpoint_to_step(checkpoint),
         "checkpoint": checkpoint,
         "test_id": report.get("closed_loop_test_id", "default"),
+        "loop_validation_id": report.get("closed_loop_test_id", "default"),
         "operation": report.get("operation"),
         "success_rate": report.get("success_rate"),
         "env_success_rate": report.get("env_success_rate"),
@@ -978,11 +994,14 @@ def _training_reference_camera_frames_by_episode(
         episode_indices = [int(value) for value in sorted(df["episode_index"].dropna().unique())[:max_episodes]]
     except Exception:
         return {}
-    result: dict[str, dict[int, list[tuple[Any, str]]]] = {camera: {} for camera in camera_columns}
+    sidecars = _reference_visual_servo_sidecars(dataset_root)
+    result: dict[str, dict[int, list[tuple[Any, str, bool, dict[str, Any] | None]]]] = {
+        camera: {} for camera in camera_columns
+    }
     for episode_index in episode_indices:
         episode_df = df[df["episode_index"] == episode_index].head(max_frames_per_episode)
         for camera_label, column in camera_columns.items():
-            frames: list[tuple[Any, str]] = []
+            frames: list[tuple[Any, str, bool, dict[str, Any] | None]] = []
             for _, row in episode_df.iterrows():
                 image = _decode_lerobot_image_cell(row.get(column))
                 if image is None:
@@ -991,10 +1010,44 @@ def _training_reference_camera_frames_by_episode(
                     f"train ep {_format_frame_index(row.get('episode_index'))} | "
                     f"frame {_format_frame_index(row.get('frame_index'))}"
                 )
-                frames.append((image, label))
+                frames.append((image, label, False, _reference_target_overlay(sidecars.get(camera_label), row, camera_label)))
             if frames:
                 result[camera_label][episode_index] = frames
     return {camera: episodes for camera, episodes in result.items() if episodes}
+
+
+def _reference_visual_servo_sidecars(dataset_root: Path) -> dict[str, Any]:
+    path = dataset_root / "meta" / "visual_servo_labels" / "camera1_camera2_green_cube.parquet"
+    if not path.exists():
+        return {}
+    try:
+        import pandas as pd
+
+        table = pd.read_parquet(path)
+        return {
+            camera: table.set_index(["episode_index", "frame_index"])
+            for camera in ("camera1", "camera2")
+            if f"{camera}_dx_norm" in table.columns
+        }
+    except Exception:
+        return {}
+
+
+def _reference_target_overlay(sidecar: Any, row: Any, camera: str) -> dict[str, Any] | None:
+    if sidecar is None:
+        return None
+    try:
+        target = sidecar.loc[(int(row.get("episode_index")), int(row.get("frame_index")))]
+        if not bool(target.get(f"{camera}_visible")):
+            return None
+        return {
+            "dx_norm": float(target.get(f"{camera}_dx_norm")),
+            "dy_norm": float(target.get(f"{camera}_dy_norm")),
+            "label": "gt",
+            "color": (255, 210, 0),
+        }
+    except Exception:
+        return None
 
 
 def _decode_lerobot_image_cell(value: Any) -> Any | None:
@@ -1037,7 +1090,7 @@ def _closed_loop_policy_camera_frames_by_episode(
         trace_path = Path(str(trace_path_value))
         if not trace_path.exists():
             continue
-        frames: list[tuple[Path, str]] = []
+        frames: list[tuple[Path, str, bool, dict[str, Any] | None]] = []
         for row in _read_jsonl(trace_path):
             row_episode = row.get("episode", episode_index)
             row_frame = row.get("global_step", row.get("primitive_step", len(frames)))
@@ -1052,12 +1105,52 @@ def _closed_loop_policy_camera_frames_by_episode(
             path = Path(str(image_path))
             if path.exists():
                 is_inference_frame = _is_closed_loop_inference_frame(row_frame, n_action_steps)
-                frames.append((path, _closed_loop_frame_label(row_episode, row_frame, row.get("prompt")), is_inference_frame))
+                frames.append(
+                    (
+                        path,
+                        _closed_loop_frame_label(row_episode, row_frame, row.get("prompt")),
+                        is_inference_frame,
+                        _closed_loop_target_overlay(row, camera_feature),
+                    )
+                )
             if len(frames) >= max_frames_per_episode:
                 break
         if frames:
             episodes[episode_index] = frames
     return episodes
+
+
+def _closed_loop_target_overlay(row: dict[str, Any], camera_feature: str) -> dict[str, Any] | None:
+    camera = "camera1" if camera_feature.endswith("camera1") else "camera2"
+    policy_output = row.get("policy_output")
+    if isinstance(policy_output, dict):
+        target = _closed_loop_target_overlay(policy_output, camera_feature)
+        if target is not None:
+            return target
+    for key in ("visual_servo_prediction", "visual_servo", "target_prediction"):
+        value = row.get(key)
+        if isinstance(value, dict):
+            source = value.get(camera) if isinstance(value.get(camera), dict) else value
+            target = _target_overlay_from_mapping(source, camera=camera, label="pred", color=(0, 220, 255))
+            if target is not None:
+                return target
+    return _target_overlay_from_mapping(row, camera=camera, label="pred", color=(0, 220, 255))
+
+
+def _target_overlay_from_mapping(value: Any, *, camera: str, label: str, color: tuple[int, int, int]) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    dx = value.get(f"{camera}_dx_norm", value.get("dx_norm"))
+    dy = value.get(f"{camera}_dy_norm", value.get("dy_norm"))
+    if dx is None or dy is None:
+        return None
+    visible = value.get(f"{camera}_visible", value.get("visible", True))
+    if not bool(visible):
+        return None
+    try:
+        return {"dx_norm": float(dx), "dy_norm": float(dy), "label": label, "color": color}
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_closed_loop_inference_frame(frame: Any, n_action_steps: int) -> bool:
@@ -1139,7 +1232,7 @@ def _frames_to_tensorboard_video(frames_with_labels: list[tuple[Any, ...]]) -> A
 
         frames = []
         for frame_item in frames_with_labels:
-            path, label, is_inference_frame = _unpack_video_frame_item(frame_item)
+            path, label, is_inference_frame, target = _unpack_video_frame_item(frame_item)
             image = _read_hwc_image(path)
             if image is None:
                 continue
@@ -1148,7 +1241,7 @@ def _frames_to_tensorboard_video(frames_with_labels: list[tuple[Any, ...]]) -> A
                 array = np.repeat(array[:, :, None], 3, axis=2)
             if array.shape[2] > 3:
                 array = array[:, :, :3]
-            array = _overlay_closed_loop_frame_label(array, label, inference_frame=is_inference_frame)
+            array = _overlay_closed_loop_frame_label(array, label, inference_frame=is_inference_frame, target=target)
             frames.append(array.astype("uint8", copy=False))
         if not frames:
             return None
@@ -1165,13 +1258,13 @@ def _image_frames_to_tensorboard_video(frames_with_labels: list[tuple[Any, ...]]
 
         frames = []
         for frame_item in frames_with_labels:
-            image, label, is_inference_frame = _unpack_video_frame_item(frame_item)
+            image, label, is_inference_frame, target = _unpack_video_frame_item(frame_item)
             array = np.asarray(image)
             if array.ndim == 2:
                 array = np.repeat(array[:, :, None], 3, axis=2)
             if array.shape[2] > 3:
                 array = array[:, :, :3]
-            array = _overlay_closed_loop_frame_label(array, label, inference_frame=is_inference_frame)
+            array = _overlay_closed_loop_frame_label(array, label, inference_frame=is_inference_frame, target=target)
             frames.append(array.astype("uint8", copy=False))
         if not frames:
             return None
@@ -1215,7 +1308,7 @@ def _video_frame_item_to_array(frame_item: tuple[Any, ...], *, title: str) -> An
     try:
         import numpy as np
 
-        source, label, is_inference_frame = _unpack_video_frame_item(frame_item)
+        source, label, is_inference_frame, target = _unpack_video_frame_item(frame_item)
         if isinstance(source, Path):
             image = _read_hwc_image(source)
         else:
@@ -1231,18 +1324,26 @@ def _video_frame_item_to_array(frame_item: tuple[Any, ...], *, title: str) -> An
             array,
             f"{title}\n{label}",
             inference_frame=is_inference_frame,
+            target=target,
         ).astype("uint8", copy=False)
     except Exception:
         return None
 
 
-def _unpack_video_frame_item(frame_item: tuple[Any, ...]) -> tuple[Any, str, bool]:
+def _unpack_video_frame_item(frame_item: tuple[Any, ...]) -> tuple[Any, str, bool, dict[str, Any] | None]:
     if len(frame_item) >= 3:
-        return frame_item[0], str(frame_item[1]), bool(frame_item[2])
-    return frame_item[0], str(frame_item[1]), False
+        target = frame_item[3] if len(frame_item) >= 4 and isinstance(frame_item[3], dict) else None
+        return frame_item[0], str(frame_item[1]), bool(frame_item[2]), target
+    return frame_item[0], str(frame_item[1]), False, None
 
 
-def _overlay_closed_loop_frame_label(array: Any, label: str, *, inference_frame: bool = False) -> Any:
+def _overlay_closed_loop_frame_label(
+    array: Any,
+    label: str,
+    *,
+    inference_frame: bool = False,
+    target: dict[str, Any] | None = None,
+) -> Any:
     try:
         import numpy as np
         from PIL import Image, ImageDraw, ImageFont
@@ -1257,6 +1358,7 @@ def _overlay_closed_loop_frame_label(array: Any, label: str, *, inference_frame:
                     outline=(0, 255, 0),
                 )
         font = ImageFont.load_default()
+        _draw_target_overlay(draw, image.width, image.height, target, font=font)
         bbox = draw.multiline_textbbox((0, 0), label, font=font, spacing=1)
         pad_x = 3
         pad_y = 2
@@ -1273,6 +1375,27 @@ def _overlay_closed_loop_frame_label(array: Any, label: str, *, inference_frame:
         return np.asarray(image)
     except Exception:
         return array
+
+
+def _draw_target_overlay(draw: Any, width: int, height: int, target: dict[str, Any] | None, *, font: Any) -> None:
+    if not target:
+        return
+    try:
+        dx = float(target["dx_norm"])
+        dy = float(target["dy_norm"])
+        x = int(round(((width - 1) * 0.5) + dx * ((width - 1) * 0.5)))
+        y = int(round(((height - 1) * 0.5) + dy * ((height - 1) * 0.5)))
+        x = max(0, min(width - 1, x))
+        y = max(0, min(height - 1, y))
+        color = tuple(target.get("color") or (255, 210, 0))
+        label = str(target.get("label") or "target")
+        radius = max(5, min(width, height) // 28)
+        draw.line((x - radius, y, x + radius, y), fill=color, width=2)
+        draw.line((x, y - radius, x, y + radius), fill=color, width=2)
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius), outline=color, width=2)
+        draw.text((min(width - 1, x + radius + 2), max(0, y - radius - 2)), label, fill=color, font=font)
+    except Exception:
+        return
 
 
 def _read_hwc_image(path: Path) -> Any | None:

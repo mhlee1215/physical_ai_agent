@@ -18,6 +18,7 @@ from physical_ai_agent.policies.smolvla_real import (
     _policy_device_metadata,
     _tensor_to_float_list,
 )
+from physical_ai_agent.policies.lerobot_policy_runner import load_lerobot_policy_runner
 from physical_ai_agent.sim.so101_nexus_env import DEFAULT_SO101_ENV_ID, SO101NexusEnv
 
 
@@ -136,6 +137,7 @@ def run_closed_loop_plan(
     start_contract: str = "default_reset",
     start_report_path: Path | None = None,
     precondition_plan: SO101ToolPlan | None = None,
+    action_contract_mode: str = "processor",
     env_factory: EnvFactory = SO101NexusEnv,
     policy_loader: PolicyLoader = _load_pretrained_policy,
     batch_builder: BatchBuilder = _build_batch_for_policy,
@@ -144,11 +146,10 @@ def run_closed_loop_plan(
     output_dir.mkdir(parents=True, exist_ok=True)
     primitive_policy_paths = primitive_policy_paths or {}
     if valid_mask_head is None:
-        if valid_mask_checkpoint is None:
-            raise ValueError("Qwen closed-loop tests require valid_mask_checkpoint")
-        from physical_ai_agent.policies.so101_valid_mask import load_valid_mask_head
+        if valid_mask_checkpoint is not None:
+            from physical_ai_agent.policies.so101_valid_mask import load_valid_mask_head
 
-        valid_mask_head = load_valid_mask_head(valid_mask_checkpoint, device=None if device == "auto" else device)
+            valid_mask_head = load_valid_mask_head(valid_mask_checkpoint, device=None if device == "auto" else device)
     precondition_calls = list(precondition_plan.calls) if precondition_plan is not None else []
     routing_plan = _routing_plan_with_preconditions(plan, precondition_calls)
     policy_routes = resolve_policy_routes(
@@ -156,6 +157,7 @@ def run_closed_loop_plan(
         default_policy_path=default_policy_path,
         primitive_policy_paths=primitive_policy_paths,
     )
+    dataset_action_bounds = _dataset_action_bounds_for_policy_routes(policy_routes)
     route_by_primitive = {route.primitive_id: route.policy_path for route in policy_routes}
     policy_cache: dict[str, Any] = {}
     policy_metadata: dict[str, dict[str, Any]] = {}
@@ -189,6 +191,8 @@ def run_closed_loop_plan(
                     start_contract=start_contract,
                     start_report_path=start_report_path,
                     precondition_calls=precondition_calls,
+                    action_contract_mode=action_contract_mode,
+                    dataset_action_bounds=dataset_action_bounds,
                     batch_builder=batch_builder,
                 )
             )
@@ -227,14 +231,20 @@ def run_closed_loop_plan(
             "checkpoint": str(valid_mask_checkpoint) if valid_mask_checkpoint else None,
             "threshold": float(valid_mask_threshold),
             "consecutive": int(valid_mask_consecutive),
-            "required_for_loop_test": True,
+            "required_for_loop_test": valid_mask_head is not None,
+            "mode": "valid_mask" if valid_mask_head is not None else "fixed_horizon",
         },
         "policy_metadata": policy_metadata,
         "policy_rollout_config": _merged_policy_rollout_config(policy_metadata),
+        "action_contract_mode": action_contract_mode,
         "loop_artifact_config": asdict(artifact_config or LoopArtifactConfig()),
         "episodes": episodes_out,
         "report_path": str(output_dir / "qwen_closed_loop_eval_report.json"),
     }
+    report["action_contract"] = _action_contract_summary(
+        episodes_out=episodes_out,
+        policy_routes=policy_routes,
+    )
     _write_report(report, Path(report["report_path"]))
     if blocker:
         (output_dir / "qwen_closed_loop_blocker.md").write_text(
@@ -269,6 +279,8 @@ def _run_episode(
     start_contract: str,
     start_report_path: Path | None,
     precondition_calls: list[SO101PrimitiveCall],
+    action_contract_mode: str,
+    dataset_action_bounds: dict[str, Any],
     batch_builder: BatchBuilder,
 ) -> dict[str, Any]:
     env = env_factory(env_id, None)
@@ -314,6 +326,8 @@ def _run_episode(
                 valid_mask_head=valid_mask_head,
                 valid_mask_threshold=valid_mask_threshold,
                 valid_mask_consecutive=valid_mask_consecutive,
+                action_contract_mode=action_contract_mode,
+                dataset_action_bounds=dataset_action_bounds,
                 batch_builder=batch_builder,
             )
             precondition_summaries.append(pre_summary)
@@ -325,7 +339,7 @@ def _run_episode(
             if terminated or truncated:
                 break
             policy_path = route_by_primitive[call.primitive_id]
-            policy = _policy_for_route(
+            policy_executor = _policy_for_route(
                 policy_cache=policy_cache,
                 policy_metadata=policy_metadata,
                 policy_loader=policy_loader,
@@ -333,6 +347,7 @@ def _run_episode(
                 local_files_only=local_files_only,
                 device=device,
             )
+            policy = _policy_model(policy_executor)
             _override_policy_rollout_config(
                 policy,
                 n_action_steps=policy_n_action_steps,
@@ -355,101 +370,142 @@ def _run_episode(
                 if max_steps_per_primitive is not None
                 else int(call.max_steps)
             )
-            valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget(
-                policy=policy,
-                obs=obs,
-                camera_pixels=camera_pixels,
-                instruction=call.prompt,
-                local_files_only=local_files_only,
-                batch_builder=batch_builder,
-                valid_mask_head=valid_mask_head,
-                max_horizon=step_budget,
-                threshold=valid_mask_threshold,
-                consecutive=valid_mask_consecutive,
-            )
-            step_budget = min(step_budget, valid_mask_budget)
-            for primitive_step in range(step_budget):
-                record_media = _should_render_media(artifact_config, primitive_step)
-                camera_pixels = _render_policy_cameras(env, renderers)
-                _require_policy_cameras(camera_pixels)
-                policy_input_images = (
-                    _write_policy_input_images(
+            valid_mask_decisions: list[dict[str, Any]] = []
+            valid_mask_stop_reason = "max_horizon"
+            while primitive_records < step_budget:
+                remaining_budget = step_budget - primitive_records
+                chunk_horizon = _valid_mask_requery_horizon(
+                    policy_rollout_config=policy_rollout_config,
+                    policy_n_action_steps=policy_n_action_steps,
+                    remaining_budget=remaining_budget,
+                )
+                if valid_mask_head is None:
+                    valid_mask_budget = chunk_horizon
+                    valid_mask_reason = "fixed_horizon"
+                    valid_mask_probs = []
+                else:
+                    valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget(
+                        policy=policy,
+                        obs=obs,
                         camera_pixels=camera_pixels,
-                        episode_media_dir=episode_media_dir,
-                        global_step=global_step,
+                        instruction=call.prompt,
+                        local_files_only=local_files_only,
+                        batch_builder=batch_builder,
+                        valid_mask_head=valid_mask_head,
+                        max_horizon=chunk_horizon,
+                        threshold=valid_mask_threshold,
+                        consecutive=valid_mask_consecutive,
                     )
-                    if record_media
-                    else {}
-                )
-                batch, image_feature_mapping = batch_builder(
-                    policy,
-                    obs,
-                    camera_pixels=camera_pixels,
-                    instruction=call.prompt,
-                    local_files_only=local_files_only,
-                )
-                raw_action = policy.select_action(batch)
-                action = _clip_action(_action_to_float_list(raw_action), action_dim)
-                obs, reward, terminated, truncated, info = env.step(action)
-                robot_frame_path = (
-                    _write_robot_frame(
-                        env=env,
-                        renderers=renderers,
-                        episode_media_dir=episode_media_dir,
-                        global_step=global_step,
-                    )
-                    if record_media
-                    else None
-                )
-                final_info = dict(info)
-                total_reward += float(reward)
-                primitive_reward += float(reward)
-                row = {
-                    "episode": episode,
-                    "global_step": global_step,
-                    "primitive_step": primitive_step,
-                    "fn": call.fn,
-                    "primitive_id": call.primitive_id,
-                    "prompt": call.prompt,
-                    "policy_path": policy_path,
-                    "policy_rollout_config": policy_rollout_config,
-                    "valid_mask": {
-                        "budget": int(step_budget),
-                        "reason": valid_mask_reason,
-                        "probs": valid_mask_probs,
-                    },
-                    "observation": obs,
-                    "sim_snapshot": _snapshot_sim_state_or_none(env),
-                    "action": action,
-                    "reward": float(reward),
-                    "terminated": bool(terminated),
-                    "truncated": bool(truncated),
-                    "info": _jsonable_info(info),
-                    "image_feature_mapping": image_feature_mapping,
-                    "policy_input_camera_names": sorted(camera_pixels),
-                    "media": {
-                        "policy_input_images": policy_input_images,
-                        "robot_frame": robot_frame_path,
-                        "render_mode": "inline" if record_media else "deferred",
-                    },
-                    "render_replay": {
-                        "env_id": env_id,
-                        "env_config": env_config,
-                        "start_contract": start_contract,
-                        "seed": seed,
-                        "artifact_width": artifact_config.width,
-                        "artifact_height": artifact_config.height,
-                        "artifact_fps": artifact_config.fps,
-                        "artifact_every_n_steps": artifact_config.every_n_steps,
-                    },
+                execute_steps = min(remaining_budget, chunk_horizon, valid_mask_budget)
+                valid_mask_decision = {
+                    "chunk_start_primitive_step": int(primitive_records),
+                    "chunk_start_global_step": int(global_step),
+                    "budget": int(execute_steps),
+                    "chunk_horizon": int(chunk_horizon),
+                    "reason": valid_mask_reason,
+                    "probs": valid_mask_probs,
                 }
-                primitive_row_indexes.append(len(records))
-                if robot_frame_path:
-                    primitive_frame_paths.append(robot_frame_path)
-                records.append(row)
-                primitive_records += 1
-                global_step += 1
+                valid_mask_decisions.append(valid_mask_decision)
+                for _chunk_step in range(execute_steps):
+                    primitive_step = primitive_records
+                    record_media = _should_render_media(artifact_config, primitive_step)
+                    camera_pixels = _render_policy_cameras(env, renderers)
+                    _require_policy_cameras(camera_pixels)
+                    policy_input_images = (
+                        _write_policy_input_images(
+                            camera_pixels=camera_pixels,
+                            episode_media_dir=episode_media_dir,
+                            global_step=global_step,
+                        )
+                        if record_media
+                        else {}
+                    )
+                    batch, image_feature_mapping = batch_builder(
+                        policy,
+                        obs,
+                        camera_pixels=camera_pixels,
+                        instruction=call.prompt,
+                        local_files_only=local_files_only,
+                    )
+                    processed_action = _select_env_action_with_trace(
+                        policy_executor=policy_executor,
+                        policy=policy,
+                        obs=obs,
+                        action_base_qpos=_current_action_qpos(env, obs, action_dim),
+                        camera_pixels=camera_pixels,
+                        instruction=call.prompt,
+                        action_dim=action_dim,
+                        action_contract_mode=action_contract_mode,
+                        dataset_action_bounds=dataset_action_bounds,
+                    )
+                    action = processed_action["action"]
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    robot_frame_path = (
+                        _write_robot_frame(
+                            env=env,
+                            renderers=renderers,
+                            episode_media_dir=episode_media_dir,
+                            global_step=global_step,
+                        )
+                        if record_media
+                        else None
+                    )
+                    final_info = dict(info)
+                    total_reward += float(reward)
+                    primitive_reward += float(reward)
+                    row = {
+                        "episode": episode,
+                        "global_step": global_step,
+                        "primitive_step": primitive_step,
+                        "fn": call.fn,
+                        "primitive_id": call.primitive_id,
+                        "prompt": call.prompt,
+                        "policy_path": policy_path,
+                        "policy_rollout_config": policy_rollout_config,
+                        "valid_mask": valid_mask_decision,
+                        "observation": obs,
+                        "sim_snapshot": _snapshot_sim_state_or_none(env),
+                        "action": action,
+                        "policy_output": {
+                            **processed_action,
+                        },
+                        "reward": float(reward),
+                        "terminated": bool(terminated),
+                        "truncated": bool(truncated),
+                        "info": _jsonable_info(info),
+                        "image_feature_mapping": image_feature_mapping,
+                        "policy_input_camera_names": sorted(camera_pixels),
+                        "media": {
+                            "policy_input_images": policy_input_images,
+                            "robot_frame": robot_frame_path,
+                            "render_mode": "inline" if record_media else "deferred",
+                        },
+                        "render_replay": {
+                            "env_id": env_id,
+                            "env_config": env_config,
+                            "start_contract": start_contract,
+                            "seed": seed,
+                            "artifact_width": artifact_config.width,
+                            "artifact_height": artifact_config.height,
+                            "artifact_fps": artifact_config.fps,
+                            "artifact_every_n_steps": artifact_config.every_n_steps,
+                        },
+                    }
+                    primitive_row_indexes.append(len(records))
+                    if robot_frame_path:
+                        primitive_frame_paths.append(robot_frame_path)
+                    records.append(row)
+                    primitive_records += 1
+                    global_step += 1
+                    if action_contract_mode == "visual_servo_delta_q" and _visual_servo_should_stop(processed_action):
+                        valid_mask_stop_reason = "visual_servo_stop"
+                        break
+                    if terminated or truncated:
+                        break
                 if terminated or truncated:
+                    break
+                if valid_mask_reason == "valid_mask_stop":
+                    valid_mask_stop_reason = "valid_mask_stop"
                     break
             primitive_videos = _write_primitive_videos(
                 frame_paths=primitive_frame_paths,
@@ -469,9 +525,9 @@ def _run_episode(
                     "policy_path": policy_path,
                     "policy_rollout_config": policy_rollout_config,
                     "valid_mask": {
-                        "budget": int(step_budget),
-                        "reason": valid_mask_reason,
-                        "probs": valid_mask_probs,
+                        "budget": int(primitive_records),
+                        "reason": valid_mask_stop_reason,
+                        "decisions": valid_mask_decisions,
                     },
                     "steps": primitive_records,
                     "reward": primitive_reward,
@@ -506,7 +562,121 @@ def _run_episode(
         "primitive_summaries": primitive_summaries,
         "trace_path": str(trace_path),
         "media_root": str(episode_media_dir) if artifact_config.render_media else None,
+        "action_space": _action_space_summary(env),
     }
+
+
+def _action_space_summary(env: Any) -> dict[str, Any]:
+    action_space = getattr(env, "action_space", None)
+    if action_space is None:
+        return {}
+    return {
+        "low": _action_to_float_list(getattr(action_space, "low", [])),
+        "high": _action_to_float_list(getattr(action_space, "high", [])),
+    }
+
+
+def _action_contract_summary(
+    *,
+    episodes_out: list[dict[str, Any]],
+    policy_routes: list[PrimitivePolicyRoute],
+) -> dict[str, Any]:
+    dataset_bounds = _dataset_action_bounds_for_policy_routes(policy_routes)
+    env_bounds = next((episode.get("action_space") for episode in episodes_out if episode.get("action_space")), {})
+    traces = [Path(str(episode.get("trace_path"))) for episode in episodes_out if episode.get("trace_path")]
+    records = []
+    for trace_path in traces:
+        if trace_path.exists():
+            records.extend(_read_jsonl(trace_path))
+    fields = {
+        "env_action": lambda row: row.get("action"),
+        "processor_raw_action": lambda row: (row.get("policy_output") or {}).get("processor_raw_action"),
+        "processor_postprocessed_action": lambda row: (row.get("policy_output") or {}).get("processor_postprocessed_action"),
+    }
+    summary = {
+        "dataset_action_bounds": dataset_bounds,
+        "env_action_bounds": env_bounds,
+        "record_count": len(records),
+        "fields": {},
+    }
+    for name, getter in fields.items():
+        values = [getter(row) for row in records]
+        values = [value for value in values if isinstance(value, list) and value]
+        summary["fields"][name] = _action_values_summary(
+            values,
+            dataset_bounds=dataset_bounds,
+            env_bounds=env_bounds,
+        )
+    return summary
+
+
+def _dataset_action_bounds_for_policy_routes(policy_routes: list[PrimitivePolicyRoute]) -> dict[str, Any]:
+    for route in policy_routes:
+        bounds = _dataset_action_bounds_for_policy_path(Path(route.policy_path))
+        if bounds:
+            return bounds
+    return {}
+
+
+def _dataset_action_bounds_for_policy_path(policy_path: Path) -> dict[str, Any]:
+    train_config_path = policy_path / "train_config.json"
+    if not train_config_path.exists():
+        return {}
+    try:
+        train_config = json.loads(train_config_path.read_text(encoding="utf-8"))
+        dataset_root = Path(str((train_config.get("dataset") or {}).get("root") or ""))
+        if not dataset_root.is_absolute():
+            dataset_root = Path.cwd() / dataset_root
+        stats_path = dataset_root / "meta" / "stats.json"
+        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+        action_stats = stats.get("action") or {}
+        return {
+            "dataset_root": str(dataset_root),
+            "min": [float(value) for value in action_stats.get("min", [])],
+            "max": [float(value) for value in action_stats.get("max", [])],
+            "mean": [float(value) for value in action_stats.get("mean", [])],
+            "std": [float(value) for value in action_stats.get("std", [])],
+        }
+    except Exception:
+        return {}
+
+
+def _action_values_summary(
+    values: list[list[float]],
+    *,
+    dataset_bounds: dict[str, Any],
+    env_bounds: dict[str, Any],
+) -> dict[str, Any]:
+    if not values:
+        return {"count": 0}
+    try:
+        import numpy as np
+
+        array = np.asarray(values, dtype=float)
+        summary: dict[str, Any] = {
+            "count": int(array.shape[0]),
+            "dim": int(array.shape[1]) if array.ndim == 2 else None,
+            "min": np.round(array.min(axis=0), 6).tolist(),
+            "max": np.round(array.max(axis=0), 6).tolist(),
+            "mean": np.round(array.mean(axis=0), 6).tolist(),
+            "std": np.round(array.std(axis=0), 6).tolist(),
+        }
+        for label, bounds in (("dataset", dataset_bounds), ("env", env_bounds)):
+            low = bounds.get("min") or bounds.get("low")
+            high = bounds.get("max") or bounds.get("high")
+            if not low or not high:
+                continue
+            low_array = np.asarray(low, dtype=float)[: array.shape[1]]
+            high_array = np.asarray(high, dtype=float)[: array.shape[1]]
+            summary[f"below_{label}_min_ratio"] = np.round((array < low_array).mean(axis=0), 6).tolist()
+            summary[f"above_{label}_max_ratio"] = np.round((array > high_array).mean(axis=0), 6).tolist()
+            summary[f"any_outside_{label}_range_ratio"] = round(
+                float(((array < low_array) | (array > high_array)).any(axis=1).mean()),
+                6,
+            )
+        return summary
+    except Exception as exc:
+        return {"count": len(values), "error": _short_error(exc)}
 
 
 def _policy_for_route(
@@ -519,10 +689,231 @@ def _policy_for_route(
     device: str,
 ) -> Any:
     if policy_path not in policy_cache:
-        policy = policy_loader(policy_path, local_files_only, device)
-        policy_cache[policy_path] = policy
-        policy_metadata[policy_path] = _policy_device_metadata(policy)
+        runner = _load_policy_runner_or_legacy_policy(policy_path, local_files_only, device, policy_loader)
+        policy_cache[policy_path] = runner
+        policy_metadata[policy_path] = _policy_execution_metadata(runner)
     return policy_cache[policy_path]
+
+
+def _load_policy_runner_or_legacy_policy(
+    policy_path: str,
+    local_files_only: bool,
+    device: str,
+    policy_loader: PolicyLoader,
+) -> Any:
+    try:
+        return load_lerobot_policy_runner(
+            policy_path,
+            device=_selected_policy_device(device),
+            policy_type="smolvla",
+            local_files_only=local_files_only,
+        )
+    except Exception:
+        return policy_loader(policy_path, local_files_only, device)
+
+
+def _selected_policy_device(device: str) -> str:
+    if str(device).lower() != "auto":
+        return str(device)
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def _policy_model(executor: Any) -> Any:
+    return getattr(executor, "policy", executor)
+
+
+def _policy_execution_metadata(executor: Any) -> dict[str, Any]:
+    policy = _policy_model(executor)
+    metadata = _policy_device_metadata(policy)
+    metadata["processor_source"] = getattr(executor, "processor_source", "legacy_policy_no_processors")
+    metadata["preprocessor_steps"] = [type(step).__name__ for step in getattr(getattr(executor, "preprocessor", None), "steps", [])]
+    metadata["postprocessor_steps"] = [type(step).__name__ for step in getattr(getattr(executor, "postprocessor", None), "steps", [])]
+    return metadata
+
+
+def _select_env_action_with_trace(
+    *,
+    policy_executor: Any,
+    policy: Any,
+    obs: Any,
+    action_base_qpos: Any | None = None,
+    camera_pixels: dict[str, Any],
+    instruction: str | None,
+    action_dim: int,
+    action_contract_mode: str,
+    dataset_action_bounds: dict[str, Any],
+) -> dict[str, Any]:
+    if action_contract_mode == "legacy" or not hasattr(policy_executor, "select_action_with_trace"):
+        raw_action = policy.select_action(
+            _build_batch_for_policy(
+                policy,
+                obs,
+                camera_pixels=camera_pixels,
+                instruction=instruction,
+                local_files_only=True,
+            )[0]
+        )
+        action = _clip_action(_action_to_float_list(raw_action), action_dim)
+        return {
+            "action": action,
+            "processor_raw_action": action,
+            "processor_postprocessed_action": action,
+            "processor_source": "legacy_policy_no_processors",
+            "preprocessor_steps": [],
+            "postprocessor_steps": [],
+            "action_contract_mode": "legacy",
+        }
+    if action_contract_mode not in {"processor", "processor_dataset_clamp", "processor_delta_q", "visual_servo_delta_q"}:
+        raise ValueError(f"unsupported action_contract_mode={action_contract_mode!r}")
+    if hasattr(policy_executor, "select_action_with_trace"):
+        raw_observation = _build_raw_lerobot_observation_for_runner(
+            policy=policy,
+            observation=obs,
+            camera_pixels=camera_pixels,
+            instruction=instruction,
+        )
+        if action_contract_mode == "visual_servo_delta_q":
+            visual_trace = policy_executor.predict_visual_servo_with_trace(raw_observation)
+            delta_q_action = _clip_action(_action_to_float_list(visual_trace["delta_q"]), action_dim)
+            action = _action_from_delta_q(action_base_qpos or obs, delta_q_action, action_dim=action_dim)
+            return {
+                "action": action,
+                "delta_q_action": delta_q_action,
+                "visual_servo_prediction": visual_trace,
+                "processor_source": visual_trace.get("processor_source"),
+                "preprocessor_steps": [],
+                "postprocessor_steps": [],
+                "action_contract_mode": action_contract_mode,
+            }
+        trace = policy_executor.select_action_with_trace(raw_observation)
+        raw_action = _clip_action(_action_to_float_list(trace["raw_action"]), action_dim)
+        postprocessed_action = _clip_action(_action_to_float_list(trace["postprocessed_action"]), action_dim)
+        action = _clip_action(_action_to_float_list(trace["action"]), action_dim)
+        unclamped_action = list(action)
+        delta_q_action = None
+        if action_contract_mode == "processor_delta_q":
+            delta_q_action = list(action)
+            action = _action_from_delta_q(action_base_qpos or obs, delta_q_action, action_dim=action_dim)
+        if action_contract_mode == "processor_dataset_clamp":
+            action = _clamp_action_to_bounds(action, dataset_action_bounds)
+        return {
+            "action": action,
+            "delta_q_action": delta_q_action,
+            "processor_raw_action": raw_action,
+            "processor_postprocessed_action": postprocessed_action,
+            "unclamped_env_action": unclamped_action,
+            "processor_source": trace.get("processor_source"),
+            "preprocessor_steps": trace.get("preprocessor_steps"),
+            "postprocessor_steps": trace.get("postprocessor_steps"),
+            "action_contract_mode": action_contract_mode,
+        }
+    raise RuntimeError("unreachable action contract path")
+
+
+def _visual_servo_should_stop(processed_action: dict[str, Any]) -> bool:
+    prediction = processed_action.get("visual_servo_prediction")
+    if not isinstance(prediction, dict):
+        return False
+    camera2 = prediction.get("camera2")
+    if not isinstance(camera2, dict):
+        return False
+    try:
+        return (
+            float(prediction.get("stop_prob", 0.0)) >= 0.7
+            and abs(float(camera2.get("dx_norm", 1.0))) <= 0.08
+            and abs(float(camera2.get("dy_norm", 1.0))) <= 0.08
+            and abs(float(camera2.get("edge_angle_error", 1.0))) <= 0.12
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _action_from_delta_q(obs: Any, delta_q: list[float], *, action_dim: int) -> list[float]:
+    state = _action_to_float_list(obs)
+    if len(state) < action_dim:
+        raise ValueError(f"observation state has {len(state)} dims, expected at least {action_dim}")
+    return [float(state[index] + delta_q[index]) for index in range(action_dim)]
+
+
+def _current_action_qpos(env: Any, fallback_obs: Any, action_dim: int) -> list[float]:
+    gym_env = _gym_env_or_none(env)
+    if gym_env is None:
+        return _action_to_float_list(fallback_obs)[:action_dim]
+    try:
+        qpos = _current_sim_qpos(gym_env)
+    except Exception:  # noqa: BLE001
+        return _action_to_float_list(fallback_obs)[:action_dim]
+    if len(qpos) < action_dim:
+        return _action_to_float_list(fallback_obs)[:action_dim]
+    return qpos[:action_dim]
+
+
+def _clamp_action_to_bounds(action: list[float], bounds: dict[str, Any]) -> list[float]:
+    low = bounds.get("min")
+    high = bounds.get("max")
+    if not low or not high:
+        return action
+    clamped = []
+    for index, value in enumerate(action):
+        if index >= len(low) or index >= len(high):
+            clamped.append(float(value))
+            continue
+        clamped.append(min(max(float(value), float(low[index])), float(high[index])))
+    return clamped
+
+
+def _build_raw_lerobot_observation_for_runner(
+    *,
+    policy: Any,
+    observation: Any,
+    camera_pixels: dict[str, Any],
+    instruction: str | None,
+) -> dict[str, Any]:
+    import torch
+
+    config = policy.config
+    state_dim = config.robot_state_feature.shape[0] if config.robot_state_feature else min(32, len(observation))
+    state = torch.zeros(state_dim, dtype=torch.float32)
+    source = torch.tensor(list(observation)[:state_dim], dtype=torch.float32)
+    state[: len(source)] = source
+    raw_observation: dict[str, Any] = {
+        "observation.state": state,
+        "task": instruction or "",
+    }
+    for index, (key, feature) in enumerate(config.image_features.items()):
+        source_name = _source_camera_name_for_feature(index, camera_pixels)
+        if source_name in camera_pixels:
+            raw_observation[key] = _pixels_to_lerobot_image_tensor(camera_pixels[source_name], feature.shape)
+    return raw_observation
+
+
+def _source_camera_name_for_feature(index: int, camera_pixels: dict[str, Any]) -> str:
+    preferred = ["egocentric_cam", "wrist_cam", "wrist_cam"]
+    if index < len(preferred):
+        return preferred[index]
+    return next(iter(camera_pixels), "zero")
+
+
+def _pixels_to_lerobot_image_tensor(pixels: Any, feature_shape: tuple[int, ...]) -> Any:
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    channels, height, width = feature_shape
+    if channels != 3:
+        raise ValueError(f"Expected RGB image feature with 3 channels, got {feature_shape}")
+    image = Image.fromarray(pixels).convert("RGB").resize((width, height))
+    array = np.asarray(image, dtype=np.float32) / 255.0
+    return torch.from_numpy(array).permute(2, 0, 1).contiguous()
 
 
 def _run_precondition_call(
@@ -544,10 +935,12 @@ def _run_precondition_call(
     valid_mask_head: Any,
     valid_mask_threshold: float,
     valid_mask_consecutive: int,
+    action_contract_mode: str,
+    dataset_action_bounds: dict[str, Any],
     batch_builder: BatchBuilder,
 ) -> tuple[dict[str, Any], Any, float, dict[str, Any], bool, bool]:
     policy_path = route_by_primitive[call.primitive_id]
-    policy = _policy_for_route(
+    policy_executor = _policy_for_route(
         policy_cache=policy_cache,
         policy_metadata=policy_metadata,
         policy_loader=policy_loader,
@@ -555,6 +948,7 @@ def _run_precondition_call(
         local_files_only=local_files_only,
         device=device,
     )
+    policy = _policy_model(policy_executor)
     _override_policy_rollout_config(
         policy,
         n_action_steps=policy_n_action_steps,
@@ -571,39 +965,70 @@ def _run_precondition_call(
         if max_steps_per_primitive is not None
         else int(call.max_steps)
     )
-    valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget(
-        policy=policy,
-        obs=obs,
-        camera_pixels=camera_pixels,
-        instruction=call.prompt,
-        local_files_only=local_files_only,
-        batch_builder=batch_builder,
-        valid_mask_head=valid_mask_head,
-        max_horizon=step_budget,
-        threshold=valid_mask_threshold,
-        consecutive=valid_mask_consecutive,
-    )
-    step_budget = min(step_budget, valid_mask_budget)
+    valid_mask_decisions: list[dict[str, Any]] = []
+    valid_mask_stop_reason = "max_horizon"
     total_reward = 0.0
     final_info: dict[str, Any] = {}
     terminated = False
     truncated = False
-    for _primitive_step in range(step_budget):
-        camera_pixels = _render_policy_cameras(env, renderers)
-        _require_policy_cameras(camera_pixels)
-        batch, _image_feature_mapping = batch_builder(
-            policy,
-            obs,
-            camera_pixels=camera_pixels,
-            instruction=call.prompt,
-            local_files_only=local_files_only,
+    primitive_steps = 0
+    while primitive_steps < step_budget:
+        remaining_budget = step_budget - primitive_steps
+        chunk_horizon = _valid_mask_requery_horizon(
+            policy_rollout_config=policy_rollout_config,
+            policy_n_action_steps=policy_n_action_steps,
+            remaining_budget=remaining_budget,
         )
-        raw_action = policy.select_action(batch)
-        action = _clip_action(_action_to_float_list(raw_action), action_dim)
-        obs, reward, terminated, truncated, info = env.step(action)
-        final_info = dict(info)
-        total_reward += float(reward)
+        if valid_mask_head is None:
+            valid_mask_budget = chunk_horizon
+            valid_mask_reason = "fixed_horizon"
+            valid_mask_probs = []
+        else:
+            valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget(
+                policy=policy,
+                obs=obs,
+                camera_pixels=camera_pixels,
+                instruction=call.prompt,
+                local_files_only=local_files_only,
+                batch_builder=batch_builder,
+                valid_mask_head=valid_mask_head,
+                max_horizon=chunk_horizon,
+                threshold=valid_mask_threshold,
+                consecutive=valid_mask_consecutive,
+            )
+        execute_steps = min(remaining_budget, chunk_horizon, valid_mask_budget)
+        valid_mask_decision = {
+            "chunk_start_primitive_step": int(primitive_steps),
+            "budget": int(execute_steps),
+            "chunk_horizon": int(chunk_horizon),
+            "reason": valid_mask_reason,
+            "probs": valid_mask_probs,
+        }
+        valid_mask_decisions.append(valid_mask_decision)
+        for _chunk_step in range(execute_steps):
+            camera_pixels = _render_policy_cameras(env, renderers)
+            _require_policy_cameras(camera_pixels)
+            action = _select_env_action_with_trace(
+                policy_executor=policy_executor,
+                policy=policy,
+                obs=obs,
+                action_base_qpos=_current_action_qpos(env, obs, action_dim),
+                camera_pixels=camera_pixels,
+                instruction=call.prompt,
+                action_dim=action_dim,
+                action_contract_mode=action_contract_mode,
+                dataset_action_bounds=dataset_action_bounds,
+            )["action"]
+            obs, reward, terminated, truncated, info = env.step(action)
+            final_info = dict(info)
+            total_reward += float(reward)
+            primitive_steps += 1
+            if terminated or truncated:
+                break
         if terminated or truncated:
+            break
+        if valid_mask_reason == "valid_mask_stop":
+            valid_mask_stop_reason = "valid_mask_stop"
             break
     summary = {
         "fn": call.fn,
@@ -612,11 +1037,11 @@ def _run_precondition_call(
         "policy_path": policy_path,
         "policy_rollout_config": policy_rollout_config,
         "valid_mask": {
-            "budget": int(step_budget),
-            "reason": valid_mask_reason,
-            "probs": valid_mask_probs,
+            "budget": int(primitive_steps),
+            "reason": valid_mask_stop_reason,
+            "decisions": valid_mask_decisions,
         },
-        "steps": int(step_budget),
+        "steps": int(primitive_steps),
         "reward": total_reward,
         "terminated": bool(terminated),
         "truncated": bool(truncated),
@@ -987,6 +1412,22 @@ def _valid_mask_primitive_budget(
     return int(horizon), reason, [float(value) for value in valid_probs[: int(max_horizon)]]
 
 
+def _valid_mask_requery_horizon(
+    *,
+    policy_rollout_config: dict[str, Any],
+    policy_n_action_steps: int | None,
+    remaining_budget: int,
+) -> int:
+    candidates = [max(1, int(remaining_budget))]
+    if policy_n_action_steps is not None:
+        candidates.append(max(1, int(policy_n_action_steps)))
+    else:
+        configured_steps = policy_rollout_config.get("n_action_steps")
+        if configured_steps is not None:
+            candidates.append(max(1, int(configured_steps)))
+    return min(candidates)
+
+
 def _execution_horizon_from_valid_probs(
     valid_probs: Any,
     *,
@@ -994,8 +1435,11 @@ def _execution_horizon_from_valid_probs(
     threshold: float,
     consecutive: int,
 ) -> tuple[int, str]:
+    probs = _valid_probs_to_float_list(valid_probs)
     horizon = max(1, int(max_horizon))
-    stop_index = _first_invalid_step(valid_probs, threshold=threshold, consecutive=consecutive)
+    if probs:
+        horizon = min(horizon, len(probs))
+    stop_index = _first_invalid_step(probs[:horizon], threshold=threshold, consecutive=consecutive)
     if stop_index is None:
         return horizon, "max_horizon"
     return max(1, min(horizon, int(stop_index))), "valid_mask_stop"
@@ -1179,6 +1623,10 @@ def _action_to_float_list(value: Any) -> list[float]:
     if isinstance(value, (list, tuple)):
         return [float(item) for item in value]
     return _tensor_to_float_list(value)
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _jsonable_info(info: dict[str, Any]) -> dict[str, Any]:

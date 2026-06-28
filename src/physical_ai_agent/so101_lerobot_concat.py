@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
+import pandas as pd
 import torch
 
 
@@ -103,6 +104,81 @@ class LeRobotConcatDataset(torch.utils.data.ConcatDataset):
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.datasets[0], name)
+
+
+class GridBinBalancedDataset(torch.utils.data.Dataset):
+    """Dataset wrapper that samples frames uniformly across object-position bins."""
+
+    def __init__(self, dataset: Any, sidecar_path: Path) -> None:
+        self.dataset = dataset
+        self.sidecar_path = Path(sidecar_path)
+        if not self.sidecar_path.exists():
+            raise FileNotFoundError(f"grid bin sidecar not found: {self.sidecar_path}")
+        table = pd.read_parquet(self.sidecar_path)
+        required = {"episode_index", "visible", "grid_bin"}
+        missing = sorted(required - set(table.columns))
+        if missing:
+            raise ValueError(f"grid bin sidecar missing columns: {missing}")
+        self._episode_to_bin = {
+            int(row.episode_index): int(row.grid_bin)
+            for row in table.itertuples(index=False)
+            if bool(row.visible) or int(row.grid_bin) == -1
+        }
+        self.disable_episode_aware_sampler = True
+        self.requires_grid_bin_balanced_sampler = True
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int) -> Any:
+        return self.dataset[index]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.dataset, name)
+
+    def make_grid_bin_balanced_sampler(
+        self,
+        *,
+        num_samples: int | None = None,
+        drop_n_last_frames: int = 0,
+        generator: torch.Generator | None = None,
+    ) -> torch.utils.data.WeightedRandomSampler:
+        weights = self.grid_bin_sample_weights(drop_n_last_frames=drop_n_last_frames)
+        if float(weights.sum()) <= 0.0:
+            raise ValueError(f"grid bin sidecar has no sampleable frames: {self.sidecar_path}")
+        return torch.utils.data.WeightedRandomSampler(
+            weights=weights,
+            num_samples=int(num_samples or len(self)),
+            replacement=True,
+            generator=generator,
+        )
+
+    def grid_bin_sample_weights(self, *, drop_n_last_frames: int = 0) -> torch.Tensor:
+        weights = torch.zeros(len(self), dtype=torch.double)
+        bin_to_indices: dict[int, list[int]] = {}
+        for row in _iter_episode_rows(getattr(self.meta, "episodes")):
+            episode = int(row["episode_index"])
+            grid_bin = self._episode_to_bin.get(episode)
+            if grid_bin is None:
+                continue
+            start = int(row["dataset_from_index"])
+            stop = int(row["dataset_to_index"]) - max(0, int(drop_n_last_frames))
+            for index in range(start, max(start, stop)):
+                bin_to_indices.setdefault(grid_bin, []).append(index)
+        occupied = [indices for indices in bin_to_indices.values() if indices]
+        if not occupied:
+            return weights
+        bin_mass = 1.0 / len(occupied)
+        for indices in occupied:
+            sample_weight = bin_mass / len(indices)
+            weights[indices] = sample_weight
+        return weights
+
+
+def _iter_episode_rows(episodes: Any) -> list[dict[str, Any]]:
+    if hasattr(episodes, "itertuples"):
+        return [row._asdict() for row in episodes.itertuples(index=False)]
+    return [dict(episodes[index]) for index in range(len(episodes))]
 
 
 def aggregate_lerobot_dataset_stats(datasets: Sequence[Any]) -> dict[str, dict[str, np.ndarray]]:

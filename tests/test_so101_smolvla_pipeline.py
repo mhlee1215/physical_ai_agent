@@ -241,6 +241,52 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("recovery_or_off_nominal_states", constants)
         self.assertIn("reject_preclose_contact", constants)
 
+    def test_training_launcher_does_not_build_literal_empty_cache_paths(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = {
+            "train_dataset": {"repo_id": "repo/train", "root": "_workspace/train"},
+            "validation_dataset": {"repo_id": "repo/validation", "root": "_workspace/validation"},
+            "predecoded_image_cache": {
+                "default_root": "_workspace/so101_image_cache",
+                "train": {},
+                "validation": {},
+            },
+        }
+
+        commands = start_so101_training._cache_build_commands(
+            Path(sys.executable),
+            Path.cwd(),
+            config,
+        )
+
+        self.assertEqual(commands, [])
+
+    def test_training_launcher_builds_explicit_split_image_caches(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = {
+            "train_dataset": {"repo_id": "repo/train", "root": "_workspace/train"},
+            "validation_dataset": {"repo_id": "repo/validation", "root": "_workspace/validation"},
+            "predecoded_image_cache": {
+                "default_root": "_workspace/so101_image_cache",
+                "train": "train_cache",
+                "validation": "validation_cache",
+            },
+        }
+
+        commands = start_so101_training._cache_build_commands(
+            Path(sys.executable),
+            Path.cwd(),
+            config,
+        )
+
+        self.assertEqual(len(commands), 2)
+        self.assertIn("_workspace/so101_image_cache/train_cache", commands[0])
+        self.assertIn("_workspace/so101_image_cache/validation_cache", commands[1])
+
     def test_pickplace_exporter_uses_egocentric_wrist_student_camera_contract(self) -> None:
         source = Path("scripts/export_so101_pickplace_teacher_rollouts_lerobot.py").read_text(
             encoding="utf-8"
@@ -292,9 +338,14 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--log-input-metadata-every-n-steps", constants)
         self.assertIn("--so101-action-prefix-loss-steps", constants)
         self.assertIn("--so101-action-prefix-loss-weight", constants)
+        self.assertIn("--so101-valid-mask-loss-weight", constants)
+        self.assertIn("--so101-valid-mask-hidden-dim", constants)
         self.assertIn("loss_unweighted", constants)
         self.assertIn("loss_prefix_weight", constants)
         self.assertIn("loss_prefix_steps", constants)
+        self.assertIn("valid_mask_loss", constants)
+        self.assertIn("valid_mask_accuracy", constants)
+        self.assertIn("action_is_pad_as_termination_proxy", constants)
         self.assertIn("camera1,camera2", constants)
         self.assertIn("input", constants)
         self.assertIn("augmented_input", constants)
@@ -317,6 +368,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("TensorBoardLogger", names)
         self.assertIn("Trainer", names)
         self.assertIn("save_checkpoint", names)
+        self.assertIn("save_valid_mask_head", names)
         self.assertIn("augment_batch_on_device", names)
         self.assertIn("_action_chunk_jitter_metrics", names)
 
@@ -419,6 +471,45 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIsNotNone(video)
             self.assertEqual(tuple(video.shape), (1, 1, 3, 64, 96))
             self.assertLess(int(video[0, 0, :, 0, 0].max()), 20)
+
+    def test_training_monitor_overlays_rollout_prediction_target(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+        import numpy as np
+
+        image = np.zeros((80, 100, 3), dtype=np.uint8)
+        rendered = monitor._overlay_closed_loop_frame_label(
+            image,
+            "ep 000 | frame 000",
+            target={"dx_norm": 0.5, "dy_norm": -0.5, "label": "pred", "color": (0, 220, 255)},
+        )
+
+        self.assertGreater(int(rendered[:, :, 1].max()), 200)
+        self.assertGreater(int(rendered[:, :, 2].max()), 200)
+
+    def test_training_monitor_reads_reference_gt_target_from_visual_servo_sidecar(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+        import pandas as pd
+
+        row = pd.Series({"episode_index": 0, "frame_index": 2})
+        sidecar = pd.DataFrame(
+            [
+                {
+                    "episode_index": 0,
+                    "frame_index": 2,
+                    "camera1_visible": True,
+                    "camera1_dx_norm": -0.25,
+                    "camera1_dy_norm": 0.5,
+                }
+            ]
+        ).set_index(["episode_index", "frame_index"])
+
+        target = monitor._reference_target_overlay(sidecar, row, "camera1")
+
+        self.assertEqual(target["label"], "gt")
+        self.assertEqual(target["dx_norm"], -0.25)
+        self.assertEqual(target["dy_norm"], 0.5)
 
     def test_training_monitor_uses_macos_safe_mujoco_gl(self) -> None:
         sys.path.insert(0, str(Path("scripts").resolve()))
@@ -1982,6 +2073,89 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("valid_mask_checkpoint", closed_loop)
         self.assertTrue(str(closed_loop["valid_mask_checkpoint"]).endswith("valid_mask_head.pt"))
 
+    def test_move_and_align_debug_loop_uses_supervised_train_split(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = json.loads(
+            Path("configs/so101/training_datasets/move_and_align_cube_edge_only.json").read_text(encoding="utf-8")
+        )
+        train = config["train_dataset"]
+        test_cases = config["closed_loop"]["test_cases"]
+
+        self.assertEqual(len(test_cases), 1)
+        test_case = test_cases[0]
+        self.assertEqual(test_case["id"], "move_and_align_cube_edge_train_aligned_debug")
+        self.assertEqual(test_case["episodes"], 10)
+        self.assertEqual(test_case["start_contract"], "move_and_align_cube_edge")
+        self.assertIn("Debug-only", test_case["description"])
+        self.assertEqual(test_case["start_dataset"]["name"], train["name"])
+        self.assertEqual(test_case["start_dataset"]["root"], train["root"])
+        self.assertEqual(test_case["start_dataset"]["repo_id"], train["repo_id"])
+        self.assertEqual(test_case["start_dataset"]["expected_episodes"], train["expected_episodes"])
+
+        base = [
+            sys.executable,
+            "scripts/run_so101_training_loop_test.py",
+            "--closed-loop-test-id",
+            "default",
+            "--closed-loop-seed",
+            "98100",
+            "--closed-loop-steps",
+            "160",
+        ]
+        commands = start_so101_training._post_checkpoint_loop_commands(
+            progress_monitor_cmd=base,
+            dataset_config=config,
+        )
+
+        self.assertEqual(len(commands), 1)
+        command = commands[0]
+        self.assertEqual(command[command.index("--closed-loop-test-id") + 1], test_case["id"])
+        self.assertEqual(command[command.index("--closed-loop-start-contract") + 1], "move_and_align_cube_edge")
+        self.assertEqual(
+            command[command.index("--closed-loop-start-report-path") + 1],
+            str(Path(train["root"]) / "so101_lerobot_export_report.json"),
+        )
+
+    def test_move_and_align_v2_dataset_generation_augmentation_contract(self) -> None:
+        exporter_source = Path("scripts/export_so101_teacher_rollouts_lerobot.py").read_text(encoding="utf-8")
+        exporter_constants = {
+            node.value
+            for node in ast.walk(ast.parse(exporter_source))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        self.assertIn("--terminal-hold-steps", exporter_constants)
+        self.assertIn("--move-and-align-near-target-correction-ratio", exporter_constants)
+        self.assertIn("near_target_correction", exporter_constants)
+
+        recipes = json.loads(Path("configs/so101/training_datasets/export_recipes.json").read_text(encoding="utf-8"))
+        recipe = next(item for item in recipes["recipes"] if item["name"] == "move_and_align_cube_edge_train_v2")
+        self.assertEqual(recipe["contract"], "skill_dataset_contract")
+        self.assertEqual(recipe["dataset"], "move_and_align_cube_edge_v2")
+        self.assertEqual(recipe["split"], "train")
+        self.assertEqual(recipe["episodes"], 300)
+        self.assertEqual(recipe["args"]["skill_mode"], "move_and_align_cube_edge")
+        self.assertEqual(recipe["args"]["terminal_hold_steps"], 20)
+        self.assertEqual(recipe["args"]["move_and_align_near_target_correction_ratio"], 0.5)
+        self.assertEqual(recipe["args"]["target_object_color"], "green")
+
+        contract = json.loads(Path("configs/so101/training_datasets/skill_dataset_contract.json").read_text(encoding="utf-8"))
+        v2 = contract["datasets"]["move_and_align_cube_edge_v2"]
+        self.assertEqual(v2["train"]["root"], recipe["root"])
+        self.assertEqual(v2["train"]["repo_id"], recipe["repo_id"])
+        self.assertEqual(v2["train"]["expected_episodes"], recipe["episodes"])
+        self.assertTrue(v2["generation_augmentation"]["terminal_hold_included"])
+        self.assertTrue(v2["generation_augmentation"]["near_target_correction_included"])
+
+        config = json.loads(
+            Path("configs/so101/training_datasets/move_and_align_cube_edge_v2_only.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(config["train_dataset"]["root"], recipe["root"])
+        self.assertEqual(config["train_dataset"]["expected_episodes"], 300)
+        self.assertEqual(config["dataset_generation_augmentation"]["terminal_hold_steps"], 20)
+        self.assertEqual(config["dataset_generation_augmentation"]["near_target_correction_ratio"], 0.5)
+
     def test_qwen_edge_loop_validation_cases_match_primitive_dataset_names(self) -> None:
         config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
         self.assertIn("test_cases", config["closed_loop"])
@@ -2105,6 +2279,27 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--closed-loop-start-contract", launcher_source)
         self.assertIn("IMPORTANT_CLOSED_LOOP_SUCCESS_RATE_TAG", monitor_source)
         self.assertIn("loop_validation_id", monitor_source)
+
+    def test_delta_q_training_config_preserves_absolute_dataset_and_forwards_closed_loop_contract(self) -> None:
+        config = json.loads(
+            Path("configs/so101/training_datasets/move_and_align_cube_edge_v2_delta_q_only.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        absolute_config = json.loads(
+            Path("configs/so101/training_datasets/move_and_align_cube_edge_v2_only.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(config["action_mode"], "delta_q")
+        self.assertEqual(config["closed_loop"]["action_contract_mode"], "processor_delta_q")
+        self.assertNotEqual(config["train_dataset"]["root"], absolute_config["train_dataset"]["root"])
+        self.assertNotEqual(config["validation_dataset"]["root"], absolute_config["validation_dataset"]["root"])
+        self.assertIn("convert_so101_lerobot_actions_to_delta.py", config["delta_action_source"]["converter"])
+
+        monitor_source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+        self.assertIn("--closed-loop-action-contract-mode", monitor_source)
+        self.assertIn("--action-contract-mode", monitor_source)
+        self.assertIn("processor_delta_q", monitor_source)
 
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (
