@@ -157,8 +157,23 @@ Without `--require-runtime`, the smoke runner writes a blocked report if the nat
 
 The SmolVLA step is now an executable tiny supervised-loss smoke gate. In this local workspace it is expected to report `blocked` until a LeRobot/SmolVLA runtime and native 280 LeRobotDataset are available.
 
-## Remaining Dataset-Quality Work
+## End-to-End Status Gate
 
+Run the full 280 readiness/status summary at any point:
+
+```bash
+PYTHONPATH=src:. python3 scripts/check_mycobot_280_pi_dataset_pipeline_status.py \
+  --asset-root _vendor/mycobot_mujoco \
+  --official-gripper-root _vendor/mycobot_ros \
+  --jsonl-dataset-root _workspace/mycobot_280pi_adaptive_dataset \
+  --native-dataset-root _workspace/mycobot_280pi_adaptive_lerobot_native \
+  --smolvla-smoke-report _workspace/mycobot_280pi_adaptive_lerobot_native/smolvla_tiny_smoke.json \
+  --output _workspace/mycobot_280pi_pipeline_status/report.json
+```
+
+Pass `--input-trace` and `--camera-manifest` once a real ROS/Gazebo capture exists. The report identifies the first blocked stage and prints the next exact command for each stage.
+
+## Remaining Dataset-Quality Work
 To turn this from a myCobot POC into a dataset-quality pipeline, the next gates are:
 
 1. Validate against the real official `mycobot_ros` checkout and inspect generated scene geometry.
