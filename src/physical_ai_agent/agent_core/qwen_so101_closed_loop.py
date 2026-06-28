@@ -878,13 +878,18 @@ def _build_raw_lerobot_observation_for_runner(
     camera_pixels: dict[str, Any],
     instruction: str | None,
 ) -> dict[str, Any]:
-    import torch
-
     config = policy.config
     state_dim = config.robot_state_feature.shape[0] if config.robot_state_feature else min(32, len(observation))
-    state = torch.zeros(state_dim, dtype=torch.float32)
-    source = torch.tensor(list(observation)[:state_dim], dtype=torch.float32)
-    state[: len(source)] = source
+    try:
+        import torch
+
+        state = torch.zeros(state_dim, dtype=torch.float32)
+        source = torch.tensor(list(observation)[:state_dim], dtype=torch.float32)
+        state[: len(source)] = source
+    except ModuleNotFoundError:
+        state = [0.0] * state_dim
+        for index, value in enumerate(list(observation)[:state_dim]):
+            state[index] = float(value)
     raw_observation: dict[str, Any] = {
         "observation.state": state,
         "task": instruction or "",

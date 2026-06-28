@@ -76,7 +76,7 @@ class LeRobotPolicyRunner:
                 edge_angle_error=float(camera2[2]),
                 stop_prob=stop_prob,
             )
-        ).tolist()
+        )
         return {
             "camera1": {"dx_norm": float(camera1[0]), "dy_norm": float(camera1[1]), "edge_angle_error": float(camera1[2]), "visible": True},
             "camera2": {"dx_norm": float(camera2[0]), "dy_norm": float(camera2[1]), "edge_angle_error": float(camera2[2]), "visible": True},
