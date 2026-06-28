@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-import numpy as np
-
 
 SO101_JOINT_ORDER = (
     "shoulder_pan",
@@ -55,17 +53,19 @@ def should_stop_visual_servo(error: VisualServoError, thresholds: VisualServoSto
     )
 
 
-def visual_servo_delta_q(error: VisualServoError, gains: VisualServoGains | None = None) -> np.ndarray:
+def visual_servo_delta_q(error: VisualServoError, gains: VisualServoGains | None = None) -> list[float]:
     gains = gains or VisualServoGains()
-    delta = np.zeros(len(SO101_JOINT_ORDER), dtype=np.float32)
+    delta = [0.0] * len(SO101_JOINT_ORDER)
     delta[0] = float(gains.pan) * float(gains.sign_x) * float(error.wrist_dx_norm)
     delta[1] = float(gains.lift) * float(gains.sign_y_lift) * float(error.wrist_dy_norm)
     delta[3] = float(gains.flex) * float(gains.sign_y_flex) * float(error.wrist_dy_norm)
     delta[4] = float(gains.wrist_roll) * float(gains.sign_angle) * float(error.edge_angle_error)
-    return np.clip(delta, -float(gains.max_abs_delta), float(gains.max_abs_delta))
+    limit = float(gains.max_abs_delta)
+    return [max(-limit, min(limit, value)) for value in delta]
 
 
-def apply_delta_q(qpos: Sequence[float], delta_q: Sequence[float], *, low: Sequence[float], high: Sequence[float]) -> np.ndarray:
-    q = np.asarray(qpos, dtype=np.float32)
-    delta = np.asarray(delta_q, dtype=np.float32)
-    return np.clip(q + delta, np.asarray(low, dtype=np.float32), np.asarray(high, dtype=np.float32))
+def apply_delta_q(qpos: Sequence[float], delta_q: Sequence[float], *, low: Sequence[float], high: Sequence[float]) -> list[float]:
+    return [
+        max(float(lo), min(float(hi), float(q) + float(delta)))
+        for q, delta, lo, hi in zip(qpos, delta_q, low, high, strict=True)
+    ]
