@@ -141,7 +141,21 @@ PYTHONPATH=src:. python3 scripts/convert_mycobot_280_pi_adaptive_jsonl_to_lerobo
 
 Without `--require-lerobot`, the converter writes a blocked report if the `lerobot` package is not installed. With `--require-lerobot`, it fails fast so a cloud or robot workstation job cannot silently skip the native dataset conversion.
 
-The SmolVLA output is currently a smoke-plan artifact, not an executed train/eval run, because this local workspace does not have a LeRobot/SmolVLA training environment installed.
+After native conversion, run the tiny SmolVLA supervised-loss smoke:
+
+```bash
+PYTHONPATH=src:. python3 scripts/run_mycobot_280_pi_smolvla_tiny_smoke.py \
+  --dataset-root _workspace/mycobot_280pi_adaptive_lerobot_native \
+  --dataset-repo-id physical-ai-agent/mycobot-280pi-adaptive \
+  --policy-path lerobot/smolvla_base \
+  --output-path _workspace/mycobot_280pi_adaptive_lerobot_native/smolvla_tiny_smoke.json \
+  --max-batches 1 \
+  --require-runtime
+```
+
+Without `--require-runtime`, the smoke runner writes a blocked report if the native dataset layout or SmolVLA runtime is unavailable. With `--require-runtime`, it fails fast so a real LeRobot workstation cannot skip the one-batch policy smoke.
+
+The SmolVLA step is now an executable tiny supervised-loss smoke gate. In this local workspace it is expected to report `blocked` until a LeRobot/SmolVLA runtime and native 280 LeRobotDataset are available.
 
 ## Remaining Dataset-Quality Work
 
@@ -151,8 +165,8 @@ To turn this from a myCobot POC into a dataset-quality pipeline, the next gates 
 2. Capture real ROS/Gazebo traces for joint states, gripper command/state, object pose, contact evidence, and camera timestamps.
 3. Point the dataset exporter at real Camera Flange 2.0 or calibrated external-camera frames.
 4. Calibrate the object pose/contact oracle against the actual object and gripper collision/contact topics.
-5. Run the generated LeRobot-style dataset through an installed LeRobotDataset loader.
-6. Execute the tiny SmolVLA train/eval smoke from `meta/smolvla_tiny_smoke_plan.json` in a real LeRobot/SmolVLA environment.
+5. Convert the generated LeRobot-style JSONL export through an installed native `LeRobotDataset` loader.
+6. Execute the tiny SmolVLA supervised-loss smoke in a real LeRobot/SmolVLA environment.
 
 ## Known Blockers In This Local Environment
 
