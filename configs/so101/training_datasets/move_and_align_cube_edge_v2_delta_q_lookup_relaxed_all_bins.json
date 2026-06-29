@@ -1,0 +1,55 @@
+{
+  "name": "move_and_align_cube_edge_v2_delta_q_lookup_relaxed_all_bins",
+  "description": "Delta-q move_and_align_cube_edge train split generated with camera1 4x4 lookup-balanced object positions. All 16 bins have 5 episodes.",
+  "scenario": "move_and_align_cube_edge",
+  "execution_policy": "single_smolvla_qwen_primitive",
+  "task": "move_and_align_cube_edge",
+  "action_mode": "delta_q",
+  "train_dataset": {
+    "name": "move_and_align_cube_edge_v2_delta_q_lookup_relaxed_all_bins_train",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-delta-q-lookup-relaxed-all-bins-80-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_lookup_relaxed_all_bins_80_ego_wrist_256_seed172000",
+    "grid_bin_sidecar": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_lookup_relaxed_all_bins_80_ego_wrist_256_seed172000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+    "expected_episodes": 80,
+    "expected_frames": 7040,
+    "grid_balance": {
+      "camera_key": "observation.images.camera1",
+      "grid_size": 4,
+      "frame_index": 0,
+      "bins": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      "episodes_per_bin": 5,
+      "bin_counts_yx": [
+        [5, 5, 5, 5],
+        [5, 5, 5, 5],
+        [5, 5, 5, 5],
+        [5, 5, 5, 5]
+      ]
+    }
+  },
+  "validation_dataset": {
+    "name": "move_and_align_cube_edge_delta_q_validation",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-valid25-delta-q-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_valid25_delta_q_ego_wrist_256_seed123000",
+    "expected_episodes": 25,
+    "expected_frames": 1700
+  },
+  "camera_contract": {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam",
+    "observation.images.camera3": "wrist_cam duplicate"
+  },
+  "prompt_contract": {
+    "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
+    "source": "move_and_align_cube_edge_v2 lookup-balanced train split"
+  },
+  "dataset_generation_augmentation": {
+    "generated_teacher_trajectories": true,
+    "terminal_hold_included": true,
+    "terminal_hold_steps": 20,
+    "near_target_correction_included": false,
+    "near_target_correction_ratio": 0.0,
+    "camera1_lookup_balanced": true,
+    "edge_contact_xy_success_threshold": 0.08,
+    "edge_contact_parallel_success_threshold_deg": 180.0
+  }
+}

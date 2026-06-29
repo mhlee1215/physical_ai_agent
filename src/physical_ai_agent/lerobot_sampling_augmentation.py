@@ -433,7 +433,7 @@ def _affine_jitter(image: Any, functional: Any, config: SamplingAugmentationConf
         image,
         grid,
         mode="bilinear",
-        padding_mode="border",
+        padding_mode="zeros" if image.device.type == "mps" else "border",
         align_corners=False,
     )
 

@@ -46,7 +46,18 @@ def build_cache(
     cache_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = cache_dir / "manifest.json"
     if manifest_path.exists() and not overwrite:
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not _manifest_matches_request(
+            manifest,
+            dataset_root=dataset_root,
+            dataset_repo_id=dataset_repo_id,
+        ):
+            raise RuntimeError(
+                "Existing image cache manifest does not match the requested dataset. "
+                f"cache_dir={cache_dir} requested_repo_id={dataset_repo_id} "
+                f"cached_repo_id={manifest.get('dataset_repo_id')}"
+            )
+        return manifest
 
     dataset = LeRobotDataset(dataset_repo_id, root=dataset_root, video_backend=video_backend)
     image_keys = [key for key in dataset.features if key.startswith("observation.images.")]
@@ -93,6 +104,23 @@ def build_cache(
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
+
+
+def _manifest_matches_request(
+    manifest: dict[str, Any],
+    *,
+    dataset_root: Path,
+    dataset_repo_id: str,
+) -> bool:
+    if manifest.get("dataset_repo_id") != dataset_repo_id:
+        return False
+    cached_root = manifest.get("dataset_root")
+    if not isinstance(cached_root, str) or not cached_root:
+        return False
+    try:
+        return Path(cached_root).expanduser().resolve() == dataset_root.expanduser().resolve()
+    except OSError:
+        return str(Path(cached_root)) == str(dataset_root)
 
 
 def _to_uint8_chw(value: torch.Tensor) -> torch.Tensor:

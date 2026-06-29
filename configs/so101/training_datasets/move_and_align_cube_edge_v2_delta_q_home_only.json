@@ -1,20 +1,26 @@
 {
-  "name": "move_and_align_cube_edge_only",
-  "description": "Single-skill SO101 run that uses only the move_and_align_cube_edge training split for train, supervised validation, and dataset-backed closed-loop starts.",
+  "name": "move_and_align_cube_edge_v2_delta_q_home_only",
+  "description": "Home-pose-start-only training subset of move_and_align_cube_edge_v2_delta_q_only for closed-loop debugging.",
   "scenario": "move_and_align_cube_edge",
   "execution_policy": "single_smolvla_qwen_primitive",
   "task": "move_and_align_cube_edge",
+  "action_mode": "delta_q",
+  "delta_action_source": {
+    "mode": "state_to_action",
+    "source_config": "configs/so101/training_datasets/move_and_align_cube_edge_v2_only.json",
+    "converter": "scripts/convert_so101_lerobot_actions_to_delta.py"
+  },
   "train_dataset": {
-    "name": "move_and_align_cube_edge_train",
-    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train100-ego-wrist-256",
-    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train100_ego_wrist_256_seed122000",
-    "expected_episodes": 100,
-    "expected_frames": 6800
+    "name": "move_and_align_cube_edge_v2_delta_q_home_only_train",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-delta-q-home-only-150-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_home_only_150_ego_wrist_256_seed124000",
+    "expected_episodes": 150,
+    "expected_frames": 13200
   },
   "validation_dataset": {
-    "name": "move_and_align_cube_edge_validation",
-    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-valid25-ego-wrist-256",
-    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_valid25_ego_wrist_256_seed123000",
+    "name": "move_and_align_cube_edge_delta_q_validation",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-valid25-delta-q-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_valid25_delta_q_ego_wrist_256_seed123000",
     "expected_episodes": 25,
     "expected_frames": 1700
   },
@@ -25,22 +31,31 @@
   },
   "prompt_contract": {
     "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
-    "source": "move_and_align_cube_edge train split"
+    "source": "move_and_align_cube_edge_v2 home-only train split"
+  },
+  "dataset_generation_augmentation": {
+    "generated_teacher_trajectories": true,
+    "terminal_hold_included": true,
+    "terminal_hold_steps": 20,
+    "near_target_correction_included": true,
+    "near_target_correction_ratio": 0.5,
+    "near_target_joint_std": 0.075,
+    "near_target_xy_std": 0.025
   },
   "training": {
     "batch_size": 32,
     "num_workers": 4,
-    "policy_repo_id": "mhlee1215/so101-smolvla-move-and-align-cube-edge",
+    "policy_repo_id": "mhlee1215/so101-smolvla-move-and-align-cube-edge-v2-delta-q",
     "policy_push_to_hub": false,
-    "steps_per_epoch": 213,
+    "steps_per_epoch": 413,
     "validation_max_batches": 32,
     "checkpoint_retention_policy": "best_val_and_closed_loop"
   },
   "predecoded_image_cache": {
     "root_env": "SO101_PREDECODED_CACHE_ROOT",
     "default_root": "_workspace/so101_image_cache",
-    "train": {},
-    "validation": {}
+    "train": "move_and_align_cube_edge_train_v2_delta_q_home_only_150_ego_wrist_256_seed124000",
+    "validation": "move_and_align_cube_edge_valid25_delta_q_ego_wrist_256_seed123000"
   },
   "tensorboard": {
     "log_input_images_every_n_steps": 50,
@@ -64,6 +79,7 @@
     "scenario": "move_and_align_cube_edge",
     "execution_policy": "single_smolvla_qwen_primitive",
     "runner": "qwen_chain",
+    "action_contract_mode": "processor_delta_q",
     "env_id": "MuJoCoPickLift-v1",
     "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",
     "qwen_object": "green cube",
@@ -74,17 +90,17 @@
     "success_threshold": 0.06,
     "test_cases": [
       {
-        "id": "move_and_align_cube_edge_train_aligned_debug",
-        "description": "Debug-only loop test. Starts from the first frames of the supervised move_and_align_cube_edge training split so train-set teacher fit and closed-loop rollout use the same episode identities.",
+        "id": "move_and_align_cube_edge_loop_validation",
+        "description": "Home-pose loop_validation split for home-only training debugging. The policy action is interpreted as delta-q.",
         "episodes": 10,
         "steps": 80,
         "seed": 98100,
         "start_contract": "move_and_align_cube_edge",
         "start_dataset": {
-          "name": "move_and_align_cube_edge_train",
-          "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train100-ego-wrist-256",
-          "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train100_ego_wrist_256_seed122000",
-          "expected_episodes": 100
+          "name": "move_and_align_cube_edge_loop_validation",
+          "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-loop-validation10-ego-wrist-256",
+          "root": "_workspace/so101_lerobot/move_and_align_cube_edge_loop_validation10_ego_wrist_256_seed123500",
+          "expected_episodes": 10
         },
         "success_metric": "tcp_to_object_below_threshold",
         "success_threshold": 0.06,
@@ -94,5 +110,8 @@
         "plan_json": "configs/agent/qwen3_so101_tool_plan_move_and_align_cube_edge_green_cube.json"
       }
     ]
+  },
+  "debug_notes": {
+    "selection": "Only train episodes whose first-frame observation.state equals the home pose used by loop_validation."
   }
 }

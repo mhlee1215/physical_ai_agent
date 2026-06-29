@@ -462,6 +462,30 @@
       }
     },
     {
+      "name": "move_and_align_cube_edge_train_v2",
+      "contract": "skill_dataset_contract",
+      "dataset": "move_and_align_cube_edge_v2",
+      "split": "train",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_300_ego_wrist_256_seed124000",
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-300-ego-wrist-256",
+      "episodes": 300,
+      "seed": 124000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "move_and_align_cube_edge",
+        "approach_steps": 32,
+        "settle_steps": 4,
+        "terminal_hold_steps": 20,
+        "move_and_align_near_target_correction_ratio": 0.5,
+        "near_target_joint_std": 0.075,
+        "near_target_xy_std": 0.025,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "max_attempt_multiplier": 1200
+      }
+    },
+    {
       "name": "move_and_align_cube_edge_validation",
       "contract": "skill_dataset_contract",
       "dataset": "move_and_align_cube_edge",
