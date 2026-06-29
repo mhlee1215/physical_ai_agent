@@ -30,7 +30,7 @@ class SO101VisualServoHead(nn.Module):
         super().__init__()
         self.config = config or SO101VisualServoHeadConfig()
         self.image_encoder = nn.Sequential(
-            nn.Conv2d(6, 16, kernel_size=5, stride=4, padding=2),
+            nn.Conv2d(8, 16, kernel_size=5, stride=4, padding=2),
             nn.ReLU(inplace=True),
             nn.Conv2d(16, 32, kernel_size=3, stride=4, padding=1),
             nn.ReLU(inplace=True),
@@ -50,7 +50,7 @@ class SO101VisualServoHead(nn.Module):
         image2 = _latest_observation(batch["observation.images.camera2"]).float()
         state = _latest_observation(batch["observation.state"]).float()
         lang = self.lang_encoder(_language_features(batch, device=state.device, dtype=state.dtype))
-        features = torch.cat([self.image_encoder(torch.cat([image1, image2], dim=1)), self.state_encoder(state), lang], dim=-1)
+        features = torch.cat([self.image_encoder(_append_xy_channels(torch.cat([image1, image2], dim=1))), self.state_encoder(state), lang], dim=-1)
         output = self.head(features)
         return {
             "camera1": output[:, 0:3],
@@ -64,6 +64,14 @@ def _latest_observation(value: torch.Tensor) -> torch.Tensor:
     if value.ndim in (3, 5):
         return value[:, -1]
     return value
+
+
+def _append_xy_channels(image: torch.Tensor) -> torch.Tensor:
+    batch, _channels, height, width = image.shape
+    y = torch.linspace(-1.0, 1.0, height, device=image.device, dtype=image.dtype).view(1, 1, height, 1)
+    x = torch.linspace(-1.0, 1.0, width, device=image.device, dtype=image.dtype).view(1, 1, 1, width)
+    xy = torch.cat([x.expand(batch, 1, height, width), y.expand(batch, 1, height, width)], dim=1)
+    return torch.cat([image, xy], dim=1)
 
 
 def visual_servo_loss(
@@ -110,7 +118,21 @@ def save_visual_servo_head(path: Path, head: SO101VisualServoHead, *, metadata: 
 def load_visual_servo_head(path: Path, *, device: str | torch.device = "cpu") -> SO101VisualServoHead:
     payload = torch.load(path, map_location=device)
     head = SO101VisualServoHead(SO101VisualServoHeadConfig(**dict(payload.get("config") or {})))
-    head.load_state_dict(payload["state_dict"])
+    state_dict = dict(payload["state_dict"])
+    conv_key = "image_encoder.0.weight"
+    if conv_key in state_dict and state_dict[conv_key].shape[1] == 6:
+        state_dict[conv_key] = torch.cat(
+            [
+                state_dict[conv_key],
+                torch.zeros(
+                    (*state_dict[conv_key].shape[:1], 2, *state_dict[conv_key].shape[2:]),
+                    dtype=state_dict[conv_key].dtype,
+                    device=state_dict[conv_key].device,
+                ),
+            ],
+            dim=1,
+        )
+    head.load_state_dict(state_dict)
     head.to(device)
     head.eval()
     return head

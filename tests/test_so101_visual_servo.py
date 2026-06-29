@@ -10,7 +10,7 @@ import pandas as pd
 import torch
 from PIL import Image
 
-from physical_ai_agent.policies.so101_visual_servo_head import SO101VisualServoHead, visual_servo_loss
+from physical_ai_agent.policies.so101_visual_servo_head import SO101VisualServoHead, _append_xy_channels, visual_servo_loss
 from physical_ai_agent.so101_visual_servo import (
     VisualServoError,
     VisualServoGains,
@@ -122,6 +122,17 @@ class SO101VisualServoTest(unittest.TestCase):
 
         self.assertIsNotNone(loss)
         self.assertIn("visual_servo_loss", metrics)
+
+    def test_visual_servo_head_keeps_image_position_features(self) -> None:
+        image = torch.zeros((2, 6, 4, 5), dtype=torch.float32)
+
+        with_xy = _append_xy_channels(image)
+
+        self.assertEqual(tuple(with_xy.shape), (2, 8, 4, 5))
+        self.assertAlmostEqual(float(with_xy[0, 6, 0, 0]), -1.0)
+        self.assertAlmostEqual(float(with_xy[0, 6, 0, -1]), 1.0)
+        self.assertAlmostEqual(float(with_xy[0, 7, 0, 0]), -1.0)
+        self.assertAlmostEqual(float(with_xy[0, 7, -1, 0]), 1.0)
 
 
 def _green_square_png(x0: int, y0: int) -> bytes:

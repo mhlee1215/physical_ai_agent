@@ -309,6 +309,49 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
         )
         self.assertTrue(all(decision["reason"] == "fixed_horizon" for decision in primitive["valid_mask"]["decisions"]))
 
+    def test_visual_servo_delta_q_ignores_action_chunk_valid_mask(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[SO101PrimitiveCall(0, "move", "green cube", "move_and_align_cube_edge", "move prompt", 40)],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    max_steps_per_primitive=40,
+                    policy_n_action_steps=15,
+                    valid_mask_head=FakeValidMaskHead(),
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeVisualServoEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=fake_batch_builder,
+                    action_contract_mode="visual_servo_delta_q",
+                )
+
+        primitive = report["episodes"][0]["primitive_summaries"][0]
+        self.assertEqual(report["valid_mask"]["mode"], "fixed_horizon")
+        self.assertEqual(report["episodes"][0]["steps"], 40)
+        self.assertEqual(primitive["valid_mask"]["reason"], "max_horizon")
+        self.assertTrue(all(decision["reason"] == "fixed_horizon" for decision in primitive["valid_mask"]["decisions"]))
+
     def test_closed_loop_blocks_when_policy_cameras_are_missing(self) -> None:
         with TemporaryDirectory() as tmpdir:
             with (
@@ -910,6 +953,16 @@ class FakePolicyExecutor:
             "postprocessor_steps": [],
         }
 
+    def predict_visual_servo_with_trace(self, observation):
+        del observation
+        return {
+            "camera1": {"dx_norm": 0.1, "dy_norm": -0.1, "edge_angle_error": 0.0, "visible": True},
+            "camera2": {"dx_norm": 0.2, "dy_norm": -0.2, "edge_angle_error": 0.0, "visible": True},
+            "stop_prob": 0.0,
+            "delta_q": [0.01, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "processor_source": self.processor_source,
+        }
+
 
 class FakeValidMaskHead:
     def predict_valid_probs(self, state, action_chunk):
@@ -989,6 +1042,18 @@ class FakeEnv:
 
     def close(self) -> None:
         self.closed = True
+
+
+class FakeVisualServoEnv(FakeEnv):
+    def reset(self, seed: int):
+        self.step_count = 0
+        return [float(seed), 0.0, 0.0, 0.0, 0.0, 0.0], {"seed": seed}
+
+    def step(self, action):
+        self.step_count += 1
+        obs = [float(item) for item in action[:6]]
+        info = {"success": self.step_count >= 6}
+        return obs, 1.0, False, False, info
 
 
 def _read_jsonl(path: Path) -> list[dict]:

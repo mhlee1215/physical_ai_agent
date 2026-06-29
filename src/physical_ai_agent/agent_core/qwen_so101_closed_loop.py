@@ -145,6 +145,9 @@ def run_closed_loop_plan(
     started = perf_counter()
     output_dir.mkdir(parents=True, exist_ok=True)
     primitive_policy_paths = primitive_policy_paths or {}
+    if action_contract_mode == "visual_servo_delta_q":
+        valid_mask_head = None
+        valid_mask_checkpoint = None
     if valid_mask_head is None:
         if valid_mask_checkpoint is not None:
             from physical_ai_agent.policies.so101_valid_mask import load_valid_mask_head
