@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from physical_ai_agent.agent_core import qwen_so101_closed_loop as loop
+from physical_ai_agent.policies.lerobot_policy_runner import _visual_servo_head_path
 
 
 class _FakeConfig:
@@ -46,6 +49,16 @@ class _FakeRunner:
 
 
 class SO101ActionContractTest(unittest.TestCase):
+    def test_visual_servo_head_can_live_next_to_pretrained_model_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_dir = Path(tmp) / "000100"
+            policy_path = checkpoint_dir / "pretrained_model"
+            policy_path.mkdir(parents=True)
+            head_path = checkpoint_dir / "visual_servo_head.pt"
+            head_path.write_bytes(b"head")
+
+            self.assertEqual(_visual_servo_head_path(policy_path), head_path)
+
     def test_processor_mode_uses_saved_processor_trace(self) -> None:
         result = loop._select_env_action_with_trace(
             policy_executor=_FakeRunner(),

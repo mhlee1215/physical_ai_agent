@@ -137,12 +137,19 @@ def load_lerobot_policy_runner(
 
 
 def _load_visual_servo_head_if_present(policy_path: Path, *, device: str) -> Any | None:
-    path = policy_path / "visual_servo_head.pt"
-    if not path.exists():
+    path = _visual_servo_head_path(policy_path)
+    if path is None:
         return None
     from physical_ai_agent.policies.so101_visual_servo_head import load_visual_servo_head
 
     return load_visual_servo_head(path, device=device)
+
+
+def _visual_servo_head_path(policy_path: Path) -> Path | None:
+    for path in (policy_path / "visual_servo_head.pt", policy_path.parent / "visual_servo_head.pt"):
+        if path.exists():
+            return path
+    return None
 
 
 def _torch_sigmoid(value: Any) -> Any:
