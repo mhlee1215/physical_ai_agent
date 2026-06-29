@@ -1920,7 +1920,7 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
                 json.dumps(self.retention_state, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            if checkpoint_dir.exists() and checkpoint_dir.name.isdigit():
+            if checkpoint_dir.exists() and checkpoint_dir.name.isdigit() and retained:
                 shutil.rmtree(checkpoint_dir)
                 self._append_retention_event(
                     {
