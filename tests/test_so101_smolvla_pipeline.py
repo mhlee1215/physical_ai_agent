@@ -2066,6 +2066,59 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--policy-num-steps", progress_cmd)
             self.assertIn("10", progress_cmd)
 
+            resolved["closed_loop"]["action_contract_mode"] = "visual_servo_delta_q"
+            visual_servo_cmd = start_so101_training._progress_monitor_command(
+                args=argparse.Namespace(
+                    python=Path(sys.executable),
+                    progress_monitor_interval_s=600,
+                    closed_loop_every_epochs=1,
+                    closed_loop_episodes=1,
+                    closed_loop_steps=90,
+                    closed_loop_policy="best_or_periodic",
+                    closed_loop_eval_skill_mode=None,
+                    closed_loop_task_prompt=None,
+                    closed_loop_record_rollout_gif=False,
+                    closed_loop_runner="auto",
+                    qwen_model="qwen3-vl-8b-instruct-mlx",
+                    qwen_base_url=None,
+                    qwen_api_key=None,
+                    qwen_response_json=None,
+                    qwen_plan_json=None,
+                    qwen_object="green cube",
+                    qwen_env_object_color=None,
+                    closed_loop_env_id=None,
+                    record_loop_artifacts=True,
+                    render_loop_media=True,
+                    loop_artifact_width=128,
+                    loop_artifact_height=128,
+                    loop_artifact_fps=12,
+                    loop_artifact_every_n_steps=1,
+                    closed_loop_subgoal_chain_mode="off",
+                    closed_loop_fixed_subgoal_chunks=1,
+                    closed_loop_valid_mask_threshold=0.5,
+                    closed_loop_valid_mask_consecutive=2,
+                    closed_loop_valid_mask_checkpoint=Path("/tmp/valid_mask_head.pt"),
+                    closed_loop_policy_n_action_steps=15,
+                    closed_loop_policy_num_steps=10,
+                ),
+                repo_root=repo_root,
+                run_dir=repo_root / "run",
+                train_output_dir=repo_root / "run/model",
+                dataset_config=resolved,
+                training_args=[],
+                train_pid_file=repo_root / "run/train.pid",
+                runtime_contract={
+                    "runtime_platform": "macos",
+                    "training_device": "mps",
+                    "lightning_accelerator": "mps",
+                    "closed_loop_device": "mps",
+                    "closed_loop_mujoco_gl": "glfw",
+                },
+            )
+            self.assertIn("--closed-loop-action-contract-mode", visual_servo_cmd)
+            self.assertIn("visual_servo_delta_q", visual_servo_cmd)
+            self.assertNotIn("--closed-loop-valid-mask-checkpoint", visual_servo_cmd)
+
     def test_qwen_edge_dataset_config_requires_valid_mask_checkpoint(self) -> None:
         config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
         closed_loop = config["closed_loop"]

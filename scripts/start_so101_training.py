@@ -1397,7 +1397,12 @@ def _validate_monitoring_contract(
         errors.append("closed-loop eval skill mode must be set in config closed_loop.eval_skill_mode or CLI.")
     if not _closed_loop_task_prompt(args, dataset_config):
         errors.append("closed-loop task prompt must be set in config closed_loop.task_prompt or CLI.")
-    if closed_loop_runner == "qwen_chain" and _closed_loop_valid_mask_checkpoint(args, dataset_config) is None:
+    action_contract_mode = _closed_loop_action_contract_mode(args, dataset_config)
+    if (
+        closed_loop_runner == "qwen_chain"
+        and action_contract_mode != "visual_servo_delta_q"
+        and _closed_loop_valid_mask_checkpoint(args, dataset_config) is None
+    ):
         errors.append(
             "qwen_chain loop tests require closed_loop.valid_mask_checkpoint or "
             "--closed-loop-valid-mask-checkpoint."
@@ -1594,7 +1599,7 @@ def _progress_monitor_command(
     if closed_loop_subgoal_sequence:
         cmd.extend(["--closed-loop-subgoal-sequence", str(closed_loop_subgoal_sequence)])
     closed_loop_valid_mask_checkpoint = _closed_loop_valid_mask_checkpoint(args, dataset_config)
-    if closed_loop_valid_mask_checkpoint:
+    if closed_loop_valid_mask_checkpoint and _closed_loop_action_contract_mode(args, dataset_config) != "visual_servo_delta_q":
         cmd.extend(["--closed-loop-valid-mask-checkpoint", str(closed_loop_valid_mask_checkpoint)])
     closed_loop_task_prompt = _closed_loop_task_prompt(args, dataset_config)
     if closed_loop_task_prompt:
