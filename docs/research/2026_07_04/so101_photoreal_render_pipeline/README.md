@@ -19,6 +19,10 @@ Procedural versus HDRI/PBR assets:
 
 ![SO101 procedural versus HDRI PBR](./procedural_vs_hdri_pbr.png)
 
+MyCobot matte PLA material:
+
+![MyCobot matte PLA render](./mycobot_matte_pla_example.png)
+
 ## One-Frame Render
 
 Install Blender and fetch the optional CC0 assets:
@@ -74,6 +78,36 @@ The hook writes the preview under:
 This does not replace `observation.images.camera1/camera2/camera3` in the
 LeRobot dataset. It is intended for dataset QA, paper figures, and visually
 checking simulation states with more realistic lighting/materials.
+
+## MyCobot Render
+
+The same sidecar approach also works for the local MyCobot Nexus scene. The
+renderer exports MuJoCo mesh geoms plus box primitives such as the cube, work
+mat, palm, and finger pads, then path-traces the static state in Blender:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/render_mycobot_blender_probe.py \
+  --asset-root _workspace/_vendor/mycobot_mujoco \
+  --render-asset-root _workspace/photoreal_assets \
+  --output-dir _workspace/mycobot_blender_probe \
+  --seed 7 \
+  --warmup-steps 8 \
+  --width 640 \
+  --height 480 \
+  --samples 256 \
+  --denoise \
+  --robot-material matte_pla
+```
+
+The measured local example on this Mac was:
+
+- renderer: Blender Cycles
+- acceleration: Metal, `Apple M5 Pro (GPU - 20 cores)`
+- size: `640x480`
+- samples: `256`
+- denoise: enabled
+- material: `matte_pla`
+- render time: `5.83s`
 
 ## Assets
 
