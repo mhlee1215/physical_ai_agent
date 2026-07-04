@@ -81,17 +81,22 @@ checking simulation states with more realistic lighting/materials.
 
 ## MyCobot Render
 
-The same sidecar approach also works for the local MyCobot Nexus scene. The
-renderer exports MuJoCo mesh geoms plus box primitives such as the cube, work
-mat, palm, and finger pads, then path-traces the static state in Blender:
+The same sidecar approach also works for the local MyCobot Nexus scene. Pass
+`--official-gripper-root` to render the official parallel gripper meshes from
+`mycobot_ros`; without those assets, the 280 scene falls back to a synthetic
+collision proxy gripper that is useful for contact tests but not for visual
+evidence. The renderer exports MuJoCo mesh geoms plus visible box primitives
+such as the cube and work mat, then path-traces the static state in Blender:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/render_mycobot_blender_probe.py \
   --asset-root _workspace/_vendor/mycobot_mujoco \
+  --official-gripper-root _workspace/_vendor/mycobot_ros \
+  --model-profile 280-jn \
   --render-asset-root _workspace/photoreal_assets \
   --output-dir _workspace/mycobot_blender_probe \
   --seed 7 \
-  --warmup-steps 8 \
+  --warmup-steps 0 \
   --width 640 \
   --height 480 \
   --samples 256 \
@@ -107,7 +112,8 @@ The measured local example on this Mac was:
 - samples: `256`
 - denoise: enabled
 - material: `matte_pla`
-- render time: `5.83s`
+- model profile: `280-jn` with official `mycobot_ros` parallel gripper meshes
+- render time: `3.22s`
 
 ## Assets
 

@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from physical_ai_agent.sim.mycobot_nexus_env import (
+    MODEL_PROFILE_280_JN,
+    MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+    MODEL_PROFILE_320_GRIPPER,
     MyCobotNexusConfig,
     MyCobotNexusEnv,
     sample_mycobot_nexus_action,
@@ -334,7 +337,22 @@ def main() -> None:
         "--asset-root",
         type=Path,
         default=Path("_vendor/mycobot_mujoco"),
-        help="Local clone of https://github.com/elephantrobotics/mycobot_mujoco.",
+        help="Local clone of https://github.com/elephantrobotics/mycobot_mujoco for the 280-jn profile.",
+    )
+    parser.add_argument(
+        "--official-gripper-root",
+        type=Path,
+        help="Local clone of elephantrobotics/mycobot_ros or mycobot_ros2 for official gripper profiles.",
+    )
+    parser.add_argument(
+        "--model-profile",
+        choices=(MODEL_PROFILE_280_JN, MODEL_PROFILE_320_GRIPPER, MODEL_PROFILE_320_ADAPTIVE_GRIPPER),
+        default=MODEL_PROFILE_280_JN,
+        help=(
+            "Robot/gripper source profile. 280-jn falls back to a synthetic gripper "
+            "unless official 280 gripper assets are supplied by the source model; "
+            "320 profiles import official gripper meshes from --official-gripper-root."
+        ),
     )
     parser.add_argument("--output-dir", type=Path, default=Path("_workspace/mycobot_blender_probe"))
     parser.add_argument("--seed", type=int, default=7)
@@ -354,6 +372,8 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     result = render_mycobot_blender_probe(
         asset_root=args.asset_root,
+        official_gripper_root=args.official_gripper_root,
+        model_profile=args.model_profile,
         output_dir=args.output_dir,
         seed=args.seed,
         warmup_steps=args.warmup_steps,
@@ -373,6 +393,8 @@ def main() -> None:
 def render_mycobot_blender_probe(
     *,
     asset_root: Path,
+    official_gripper_root: Path | None,
+    model_profile: str,
     output_dir: Path,
     seed: int,
     warmup_steps: int,
@@ -396,6 +418,8 @@ def render_mycobot_blender_probe(
         MyCobotNexusConfig(
             asset_root=asset_root,
             work_dir=output_dir / "mycobot_scene",
+            official_gripper_root=official_gripper_root,
+            model_profile=model_profile,
             width=width,
             height=height,
         )
@@ -452,6 +476,8 @@ def render_mycobot_blender_probe(
         "image_path": str(image_path),
         "comparison_path": str(comparison_path) if comparison_path else None,
         "asset_root": str(asset_root),
+        "official_gripper_root": str(official_gripper_root) if official_gripper_root else None,
+        "model_profile": model_profile,
         "mesh_dir": str(mesh_dir),
         "mesh_geoms_exported": len(exported),
         "primitive_geoms_exported": len(primitives),
@@ -490,6 +516,8 @@ def _export_primitive_geoms(model: Any, data: Any) -> list[dict[str, Any]]:
             continue
         name = model.geom(geom_id).name or f"geom_{geom_id:03d}"
         rgba = _geom_rgba(model, geom_id)
+        if len(rgba) >= 4 and rgba[3] <= 0.01:
+            continue
         primitives.append(
             {
                 "geom_id": geom_id,
