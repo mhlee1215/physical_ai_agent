@@ -12,11 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from physical_ai_agent.sim.mycobot_nexus_env import (
+    ADAPTIVE_GATE7_TABLE_ARM_QPOS,
     MODEL_PROFILE_280_JN,
     MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
     MODEL_PROFILE_320_GRIPPER,
     MyCobotNexusConfig,
     MyCobotNexusEnv,
+    TASK_CUBE_POS,
     sample_mycobot_nexus_action,
 )
 
@@ -357,6 +359,12 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("_workspace/mycobot_blender_probe"))
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--warmup-steps", type=int, default=8)
+    parser.add_argument(
+        "--pose-preset",
+        choices=("sample", "adaptive-table"),
+        default="sample",
+        help="State to render after reset. adaptive-table uses the validated adaptive gripper table pose.",
+    )
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--samples", type=int, default=256)
@@ -377,6 +385,7 @@ def main() -> None:
         output_dir=args.output_dir,
         seed=args.seed,
         warmup_steps=args.warmup_steps,
+        pose_preset=args.pose_preset,
         width=args.width,
         height=args.height,
         samples=args.samples,
@@ -398,6 +407,7 @@ def render_mycobot_blender_probe(
     output_dir: Path,
     seed: int,
     warmup_steps: int,
+    pose_preset: str,
     width: int,
     height: int,
     samples: int,
@@ -426,8 +436,11 @@ def render_mycobot_blender_probe(
     )
     try:
         env.reset(seed=seed)
-        for step in range(warmup_steps):
-            env.step(sample_mycobot_nexus_action(step, warmup_steps))
+        if pose_preset == "adaptive-table":
+            _set_adaptive_table_pose(env)
+        else:
+            for step in range(warmup_steps):
+                env.step(sample_mycobot_nexus_action(step, warmup_steps))
         model, data = env.model, env.data
         exported = _export_mesh_geoms(model, data, mesh_dir, max_mesh_geoms=max_mesh_geoms)
         primitives = _export_primitive_geoms(model, data)
@@ -493,10 +506,30 @@ def render_mycobot_blender_probe(
         "height": height,
         "seed": seed,
         "warmup_steps": warmup_steps,
+        "pose_preset": pose_preset,
         "log_path": str(log_path),
     }
     (output_dir / "blender_probe_report.json").write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     return report
+
+
+def _set_adaptive_table_pose(env: MyCobotNexusEnv) -> None:
+    if env.config.model_profile != MODEL_PROFILE_320_ADAPTIVE_GRIPPER:
+        raise ValueError("--pose-preset adaptive-table requires --model-profile 320-m5-2022-adaptive-gripper")
+    for qpos_index, value in zip(env._qpos_indices, ADAPTIVE_GATE7_TABLE_ARM_QPOS, strict=True):
+        env.data.qpos[qpos_index] = float(value)
+    for actuator_index, value in zip(env._arm_actuator_indices, ADAPTIVE_GATE7_TABLE_ARM_QPOS, strict=True):
+        env.data.ctrl[actuator_index] = float(value)
+    env._set_gripper(command=0.25)
+    env._mujoco.mj_forward(env.model, env.data)
+    pad_midpoint = env._finger_pad_midpoint()
+    cube_position = [float(pad_midpoint[0]), float(pad_midpoint[1]), float(TASK_CUBE_POS[2])]
+    for axis, value in enumerate(cube_position):
+        env.data.qpos[env._cube_freejoint_qpos_index + axis] = float(value)
+    qvel_start = env._cube_freejoint_qvel_index
+    env.data.qvel[qvel_start:qvel_start + 6] = 0.0
+    env._cube_initial_pos = list(cube_position)
+    env._mujoco.mj_forward(env.model, env.data)
 
 
 def _export_primitive_geoms(model: Any, data: Any) -> list[dict[str, Any]]:

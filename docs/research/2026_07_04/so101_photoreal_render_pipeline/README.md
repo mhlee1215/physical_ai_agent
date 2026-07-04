@@ -19,9 +19,9 @@ Procedural versus HDRI/PBR assets:
 
 ![SO101 procedural versus HDRI PBR](./procedural_vs_hdri_pbr.png)
 
-MyCobot matte PLA material:
+MyCobot adaptive gripper matte PLA material:
 
-![MyCobot matte PLA render](./mycobot_matte_pla_example.png)
+![MyCobot adaptive gripper matte PLA render](./mycobot_matte_pla_example.png)
 
 ## One-Frame Render
 
@@ -81,18 +81,17 @@ checking simulation states with more realistic lighting/materials.
 
 ## MyCobot Render
 
-The same sidecar approach also works for the local MyCobot Nexus scene. Pass
-`--official-gripper-root` to render the official parallel gripper meshes from
-`mycobot_ros`; without those assets, the 280 scene falls back to a synthetic
-collision proxy gripper that is useful for contact tests but not for visual
-evidence. The renderer exports MuJoCo mesh geoms plus visible box primitives
-such as the cube and work mat, then path-traces the static state in Blender:
+The same sidecar approach also works for the local MyCobot Nexus scene. For
+adaptive-gripper visual evidence, pass `--official-gripper-root` with a local
+`mycobot_ros2` clone and use the `320-m5-2022-adaptive-gripper` profile. The
+renderer exports MuJoCo mesh geoms plus visible box primitives such as the cube
+and work mat, then path-traces the static state in Blender:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/render_mycobot_blender_probe.py \
-  --asset-root _workspace/_vendor/mycobot_mujoco \
-  --official-gripper-root _workspace/_vendor/mycobot_ros \
-  --model-profile 280-jn \
+  --official-gripper-root _workspace/_vendor/mycobot_ros2 \
+  --model-profile 320-m5-2022-adaptive-gripper \
+  --pose-preset adaptive-table \
   --render-asset-root _workspace/photoreal_assets \
   --output-dir _workspace/mycobot_blender_probe \
   --seed 7 \
@@ -112,8 +111,19 @@ The measured local example on this Mac was:
 - samples: `256`
 - denoise: enabled
 - material: `matte_pla`
-- model profile: `280-jn` with official `mycobot_ros` parallel gripper meshes
-- render time: `3.22s`
+- model profile: `320-m5-2022-adaptive-gripper` with official `mycobot_ros2`
+  adaptive gripper meshes
+- pose preset: `adaptive-table`
+- render time: `6.55s`
+
+The adaptive asset/pose path was also checked with:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/verify_mycobot_320_adaptive_visual_pose.py \
+  --official-gripper-root _workspace/_vendor/mycobot_ros2
+PYTHONPATH=src .venv/bin/python scripts/verify_mycobot_320_adaptive_mimic_motion.py \
+  --official-gripper-root _workspace/_vendor/mycobot_ros2
+```
 
 ## Assets
 
