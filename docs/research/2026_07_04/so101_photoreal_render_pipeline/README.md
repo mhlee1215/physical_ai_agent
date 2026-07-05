@@ -144,15 +144,21 @@ To make rendered frames visible as an actual dataset, build an
 strict by default: selected source episodes must preserve their original frame
 counts and all policy camera keys:
 
-Camera alignment is metadata-driven, not visually hand-tuned. For every source
-row, `scripts/render_so101_dataset_blender_preview.py` sets the MuJoCo state,
-calls the same `_make_camera(...)` route used by
+Camera alignment is metadata-driven, not visually hand-tuned. For every rendered
+source row, `scripts/render_so101_dataset_blender_preview.py` uses the replayed
+MuJoCo state, calls the same `_make_camera(...)` route used by
 `scripts/export_so101_teacher_rollouts_lerobot.py`, runs
 `mujoco.Renderer.update_scene(...)`, then reads `scene.camera[0].pos`,
 `scene.camera[0].forward`, `scene.camera[0].up`, and the MuJoCo camera FOV into
 the Blender camera. `camera1` also applies the same egocentric postprocess
 rotation contract as the source dataset. The `--camera-lens` value is only a
 fallback for cameras without MuJoCo FOV metadata.
+
+Object/contact dynamics are also replay-based. The renderer resets each source
+episode once with the seed recorded in `so101_lerobot_export_report.json`,
+renders the pre-action frame, then steps the source `action` before the next
+frame. It does not reset the environment per row, because that would keep the
+cube at the reset pose and break grasp/lift continuity.
 
 ```bash
 PYTHONPATH=src:.:scripts .venv/bin/python scripts/render_so101_dataset_blender_preview.py \

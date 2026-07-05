@@ -103,6 +103,7 @@ def render_dataset_preview(
 ) -> dict[str, Any]:
     import gymnasium as gym
     import mujoco
+    import numpy as np
     import pyarrow.parquet as pq
     import so101_nexus_mujoco  # noqa: F401 - registers Gymnasium env ids.
 
@@ -114,11 +115,19 @@ def render_dataset_preview(
         frame_tokens=frame_tokens,
         episode_summaries=episode_summaries,
     )
-    rows = _dataset_rows(dataset_root, episode_frames=episode_frames)
+    rows = _dataset_rows_for_replay(dataset_root, episode_frames=episode_frames)
     expected = sum(len(frames) for frames in episode_frames.values())
-    if len(rows) != expected:
-        found = [(int(row["episode_index"]), int(row["frame_index"])) for row in rows]
+    selected = [
+        row
+        for row in rows
+        if int(row["frame_index"]) in set(episode_frames[int(row["episode_index"])])
+    ]
+    if len(selected) != expected:
+        found = [(int(row["episode_index"]), int(row["frame_index"])) for row in selected]
         raise ValueError(f"missing requested episode frames: requested={episode_frames}, found={found}")
+    rows_by_episode: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        rows_by_episode.setdefault(int(row["episode_index"]), []).append(row)
 
     rendered: list[dict[str, Any]] = []
     driver_path = output_dir / "blender_driver.py"
@@ -133,8 +142,7 @@ def render_dataset_preview(
     try:
         for camera_name in ("egocentric_cam", "wrist_cam"):
             mujoco_renderers[camera_name] = mujoco.Renderer(env.unwrapped.model, height=height, width=width)
-        for row in rows:
-            episode = int(row["episode_index"])
+        for episode in sorted(rows_by_episode):
             seed = _seed_for_episode(
                 episode,
                 seed_base=seed_base,
@@ -143,95 +151,101 @@ def render_dataset_preview(
             )
             env.reset(seed=seed)
             unwrapped = env.unwrapped
-            state = [float(value) for value in row["observation.state"]]
-            unwrapped.data.qpos[: len(state)] = state
             actuator_ids = getattr(unwrapped, "_actuator_ids", None)
-            if actuator_ids is not None:
-                unwrapped.data.ctrl[actuator_ids] = state
-            mujoco.mj_forward(unwrapped.model, unwrapped.data)
+            for row in rows_by_episode[episode]:
+                frame_index = int(row["frame_index"])
+                state = [float(value) for value in row["observation.state"]]
+                action = [float(value) for value in row["action"]]
+                replay_state = unwrapped.data.ctrl[actuator_ids] if actuator_ids is not None else unwrapped.data.ctrl
+                state_error = _state_replay_error(replay_state, state)
 
-            frame_index = int(row["frame_index"])
-            frame_dir = output_dir / f"episode_{episode:04d}_frame_{frame_index:04d}"
-            mesh_dir = frame_dir / "ply"
-            mesh_dir.mkdir(parents=True, exist_ok=True)
-            exported = _export_mesh_geoms(
-                unwrapped.model,
-                unwrapped.data,
-                mesh_dir,
-                max_mesh_geoms=max_mesh_geoms,
-            )
-            primitives = _export_primitive_geoms(unwrapped.model, unwrapped.data)
-            camera_specs = _camera_specs_from_mujoco_scene(
-                env,
-                mujoco_renderers,
-                camera_lens=camera_lens,
-            )
-            render_specs = []
-            image_paths: dict[str, str] = {}
-            for camera_key in camera_keys:
-                if camera_key not in camera_specs:
-                    raise ValueError(f"unsupported camera key: {camera_key}")
-                image_path = frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_{_camera_slug(camera_key)}.png"
-                render_specs.append({"image_path": str(image_path.resolve()), "camera": camera_specs[camera_key]})
-                image_paths[camera_key] = str(image_path)
-            blender_report_path = frame_dir / "blender_device_report.json"
-            spec_path = frame_dir / "blender_scene_spec.json"
-            spec = {
-                "width": width,
-                "height": height,
-                "samples": samples,
-                "denoise": denoise,
-                "robot_material": robot_material,
-                "camera_lens": camera_lens,
-                "texture_path": str(texture_path.resolve()),
-                "hdri_path": str(hdri_path.resolve()) if hdri_path.exists() else None,
-                "table_pbr": _pbr_paths(table_pbr_dir, "Wood008_1K-JPG"),
-                "plastic_pbr": _pbr_paths(plastic_pbr_dir, "Plastic013A_1K-JPG"),
-                "image_path": str(Path(next(iter(image_paths.values()))).resolve()),
-                "blender_report_path": str(blender_report_path.resolve()),
-                "meshes": [{**item, "path": str(Path(item["path"]).resolve())} for item in exported],
-                "primitives": primitives,
-                "target_site": None,
-                "renders": render_specs,
-            }
-            spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True), encoding="utf-8")
-            command = [blender_bin, "--background", "--python", str(driver_path), "--", str(spec_path)]
-            started = time.perf_counter()
-            completed = subprocess.run(command, text=True, capture_output=True, check=False)
-            render_seconds = time.perf_counter() - started
-            log_path = frame_dir / "blender_render.log"
-            log_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
-            if completed.returncode != 0:
-                raise RuntimeError(f"Blender render failed with exit code {completed.returncode}; see {log_path}")
-            for camera_key, image_path in image_paths.items():
-                rotation = camera_specs[camera_key].get("rotation_degrees", 0)
-                if rotation:
-                    _rotate_image(Path(image_path), int(rotation))
-            if duplicate_camera3_from_camera2 and "observation.images.camera2" in image_paths:
-                camera2_path = Path(image_paths["observation.images.camera2"])
-                camera3_path = frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_camera3.png"
-                shutil.copyfile(camera2_path, camera3_path)
-                image_paths["observation.images.camera3"] = str(camera3_path)
-            rendered.append(
-                {
-                    "episode": episode,
-                    "seed": seed,
-                    "frame": frame_index,
-                    "frame_label": _frame_label(episode_frames, episode=episode, frame=frame_index),
-                    "timestamp": float(row["timestamp"]),
-                    "state": state,
-                    "action": [float(value) for value in row["action"]],
-                    "image_path": image_paths.get("observation.images.camera1") or next(iter(image_paths.values())),
-                    "image_paths": image_paths,
-                    "mesh_geoms_exported": len(exported),
-                    "primitive_geoms_exported": len(primitives),
-                    "render_seconds": render_seconds,
-                }
-            )
+                if frame_index in episode_frames[episode]:
+                    frame_dir = output_dir / f"episode_{episode:04d}_frame_{frame_index:04d}"
+                    mesh_dir = frame_dir / "ply"
+                    mesh_dir.mkdir(parents=True, exist_ok=True)
+                    mujoco.mj_forward(unwrapped.model, unwrapped.data)
+                    exported = _export_mesh_geoms(
+                        unwrapped.model,
+                        unwrapped.data,
+                        mesh_dir,
+                        max_mesh_geoms=max_mesh_geoms,
+                    )
+                    primitives = _export_primitive_geoms(unwrapped.model, unwrapped.data)
+                    camera_specs = _camera_specs_from_mujoco_scene(
+                        env,
+                        mujoco_renderers,
+                        camera_lens=camera_lens,
+                    )
+                    render_specs = []
+                    image_paths: dict[str, str] = {}
+                    for camera_key in camera_keys:
+                        if camera_key not in camera_specs:
+                            raise ValueError(f"unsupported camera key: {camera_key}")
+                        image_path = frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_{_camera_slug(camera_key)}.png"
+                        render_specs.append({"image_path": str(image_path.resolve()), "camera": camera_specs[camera_key]})
+                        image_paths[camera_key] = str(image_path)
+                    blender_report_path = frame_dir / "blender_device_report.json"
+                    spec_path = frame_dir / "blender_scene_spec.json"
+                    spec = {
+                        "width": width,
+                        "height": height,
+                        "samples": samples,
+                        "denoise": denoise,
+                        "robot_material": robot_material,
+                        "camera_lens": camera_lens,
+                        "texture_path": str(texture_path.resolve()),
+                        "hdri_path": str(hdri_path.resolve()) if hdri_path.exists() else None,
+                        "table_pbr": _pbr_paths(table_pbr_dir, "Wood008_1K-JPG"),
+                        "plastic_pbr": _pbr_paths(plastic_pbr_dir, "Plastic013A_1K-JPG"),
+                        "image_path": str(Path(next(iter(image_paths.values()))).resolve()),
+                        "blender_report_path": str(blender_report_path.resolve()),
+                        "meshes": [{**item, "path": str(Path(item["path"]).resolve())} for item in exported],
+                        "primitives": primitives,
+                        "target_site": None,
+                        "renders": render_specs,
+                    }
+                    spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True), encoding="utf-8")
+                    command = [blender_bin, "--background", "--python", str(driver_path), "--", str(spec_path)]
+                    started = time.perf_counter()
+                    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+                    render_seconds = time.perf_counter() - started
+                    log_path = frame_dir / "blender_render.log"
+                    log_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
+                    if completed.returncode != 0:
+                        raise RuntimeError(f"Blender render failed with exit code {completed.returncode}; see {log_path}")
+                    for camera_key, image_path in image_paths.items():
+                        rotation = camera_specs[camera_key].get("rotation_degrees", 0)
+                        if rotation:
+                            _rotate_image(Path(image_path), int(rotation))
+                    if duplicate_camera3_from_camera2 and "observation.images.camera2" in image_paths:
+                        camera2_path = Path(image_paths["observation.images.camera2"])
+                        camera3_path = frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_camera3.png"
+                        shutil.copyfile(camera2_path, camera3_path)
+                        image_paths["observation.images.camera3"] = str(camera3_path)
+                    rendered.append(
+                        {
+                            "episode": episode,
+                            "seed": seed,
+                            "frame": frame_index,
+                            "frame_label": _frame_label(episode_frames, episode=episode, frame=frame_index),
+                            "timestamp": float(row["timestamp"]),
+                            "state": state,
+                            "action": action,
+                            "replay_state_error": state_error,
+                            "image_path": image_paths.get("observation.images.camera1") or next(iter(image_paths.values())),
+                            "image_paths": image_paths,
+                            "mesh_geoms_exported": len(exported),
+                            "primitive_geoms_exported": len(primitives),
+                            "render_seconds": render_seconds,
+                        }
+                    )
+                env.step(np.asarray(action, dtype=float))
     finally:
         for renderer in mujoco_renderers.values():
             renderer.close()
         env.close()
+    if len(rendered) != expected:
+        raise RuntimeError(f"rendered {len(rendered)} frames, expected {expected}")
 
     contact_sheet = _write_contact_sheet(rendered, output_dir / "so101_dataset_photoreal_contact_sheet.png")
     report = {
@@ -254,9 +268,9 @@ def render_dataset_preview(
         "contact_sheet": str(contact_sheet),
         "renders": rendered,
         "note": (
-            "Robot qpos/action are read from the LeRobot dataset rows. The cube/object "
-            "pose comes from resetting the MuJoCoPickLift env with the per-episode seed "
-            "recorded in so101_lerobot_export_report.json when available."
+            "Episode state is replayed from the source LeRobot actions: each episode "
+            "resets once with the recorded seed, renders the pre-action frame, then "
+            "steps the source action so cube/contact dynamics remain continuous."
         ),
     }
     (output_dir / "so101_dataset_blender_preview_report.json").write_text(
@@ -266,7 +280,7 @@ def render_dataset_preview(
     return report
 
 
-def _dataset_rows(dataset_root: Path, *, episode_frames: dict[int, list[int]]) -> list[dict[str, Any]]:
+def _dataset_rows_for_replay(dataset_root: Path, *, episode_frames: dict[int, list[int]]) -> list[dict[str, Any]]:
     import pyarrow.parquet as pq
 
     data_files = sorted((dataset_root / "data").glob("chunk-*/file-*.parquet"))
@@ -276,13 +290,22 @@ def _dataset_rows(dataset_root: Path, *, episode_frames: dict[int, list[int]]) -
         [str(path) for path in data_files],
         columns=["episode_index", "frame_index", "timestamp", "observation.state", "action"],
     )
-    wanted = {(int(episode), int(frame)) for episode, frames in episode_frames.items() for frame in frames}
+    max_frame_by_episode = {int(episode): max(int(frame) for frame in frames) for episode, frames in episode_frames.items()}
     rows = [
         row
         for row in _rows(table.to_pydict())
-        if (int(row["episode_index"]), int(row["frame_index"])) in wanted
+        if int(row["episode_index"]) in max_frame_by_episode
+        and int(row["frame_index"]) <= max_frame_by_episode[int(row["episode_index"])]
     ]
     return sorted(rows, key=lambda row: (int(row["episode_index"]), int(row["frame_index"])))
+
+
+def _state_replay_error(qpos: Any, state: list[float]) -> float:
+    total = 0.0
+    for observed, expected in zip(qpos, state, strict=False):
+        delta = float(observed) - float(expected)
+        total += delta * delta
+    return total**0.5
 
 
 def _export_primitive_geoms(model: Any, data: Any) -> list[dict[str, Any]]:
