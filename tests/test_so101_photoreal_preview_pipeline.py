@@ -125,9 +125,12 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "photoreal_dataset"
             (root / "episodes").mkdir(parents=True)
-            (root / "images" / "episode_0000").mkdir(parents=True)
-            image = root / "images" / "episode_0000" / "frame_0000.png"
-            image.write_bytes(png)
+            image_paths = {}
+            for camera in ("camera1", "camera2", "camera3"):
+                image = root / "images" / "episode_0000" / f"observation_images_{camera}" / "frame_0000.png"
+                image.parent.mkdir(parents=True)
+                image.write_bytes(png)
+                image_paths[camera] = f"images/episode_0000/observation_images_{camera}/frame_0000.png"
             (root / "episodes" / "episode_0000.jsonl").write_text(
                 json.dumps(
                     {
@@ -141,7 +144,7 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
                         "source_frame_index": 85,
                         "observation": {
                             "state": [0, 1, 2, 3, 4, 5],
-                            "images": {"camera1": "images/episode_0000/frame_0000.png"},
+                            "images": image_paths,
                         },
                         "action": [5, 4, 3, 2, 1, 0],
                     },
@@ -159,10 +162,20 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
                         "fps": 12,
                         "image_mime_type": "image/png",
                         "image_shape": [1, 1, 3],
-                        "features": ["observation.images.camera1", "observation.state", "action"],
+                        "features": [
+                            "observation.images.camera1",
+                            "observation.images.camera2",
+                            "observation.images.camera3",
+                            "observation.state",
+                            "action",
+                        ],
                         "joint_names": ["j0", "j1", "j2", "j3", "j4", "j5"],
                         "action_names": ["j0", "j1", "j2", "j3", "j4", "j5"],
-                        "camera_contract": {"observation.images.camera1": "photoreal_render"},
+                        "camera_contract": {
+                            "observation.images.camera1": "photoreal egocentric_cam",
+                            "observation.images.camera2": "photoreal wrist_cam",
+                            "observation.images.camera3": "photoreal wrist_cam duplicate",
+                        },
                         "episode_summaries": [{"episode_index": 0, "frames": 1}],
                     }
                 ),
@@ -178,6 +191,8 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertEqual(payload["source_episode_index"], 2)
         self.assertEqual(payload["source_frame_index"], 85)
         self.assertIn("observation.images.camera1", payload["images"])
+        self.assertIn("observation.images.camera2", payload["images"])
+        self.assertIn("observation.images.camera3", payload["images"])
         self.assertNotIn("photoreal_images", payload)
 
 

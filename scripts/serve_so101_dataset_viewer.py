@@ -732,6 +732,7 @@ def _so101_photoreal_dataset(root: Path) -> dict[str, Any]:
 def _so101_photoreal_dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
     manifest = dataset["manifest"]
     image_shape = manifest.get("image_shape") or [480, 640, 3]
+    image_features = [feature for feature in manifest.get("features", []) if str(feature).startswith("observation.images.")]
     return {
         "type": "so101_photoreal_jsonl",
         "dataset_format": "so101_photoreal_jsonl_v1",
@@ -749,7 +750,7 @@ def _so101_photoreal_dataset_summary(split: str, dataset: dict[str, Any]) -> dic
         "image_bytes": _dir_size(dataset["root"] / "images"),
         "image_human": _format_bytes(_dir_size(dataset["root"] / "images")),
         "features": manifest.get("features") or ["observation.images.camera1"],
-        "image_shapes": {"observation.images.camera1": image_shape},
+        "image_shapes": {feature: image_shape for feature in image_features},
         "episode_lengths": dataset["episode_lengths"],
         "camera_contract": manifest.get("camera_contract") or {},
         "source_dataset_root": manifest.get("source_dataset_root"),
@@ -963,14 +964,16 @@ def _so101_photoreal_frame_payload(root: Path, split: str, episode: int, frame: 
     frame = max(0, min(frame, lengths[episode] - 1))
     episode_path = root / "episodes" / f"episode_{episode:04d}.jsonl"
     row = _jsonl_row(episode_path, frame)
-    image_rel = row.get("observation", {}).get("images", {}).get("camera1")
     images = {}
-    image_path = ""
-    if image_rel:
-        image_path = str(image_rel)
+    image_paths = {}
+    for name, image_rel in (row.get("observation", {}).get("images", {}) or {}).items():
+        if not image_rel:
+            continue
         image_file = root / image_rel
         mime = dataset["manifest"].get("image_mime_type") or "image/png"
-        images["observation.images.camera1"] = f"data:{mime};base64," + base64.b64encode(image_file.read_bytes()).decode("ascii")
+        key = name if str(name).startswith("observation.images.") else f"observation.images.{name}"
+        image_paths[key] = str(image_rel)
+        images[key] = f"data:{mime};base64," + base64.b64encode(image_file.read_bytes()).decode("ascii")
     state_values = [float(value) for value in row.get("observation", {}).get("state", [])]
     action_values = [float(value) for value in row.get("action", [])]
     return {
@@ -987,7 +990,7 @@ def _so101_photoreal_frame_payload(root: Path, split: str, episode: int, frame: 
         "source_frame_index": row.get("source_frame_index"),
         "source_seed": row.get("source_seed"),
         "images": images,
-        "image_path": image_path,
+        "image_paths": image_paths,
         "camera_contract": dataset["manifest"].get("camera_contract") or {},
         "state": _named_values(dataset["manifest"].get("joint_names") or JOINT_NAMES, state_values),
         "action": _named_values(dataset["manifest"].get("action_names") or JOINT_NAMES, action_values),

@@ -131,29 +131,45 @@ dataset. The robot qpos/action are row-derived; object pose is recreated by
 resetting the export-compatible env with the report-backed per-episode seed
 because the LeRobot parquet rows do not store full object qpos.
 
-## SO101 Photoreal Dataset
+## SO101 Photoreal Dataset Contract
 
-To make the rendered frames visible as an actual dataset, build a compact
-photoreal JSONL dataset root:
+To make rendered frames visible as an actual dataset, build an
+`so101_photoreal_jsonl_v1` root from a rendered frame directory. The builder is
+strict by default: selected source episodes must preserve their original frame
+counts and all policy camera keys:
 
 ```bash
 PYTHONPATH=src:.:scripts .venv/bin/python scripts/build_so101_photoreal_dataset.py \
   --source-dataset-root _workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200 \
-  --rendered-dir docs/research/2026_07_04/so101_photoreal_render_pipeline/so101_pick_cube_train5episodes \
-  --output-root _workspace/so101_photoreal_datasets/pick_cube_train5episodes_start_grip_640_seed98200 \
+  --rendered-dir _workspace/so101_photoreal_renders/pick_cube_train5episodes_full \
+  --output-root _workspace/so101_photoreal_datasets/pick_cube_train5episodes_full_640_seed98200 \
+  --episodes 0,1,2,3,4 \
   --overwrite
 ```
 
-The generated dataset format is `so101_photoreal_jsonl_v1`. Its stored image
-feature is `observation.images.camera1`, and that image is the photoreal render
-itself. This differs from the sidecar comparison path above: the Data Viewer
-discovers this root under `_workspace/so101_photoreal_datasets/` and lists it
-as a separate `Photoreal datasets` entry.
+The rendered directory must contain one PNG per source episode/frame/camera,
+using names like:
 
-The current compact dataset contains episodes `0..4` from `pick_cube_train`,
-with `start` and `grip` frames for each episode. It is intended for visual
-dataset QA and dashboard inspection. A full replacement training set would
-require rendering every frame for the selected episodes.
+```text
+episode_0000_frame_0000_camera1.png
+episode_0000_frame_0000_camera2.png
+episode_0000_frame_0001_camera1.png
+...
+```
+
+For `pick_cube_train` episode `0..4`, this means the output must preserve the
+source lengths, roughly 92 frames per episode, and expose:
+
+- `observation.images.camera1`: photoreal `egocentric_cam`
+- `observation.images.camera2`: photoreal `wrist_cam`
+- `observation.images.camera3`: photoreal `wrist_cam duplicate`
+- `observation.state`
+- `action`
+
+If any required frame or camera is missing, the builder fails instead of
+creating a misleading partial dataset. The Data Viewer discovers completed
+roots under `_workspace/so101_photoreal_datasets/` and lists them as separate
+`Photoreal datasets` entries.
 
 ## MyCobot Render
 
