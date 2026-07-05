@@ -15,9 +15,9 @@ Material comparison:
 
 ![SO101 material comparison](./material_compare.png)
 
-SO101 home-to-cube dataset five-frame preview:
+SO101 `pick_cube_train` five-episode start/grip preview:
 
-![SO101 home-to-cube photoreal preview](./so101_home_to_grip_5frames/contact_sheet.png)
+![SO101 pick-cube five-episode photoreal preview](./so101_pick_cube_train5episodes/contact_sheet.png)
 
 Procedural versus HDRI/PBR assets:
 
@@ -83,38 +83,53 @@ This does not replace `observation.images.camera1/camera2/camera3` in the
 LeRobot dataset. It is intended for dataset QA, paper figures, and visually
 checking simulation states with more realistic lighting/materials.
 
-## SO101 Dataset Frame Preview
+## SO101 Dataset Episode Preview
 
-Five frames were rendered from the local home-start SO101 LeRobot dataset:
+Five episodes were rendered from the existing SO101 `pick_cube_train` LeRobot
+training set:
 
 ```text
-_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_home_balanced_lr_104_ego_wrist_256_seed124000
+_workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200
 ```
 
-The preview uses episode `0`, frames `0,20,30,40,50`. These rows start at the
-home pose and move toward the visible green cube. The renderer reads
-`observation.state` and `action` from the parquet rows, resets
-`MuJoCoPickLift-v1` with the dataset seed, injects the robot qpos, and renders
-the frame with Blender Cycles:
+This is the recipe-backed home-start cube-grip training set:
+
+- recipe: `pick_cube_train`
+- export script: `scripts/export_so101_teacher_rollouts_lerobot.py`
+- task: `pick_cube`
+- seed: `98200`
+- start mode: `home`
+- teacher style: `staged`
+- phase settings: `approach_steps=34`, `settle_steps=10`,
+  `close_steps=42`, `lift_steps=58`
+
+The preview uses episodes `0,1,2,3,4` and renders each episode's `start` frame
+plus the computed `grip` frame. The renderer reads `observation.state` and
+`action` from the parquet rows, resets the same high-contrast PickLift env
+factory used by the dataset exporter, uses the actual per-episode seed recorded
+in `so101_lerobot_export_report.json`, injects the robot qpos, and renders the
+frame with Blender Cycles:
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/render_so101_dataset_blender_preview.py \
-  --dataset-root _workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_home_balanced_lr_104_ego_wrist_256_seed124000 \
-  --output-dir _workspace/so101_dataset_photoreal_home_to_grip_5frames \
-  --episode 0 \
-  --frames 0,20,30,40,50 \
+PYTHONPATH=src:.:scripts .venv/bin/python scripts/render_so101_dataset_blender_preview.py \
+  --dataset-root _workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200 \
+  --output-dir _workspace/so101_dataset_photoreal_pick_cube_train5episodes \
+  --env-source high_contrast_picklift \
+  --episodes 0,1,2,3,4 \
+  --frames start,grip \
   --asset-root _workspace/photoreal_assets \
   --width 640 \
   --height 480 \
   --samples 192 \
   --denoise \
-  --robot-material matte_pla
+  --robot-material matte_pla \
+  --camera-lens 35
 ```
 
 This is a sidecar visual preview, not an in-place mutation of the LeRobot
-dataset. The robot qpos/action are row-derived; the cube pose comes from the
-seeded `MuJoCoPickLift-v1` reset because the LeRobot parquet rows do not store
-full object qpos.
+dataset. The robot qpos/action are row-derived; object pose is recreated by
+resetting the export-compatible env with the report-backed per-episode seed
+because the LeRobot parquet rows do not store full object qpos.
 
 ## MyCobot Render
 

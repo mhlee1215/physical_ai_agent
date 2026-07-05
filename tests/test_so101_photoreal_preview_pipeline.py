@@ -83,7 +83,10 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
             capture_output=True,
         )
         self.assertIn("--dataset-root", completed.stdout)
+        self.assertIn("--episodes", completed.stdout)
+        self.assertIn("--env-source", completed.stdout)
         self.assertIn("--frames", completed.stdout)
+        self.assertIn("--camera-lens", completed.stdout)
 
 
 if __name__ == "__main__":

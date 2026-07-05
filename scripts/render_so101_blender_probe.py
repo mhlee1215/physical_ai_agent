@@ -110,7 +110,7 @@ def main():
     bpy.context.collection.objects.link(camera_obj)
     camera_obj.location = (0.48, -0.50, 0.31)
     look_at(camera_obj, Vector((0.12, 0.015, 0.075)))
-    camera.lens = 48
+    camera.lens = float(spec.get("camera_lens", 48))
     camera.dof.use_dof = True
     camera.dof.focus_distance = 0.56
     camera.dof.aperture_fstop = 8.0

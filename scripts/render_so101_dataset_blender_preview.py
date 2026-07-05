@@ -23,11 +23,21 @@ def main() -> None:
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=Path("_workspace/so101_dataset_blender_preview"))
     parser.add_argument("--env-id", default="MuJoCoPickLift-v1")
+    parser.add_argument(
+        "--env-source",
+        choices=("gym", "high_contrast_picklift"),
+        default="gym",
+        help="Environment source. Use high_contrast_picklift for export_so101_teacher_rollouts_lerobot datasets.",
+    )
     parser.add_argument("--episode", type=int, default=0)
+    parser.add_argument(
+        "--episodes",
+        help="Comma-separated episode indices. Overrides --episode when set.",
+    )
     parser.add_argument(
         "--frames",
         default="0,22,44,66,87",
-        help="Comma-separated frame indices from the selected episode.",
+        help="Comma-separated frame indices or labels: start, open, grip, final.",
     )
     parser.add_argument("--seed-base", type=int, help="Reset seed base. Defaults to seedNNN parsed from dataset root.")
     parser.add_argument("--width", type=int, default=640)
@@ -35,25 +45,29 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=192)
     parser.add_argument("--denoise", action="store_true")
     parser.add_argument("--robot-material", choices=("plastic", "matte_pla", "metal"), default="matte_pla")
+    parser.add_argument("--camera-lens", type=float, default=48.0)
     parser.add_argument("--asset-root", type=Path, default=Path("_workspace/photoreal_assets"))
     parser.add_argument("--blender-bin", default="blender")
     parser.add_argument("--max-mesh-geoms", type=int, default=128)
     args = parser.parse_args()
 
     blender_bin = shutil.which(args.blender_bin) or args.blender_bin
-    frames = [int(item.strip()) for item in args.frames.split(",") if item.strip()]
+    episodes = _parse_int_csv(args.episodes) if args.episodes else [int(args.episode)]
+    frame_tokens = [item.strip() for item in args.frames.split(",") if item.strip()]
     result = render_dataset_preview(
         dataset_root=args.dataset_root,
         output_dir=args.output_dir,
         env_id=args.env_id,
-        episode=args.episode,
-        frames=frames,
+        env_source=args.env_source,
+        episodes=episodes,
+        frame_tokens=frame_tokens,
         seed_base=args.seed_base,
         width=args.width,
         height=args.height,
         samples=args.samples,
         denoise=args.denoise,
         robot_material=args.robot_material,
+        camera_lens=args.camera_lens,
         asset_root=args.asset_root,
         blender_bin=blender_bin,
         max_mesh_geoms=args.max_mesh_geoms,
@@ -66,14 +80,16 @@ def render_dataset_preview(
     dataset_root: Path,
     output_dir: Path,
     env_id: str,
-    episode: int,
-    frames: list[int],
+    env_source: str,
+    episodes: list[int],
+    frame_tokens: list[str],
     seed_base: int | None,
     width: int,
     height: int,
     samples: int,
     denoise: bool,
     robot_material: str,
+    camera_lens: float,
     asset_root: Path,
     blender_bin: str,
     max_mesh_geoms: int,
@@ -84,12 +100,19 @@ def render_dataset_preview(
     import so101_nexus_mujoco  # noqa: F401 - registers Gymnasium env ids.
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    rows = _dataset_rows(dataset_root, episode=episode, frames=frames)
-    if len(rows) != len(frames):
-        found = sorted(int(row["frame_index"]) for row in rows)
-        raise ValueError(f"missing requested frames: requested={frames}, found={found}")
+    episode_summaries = _episode_summaries(dataset_root)
+    episode_frames = _resolve_episode_frames(
+        dataset_root,
+        episodes=episodes,
+        frame_tokens=frame_tokens,
+        episode_summaries=episode_summaries,
+    )
+    rows = _dataset_rows(dataset_root, episode_frames=episode_frames)
+    expected = sum(len(frames) for frames in episode_frames.values())
+    if len(rows) != expected:
+        found = [(int(row["episode_index"]), int(row["frame_index"])) for row in rows]
+        raise ValueError(f"missing requested episode frames: requested={episode_frames}, found={found}")
 
-    seed = (seed_base if seed_base is not None else _seed_from_name(dataset_root)) + episode
     rendered: list[dict[str, Any]] = []
     driver_path = output_dir / "blender_driver.py"
     driver_path.write_text(BLENDER_DRIVER, encoding="utf-8")
@@ -98,9 +121,16 @@ def render_dataset_preview(
     table_pbr_dir = asset_root / "ambientcg" / "Wood008_1K-JPG"
     plastic_pbr_dir = asset_root / "ambientcg" / "Plastic013A_1K-JPG"
 
-    env = gym.make(env_id, render_mode=None)
+    env = _make_env(env_id=env_id, env_source=env_source)
     try:
         for row in rows:
+            episode = int(row["episode_index"])
+            seed = _seed_for_episode(
+                episode,
+                seed_base=seed_base,
+                dataset_root=dataset_root,
+                episode_summaries=episode_summaries,
+            )
             env.reset(seed=seed)
             unwrapped = env.unwrapped
             state = [float(value) for value in row["observation.state"]]
@@ -130,6 +160,7 @@ def render_dataset_preview(
                 "samples": samples,
                 "denoise": denoise,
                 "robot_material": robot_material,
+                "camera_lens": camera_lens,
                 "texture_path": str(texture_path.resolve()),
                 "hdri_path": str(hdri_path.resolve()) if hdri_path.exists() else None,
                 "table_pbr": _pbr_paths(table_pbr_dir, "Wood008_1K-JPG"),
@@ -152,7 +183,9 @@ def render_dataset_preview(
             rendered.append(
                 {
                     "episode": episode,
+                    "seed": seed,
                     "frame": frame_index,
+                    "frame_label": _frame_label(episode_frames, episode=episode, frame=frame_index),
                     "timestamp": float(row["timestamp"]),
                     "state": state,
                     "action": [float(value) for value in row["action"]],
@@ -165,15 +198,18 @@ def render_dataset_preview(
     finally:
         env.close()
 
-    contact_sheet = _write_contact_sheet(rendered, output_dir / "so101_dataset_photoreal_5frame_contact_sheet.png")
+    contact_sheet = _write_contact_sheet(rendered, output_dir / "so101_dataset_photoreal_contact_sheet.png")
     report = {
         "dataset_root": str(dataset_root),
         "env_id": env_id,
-        "episode": episode,
-        "frames": frames,
-        "seed": seed,
+        "env_source": env_source,
+        "episodes": episodes,
+        "frame_tokens": frame_tokens,
+        "episode_frames": episode_frames,
+        "seed_base": seed_base if seed_base is not None else _seed_from_name(dataset_root),
         "renderer": "blender_cycles",
         "robot_material": robot_material,
+        "camera_lens": camera_lens,
         "samples": samples,
         "denoise": denoise,
         "width": width,
@@ -182,7 +218,8 @@ def render_dataset_preview(
         "renders": rendered,
         "note": (
             "Robot qpos/action are read from the LeRobot dataset rows. The cube/object "
-            "pose comes from resetting the MuJoCoPickLift env with the dataset seed."
+            "pose comes from resetting the MuJoCoPickLift env with the per-episode seed "
+            "recorded in so101_lerobot_export_report.json when available."
         ),
     }
     (output_dir / "so101_dataset_blender_preview_report.json").write_text(
@@ -192,9 +229,7 @@ def render_dataset_preview(
     return report
 
 
-def _dataset_rows(dataset_root: Path, *, episode: int, frames: list[int]) -> list[dict[str, Any]]:
-    import pyarrow as pa
-    import pyarrow.compute as pc
+def _dataset_rows(dataset_root: Path, *, episode_frames: dict[int, list[int]]) -> list[dict[str, Any]]:
     import pyarrow.parquet as pq
 
     data_files = sorted((dataset_root / "data").glob("chunk-*/file-*.parquet"))
@@ -204,14 +239,13 @@ def _dataset_rows(dataset_root: Path, *, episode: int, frames: list[int]) -> lis
         [str(path) for path in data_files],
         columns=["episode_index", "frame_index", "timestamp", "observation.state", "action"],
     )
-    frame_set = pa.array(frames, type=pa.int64())
-    mask = pc.and_(
-        pc.equal(table["episode_index"], episode),
-        pc.is_in(table["frame_index"], value_set=frame_set),
-    )
-    filtered = table.filter(mask)
-    rows = _rows(filtered.to_pydict())
-    return sorted(rows, key=lambda row: int(row["frame_index"]))
+    wanted = {(int(episode), int(frame)) for episode, frames in episode_frames.items() for frame in frames}
+    rows = [
+        row
+        for row in _rows(table.to_pydict())
+        if (int(row["episode_index"]), int(row["frame_index"])) in wanted
+    ]
+    return sorted(rows, key=lambda row: (int(row["episode_index"]), int(row["frame_index"])))
 
 
 def _export_primitive_geoms(model: Any, data: Any) -> list[dict[str, Any]]:
@@ -254,17 +288,41 @@ def _geom_rgba(model: Any, geom_id: int) -> list[float]:
     return [float(value) for value in model.geom_rgba[geom_id]]
 
 
+def _make_env(*, env_id: str, env_source: str) -> Any:
+    if env_source == "high_contrast_picklift":
+        from train_so101_wrist_ego_visual_servo import make_high_contrast_picklift_env
+
+        return make_high_contrast_picklift_env()
+    import gymnasium as gym
+
+    return gym.make(env_id, render_mode=None)
+
+
 def _write_contact_sheet(rendered: list[dict[str, Any]], output_path: Path) -> Path:
     images = [Image.open(item["image_path"]).convert("RGB") for item in rendered]
     cell_w, cell_h, label_h = 320, 240, 38
-    sheet = Image.new("RGB", (cell_w * len(images), cell_h + label_h), (238, 238, 232))
+    episode_counts: dict[int, int] = {}
+    for item in rendered:
+        episode_counts[int(item["episode"])] = episode_counts.get(int(item["episode"]), 0) + 1
+    columns = max(1, max(episode_counts.values()) if episode_counts else 1)
+    if len(images) <= 5:
+        columns = len(images)
+    rows = (len(images) + columns - 1) // columns
+    sheet = Image.new("RGB", (cell_w * columns, (cell_h + label_h) * rows), (238, 238, 232))
     draw = ImageDraw.Draw(sheet)
     for index, (image, item) in enumerate(zip(images, rendered, strict=True)):
         image.thumbnail((cell_w, cell_h), Image.Resampling.LANCZOS)
-        x = index * cell_w + (cell_w - image.width) // 2
-        y = label_h + (cell_h - image.height) // 2
+        col = index % columns
+        row = index // columns
+        x = col * cell_w + (cell_w - image.width) // 2
+        y = row * (cell_h + label_h) + label_h + (cell_h - image.height) // 2
         sheet.paste(image, (x, y))
-        draw.text((index * cell_w + 10, 12), f"ep {item['episode']} | frame {item['frame']}", fill=(25, 25, 25))
+        label = str(item.get("frame_label") or item["frame"])
+        draw.text(
+            (col * cell_w + 10, row * (cell_h + label_h) + 12),
+            f"ep {item['episode']} | {label} | frame {item['frame']}",
+            fill=(25, 25, 25),
+        )
     sheet.save(output_path)
     return output_path
 
@@ -279,6 +337,99 @@ def _seed_from_name(path: Path) -> int:
 def _rows(columns: dict[str, list[Any]]) -> list[dict[str, Any]]:
     count = len(next(iter(columns.values()))) if columns else 0
     return [{key: value[index] for key, value in columns.items()} for index in range(count)]
+
+
+def _parse_int_csv(value: str) -> list[int]:
+    return [int(item.strip()) for item in value.split(",") if item.strip()]
+
+
+def _episode_summaries(dataset_root: Path) -> dict[int, dict[str, Any]]:
+    report_path = dataset_root / "so101_lerobot_export_report.json"
+    if not report_path.exists():
+        return {}
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    episodes = report.get("episodes") or []
+    return {index: episode for index, episode in enumerate(episodes) if isinstance(episode, dict)}
+
+
+def _seed_for_episode(
+    episode: int,
+    *,
+    seed_base: int | None,
+    dataset_root: Path,
+    episode_summaries: dict[int, dict[str, Any]],
+) -> int:
+    if episode in episode_summaries and "seed" in episode_summaries[episode]:
+        return int(episode_summaries[episode]["seed"])
+    return (seed_base if seed_base is not None else _seed_from_name(dataset_root)) + int(episode)
+
+
+def _resolve_episode_frames(
+    dataset_root: Path,
+    *,
+    episodes: list[int],
+    frame_tokens: list[str],
+    episode_summaries: dict[int, dict[str, Any]],
+) -> dict[int, list[int]]:
+    ranges = _episode_frame_ranges(dataset_root)
+    episode_frames: dict[int, list[int]] = {}
+    for episode in episodes:
+        if episode not in ranges:
+            raise ValueError(f"episode {episode} not found in {dataset_root}")
+        first_frame, last_frame = ranges[episode]
+        summary = episode_summaries.get(episode, {})
+        frames = [_resolve_frame_token(token, first_frame=first_frame, last_frame=last_frame, summary=summary) for token in frame_tokens]
+        episode_frames[int(episode)] = sorted(dict.fromkeys(frames))
+    return episode_frames
+
+
+def _episode_frame_ranges(dataset_root: Path) -> dict[int, tuple[int, int]]:
+    import pyarrow.parquet as pq
+
+    data_files = sorted((dataset_root / "data").glob("chunk-*/file-*.parquet"))
+    if not data_files:
+        raise FileNotFoundError(f"missing LeRobot parquet data files under {dataset_root}")
+    table = pq.read_table([str(path) for path in data_files], columns=["episode_index", "frame_index"])
+    ranges: dict[int, tuple[int, int]] = {}
+    columns = table.to_pydict()
+    for episode, frame in zip(columns["episode_index"], columns["frame_index"]):
+        episode = int(episode)
+        frame = int(frame)
+        current = ranges.get(episode)
+        ranges[episode] = (frame, frame) if current is None else (min(current[0], frame), max(current[1], frame))
+    return ranges
+
+
+def _resolve_frame_token(token: str, *, first_frame: int, last_frame: int, summary: dict[str, Any]) -> int:
+    lowered = token.lower()
+    if lowered == "start":
+        return first_frame
+    if lowered in {"final", "last"}:
+        return last_frame
+    phase_counts = summary.get("phase_counts") if isinstance(summary, dict) else None
+    if lowered == "open" and isinstance(phase_counts, dict):
+        return min(last_frame, first_frame + int(phase_counts.get("approach", 0)) + int(phase_counts.get("settle", 0)) - 1)
+    if lowered == "grip" and isinstance(phase_counts, dict):
+        return min(
+            last_frame,
+            first_frame
+            + int(phase_counts.get("approach", 0))
+            + int(phase_counts.get("settle", 0))
+            + int(phase_counts.get("close", 0))
+            - 1,
+        )
+    return int(token)
+
+
+def _frame_label(episode_frames: dict[int, list[int]], *, episode: int, frame: int) -> str:
+    frames = episode_frames.get(int(episode), [])
+    if len(frames) == 1:
+        return "selected"
+    if frame == frames[0]:
+        return "start"
+    if frame == frames[-1]:
+        return "grip"
+    return str(frame)
 
 
 if __name__ == "__main__":
