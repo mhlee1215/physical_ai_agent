@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 
 def main():
@@ -82,6 +82,9 @@ def main():
         bpy.ops.object.shade_smooth()
         weighted = obj.modifiers.new("weighted_normals", "WEIGHTED_NORMAL")
         weighted.keep_sharp = True
+
+    for item in spec.get("primitives", []):
+        add_primitive(item)
 
     target = spec.get("target_site")
     if target:
@@ -219,6 +222,66 @@ def make_target_material():
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
     bsdf.inputs["Base Color"].default_value = (1.0, 0.42, 0.04, 1.0)
     bsdf.inputs["Roughness"].default_value = 0.44
+    return mat
+
+
+def add_primitive(item):
+    if len(item.get("rgba", [])) >= 4 and float(item["rgba"][3]) <= 0.01:
+        return
+    kind = item["type"]
+    location = item["position"]
+    rotation = matrix_to_euler(item["xmat"])
+    name = item["name"] or f"primitive_{item['geom_id']:03d}"
+    size = [float(value) for value in item["size"]]
+    if kind == "box":
+        bpy.ops.mesh.primitive_cube_add(size=2.0, location=location, rotation=rotation)
+        obj = bpy.context.object
+        obj.scale = (size[0], size[1], size[2])
+    elif kind == "cylinder":
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=size[0], depth=2.0 * size[1], location=location, rotation=rotation)
+        obj = bpy.context.object
+    elif kind == "sphere":
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=48, ring_count=24, radius=size[0], location=location, rotation=rotation)
+        obj = bpy.context.object
+    else:
+        return
+    obj.name = name
+    obj.data.materials.append(make_primitive_material(name, item["rgba"], item.get("semantic_color")))
+    bpy.ops.object.shade_smooth()
+
+
+def matrix_to_euler(values):
+    rows = [values[0:3], values[3:6], values[6:9]]
+    return Matrix(rows).to_euler()
+
+
+def make_primitive_material(name, rgba, semantic_color):
+    mat = bpy.data.materials.new(f"{name}_material")
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    bsdf = nodes.get("Principled BSDF")
+    if semantic_color == "green_cube" or "cube" in name or "pick_slot" in name:
+        rgb = (0.03, 0.78, 0.12)
+        roughness = 0.58
+    elif "pad" in name:
+        rgb = (0.025, 0.025, 0.024)
+        roughness = 0.76
+    else:
+        color = material_color(rgba)
+        rgb = (color[0], color[1], color[2])
+        roughness = 0.66
+    bsdf.inputs["Base Color"].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
+    bsdf.inputs["Metallic"].default_value = 0.0
+    bsdf.inputs["Roughness"].default_value = roughness
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 84.0
+    noise.inputs["Detail"].default_value = 10.0
+    bump = nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.010
+    bump.inputs["Distance"].default_value = 0.0012
+    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
     return mat
 
 

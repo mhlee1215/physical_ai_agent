@@ -75,6 +75,16 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertIn("--asset-root", completed.stdout)
         self.assertIn("--robot-material", completed.stdout)
 
+    def test_so101_dataset_blender_preview_help(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "scripts/render_so101_dataset_blender_preview.py", "--help"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        self.assertIn("--dataset-root", completed.stdout)
+        self.assertIn("--frames", completed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

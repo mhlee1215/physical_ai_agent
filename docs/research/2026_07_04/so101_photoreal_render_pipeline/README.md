@@ -15,6 +15,10 @@ Material comparison:
 
 ![SO101 material comparison](./material_compare.png)
 
+SO101 home-to-cube dataset five-frame preview:
+
+![SO101 home-to-cube photoreal preview](./so101_home_to_grip_5frames/contact_sheet.png)
+
 Procedural versus HDRI/PBR assets:
 
 ![SO101 procedural versus HDRI PBR](./procedural_vs_hdri_pbr.png)
@@ -78,6 +82,39 @@ The hook writes the preview under:
 This does not replace `observation.images.camera1/camera2/camera3` in the
 LeRobot dataset. It is intended for dataset QA, paper figures, and visually
 checking simulation states with more realistic lighting/materials.
+
+## SO101 Dataset Frame Preview
+
+Five frames were rendered from the local home-start SO101 LeRobot dataset:
+
+```text
+_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_home_balanced_lr_104_ego_wrist_256_seed124000
+```
+
+The preview uses episode `0`, frames `0,20,30,40,50`. These rows start at the
+home pose and move toward the visible green cube. The renderer reads
+`observation.state` and `action` from the parquet rows, resets
+`MuJoCoPickLift-v1` with the dataset seed, injects the robot qpos, and renders
+the frame with Blender Cycles:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/render_so101_dataset_blender_preview.py \
+  --dataset-root _workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_home_balanced_lr_104_ego_wrist_256_seed124000 \
+  --output-dir _workspace/so101_dataset_photoreal_home_to_grip_5frames \
+  --episode 0 \
+  --frames 0,20,30,40,50 \
+  --asset-root _workspace/photoreal_assets \
+  --width 640 \
+  --height 480 \
+  --samples 192 \
+  --denoise \
+  --robot-material matte_pla
+```
+
+This is a sidecar visual preview, not an in-place mutation of the LeRobot
+dataset. The robot qpos/action are row-derived; the cube pose comes from the
+seeded `MuJoCoPickLift-v1` reset because the LeRobot parquet rows do not store
+full object qpos.
 
 ## MyCobot Render
 
