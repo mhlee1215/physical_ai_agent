@@ -268,8 +268,8 @@ def make_primitive_material(name, rgba, semantic_color):
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
     bsdf = nodes.get("Principled BSDF")
-    if semantic_color == "green_cube" or "cube" in name or "pick_slot" in name:
-        rgb = (0.03, 0.78, 0.12)
+    if semantic_color == "red_cube" or "cube" in name or "pick_slot" in name:
+        rgb = (0.90, 0.04, 0.02)
         roughness = 0.58
     elif "pad" in name:
         rgb = (0.025, 0.025, 0.024)
@@ -405,8 +405,28 @@ def configure_camera(camera_obj, camera, camera_spec, default_lens):
         camera_obj.location = camera_spec["location"]
         xmat = camera_spec["xmat"]
         rows = [xmat[0:3], xmat[3:6], xmat[6:9]]
-        direction = -Vector(rows[2])
+        columns = [
+            [rows[0][0], rows[1][0], rows[2][0]],
+            [rows[0][1], rows[1][1], rows[2][1]],
+            [rows[0][2], rows[1][2], rows[2][2]],
+        ]
+        direction = -Vector(columns[2])
         look_at(camera_obj, camera_obj.location + direction)
+    elif mode == "forward_up":
+        camera_obj.location = camera_spec["location"]
+        forward = Vector(camera_spec["forward"]).normalized()
+        up = Vector(camera_spec["up"]).normalized()
+        z_axis = -forward
+        x_axis = up.cross(z_axis).normalized()
+        y_axis = z_axis.cross(x_axis).normalized()
+        rotation = Matrix(
+            (
+                (x_axis.x, y_axis.x, z_axis.x),
+                (x_axis.y, y_axis.y, z_axis.y),
+                (x_axis.z, y_axis.z, z_axis.z),
+            )
+        )
+        camera_obj.rotation_euler = rotation.to_euler()
     elif mode == "spherical":
         lookat = Vector(camera_spec["lookat"])
         distance = float(camera_spec["distance"])
@@ -424,7 +444,13 @@ def configure_camera(camera_obj, camera, camera_spec, default_lens):
     else:
         camera_obj.location = camera_spec["location"]
         look_at(camera_obj, Vector(camera_spec["target"]))
-    camera.lens = float(camera_spec.get("lens", default_lens))
+    if camera_spec.get("fovy") is not None:
+        camera.sensor_fit = "VERTICAL"
+        camera.angle = math.radians(float(camera_spec["fovy"]))
+    else:
+        camera.lens = float(camera_spec.get("lens", default_lens))
+    camera.clip_start = float(camera_spec.get("clip_start", 0.001))
+    camera.clip_end = float(camera_spec.get("clip_end", 100.0))
     camera.dof.use_dof = True
     camera.dof.focus_distance = float(camera_spec.get("focus_distance", 0.56))
     camera.dof.aperture_fstop = float(camera_spec.get("aperture_fstop", 8.0))

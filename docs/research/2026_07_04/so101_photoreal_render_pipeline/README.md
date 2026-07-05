@@ -1,9 +1,11 @@
 # SO101 Photoreal Render Preview Pipeline
 
-This note records the optional high-fidelity SO101 render lane for dataset
-generation. It is a sidecar preview path: the canonical LeRobot policy images
-remain MuJoCo camera renders, while Blender/Cycles produces paper or inspection
-renders under a separate `photoreal_preview/` directory.
+This note records the high-fidelity SO101 render lane for dataset generation.
+The current training path can build a photoreal dataset root with the same
+episode/frame/action/state contract as the source LeRobot dataset. Legacy
+one-frame probes and preview sidecars are still useful for inspection, but the
+training artifact is the `so101_photoreal_jsonl_v1` dataset under
+`_workspace/so101_photoreal_datasets/`.
 
 ## Example Output
 
@@ -18,6 +20,10 @@ Material comparison:
 SO101 `pick_cube_train` five-episode start/grip preview:
 
 ![SO101 pick-cube five-episode photoreal preview](./so101_pick_cube_train5episodes/contact_sheet.png)
+
+SO101 photoreal dataset frames using MuJoCo scene camera metadata:
+
+![SO101 scene-camera photoreal dataset examples](./so101_scene_camera_photoreal_examples.png)
 
 Procedural versus HDRI/PBR assets:
 
@@ -62,7 +68,7 @@ The measured local example on this Mac was:
 
 ## Dataset Export Hook
 
-Generate the normal dataset and add a preview sidecar:
+Generate the normal dataset and, if needed, add an inspection preview sidecar:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/export_so101_training_datasets.py \
@@ -79,9 +85,9 @@ The hook writes the preview under:
 <recipe root>/photoreal_preview/
 ```
 
-This does not replace `observation.images.camera1/camera2/camera3` in the
-LeRobot dataset. It is intended for dataset QA, paper figures, and visually
-checking simulation states with more realistic lighting/materials.
+This preview hook does not replace `observation.images.camera1/camera2/camera3`
+in the LeRobot dataset. Use the full photoreal dataset contract below when the
+rendered images should become the training input.
 
 ## SO101 Dataset Episode Preview
 
@@ -126,10 +132,10 @@ PYTHONPATH=src:.:scripts .venv/bin/python scripts/render_so101_dataset_blender_p
   --camera-lens 35
 ```
 
-This is a sidecar visual preview, not an in-place mutation of the LeRobot
-dataset. The robot qpos/action are row-derived; object pose is recreated by
-resetting the export-compatible env with the report-backed per-episode seed
-because the LeRobot parquet rows do not store full object qpos.
+This command is an inspection preview, not the training dataset. The robot
+qpos/action are row-derived; object pose is recreated by resetting the
+export-compatible env with the report-backed per-episode seed because the
+LeRobot parquet rows do not store full object qpos.
 
 ## SO101 Photoreal Dataset Contract
 
@@ -137,6 +143,16 @@ To make rendered frames visible as an actual dataset, build an
 `so101_photoreal_jsonl_v1` root from a rendered frame directory. The builder is
 strict by default: selected source episodes must preserve their original frame
 counts and all policy camera keys:
+
+Camera alignment is metadata-driven, not visually hand-tuned. For every source
+row, `scripts/render_so101_dataset_blender_preview.py` sets the MuJoCo state,
+calls the same `_make_camera(...)` route used by
+`scripts/export_so101_teacher_rollouts_lerobot.py`, runs
+`mujoco.Renderer.update_scene(...)`, then reads `scene.camera[0].pos`,
+`scene.camera[0].forward`, `scene.camera[0].up`, and the MuJoCo camera FOV into
+the Blender camera. `camera1` also applies the same egocentric postprocess
+rotation contract as the source dataset. The `--camera-lens` value is only a
+fallback for cameras without MuJoCo FOV metadata.
 
 ```bash
 PYTHONPATH=src:.:scripts .venv/bin/python scripts/render_so101_dataset_blender_preview.py \

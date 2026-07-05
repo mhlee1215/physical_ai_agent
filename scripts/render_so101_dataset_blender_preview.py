@@ -14,7 +14,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
-from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE
+from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_IMAGE_ROTATION_DEGREES, _make_camera
 from render_so101_blender_probe import BLENDER_DRIVER, _pbr_paths, _write_photo_tabletop_texture
 from render_so101_mitsuba_probe import _export_mesh_geoms
 
@@ -129,7 +129,10 @@ def render_dataset_preview(
     plastic_pbr_dir = asset_root / "ambientcg" / "Plastic013A_1K-JPG"
 
     env = _make_env(env_id=env_id, env_source=env_source)
+    mujoco_renderers: dict[str, Any] = {}
     try:
+        for camera_name in ("egocentric_cam", "wrist_cam"):
+            mujoco_renderers[camera_name] = mujoco.Renderer(env.unwrapped.model, height=height, width=width)
         for row in rows:
             episode = int(row["episode_index"])
             seed = _seed_for_episode(
@@ -158,7 +161,11 @@ def render_dataset_preview(
                 max_mesh_geoms=max_mesh_geoms,
             )
             primitives = _export_primitive_geoms(unwrapped.model, unwrapped.data)
-            camera_specs = _camera_specs(unwrapped.model, unwrapped.data, camera_lens=camera_lens)
+            camera_specs = _camera_specs_from_mujoco_scene(
+                env,
+                mujoco_renderers,
+                camera_lens=camera_lens,
+            )
             render_specs = []
             image_paths: dict[str, str] = {}
             for camera_key in camera_keys:
@@ -196,6 +203,10 @@ def render_dataset_preview(
             log_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
             if completed.returncode != 0:
                 raise RuntimeError(f"Blender render failed with exit code {completed.returncode}; see {log_path}")
+            for camera_key, image_path in image_paths.items():
+                rotation = camera_specs[camera_key].get("rotation_degrees", 0)
+                if rotation:
+                    _rotate_image(Path(image_path), int(rotation))
             if duplicate_camera3_from_camera2 and "observation.images.camera2" in image_paths:
                 camera2_path = Path(image_paths["observation.images.camera2"])
                 camera3_path = frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_camera3.png"
@@ -218,6 +229,8 @@ def render_dataset_preview(
                 }
             )
     finally:
+        for renderer in mujoco_renderers.values():
+            renderer.close()
         env.close()
 
     contact_sheet = _write_contact_sheet(rendered, output_dir / "so101_dataset_photoreal_contact_sheet.png")
@@ -289,7 +302,7 @@ def _export_primitive_geoms(model: Any, data: Any) -> list[dict[str, Any]]:
         if len(rgba) >= 4 and rgba[3] <= 0.01:
             continue
         name = model.geom(geom_id).name or f"geom_{geom_id:03d}"
-        semantic_color = "green_cube" if "cube" in name or "pick_slot" in name else None
+        semantic_color = "red_cube" if "cube" in name or "pick_slot" in name else None
         primitives.append(
             {
                 "geom_id": geom_id,
@@ -459,42 +472,78 @@ def _frame_label(episode_frames: dict[int, list[int]], *, episode: int, frame: i
     return str(frame)
 
 
-def _camera_specs(model: Any, data: Any, *, camera_lens: float) -> dict[str, dict[str, Any]]:
+def _camera_specs_from_mujoco_scene(
+    env: Any,
+    renderers: dict[str, Any],
+    *,
+    camera_lens: float,
+) -> dict[str, dict[str, Any]]:
+    unwrapped = env.unwrapped
     return {
         "observation.images.camera1": {
-            "mode": "spherical",
-            "lookat": EGOCENTRIC_CAMERA1_POSE["lookat"],
-            "distance": EGOCENTRIC_CAMERA1_POSE["distance"],
-            "azimuth": EGOCENTRIC_CAMERA1_POSE["azimuth"],
-            "elevation": EGOCENTRIC_CAMERA1_POSE["elevation"],
-            "lens": camera_lens,
-            "focus_distance": 0.63,
-            "aperture_fstop": 8.0,
+            **_scene_camera_spec(unwrapped.model, unwrapped.data, renderers["egocentric_cam"], "egocentric_cam"),
+            "rotation_degrees": -EGOCENTRIC_IMAGE_ROTATION_DEGREES,
         },
-        "observation.images.camera2": _wrist_camera_spec(model, data, camera_lens=camera_lens),
+        "observation.images.camera2": _scene_camera_spec(
+            unwrapped.model,
+            unwrapped.data,
+            renderers["wrist_cam"],
+            "wrist_cam",
+        ),
     }
 
 
-def _wrist_camera_spec(model: Any, data: Any, *, camera_lens: float) -> dict[str, Any]:
-    camera_id = None
-    for index in range(model.ncam):
-        if model.camera(index).name == "wrist_cam":
-            camera_id = index
-            break
-    if camera_id is None:
-        raise ValueError("wrist_cam not found in MuJoCo model")
+def _scene_camera_spec(model: Any, data: Any, renderer: Any, camera_name: str) -> dict[str, Any]:
+    renderer.update_scene(data, camera=_make_camera(_EnvView(model=model, data=data), camera_name))
+    scene = getattr(renderer, "scene", None) or getattr(renderer, "_scene", None)
+    if scene is None:
+        raise RuntimeError("MuJoCo renderer scene is unavailable")
+    camera = scene.camera[0]
     return {
-        "mode": "matrix",
-        "location": [float(value) for value in data.cam_xpos[camera_id]],
-        "xmat": [float(value) for value in data.cam_xmat[camera_id]],
-        "lens": camera_lens,
-        "focus_distance": 0.20,
+        "mode": "forward_up",
+        "location": [float(value) for value in camera.pos],
+        "forward": [float(value) for value in camera.forward],
+        "up": [float(value) for value in camera.up],
+        "fovy": _camera_fovy(model, camera_name),
+        "focus_distance": 0.63 if camera_name == "egocentric_cam" else 0.20,
         "aperture_fstop": 10.0,
+        "clip_start": 0.001,
     }
+
+
+def _camera_fovy(model: Any, camera_name: str) -> float:
+    if camera_name == "egocentric_cam":
+        return float(model.vis.global_.fovy)
+    for index in range(model.ncam):
+        if model.camera(index).name == camera_name:
+            return float(model.cam_fovy[index])
+    return float(model.vis.global_.fovy)
+
+
+class _EnvView:
+    def __init__(self, *, model: Any, data: Any) -> None:
+        self.unwrapped = self
+        self.model = model
+        self.data = data
 
 
 def _camera_slug(camera_key: str) -> str:
     return camera_key.removeprefix("observation.images.")
+
+
+def _rotate_image(path: Path, degrees: int) -> None:
+    if degrees % 360 == 0:
+        return
+    image = Image.open(path).convert("RGB")
+    if degrees % 360 == 90:
+        image = image.transpose(Image.Transpose.ROTATE_270)
+    elif degrees % 360 == 180:
+        image = image.transpose(Image.Transpose.ROTATE_180)
+    elif degrees % 360 == 270:
+        image = image.transpose(Image.Transpose.ROTATE_90)
+    else:
+        image = image.rotate(-degrees, expand=False)
+    image.save(path)
 
 
 if __name__ == "__main__":
