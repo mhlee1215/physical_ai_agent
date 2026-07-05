@@ -14,7 +14,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
-from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_IMAGE_ROTATION_DEGREES, _make_camera
+from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE, _make_camera
 from render_so101_blender_probe import BLENDER_DRIVER, _pbr_paths, _write_photo_tabletop_texture
 from render_so101_mitsuba_probe import _export_mesh_geoms
 
@@ -191,6 +191,10 @@ def render_dataset_preview(
                         "height": height,
                         "samples": samples,
                         "denoise": denoise,
+                        "cycles_seed": 98200,
+                        "sample_clamp_indirect": 0.85,
+                        "background_wall": False,
+                        "stable_tabletop": True,
                         "robot_material": robot_material,
                         "camera_lens": camera_lens,
                         "texture_path": str(texture_path.resolve()),
@@ -502,15 +506,18 @@ def _camera_specs_from_mujoco_scene(
     camera_lens: float,
 ) -> dict[str, dict[str, Any]]:
     unwrapped = env.unwrapped
+    camera1 = _scene_camera_spec(
+        unwrapped.model,
+        unwrapped.data,
+        renderers["egocentric_cam"],
+        "egocentric_cam",
+    )
+    camera1["rotation_degrees"] = int(EGOCENTRIC_CAMERA1_POSE["rotation_degrees"])
     return {
-        "observation.images.camera1": {
-            **_scene_camera_spec(unwrapped.model, unwrapped.data, renderers["egocentric_cam"], "egocentric_cam"),
-            "rotation_degrees": -EGOCENTRIC_IMAGE_ROTATION_DEGREES,
-        },
-        "observation.images.camera2": _scene_camera_spec(
+        "observation.images.camera1": camera1,
+        "observation.images.camera2": _fixed_mujoco_camera_spec(
             unwrapped.model,
             unwrapped.data,
-            renderers["wrist_cam"],
             "wrist_cam",
         ),
     }
@@ -530,6 +537,31 @@ def _scene_camera_spec(model: Any, data: Any, renderer: Any, camera_name: str) -
         "fovy": _camera_fovy(model, camera_name),
         "focus_distance": 0.63 if camera_name == "egocentric_cam" else 0.20,
         "aperture_fstop": 10.0,
+        "use_dof": False,
+        "clip_start": 0.001,
+    }
+
+
+def _fixed_mujoco_camera_spec(model: Any, data: Any, camera_name: str) -> dict[str, Any]:
+    camera_id = _camera_id(model, camera_name)
+    xmat = [float(value) for value in data.cam_xmat[camera_id]]
+    rows = [xmat[0:3], xmat[3:6], xmat[6:9]]
+    columns = [
+        [rows[0][0], rows[1][0], rows[2][0]],
+        [rows[0][1], rows[1][1], rows[2][1]],
+        [rows[0][2], rows[1][2], rows[2][2]],
+    ]
+    forward = [-float(value) for value in columns[2]]
+    up = [float(value) for value in columns[1]]
+    return {
+        "mode": "forward_up",
+        "location": [float(value) for value in data.cam_xpos[camera_id]],
+        "forward": forward,
+        "up": up,
+        "fovy": _camera_fovy(model, camera_name),
+        "focus_distance": 0.20,
+        "aperture_fstop": 10.0,
+        "use_dof": False,
         "clip_start": 0.001,
     }
 
@@ -541,6 +573,13 @@ def _camera_fovy(model: Any, camera_name: str) -> float:
         if model.camera(index).name == camera_name:
             return float(model.cam_fovy[index])
     return float(model.vis.global_.fovy)
+
+
+def _camera_id(model: Any, camera_name: str) -> int:
+    for index in range(model.ncam):
+        if model.camera(index).name == camera_name:
+            return int(index)
+    raise ValueError(f"unknown MuJoCo camera: {camera_name}")
 
 
 class _EnvView:

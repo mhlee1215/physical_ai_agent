@@ -41,6 +41,13 @@ def main():
     scene.cycles.samples = int(spec["samples"])
     scene.cycles.preview_samples = min(64, int(spec["samples"]))
     scene.cycles.use_denoising = bool(spec["denoise"])
+    scene.cycles.seed = int(spec.get("cycles_seed", 0))
+    if hasattr(scene.cycles, "use_animated_seed"):
+        scene.cycles.use_animated_seed = False
+    if hasattr(scene.cycles, "sample_clamp_direct"):
+        scene.cycles.sample_clamp_direct = float(spec.get("sample_clamp_direct", 0.0))
+    if hasattr(scene.cycles, "sample_clamp_indirect"):
+        scene.cycles.sample_clamp_indirect = float(spec.get("sample_clamp_indirect", 1.25))
     scene.render.resolution_x = int(spec["width"])
     scene.render.resolution_y = int(spec["height"])
     scene.view_settings.view_transform = "Filmic"
@@ -58,21 +65,22 @@ def main():
             metal_devices.append(device.name)
     scene.cycles.device = "GPU" if metal_devices else "CPU"
 
-    floor_mat = make_tabletop_material(spec["table_pbr"])
+    floor_mat = make_stable_tabletop_material() if spec.get("stable_tabletop") else make_tabletop_material(spec["table_pbr"])
     bpy.ops.mesh.primitive_plane_add(size=2.5, location=(0.0, 0.0, -0.002))
     floor = bpy.context.object
     floor.name = "tabletop"
     floor.data.materials.append(floor_mat)
 
-    wall_mat = make_wall_material()
-    bpy.ops.mesh.primitive_plane_add(
-        size=2.5,
-        location=(0.0, 0.78, 0.62),
-        rotation=(math.radians(90.0), 0.0, 0.0),
-    )
-    wall = bpy.context.object
-    wall.name = "matte_background_wall"
-    wall.data.materials.append(wall_mat)
+    if spec.get("background_wall", True):
+        wall_mat = make_wall_material()
+        bpy.ops.mesh.primitive_plane_add(
+            size=2.5,
+            location=(0.0, 0.78, 0.62),
+            rotation=(math.radians(90.0), 0.0, 0.0),
+        )
+        wall = bpy.context.object
+        wall.name = "matte_background_wall"
+        wall.data.materials.append(wall_mat)
 
     for item in spec["meshes"]:
         bpy.ops.wm.ply_import(filepath=item["path"])
@@ -332,6 +340,16 @@ def make_tabletop_material(table_pbr):
     return mat
 
 
+def make_stable_tabletop_material():
+    mat = bpy.data.materials.new("stable_training_tabletop")
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (0.52, 0.52, 0.49, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.82
+    bsdf.inputs["Metallic"].default_value = 0.0
+    return mat
+
+
 def make_wall_material():
     mat = bpy.data.materials.new("warm_matte_wall")
     mat.use_nodes = True
@@ -451,7 +469,7 @@ def configure_camera(camera_obj, camera, camera_spec, default_lens):
         camera.lens = float(camera_spec.get("lens", default_lens))
     camera.clip_start = float(camera_spec.get("clip_start", 0.001))
     camera.clip_end = float(camera_spec.get("clip_end", 100.0))
-    camera.dof.use_dof = True
+    camera.dof.use_dof = bool(camera_spec.get("use_dof", True))
     camera.dof.focus_distance = float(camera_spec.get("focus_distance", 0.56))
     camera.dof.aperture_fstop = float(camera_spec.get("aperture_fstop", 8.0))
 
