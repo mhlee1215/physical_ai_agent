@@ -20,6 +20,9 @@ from urllib.parse import parse_qs, urlparse
 import pyarrow.parquet as pq
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
@@ -48,6 +51,15 @@ CAMERA_KEYS = [
     "observation.images.camera2",
     "observation.images.camera3",
 ]
+SO101_CAMERA_CONTRACT = {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam",
+    "observation.images.camera3": "wrist_cam duplicate",
+}
+PHOTO_REAL_PREVIEW_ROOT = Path("docs/research/2026_07_04/so101_photoreal_render_pipeline")
+PHOTO_REAL_PREVIEW_DIRS = {
+    "pick_cube_train50_ego_wrist_256_seed98200": PHOTO_REAL_PREVIEW_ROOT / "so101_pick_cube_train5episodes",
+}
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 MYCOBOT_JOINT_NAMES = [
     "joint2_to_joint1",
@@ -515,6 +527,7 @@ def _dataset_catalog_item(repo_root: Path, split: str, root: Path, *, category: 
 
 def _dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
     platform = _dataset_platform(split, Path(dataset["root"]))
+    photoreal_preview = _photoreal_preview_summary(Path(dataset["root"]))
     return {
         "dataset_format": "lerobot_parquet",
         "root": str(dataset["root"]),
@@ -535,6 +548,8 @@ def _dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
             key: dataset["info"]["features"][key]["shape"] for key in dataset["camera_keys"]
         },
         "episode_lengths": dataset["episode_lengths"],
+        "camera_contract": SO101_CAMERA_CONTRACT,
+        "photoreal_preview": photoreal_preview,
     }
 
 
@@ -547,6 +562,51 @@ def _dataset_platform(split: str, root: Path) -> str:
 
 def _platform_label(platform: str) -> str:
     return {"mycobot": "MyCobot", "so101": "SO101"}.get(platform, platform)
+
+
+def _photoreal_preview_summary(dataset_root: Path) -> dict[str, Any]:
+    preview_dir = _photoreal_preview_dir(dataset_root)
+    if preview_dir is None:
+        return {"available": False}
+    frames: dict[int, list[int]] = {}
+    for path in sorted(preview_dir.glob("episode_*_frame_*.png")):
+        match = re.search(r"episode_(\d+)_frame_(\d+)\.png$", path.name)
+        if not match:
+            continue
+        episode = int(match.group(1))
+        frame = int(match.group(2))
+        frames.setdefault(episode, []).append(frame)
+    return {
+        "available": bool(frames),
+        "path": str(preview_dir),
+        "contact_sheet": str(preview_dir / "contact_sheet.png") if (preview_dir / "contact_sheet.png").exists() else None,
+        "episodes": sorted(frames),
+        "frames_by_episode": {str(episode): sorted(values) for episode, values in frames.items()},
+        "note": "Photoreal sidecar preview; original LeRobot camera images remain canonical policy inputs.",
+    }
+
+
+def _photoreal_frame_images(dataset_root: Path, *, episode: int, frame: int) -> dict[str, str]:
+    preview_dir = _photoreal_preview_dir(dataset_root)
+    if preview_dir is None:
+        return {}
+    image_path = preview_dir / f"episode_{episode:04d}_frame_{frame:04d}.png"
+    if not image_path.exists():
+        return {}
+    return {"photoreal_sidecar": _file_data_uri(image_path)}
+
+
+def _photoreal_preview_dir(dataset_root: Path) -> Path | None:
+    relative = PHOTO_REAL_PREVIEW_DIRS.get(dataset_root.name)
+    if relative is None:
+        return None
+    path = relative if relative.is_absolute() else REPO_ROOT / relative
+    return path if path.exists() else None
+
+
+def _file_data_uri(path: Path) -> str:
+    mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
 def _discover_temporary_datasets(repo_root: Path) -> dict[str, Path]:
@@ -745,6 +805,7 @@ def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dic
     prompt = dataset["tasks"].get(task_index)
     if prompt is None:
         prompt = meta["tasks"][0] if meta.get("tasks") else ""
+    photoreal_images = _photoreal_frame_images(Path(dataset["root"]), episode=episode, frame=frame)
     return {
         "split": split,
         "episode": episode,
@@ -756,6 +817,8 @@ def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dic
         "prompt": prompt,
         "task_index": task_index,
         "images": images,
+        "camera_contract": SO101_CAMERA_CONTRACT,
+        "photoreal_images": photoreal_images,
         "state": dict(zip(JOINT_NAMES, state, strict=True)),
         "action": dict(zip(JOINT_NAMES, action, strict=True)),
     }
@@ -1863,6 +1926,10 @@ def _index_html() -> str:
     button:not(.tab-button):not(.zoom-btn) { background: #f8fafc; transition: background 120ms ease, border-color 120ms ease, transform 120ms ease; }
     button:not(.tab-button):not(.zoom-btn):hover { background: #eef4ff; border-color: #9fb7ee; transform: translateY(-1px); }
     .cameras { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .photoreal-cameras { grid-template-columns: minmax(260px, 520px); }
+    .quick-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .quick-strip:empty { display: none; }
+    .quick-strip button { min-height: 42px; border-color: #b9ccf5; background: var(--data-soft); color: #1e3a8a; }
     .rollout-row { display: grid; grid-template-columns: repeat(3, minmax(210px, 1fr)); gap: 12px; align-items: start; overflow-x: auto; padding-bottom: 2px; }
     .thumb-row { display: grid; grid-template-columns: repeat(3, minmax(110px, 160px)); gap: 9px; align-items: start; overflow-x: auto; padding-bottom: 2px; }
     .thumb-row img { max-height: 118px; object-fit: cover; }
@@ -1912,6 +1979,7 @@ def _index_html() -> str:
       header { padding: 18px 16px; }
       h1 { font-size: 25px; }
 	      .app-tabs, .controls, .cameras, .loop-grid, .viewer-kind, .manager-grid, .metric-grid, .loop-controls, .sim-controls, .sim-start-controls, .sim-policy-controls, .sim-run-controls { grid-template-columns: 1fr; }
+      .quick-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .rollout-row, .thumb-row { grid-template-columns: minmax(220px, 1fr); }
       .kv { grid-template-columns: 1fr; }
     }
@@ -1960,12 +2028,18 @@ def _index_html() -> str:
         <button id="next">Next</button>
       </div>
       <p id="meta" class="meta"></p>
+      <div id="photorealShortcuts" class="quick-strip"></div>
     </section>
     <section class="prompt">
       <div class="prompt-label">Prompt</div>
       <p id="promptText" class="prompt-text"></p>
     </section>
     <section class="cameras" id="cameras"></section>
+    <section id="photorealPanel" hidden>
+      <div class="prompt-label">Photoreal sidecar</div>
+      <p id="photorealMeta" class="meta"></p>
+      <div class="cameras photoreal-cameras" id="photorealCameras"></div>
+    </section>
     <section>
       <div class="prompt-label">Motor state and action</div>
       <table>
@@ -2073,6 +2147,10 @@ def _index_html() -> str:
     const meta = document.getElementById("meta");
 	    const promptText = document.getElementById("promptText");
 	    const cameras = document.getElementById("cameras");
+	    const photorealShortcuts = document.getElementById("photorealShortcuts");
+	    const photorealPanel = document.getElementById("photorealPanel");
+	    const photorealMeta = document.getElementById("photorealMeta");
+	    const photorealCameras = document.getElementById("photorealCameras");
 	    const jointRows = document.getElementById("jointRows");
 	    const tabDataViewer = document.getElementById("tabDataViewer");
 	    const tabTrainingManager = document.getElementById("tabTrainingManager");
@@ -2205,16 +2283,20 @@ def _index_html() -> str:
 	      split.innerHTML = names.map(name => `<option value="${name}">${name}</option>`).join("");
 	      if (names.includes(previous)) split.value = previous;
 	      else if (names.length) split.value = names[0];
-	      kindMeta.textContent = `${platformLabel(platform)} ${viewKindLabel(viewKind.value)} datasets (${names.length})`;
-	      if (split.value) {
-	        syncEpisodeRange();
-	        loadFrame();
-	      } else {
-	        meta.textContent = "No datasets are available for this platform and data type.";
-	        promptText.textContent = "";
-	        cameras.innerHTML = "";
-	        jointRows.innerHTML = "";
-	      }
+      kindMeta.textContent = `${platformLabel(platform)} ${viewKindLabel(viewKind.value)} datasets (${names.length})`;
+      if (split.value) {
+        syncEpisodeRange();
+        renderPhotorealShortcuts();
+        loadFrame();
+      } else {
+        meta.textContent = "No datasets are available for this platform and data type.";
+        promptText.textContent = "";
+        cameras.innerHTML = "";
+        photorealShortcuts.innerHTML = "";
+        photorealPanel.hidden = true;
+        photorealCameras.innerHTML = "";
+        jointRows.innerHTML = "";
+      }
 	    }
 
 	    function namesForKindAndPlatform(kind, platform) {
@@ -2355,6 +2437,21 @@ def _index_html() -> str:
       frame.value = String(Math.min(Number(frame.value), length - 1));
     }
 
+	    function renderPhotorealShortcuts() {
+	      const data = datasets[split.value] || {};
+	      const preview = data.photoreal_preview || {};
+	      const framesByEpisode = preview.frames_by_episode || {};
+	      const buttons = [];
+	      for (const [episodeIndex, frames] of Object.entries(framesByEpisode)) {
+	        if (!Array.isArray(frames)) continue;
+	        frames.forEach((frameIndex, index) => {
+	          const label = index === 0 ? "start" : (index === frames.length - 1 ? "grip" : `f${frameIndex}`);
+	          buttons.push(`<button type="button" data-episode="${episodeIndex}" data-frame="${frameIndex}">ep${episodeIndex} ${label}</button>`);
+	        });
+	      }
+	      photorealShortcuts.innerHTML = buttons.join("");
+	    }
+
 	    async function loadFrame() {
       if (loading) return;
       loading = true;
@@ -2364,9 +2461,25 @@ def _index_html() -> str:
       meta.textContent = `${row.split} | episode ${row.episode}/${datasets[row.split].episodes - 1} | frame ${row.frame}/${row.episode_length - 1} | row ${row.row_index} | task_index ${row.task_index ?? "n/a"} | t=${row.timestamp.toFixed(3)}s`;
       promptText.textContent = row.prompt || row.task || "(no prompt stored)";
       cameras.innerHTML = cameraFigures(row.images);
+      renderPhotorealPanel(row);
       jointRows.innerHTML = Object.keys(row.state).map(joint => `
         <tr><td>${joint}</td><td>${fmt(row.state[joint])}</td><td>${fmt(row.action[joint])}</td></tr>
 	      `).join("");
+	    }
+
+	    function renderPhotorealPanel(row) {
+	      const images = row.photoreal_images || {};
+	      const entries = Object.entries(images).filter(([, src]) => src);
+	      if (!entries.length) {
+	        photorealPanel.hidden = true;
+	        photorealMeta.textContent = "";
+	        photorealCameras.innerHTML = "";
+	        return;
+	      }
+	      const contract = row.camera_contract || {};
+	      photorealPanel.hidden = false;
+	      photorealMeta.textContent = `sidecar frame for ep ${row.episode}, frame ${row.frame}; policy cameras: camera1=${contract["observation.images.camera1"] || "n/a"}, camera2=${contract["observation.images.camera2"] || "n/a"}`;
+	      photorealCameras.innerHTML = cameraFigures(images);
 	    }
 
 	    function initLoopAnalyzer(force = false) {
@@ -2713,7 +2826,15 @@ def _index_html() -> str:
 	    zoomModal.addEventListener("click", event => {
 	      if (event.target === zoomModal) closeZoom();
 	    });
-	    split.addEventListener("change", () => { syncEpisodeRange(); loadFrame(); });
+	    photorealShortcuts.addEventListener("click", event => {
+	      const button = event.target.closest?.("button[data-episode][data-frame]");
+	      if (!button) return;
+	      episode.value = button.dataset.episode;
+	      syncFrameRange();
+	      frame.value = button.dataset.frame;
+	      loadFrame();
+	    });
+	    split.addEventListener("change", () => { syncEpisodeRange(); renderPhotorealShortcuts(); loadFrame(); });
 	    episode.addEventListener("input", () => { frame.value = "0"; loadFrame(); });
 	    frame.addEventListener("input", loadFrame);
     play.addEventListener("click", () => {

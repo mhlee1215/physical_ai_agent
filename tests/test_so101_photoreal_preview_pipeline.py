@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import base64
 import subprocess
 import sys
 import tempfile
@@ -87,6 +88,31 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertIn("--env-source", completed.stdout)
         self.assertIn("--frames", completed.stdout)
         self.assertIn("--camera-lens", completed.stdout)
+
+    def test_dataset_viewer_photoreal_preview_helpers(self) -> None:
+        spec = importlib.util.spec_from_file_location("serve_so101_dataset_viewer", "scripts/serve_so101_dataset_viewer.py")
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "dataset_root"
+            preview = Path(tmp) / "preview"
+            root.mkdir()
+            preview.mkdir()
+            (preview / "episode_0002_frame_0085.png").write_bytes(
+                base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax9L2kAAAAASUVORK5CYII=")
+            )
+            module.PHOTO_REAL_PREVIEW_DIRS = {root.name: preview}
+
+            summary = module._photoreal_preview_summary(root)
+            images = module._photoreal_frame_images(root, episode=2, frame=85)
+
+        self.assertTrue(summary["available"])
+        self.assertEqual(summary["frames_by_episode"], {"2": [85]})
+        self.assertIn("photoreal_sidecar", images)
+        self.assertTrue(images["photoreal_sidecar"].startswith("data:image/png;base64,"))
 
 
 if __name__ == "__main__":
