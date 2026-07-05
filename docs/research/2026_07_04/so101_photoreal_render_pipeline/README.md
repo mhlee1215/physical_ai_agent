@@ -157,9 +157,9 @@ metadata.
 
 The training-view render profile is intentionally stable rather than decorative:
 it disables depth of field, uses a fixed Cycles seed with animated seed off,
-clamps indirect samples, removes the background wall, and uses a neutral matte
-tabletop. That avoids the frame-to-frame shimmer seen in the earlier low-sample
-wood/PBR preview.
+runs with denoising disabled for temporal consistency, clamps indirect samples,
+removes the background wall, and uses a neutral matte tabletop. That avoids the
+frame-to-frame shimmer seen in the earlier low-sample wood/PBR preview.
 
 Object/contact dynamics are also replay-based. The renderer resets each source
 episode once with the seed recorded in `so101_lerobot_export_report.json`,
@@ -175,7 +175,7 @@ PYTHONPATH=src:.:scripts .venv/bin/python scripts/render_so101_dataset_blender_p
   --episodes 0,1,2,3,4 \
   --frames all \
   --asset-root _workspace/photoreal_assets \
-  --width 256 --height 256 --samples 64 --denoise \
+  --width 256 --height 256 --samples 256 \
   --robot-material matte_pla --camera-lens 35
 ```
 
@@ -219,7 +219,7 @@ The local generated full dataset used for dashboard QA is:
 - 5 episodes, 461 frames total
 - 461 PNGs for each of `camera1`, `camera2`, and `camera3`
 - `training_ready=true`
-- stable render profile: `samples=64`, denoise enabled, DOF off, fixed Cycles
+- stable render profile: `samples=256`, denoise disabled, DOF off, fixed Cycles
   seed, neutral matte tabletop, no background wall
 
 ## MyCobot Render
