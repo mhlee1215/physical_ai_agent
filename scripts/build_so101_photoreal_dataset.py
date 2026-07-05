@@ -93,6 +93,7 @@ def build_photoreal_dataset(
     rows = _source_rows(source_dataset_root, wanted={(row["source_episode"], row["source_frame"]) for row in plan})
     tasks = _tasks(source_dataset_root)
     source_report = _source_export_report(source_dataset_root)
+    image_shape = _source_image_shape(source_dataset_root, camera_keys)
 
     if output_root.exists():
         if not overwrite:
@@ -169,7 +170,7 @@ def build_photoreal_dataset(
         "frames": total_frames,
         "fps": _fps(source_dataset_root),
         "image_mime_type": "image/png",
-        "image_shape": [480, 640, 3],
+        "image_shape": image_shape,
         "features": [*camera_keys, "observation.state", "action"],
         "joint_names": JOINT_NAMES,
         "action_names": JOINT_NAMES,
@@ -291,6 +292,18 @@ def _fps(source_dataset_root: Path) -> int | None:
     if not info_path.exists():
         return None
     return json.loads(info_path.read_text(encoding="utf-8")).get("fps")
+
+
+def _source_image_shape(source_dataset_root: Path, camera_keys: list[str]) -> list[int]:
+    info_path = source_dataset_root / "meta" / "info.json"
+    if not info_path.exists():
+        return [480, 640, 3]
+    features = json.loads(info_path.read_text(encoding="utf-8")).get("features") or {}
+    for camera_key in camera_keys:
+        shape = (features.get(camera_key) or {}).get("shape")
+        if isinstance(shape, list) and len(shape) == 3:
+            return [int(value) for value in shape]
+    return [480, 640, 3]
 
 
 def _image_field(camera_key: str) -> str:

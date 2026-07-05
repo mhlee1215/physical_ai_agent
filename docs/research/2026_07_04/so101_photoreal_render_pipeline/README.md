@@ -139,10 +139,22 @@ strict by default: selected source episodes must preserve their original frame
 counts and all policy camera keys:
 
 ```bash
+PYTHONPATH=src:.:scripts .venv/bin/python scripts/render_so101_dataset_blender_preview.py \
+  --dataset-root _workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200 \
+  --output-dir _workspace/so101_photoreal_renders/pick_cube_train5episodes_full_256_seed98200 \
+  --env-source high_contrast_picklift \
+  --episodes 0,1,2,3,4 \
+  --frames all \
+  --asset-root _workspace/photoreal_assets \
+  --width 256 --height 256 --samples 32 --denoise \
+  --robot-material matte_pla --camera-lens 35
+```
+
+```bash
 PYTHONPATH=src:.:scripts .venv/bin/python scripts/build_so101_photoreal_dataset.py \
   --source-dataset-root _workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200 \
-  --rendered-dir _workspace/so101_photoreal_renders/pick_cube_train5episodes_full \
-  --output-root _workspace/so101_photoreal_datasets/pick_cube_train5episodes_full_640_seed98200 \
+  --rendered-dir _workspace/so101_photoreal_renders/pick_cube_train5episodes_full_256_seed98200 \
+  --output-root _workspace/so101_photoreal_datasets/pick_cube_train5episodes_full_256_seed98200 \
   --episodes 0,1,2,3,4 \
   --overwrite
 ```
@@ -158,7 +170,8 @@ episode_0000_frame_0001_camera1.png
 ```
 
 For `pick_cube_train` episode `0..4`, this means the output must preserve the
-source lengths, roughly 92 frames per episode, and expose:
+source lengths `[92, 92, 93, 92, 92]`, source image shape `[256, 256, 3]`,
+and expose:
 
 - `observation.images.camera1`: photoreal `egocentric_cam`
 - `observation.images.camera2`: photoreal `wrist_cam`
@@ -170,6 +183,13 @@ If any required frame or camera is missing, the builder fails instead of
 creating a misleading partial dataset. The Data Viewer discovers completed
 roots under `_workspace/so101_photoreal_datasets/` and lists them as separate
 `Photoreal datasets` entries.
+
+The local generated full dataset used for dashboard QA is:
+
+- `_workspace/so101_photoreal_datasets/pick_cube_train5episodes_full_256_seed98200`
+- 5 episodes, 461 frames total
+- 461 PNGs for each of `camera1`, `camera2`, and `camera3`
+- `training_ready=true`
 
 ## MyCobot Render
 

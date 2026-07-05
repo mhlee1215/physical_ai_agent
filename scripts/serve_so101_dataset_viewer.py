@@ -2175,6 +2175,7 @@ def _index_html() -> str:
 	          <select id="viewKind">
 	            <option value="train" selected>Train datasets</option>
 	            <option value="valid">Validation datasets</option>
+	            <option value="photoreal">Photoreal datasets</option>
 	            <option value="preview">Preview datasets</option>
 	          </select>
 	        </label>
@@ -2300,7 +2301,7 @@ def _index_html() -> str:
 	  </main>
 	  <script>
 	    let datasets = {};
-	    let datasetNamesByKind = { train: [], valid: [], preview: [] };
+	    let datasetNamesByKind = { train: [], valid: [], photoreal: [], preview: [] };
 	    let datasetPlatformByName = {};
 	    let datasetCategoryByName = {};
 	    let loopAnalyzerLoaded = false;
@@ -2393,11 +2394,12 @@ def _index_html() -> str:
 	      datasetNamesByKind = {
 	        train: orderedNames.filter(name => name.endsWith("_train")),
 	        valid: orderedNames.filter(name => name.endsWith("_val") || name.endsWith("_valid") || name.includes("_validation")),
+	        photoreal: orderedNames.filter(name => isPhotorealDataset(name)),
 	        preview: orderedNames.filter(name => isPreviewDataset(name)),
 	      };
 	      if (!datasetNamesByKind.train.length) datasetNamesByKind.train = orderedNames;
 	      if (!datasetNamesByKind.valid.length) datasetNamesByKind.valid = orderedNames.filter(name => !name.endsWith("_train"));
-	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !name.endsWith("_train") && !name.endsWith("_val") && !name.endsWith("_valid"));
+	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !name.endsWith("_train") && !name.endsWith("_val") && !name.endsWith("_valid") && !isPhotorealDataset(name));
 	      syncViewKind();
 	    }
 
@@ -2439,7 +2441,7 @@ def _index_html() -> str:
 	      const platform = platformKind.value || "so101";
 	      const selectedNames = namesForKindAndPlatform(viewKind.value, platform);
 	      if (!selectedNames.length) {
-	        const fallbackKind = ["preview", "train", "valid"].find(kind => namesForKindAndPlatform(kind, platform).length);
+	        const fallbackKind = ["photoreal", "preview", "train", "valid"].find(kind => namesForKindAndPlatform(kind, platform).length);
 	        if (fallbackKind && fallbackKind !== viewKind.value) {
 	          viewKind.value = fallbackKind;
 	        }
@@ -2472,7 +2474,12 @@ def _index_html() -> str:
 	    function isPreviewDataset(name) {
 	      const platform = datasetPlatformByName[name] || "so101";
 	      const category = datasetCategoryByName[name] || "";
-	      return platform !== "so101" || category === "temporary" || category === "photoreal" || category === "mycobot";
+	      return platform !== "so101" || category === "temporary" || category === "mycobot";
+	    }
+
+	    function isPhotorealDataset(name) {
+	      const category = datasetCategoryByName[name] || "";
+	      return category === "photoreal" || name.startsWith("photoreal_");
 	    }
 
 	    function platformLabel(platform) {
@@ -2481,6 +2488,7 @@ def _index_html() -> str:
 
 	    function viewKindLabel(kind) {
 	      if (kind === "valid") return "validation";
+	      if (kind === "photoreal") return "photoreal";
 	      if (kind === "preview") return "preview";
 	      return "train";
 	    }

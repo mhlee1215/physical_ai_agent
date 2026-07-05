@@ -14,6 +14,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE
 from render_so101_blender_probe import BLENDER_DRIVER, _pbr_paths, _write_photo_tabletop_texture
 from render_so101_mitsuba_probe import _export_mesh_geoms
 
@@ -37,8 +38,10 @@ def main() -> None:
     parser.add_argument(
         "--frames",
         default="0,22,44,66,87",
-        help="Comma-separated frame indices or labels: start, open, grip, final.",
+        help="Comma-separated frame indices or labels: start, open, grip, final, all.",
     )
+    parser.add_argument("--camera-keys", default="observation.images.camera1,observation.images.camera2")
+    parser.add_argument("--duplicate-camera3-from-camera2", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--seed-base", type=int, help="Reset seed base. Defaults to seedNNN parsed from dataset root.")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
@@ -61,6 +64,8 @@ def main() -> None:
         env_source=args.env_source,
         episodes=episodes,
         frame_tokens=frame_tokens,
+        camera_keys=[item.strip() for item in args.camera_keys.split(",") if item.strip()],
+        duplicate_camera3_from_camera2=args.duplicate_camera3_from_camera2,
         seed_base=args.seed_base,
         width=args.width,
         height=args.height,
@@ -83,6 +88,8 @@ def render_dataset_preview(
     env_source: str,
     episodes: list[int],
     frame_tokens: list[str],
+    camera_keys: list[str],
+    duplicate_camera3_from_camera2: bool,
     seed_base: int | None,
     width: int,
     height: int,
@@ -151,7 +158,15 @@ def render_dataset_preview(
                 max_mesh_geoms=max_mesh_geoms,
             )
             primitives = _export_primitive_geoms(unwrapped.model, unwrapped.data)
-            image_path = frame_dir / "so101_dataset_blender_cycles_metal.png"
+            camera_specs = _camera_specs(unwrapped.model, unwrapped.data, camera_lens=camera_lens)
+            render_specs = []
+            image_paths: dict[str, str] = {}
+            for camera_key in camera_keys:
+                if camera_key not in camera_specs:
+                    raise ValueError(f"unsupported camera key: {camera_key}")
+                image_path = frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_{_camera_slug(camera_key)}.png"
+                render_specs.append({"image_path": str(image_path.resolve()), "camera": camera_specs[camera_key]})
+                image_paths[camera_key] = str(image_path)
             blender_report_path = frame_dir / "blender_device_report.json"
             spec_path = frame_dir / "blender_scene_spec.json"
             spec = {
@@ -165,11 +180,12 @@ def render_dataset_preview(
                 "hdri_path": str(hdri_path.resolve()) if hdri_path.exists() else None,
                 "table_pbr": _pbr_paths(table_pbr_dir, "Wood008_1K-JPG"),
                 "plastic_pbr": _pbr_paths(plastic_pbr_dir, "Plastic013A_1K-JPG"),
-                "image_path": str(image_path.resolve()),
+                "image_path": str(Path(next(iter(image_paths.values()))).resolve()),
                 "blender_report_path": str(blender_report_path.resolve()),
                 "meshes": [{**item, "path": str(Path(item["path"]).resolve())} for item in exported],
                 "primitives": primitives,
                 "target_site": None,
+                "renders": render_specs,
             }
             spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True), encoding="utf-8")
             command = [blender_bin, "--background", "--python", str(driver_path), "--", str(spec_path)]
@@ -180,6 +196,11 @@ def render_dataset_preview(
             log_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
             if completed.returncode != 0:
                 raise RuntimeError(f"Blender render failed with exit code {completed.returncode}; see {log_path}")
+            if duplicate_camera3_from_camera2 and "observation.images.camera2" in image_paths:
+                camera2_path = Path(image_paths["observation.images.camera2"])
+                camera3_path = frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_camera3.png"
+                shutil.copyfile(camera2_path, camera3_path)
+                image_paths["observation.images.camera3"] = str(camera3_path)
             rendered.append(
                 {
                     "episode": episode,
@@ -189,7 +210,8 @@ def render_dataset_preview(
                     "timestamp": float(row["timestamp"]),
                     "state": state,
                     "action": [float(value) for value in row["action"]],
-                    "image_path": str(image_path),
+                    "image_path": image_paths.get("observation.images.camera1") or next(iter(image_paths.values())),
+                    "image_paths": image_paths,
                     "mesh_geoms_exported": len(exported),
                     "primitive_geoms_exported": len(primitives),
                     "render_seconds": render_seconds,
@@ -205,6 +227,8 @@ def render_dataset_preview(
         "env_source": env_source,
         "episodes": episodes,
         "frame_tokens": frame_tokens,
+        "camera_keys": camera_keys,
+        "duplicate_camera3_from_camera2": duplicate_camera3_from_camera2,
         "episode_frames": episode_frames,
         "seed_base": seed_base if seed_base is not None else _seed_from_name(dataset_root),
         "renderer": "blender_cycles",
@@ -378,7 +402,10 @@ def _resolve_episode_frames(
             raise ValueError(f"episode {episode} not found in {dataset_root}")
         first_frame, last_frame = ranges[episode]
         summary = episode_summaries.get(episode, {})
-        frames = [_resolve_frame_token(token, first_frame=first_frame, last_frame=last_frame, summary=summary) for token in frame_tokens]
+        if len(frame_tokens) == 1 and frame_tokens[0].lower() == "all":
+            frames = list(range(first_frame, last_frame + 1))
+        else:
+            frames = [_resolve_frame_token(token, first_frame=first_frame, last_frame=last_frame, summary=summary) for token in frame_tokens]
         episode_frames[int(episode)] = sorted(dict.fromkeys(frames))
     return episode_frames
 
@@ -430,6 +457,44 @@ def _frame_label(episode_frames: dict[int, list[int]], *, episode: int, frame: i
     if frame == frames[-1]:
         return "grip"
     return str(frame)
+
+
+def _camera_specs(model: Any, data: Any, *, camera_lens: float) -> dict[str, dict[str, Any]]:
+    return {
+        "observation.images.camera1": {
+            "mode": "spherical",
+            "lookat": EGOCENTRIC_CAMERA1_POSE["lookat"],
+            "distance": EGOCENTRIC_CAMERA1_POSE["distance"],
+            "azimuth": EGOCENTRIC_CAMERA1_POSE["azimuth"],
+            "elevation": EGOCENTRIC_CAMERA1_POSE["elevation"],
+            "lens": camera_lens,
+            "focus_distance": 0.63,
+            "aperture_fstop": 8.0,
+        },
+        "observation.images.camera2": _wrist_camera_spec(model, data, camera_lens=camera_lens),
+    }
+
+
+def _wrist_camera_spec(model: Any, data: Any, *, camera_lens: float) -> dict[str, Any]:
+    camera_id = None
+    for index in range(model.ncam):
+        if model.camera(index).name == "wrist_cam":
+            camera_id = index
+            break
+    if camera_id is None:
+        raise ValueError("wrist_cam not found in MuJoCo model")
+    return {
+        "mode": "matrix",
+        "location": [float(value) for value in data.cam_xpos[camera_id]],
+        "xmat": [float(value) for value in data.cam_xmat[camera_id]],
+        "lens": camera_lens,
+        "focus_distance": 0.20,
+        "aperture_fstop": 10.0,
+    }
+
+
+def _camera_slug(camera_key: str) -> str:
+    return camera_key.removeprefix("observation.images.")
 
 
 if __name__ == "__main__":

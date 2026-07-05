@@ -105,19 +105,26 @@ def main():
     scene.world = world
     configure_world(world, spec.get("hdri_path"))
 
+    renders = spec.get("renders") or [
+        {
+            "image_path": spec["image_path"],
+            "camera": {
+                "mode": "look_at",
+                "location": [0.48, -0.50, 0.31],
+                "target": [0.12, 0.015, 0.075],
+                "lens": float(spec.get("camera_lens", 48)),
+                "focus_distance": 0.56,
+            },
+        }
+    ]
     camera = bpy.data.cameras.new("camera")
     camera_obj = bpy.data.objects.new("camera", camera)
     bpy.context.collection.objects.link(camera_obj)
-    camera_obj.location = (0.48, -0.50, 0.31)
-    look_at(camera_obj, Vector((0.12, 0.015, 0.075)))
-    camera.lens = float(spec.get("camera_lens", 48))
-    camera.dof.use_dof = True
-    camera.dof.focus_distance = 0.56
-    camera.dof.aperture_fstop = 8.0
     scene.camera = camera_obj
-
-    scene.render.filepath = spec["image_path"]
-    bpy.ops.render.render(write_still=True)
+    for render in renders:
+        configure_camera(camera_obj, camera, render["camera"], default_lens=float(spec.get("camera_lens", 48)))
+        scene.render.filepath = render["image_path"]
+        bpy.ops.render.render(write_still=True)
 
     report = {
         "blender_version": bpy.app.version_string,
@@ -390,6 +397,37 @@ def add_area_light(name, location, power, size):
     bpy.context.collection.objects.link(obj)
     obj.location = location
     look_at(obj, Vector((0.12, 0.02, 0.05)))
+
+
+def configure_camera(camera_obj, camera, camera_spec, default_lens):
+    mode = camera_spec.get("mode", "look_at")
+    if mode == "matrix":
+        camera_obj.location = camera_spec["location"]
+        xmat = camera_spec["xmat"]
+        rows = [xmat[0:3], xmat[3:6], xmat[6:9]]
+        direction = -Vector(rows[2])
+        look_at(camera_obj, camera_obj.location + direction)
+    elif mode == "spherical":
+        lookat = Vector(camera_spec["lookat"])
+        distance = float(camera_spec["distance"])
+        azimuth = math.radians(float(camera_spec["azimuth"]))
+        elevation = math.radians(float(camera_spec["elevation"]))
+        location = Vector(
+            (
+                lookat.x + distance * math.cos(elevation) * math.cos(azimuth),
+                lookat.y + distance * math.cos(elevation) * math.sin(azimuth),
+                lookat.z - distance * math.sin(elevation),
+            )
+        )
+        camera_obj.location = location
+        look_at(camera_obj, lookat)
+    else:
+        camera_obj.location = camera_spec["location"]
+        look_at(camera_obj, Vector(camera_spec["target"]))
+    camera.lens = float(camera_spec.get("lens", default_lens))
+    camera.dof.use_dof = True
+    camera.dof.focus_distance = float(camera_spec.get("focus_distance", 0.56))
+    camera.dof.aperture_fstop = float(camera_spec.get("aperture_fstop", 8.0))
 
 
 def look_at(obj, target):
