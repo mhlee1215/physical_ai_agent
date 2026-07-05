@@ -153,6 +153,24 @@ Required persistence targets:
 The postdoc should still notify PM and affected workers, but the file update is
 part of the orchestration change itself.
 
+### Local Dashboard Server Lifecycle
+
+Dataset viewers, Robot Experiment Manager, loop analyzers, TensorBoard-adjacent
+inspection surfaces, and other user-visible local servers must reuse the
+current user-visible server and port by default. Before starting a viewer or
+dashboard server, check whether the requested/current port is already serving
+the target surface. If it is, reuse it and refresh the data or restart that same
+server only when needed.
+
+Do not work around a live server by starting a second copy on a new port. A port
+change is allowed only when the user explicitly asks for a separate server, the
+original port is owned by an unrelated process and cannot be stopped safely, or
+the final report clearly labels the new port as a temporary exception. For the
+SO101/photoreal dataset viewer lane, the active browser port is the contract:
+if the user is looking at `http://127.0.0.1:8769/`, update or restart that
+server on `8769` instead of launching another viewer on `8768`, `8770`, or an
+ad hoc fallback.
+
 ### Paper-Table Data Priority
 
 Top-level objective: produce manuscript-table experiment data as quickly and

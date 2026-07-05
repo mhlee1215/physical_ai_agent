@@ -139,6 +139,13 @@ paper-facing concepts:
   not by a separate polling monitor.
 - User policy: whenever TensorBoard is started or reported, provide both the
   local URL and the same-Wi-Fi mobile TensorBoard URL.
+- User policy: local dataset/viewer dashboards must reuse the current
+  user-visible server and port. If the user is viewing
+  `http://127.0.0.1:8769/`, update or restart that same `8769` server rather
+  than starting another viewer on a fallback port. Starting extra viewer
+  servers or changing ports is allowed only when the user explicitly asks for a
+  separate server or the original port is owned by an unrelated process and the
+  exception is reported clearly.
 - User policy: Qwen-chain SO101 loop tests must use the valid-mask termination
   head, not fixed-length primitive execution. Provide
   `closed_loop.valid_mask_checkpoint` in dataset config or
