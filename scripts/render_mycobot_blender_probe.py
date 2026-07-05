@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -344,16 +345,16 @@ def main() -> None:
     parser.add_argument(
         "--official-gripper-root",
         type=Path,
-        help="Local clone of elephantrobotics/mycobot_ros or mycobot_ros2 for official gripper profiles.",
+        default=Path(os.environ.get("MYCOBOT_ROS2_ROOT", "_vendor/mycobot_ros2")),
+        help="Local clone of elephantrobotics/mycobot_ros2 for the default adaptive gripper profile.",
     )
     parser.add_argument(
         "--model-profile",
         choices=(MODEL_PROFILE_280_JN, MODEL_PROFILE_320_GRIPPER, MODEL_PROFILE_320_ADAPTIVE_GRIPPER),
-        default=MODEL_PROFILE_280_JN,
+        default=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
         help=(
-            "Robot/gripper source profile. 280-jn falls back to a synthetic gripper "
-            "unless official 280 gripper assets are supplied by the source model; "
-            "320 profiles import official gripper meshes from --official-gripper-root."
+            "Robot/gripper source profile. The default MyCobot visual profile is "
+            "320-m5-2022-adaptive-gripper. 280-jn is only for explicit legacy checks."
         ),
     )
     parser.add_argument("--output-dir", type=Path, default=Path("_workspace/mycobot_blender_probe"))
@@ -362,7 +363,7 @@ def main() -> None:
     parser.add_argument(
         "--pose-preset",
         choices=("sample", "adaptive-table"),
-        default="sample",
+        default="adaptive-table",
         help="State to render after reset. adaptive-table uses the validated adaptive gripper table pose.",
     )
     parser.add_argument("--width", type=int, default=640)

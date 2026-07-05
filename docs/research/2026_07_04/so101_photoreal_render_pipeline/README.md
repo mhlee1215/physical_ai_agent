@@ -81,17 +81,17 @@ checking simulation states with more realistic lighting/materials.
 
 ## MyCobot Render
 
-The same sidecar approach also works for the local MyCobot Nexus scene. For
-adaptive-gripper visual evidence, pass `--official-gripper-root` with a local
-`mycobot_ros2` clone and use the `320-m5-2022-adaptive-gripper` profile. The
-renderer exports MuJoCo mesh geoms plus visible box primitives such as the cube
-and work mat, then path-traces the static state in Blender:
+The same sidecar approach also works for the local MyCobot Nexus scene. MyCobot
+visual evidence defaults to the adaptive gripper: `mycobot_ros2`,
+`320-m5-2022-adaptive-gripper`, and the `adaptive-table` pose preset. Synthetic
+or parallel-gripper renders should only be used for explicit legacy/debug
+checks, not as the default MyCobot visual. The renderer exports MuJoCo mesh
+geoms plus visible box primitives such as the cube and work mat, then
+path-traces the static state in Blender:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/render_mycobot_blender_probe.py \
   --official-gripper-root _workspace/_vendor/mycobot_ros2 \
-  --model-profile 320-m5-2022-adaptive-gripper \
-  --pose-preset adaptive-table \
   --render-asset-root _workspace/photoreal_assets \
   --output-dir _workspace/mycobot_blender_probe \
   --seed 7 \
