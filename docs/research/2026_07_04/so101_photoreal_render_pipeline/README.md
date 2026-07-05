@@ -19,6 +19,10 @@ Procedural versus HDRI/PBR assets:
 
 ![SO101 procedural versus HDRI PBR](./procedural_vs_hdri_pbr.png)
 
+MyCobot adaptive gripper matte PLA material:
+
+![MyCobot adaptive gripper matte PLA render](./mycobot_matte_pla_example.png)
+
 ## One-Frame Render
 
 Install Blender and fetch the optional CC0 assets:
@@ -74,6 +78,52 @@ The hook writes the preview under:
 This does not replace `observation.images.camera1/camera2/camera3` in the
 LeRobot dataset. It is intended for dataset QA, paper figures, and visually
 checking simulation states with more realistic lighting/materials.
+
+## MyCobot Render
+
+The same sidecar approach also works for the local MyCobot Nexus scene. MyCobot
+visual evidence defaults to the adaptive gripper: `mycobot_ros2`,
+`320-m5-2022-adaptive-gripper`, and the `adaptive-table` pose preset. Synthetic
+or parallel-gripper renders should only be used for explicit legacy/debug
+checks, not as the default MyCobot visual. The renderer exports MuJoCo mesh
+geoms plus visible box primitives such as the cube and work mat, then
+path-traces the static state in Blender:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/render_mycobot_blender_probe.py \
+  --official-gripper-root _workspace/_vendor/mycobot_ros2 \
+  --render-asset-root _workspace/photoreal_assets \
+  --output-dir _workspace/mycobot_blender_probe \
+  --seed 7 \
+  --warmup-steps 0 \
+  --width 640 \
+  --height 480 \
+  --samples 256 \
+  --denoise \
+  --robot-material matte_pla
+```
+
+The measured local example on this Mac was:
+
+- renderer: Blender Cycles
+- acceleration: Metal, `Apple M5 Pro (GPU - 20 cores)`
+- size: `640x480`
+- samples: `256`
+- denoise: enabled
+- material: `matte_pla`
+- model profile: `320-m5-2022-adaptive-gripper` with official `mycobot_ros2`
+  adaptive gripper meshes
+- pose preset: `adaptive-table`
+- render time: `6.55s`
+
+The adaptive asset/pose path was also checked with:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/verify_mycobot_320_adaptive_visual_pose.py \
+  --official-gripper-root _workspace/_vendor/mycobot_ros2
+PYTHONPATH=src .venv/bin/python scripts/verify_mycobot_320_adaptive_mimic_motion.py \
+  --official-gripper-root _workspace/_vendor/mycobot_ros2
+```
 
 ## Assets
 

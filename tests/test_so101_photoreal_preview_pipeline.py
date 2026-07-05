@@ -65,6 +65,16 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
 
+    def test_mycobot_blender_probe_help(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "scripts/render_mycobot_blender_probe.py", "--help"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        self.assertIn("--asset-root", completed.stdout)
+        self.assertIn("--robot-material", completed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
