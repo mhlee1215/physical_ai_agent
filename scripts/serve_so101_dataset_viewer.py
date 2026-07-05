@@ -279,11 +279,15 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
         _dataset_catalog_item(repo_root, split, path, category="temporary")
         for split, path in _discover_temporary_datasets(repo_root).items()
     ]
+    photoreal_items = [
+        _so101_photoreal_dataset_catalog_item(repo_root, split, path)
+        for split, path in _discover_so101_photoreal_datasets(repo_root).items()
+    ]
     mycobot_items = [
         _mycobot_dataset_catalog_item(repo_root, split, path)
         for split, path in _discover_mycobot_datasets(repo_root).items()
     ]
-    for item in [*official_items, *skill_items, *archived_items, *temporary_items, *mycobot_items]:
+    for item in [*official_items, *skill_items, *archived_items, *temporary_items, *photoreal_items, *mycobot_items]:
         if item["status"] == "available":
             payload[item["name"]] = item["summary"]
     return {
@@ -306,6 +310,12 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
                 "title": "Temporary / recently generated",
                 "description": "Smoke or experimental datasets generated while testing new object/grasp variants.",
                 "items": temporary_items,
+            },
+            {
+                "id": "photoreal",
+                "title": "Photoreal datasets",
+                "description": "SO101 datasets whose stored image frames are photoreal renders.",
+                "items": photoreal_items,
             },
             {
                 "id": "mycobot",
@@ -644,6 +654,111 @@ def _discover_temporary_datasets(repo_root: Path) -> dict[str, Path]:
     return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
 
 
+def _discover_so101_photoreal_datasets(repo_root: Path) -> dict[str, Path]:
+    discovered = _parse_dataset_env("SO101_PHOTOREAL_DATASETS")
+    roots = [
+        repo_root / "_workspace" / "so101_photoreal_datasets",
+        REPO_ROOT / "_workspace" / "so101_photoreal_datasets",
+    ]
+    seen = {path.resolve() for path in discovered.values()}
+    for root in roots:
+        if not root.exists():
+            continue
+        for manifest_path in sorted(root.glob("*/manifest.json")):
+            dataset_root = manifest_path.parent
+            resolved = dataset_root.resolve()
+            if resolved in seen:
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if manifest.get("format") != "so101_photoreal_jsonl_v1":
+                continue
+            split = _unique_split_name("photoreal_" + _slug(dataset_root.name), discovered)
+            discovered[split] = dataset_root
+            seen.add(resolved)
+    return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
+
+
+def _so101_photoreal_dataset_catalog_item(repo_root: Path, split: str, root: Path) -> dict[str, Any]:
+    resolved = _resolve_dataset_path(repo_root, root)
+    base = {
+        "name": split,
+        "root": str(resolved),
+        "category": "photoreal",
+        "platform": "so101",
+        "platform_label": "SO101",
+        "dataset_format": "so101_photoreal_jsonl_v1",
+    }
+    try:
+        dataset = _so101_photoreal_dataset(resolved)
+    except Exception as exc:  # noqa: BLE001 - dashboard should show incomplete datasets instead of failing.
+        return {
+            **base,
+            "status": "missing",
+            "detail": str(exc),
+            "summary": {
+                **base,
+                "episodes": 0,
+                "frames": 0,
+                "size_bytes": _dir_size(resolved),
+                "size_human": _format_bytes(_dir_size(resolved)),
+            },
+        }
+    summary = _so101_photoreal_dataset_summary(split, dataset)
+    return {
+        **base,
+        "status": "available" if summary["episodes"] > 0 and summary["frames"] > 0 else "incomplete",
+        "detail": "photoreal image dataset",
+        "summary": summary,
+        **summary,
+    }
+
+
+def _so101_photoreal_dataset(root: Path) -> dict[str, Any]:
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("format") != "so101_photoreal_jsonl_v1":
+        raise ValueError(f"unsupported SO101 photoreal dataset format: {manifest.get('format')}")
+    summaries = manifest.get("episode_summaries") or []
+    return {
+        "root": root,
+        "manifest": manifest,
+        "episode_lengths": [int(row.get("frames") or 0) for row in summaries],
+        "size_bytes": _dir_size(root),
+    }
+
+
+def _so101_photoreal_dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
+    manifest = dataset["manifest"]
+    image_shape = manifest.get("image_shape") or [480, 640, 3]
+    return {
+        "type": "so101_photoreal_jsonl",
+        "dataset_format": "so101_photoreal_jsonl_v1",
+        "platform": "so101",
+        "platform_label": "SO101",
+        "root": str(dataset["root"]),
+        "name": split,
+        "episodes": int(manifest.get("episodes") or len(dataset["episode_lengths"])),
+        "frames": int(manifest.get("frames") or sum(dataset["episode_lengths"])),
+        "fps": manifest.get("fps"),
+        "size_bytes": dataset["size_bytes"],
+        "size_human": _format_bytes(dataset["size_bytes"]),
+        "data_bytes": _dir_size(dataset["root"] / "episodes"),
+        "data_human": _format_bytes(_dir_size(dataset["root"] / "episodes")),
+        "image_bytes": _dir_size(dataset["root"] / "images"),
+        "image_human": _format_bytes(_dir_size(dataset["root"] / "images")),
+        "features": manifest.get("features") or ["observation.images.camera1"],
+        "image_shapes": {"observation.images.camera1": image_shape},
+        "episode_lengths": dataset["episode_lengths"],
+        "camera_contract": manifest.get("camera_contract") or {},
+        "source_dataset_root": manifest.get("source_dataset_root"),
+        "source_dataset_name": manifest.get("source_dataset_name"),
+        "training_ready": bool(manifest.get("training_ready")),
+        "note": manifest.get("note"),
+    }
+
+
 def _discover_mycobot_datasets(repo_root: Path) -> dict[str, Path]:
     discovered = _parse_dataset_env("MYCOBOT_TEMP_DATASETS")
     seen_paths = {path.resolve() for path in discovered.values()}
@@ -783,6 +898,9 @@ def _safe_mtime(path: Path) -> float:
 
 
 def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dict[str, Any]:
+    photoreal_roots = _discover_so101_photoreal_datasets(repo_root)
+    if split in photoreal_roots:
+        return _so101_photoreal_frame_payload(_resolve_dataset_path(repo_root, photoreal_roots[split]), split, episode, frame)
     mycobot_roots = _discover_mycobot_datasets(repo_root)
     if split in mycobot_roots:
         return _mycobot_frame_payload(_resolve_dataset_path(repo_root, mycobot_roots[split]), split, episode, frame)
@@ -834,6 +952,51 @@ def _mycobot_dataset(root: Path) -> dict[str, Any]:
         "manifest": manifest,
         "episode_lengths": [int(row.get("frames") or 0) for row in summaries],
         "size_bytes": _dir_size(root),
+    }
+
+
+def _so101_photoreal_frame_payload(root: Path, split: str, episode: int, frame: int) -> dict[str, Any]:
+    dataset = _so101_photoreal_dataset(root)
+    lengths = dataset["episode_lengths"]
+    if episode < 0 or episode >= len(lengths):
+        raise ValueError(f"episode out of range: {episode}")
+    frame = max(0, min(frame, lengths[episode] - 1))
+    episode_path = root / "episodes" / f"episode_{episode:04d}.jsonl"
+    row = _jsonl_row(episode_path, frame)
+    image_rel = row.get("observation", {}).get("images", {}).get("camera1")
+    images = {}
+    image_path = ""
+    if image_rel:
+        image_path = str(image_rel)
+        image_file = root / image_rel
+        mime = dataset["manifest"].get("image_mime_type") or "image/png"
+        images["observation.images.camera1"] = f"data:{mime};base64," + base64.b64encode(image_file.read_bytes()).decode("ascii")
+    state_values = [float(value) for value in row.get("observation", {}).get("state", [])]
+    action_values = [float(value) for value in row.get("action", [])]
+    return {
+        "split": split,
+        "episode": episode,
+        "frame": frame,
+        "episode_length": lengths[episode],
+        "row_index": frame,
+        "timestamp": float(row.get("timestamp") or 0.0),
+        "task": row.get("task", ""),
+        "prompt": row.get("prompt") or row.get("task", ""),
+        "task_index": row.get("task_index"),
+        "source_episode_index": row.get("source_episode_index"),
+        "source_frame_index": row.get("source_frame_index"),
+        "source_seed": row.get("source_seed"),
+        "images": images,
+        "image_path": image_path,
+        "camera_contract": dataset["manifest"].get("camera_contract") or {},
+        "state": _named_values(dataset["manifest"].get("joint_names") or JOINT_NAMES, state_values),
+        "action": _named_values(dataset["manifest"].get("action_names") or JOINT_NAMES, action_values),
+        "info": {
+            "format": dataset["manifest"].get("format"),
+            "source_dataset_root": dataset["manifest"].get("source_dataset_root"),
+            "source_dataset_name": dataset["manifest"].get("source_dataset_name"),
+            "training_ready": bool(dataset["manifest"].get("training_ready")),
+        },
     }
 
 
@@ -2306,7 +2469,7 @@ def _index_html() -> str:
 	    function isPreviewDataset(name) {
 	      const platform = datasetPlatformByName[name] || "so101";
 	      const category = datasetCategoryByName[name] || "";
-	      return platform !== "so101" || category === "temporary" || category === "mycobot";
+	      return platform !== "so101" || category === "temporary" || category === "photoreal" || category === "mycobot";
 	    }
 
 	    function platformLabel(platform) {

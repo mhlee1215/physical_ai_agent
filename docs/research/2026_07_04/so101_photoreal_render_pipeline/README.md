@@ -131,6 +131,30 @@ dataset. The robot qpos/action are row-derived; object pose is recreated by
 resetting the export-compatible env with the report-backed per-episode seed
 because the LeRobot parquet rows do not store full object qpos.
 
+## SO101 Photoreal Dataset
+
+To make the rendered frames visible as an actual dataset, build a compact
+photoreal JSONL dataset root:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python scripts/build_so101_photoreal_dataset.py \
+  --source-dataset-root _workspace/so101_lerobot/pick_cube_train50_ego_wrist_256_seed98200 \
+  --rendered-dir docs/research/2026_07_04/so101_photoreal_render_pipeline/so101_pick_cube_train5episodes \
+  --output-root _workspace/so101_photoreal_datasets/pick_cube_train5episodes_start_grip_640_seed98200 \
+  --overwrite
+```
+
+The generated dataset format is `so101_photoreal_jsonl_v1`. Its stored image
+feature is `observation.images.camera1`, and that image is the photoreal render
+itself. This differs from the sidecar comparison path above: the Data Viewer
+discovers this root under `_workspace/so101_photoreal_datasets/` and lists it
+as a separate `Photoreal datasets` entry.
+
+The current compact dataset contains episodes `0..4` from `pick_cube_train`,
+with `start` and `grip` frames for each episode. It is intended for visual
+dataset QA and dashboard inspection. A full replacement training set would
+require rendering every frame for the selected episodes.
+
 ## MyCobot Render
 
 The same sidecar approach also works for the local MyCobot Nexus scene. MyCobot

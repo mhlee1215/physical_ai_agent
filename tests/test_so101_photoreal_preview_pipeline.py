@@ -114,6 +114,72 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertIn("photoreal_sidecar", images)
         self.assertTrue(images["photoreal_sidecar"].startswith("data:image/png;base64,"))
 
+    def test_dataset_viewer_so101_photoreal_dataset_adapter(self) -> None:
+        spec = importlib.util.spec_from_file_location("serve_so101_dataset_viewer", "scripts/serve_so101_dataset_viewer.py")
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax9L2kAAAAASUVORK5CYII=")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "photoreal_dataset"
+            (root / "episodes").mkdir(parents=True)
+            (root / "images" / "episode_0000").mkdir(parents=True)
+            image = root / "images" / "episode_0000" / "frame_0000.png"
+            image.write_bytes(png)
+            (root / "episodes" / "episode_0000.jsonl").write_text(
+                json.dumps(
+                    {
+                        "episode_index": 0,
+                        "frame_index": 0,
+                        "timestamp": 0.0,
+                        "task_index": 0,
+                        "task": "Grasp the visible cube and lift it up.",
+                        "prompt": "Grasp the visible cube and lift it up.",
+                        "source_episode_index": 2,
+                        "source_frame_index": 85,
+                        "observation": {
+                            "state": [0, 1, 2, 3, 4, 5],
+                            "images": {"camera1": "images/episode_0000/frame_0000.png"},
+                        },
+                        "action": [5, 4, 3, 2, 1, 0],
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "format": "so101_photoreal_jsonl_v1",
+                        "episodes": 1,
+                        "frames": 1,
+                        "fps": 12,
+                        "image_mime_type": "image/png",
+                        "image_shape": [1, 1, 3],
+                        "features": ["observation.images.camera1", "observation.state", "action"],
+                        "joint_names": ["j0", "j1", "j2", "j3", "j4", "j5"],
+                        "action_names": ["j0", "j1", "j2", "j3", "j4", "j5"],
+                        "camera_contract": {"observation.images.camera1": "photoreal_render"},
+                        "episode_summaries": [{"episode_index": 0, "frames": 1}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            dataset = module._so101_photoreal_dataset(root)
+            summary = module._so101_photoreal_dataset_summary("photoreal_test", dataset)
+            payload = module._so101_photoreal_frame_payload(root, "photoreal_test", 0, 0)
+
+        self.assertEqual(summary["dataset_format"], "so101_photoreal_jsonl_v1")
+        self.assertEqual(summary["episodes"], 1)
+        self.assertEqual(payload["source_episode_index"], 2)
+        self.assertEqual(payload["source_frame_index"], 85)
+        self.assertIn("observation.images.camera1", payload["images"])
+        self.assertNotIn("photoreal_images", payload)
+
 
 if __name__ == "__main__":
     unittest.main()
