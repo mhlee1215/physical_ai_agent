@@ -70,7 +70,7 @@ def main() -> None:
         nexus._set_adaptive_gate_arm_pose(env, nexus._adaptive_gate7_arm_qpos(nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER))
         frames: list[Path] = []
         rows: list[dict[str, Any]] = []
-        pose_specs = (("open", 1.0), ("closed", -0.7))
+        pose_specs = (("open", 1.0), ("tight_contact", -0.1), ("overclosed_crossed", -0.7))
         panel_specs = (
             ("complete_gripper", "all visual finger links plus collision pads", VISUAL_LINKS | PAD_GEOMS, 0.92, 0.92),
             ("finger_mesh_only", "visual gripper meshes only; no collision pads", VISUAL_LINKS, 0.96, 0.0),
@@ -99,7 +99,8 @@ def main() -> None:
                     renderer.update_scene(env.data, camera=camera)
                     rgb = renderer.render()
                     frame = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
-                    _draw_header(frame, pose_name, panel_name, view_name, description, command)
+                    pad_distance = _pad_distance(env)
+                    _draw_header(frame, pose_name, panel_name, view_name, description, command, pad_distance)
                     _draw_legend(frame)
                     out = args.output_dir / f"{pose_name}_{panel_name}_{view_name}.png"
                     cv2.imwrite(str(out), frame)
@@ -112,7 +113,7 @@ def main() -> None:
             "frames": [str(path) for path in frames],
             "panels": rows,
             "inventory": _inventory(env),
-            "note": "Open/closed gripper audit separates visual meshes from physics collision pads so distal finger ends and pads are readable.",
+            "note": "Open/tight/overclosed gripper audit separates visual meshes from physics collision pads. The tight_contact command is the measured minimum pad distance; overclosed_crossed is shown explicitly because it is visually misleading if labeled closed.",
         }
         report_path = args.output_dir / "open_closed_gripper_audit_report.json"
         report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -140,7 +141,7 @@ def _apply_visibility(env: nexus.MyCobotNexusEnv, visible: set[str], *, visual_a
         env.model.geom_rgba[geom_id, :] = rgba
 
 
-def _draw_header(frame: np.ndarray, pose_name: str, panel_name: str, view_name: str, description: str, command: float) -> None:
+def _draw_header(frame: np.ndarray, pose_name: str, panel_name: str, view_name: str, description: str, command: float, pad_distance: float) -> None:
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 116), (255, 255, 255), -1)
     cv2.putText(
         frame,
@@ -155,7 +156,7 @@ def _draw_header(frame: np.ndarray, pose_name: str, panel_name: str, view_name: 
     cv2.putText(frame, description, (18, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
     cv2.putText(
         frame,
-        f"gripper command={command:+.2f}; pads are physics proxy boxes, finger links are visual meshes",
+        f"gripper command={command:+.2f}; pad-center distance={pad_distance * 1000:.1f} mm; tight contact is near -0.10",
         (18, 90),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.48,
@@ -163,6 +164,16 @@ def _draw_header(frame: np.ndarray, pose_name: str, panel_name: str, view_name: 
         1,
         cv2.LINE_AA,
     )
+
+
+def _pad_distance(env: nexus.MyCobotNexusEnv) -> float:
+    positions = []
+    for name in ("left_finger_pad", "right_finger_pad"):
+        geom_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, name)
+        if geom_id < 0:
+            return float("nan")
+        positions.append(np.asarray(env.data.geom_xpos[geom_id], dtype=float))
+    return float(np.linalg.norm(positions[1] - positions[0]))
 
 
 def _draw_legend(frame: np.ndarray) -> None:
