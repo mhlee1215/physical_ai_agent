@@ -27,6 +27,7 @@ VISIBILITY_MODES = (
     "audit_connectors",
     "skeleton_only",
     "gripper_mesh",
+    "gripper_mesh_close",
     "gripper_audit",
 )
 
@@ -77,7 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated layers to render: mesh_only, mesh_markers, pads_markers, "
             "collision_only, all, audit_mesh, audit_all, audit_connectors, "
-            "skeleton_only, gripper_mesh, gripper_audit."
+            "skeleton_only, gripper_mesh, gripper_mesh_close, gripper_audit."
         ),
     )
     return parser
@@ -123,7 +124,10 @@ def main() -> None:
             for visibility_mode in visibility_modes:
                 _apply_visibility_mode(env, visibility_mode, rgba_snapshot)
                 view_reports = []
-                for view_name, target_names, mode in _view_specs(args.model_profile):
+                view_specs = _view_specs(args.model_profile)
+                if visibility_mode == "gripper_mesh_close":
+                    view_specs = _gripper_close_view_specs()
+                for view_name, target_names, mode in view_specs:
                     rgb, camera_meta = _render_best_view(env, renderer, target_names, mode, args.camera_search)
                     bgr = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
                     _draw_label(bgr, label, f"{visibility_mode} | {view_name}", camera_meta, env)
@@ -331,7 +335,7 @@ def _apply_visibility_mode(env: nexus.MyCobotNexusEnv, mode: str, snapshot: dict
                 env.model.geom_rgba[geom_id, :] = [1.0, 0.05, 0.0, 1.0]
             else:
                 env.model.geom_rgba[geom_id, 3] = 0.0
-        elif mode == "gripper_mesh":
+        elif mode in {"gripper_mesh", "gripper_mesh_close"}:
             if is_mesh and _is_gripper_geom(name):
                 env.model.geom_rgba[geom_id, :] = _gripper_geom_color(name, alpha=1.0)
             else:
@@ -359,7 +363,7 @@ def _apply_visibility_mode(env: nexus.MyCobotNexusEnv, mode: str, snapshot: dict
     env.model.site_rgba[:, 3] = snapshot["site"][:, 3] if show_markers else 0.0
     if mode in {"skeleton_only", "gripper_audit"}:
         env.model.site_size[:] = np.maximum(env.model.site_size, 0.0075)
-    elif mode == "gripper_mesh":
+    elif mode in {"gripper_mesh", "gripper_mesh_close"}:
         env.model.site_rgba[:, 3] = 0.0
 
 
@@ -408,6 +412,24 @@ def _view_specs(model_profile: str) -> list[tuple[str, tuple[str, ...], str]]:
     ]
 
 
+def _gripper_close_view_specs() -> list[tuple[str, tuple[str, ...], str]]:
+    gripper_names = (
+        "gripper_base",
+        "gripper_left3",
+        "gripper_left1",
+        "gripper_left2",
+        "gripper_right3",
+        "gripper_right1",
+        "gripper_right2",
+    )
+    return [
+        ("gripper_close_front", gripper_names, "gripper_close_front"),
+        ("gripper_close_side", gripper_names, "gripper_close_side"),
+        ("gripper_close_top", gripper_names, "gripper_close_top"),
+        ("gripper_close_iso", gripper_names, "gripper_close_iso"),
+    ]
+
+
 def _render_best_view(
     env: nexus.MyCobotNexusEnv,
     renderer: Any,
@@ -443,7 +465,15 @@ def _render_best_view(
 def _camera_candidates(mode: str, radius: float, search_mode: str) -> list[tuple[float, float, float]]:
     radius = max(radius, 0.08)
     if search_mode == "fast":
-        if mode == "full":
+        if mode == "gripper_close_front":
+            raw = ((135.0, -12.0, 2.4), (90.0, -8.0, 2.4), (180.0, -12.0, 2.6))
+        elif mode == "gripper_close_side":
+            raw = ((45.0, -15.0, 2.4), (225.0, -15.0, 2.4), (315.0, -10.0, 2.8))
+        elif mode == "gripper_close_top":
+            raw = ((90.0, -70.0, 2.6), (180.0, -70.0, 2.6), (270.0, -70.0, 2.6))
+        elif mode == "gripper_close_iso":
+            raw = ((135.0, -35.0, 2.8), (225.0, -35.0, 2.8), (45.0, -35.0, 2.8))
+        elif mode == "full":
             raw = (
                 (35.0, -25.0, 3.2),
                 (110.0, -25.0, 3.2),
