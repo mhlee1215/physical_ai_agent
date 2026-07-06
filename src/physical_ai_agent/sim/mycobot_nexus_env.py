@@ -126,10 +126,12 @@ ADAPTIVE_FINGER_PAD_EULER = (0.0, 0.0, 0.0)
 ADAPTIVE_FINGER_PAD_FRICTION = (80.0, 8.0, 8.0)
 ADAPTIVE_FINGER_PAD_CONDIM = 6
 # The 280 ROS1 adaptive-gripper fingertip meshes extend along local X, not local Y like
-# the 320 pro-adaptive gripper. Keep the proxy pads on the visible fingertip geometry.
+# the 320 pro-adaptive gripper. Keep the proxy pad centers on the visible fingertip
+# tips, but make the 280 pads thin along local X so their inner faces oppose each
+# other like gripper jaws instead of rendering as end-to-end blocks.
 ADAPTIVE_280_LEFT_FINGER_PAD_POS = (0.0275, 0.0, 0.00381)
 ADAPTIVE_280_RIGHT_FINGER_PAD_POS = (-0.03176, 0.0, 0.00390)
-ADAPTIVE_280_FINGER_PAD_SIZE = ADAPTIVE_FINGER_PAD_SIZE
+ADAPTIVE_280_FINGER_PAD_SIZE = (0.003, 0.014, 0.006)
 ADAPTIVE_280_FINGER_PAD_FRICTION = ADAPTIVE_FINGER_PAD_FRICTION
 ADAPTIVE_GATE7_TABLE_ARM_QPOS = (
     -0.655675253325397,

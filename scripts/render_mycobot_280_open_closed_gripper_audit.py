@@ -70,22 +70,18 @@ def main() -> None:
         nexus._set_adaptive_gate_arm_pose(env, nexus._adaptive_gate7_arm_qpos(nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER))
         frames: list[Path] = []
         rows: list[dict[str, Any]] = []
-        pose_specs = (("open", 1.0), ("tight_contact", -0.1), ("overclosed_crossed", -0.7))
+        pose_specs = (("open", 1.0), ("just_contact", 0.0), ("overclosed_overlap", 0.4), ("overtravel_reopened", -0.7))
         panel_specs = (
             ("complete_gripper", "all visual finger links plus collision pads", VISUAL_LINKS | PAD_GEOMS, 0.92, 0.92),
             ("finger_mesh_only", "visual gripper meshes only; no collision pads", VISUAL_LINKS, 0.96, 0.0),
-            ("pad_collision_only", "physics collision pads only; visual finger meshes hidden", PAD_GEOMS, 0.0, 0.92),
-            ("distal_fingers_and_pads", "distal finger ends plus the actual collision pads", DISTAL_LINKS | PAD_GEOMS, 0.98, 0.98),
-        )
-        camera_specs = (
-            ("front", 135.0, -12.0, 2.45),
-            ("side", 45.0, -10.0, 2.30),
-            ("top", 90.0, -72.0, 2.55),
+            ("pad_collision_only", "physics collision pads only; visual finger meshes hidden", PAD_GEOMS, 0.0, 0.68),
+            ("distal_fingers_and_pads", "distal finger ends plus the actual collision pads", DISTAL_LINKS | PAD_GEOMS, 0.98, 0.74),
         )
         for pose_name, command in pose_specs:
             env._set_gripper(command=command)
             env._mujoco.mj_forward(env.model, env.data)
             target, radius = _gripper_target_and_radius(env)
+            camera_specs = _pad_frame_camera_specs(env)
             for panel_name, description, visible, visual_alpha, pad_alpha in panel_specs:
                 for view_name, azimuth, elevation, multiplier in camera_specs:
                     camera = visibility._camera(
@@ -102,6 +98,8 @@ def main() -> None:
                     pad_distance = _pad_distance(env)
                     _draw_header(frame, pose_name, panel_name, view_name, description, command, pad_distance)
                     _draw_legend(frame)
+                    if pose_name == "overclosed_overlap" and panel_name == "pad_collision_only":
+                        _draw_invalid_overlap_cue(frame)
                     out = args.output_dir / f"{pose_name}_{panel_name}_{view_name}.png"
                     cv2.imwrite(str(out), frame)
                     frames.append(out)
@@ -113,7 +111,7 @@ def main() -> None:
             "frames": [str(path) for path in frames],
             "panels": rows,
             "inventory": _inventory(env),
-            "note": "Open/tight/overclosed gripper audit separates visual meshes from physics collision pads. The tight_contact command is the measured minimum pad distance; overclosed_crossed is shown explicitly because it is visually misleading if labeled closed.",
+            "note": "Open/contact/overtravel gripper audit separates visual meshes from physics collision pads. The just_contact command is the pre-crossing jaw contact state; overclosed_overlap and overtravel_reopened are shown explicitly as invalid states.",
         }
         report_path = args.output_dir / "open_closed_gripper_audit_report.json"
         report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -122,6 +120,33 @@ def main() -> None:
         if renderer is not None:
             renderer.close()
         env.close()
+
+
+def _pad_frame_camera_specs(env: nexus.MyCobotNexusEnv) -> tuple[tuple[str, float, float, float], ...]:
+    left_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, "left_finger_pad")
+    if left_id < 0:
+        return (("front", 135.0, -12.0, 2.45), ("side", 45.0, -10.0, 2.30), ("top", 90.0, -72.0, 2.55))
+    mat = np.asarray(env.data.geom_xmat[left_id], dtype=float).reshape(3, 3)
+    jaw_axis = mat[:, 0]
+    pad_length_axis = mat[:, 1]
+    pad_height_axis = mat[:, 2]
+    oblique = pad_length_axis + pad_height_axis * 0.7
+    return (
+        ("gap_top_pad_frame", *_azimuth_elevation_from_direction(pad_height_axis), 2.65),
+        ("gap_side_pad_frame", *_azimuth_elevation_from_direction(pad_length_axis), 2.55),
+        ("gap_oblique_pad_frame", *_azimuth_elevation_from_direction(oblique), 2.75),
+    )
+
+
+def _azimuth_elevation_from_direction(direction: np.ndarray) -> tuple[float, float]:
+    vec = np.asarray(direction, dtype=float)
+    norm = float(np.linalg.norm(vec))
+    if norm < 1e-9:
+        return 135.0, -12.0
+    vec = vec / norm
+    azimuth = float(np.degrees(np.arctan2(vec[1], vec[0])))
+    elevation = float(np.degrees(np.arcsin(np.clip(vec[2], -1.0, 1.0))))
+    return azimuth, elevation
 
 
 def _apply_visibility(env: nexus.MyCobotNexusEnv, visible: set[str], *, visual_alpha: float, pad_alpha: float) -> None:
@@ -156,7 +181,7 @@ def _draw_header(frame: np.ndarray, pose_name: str, panel_name: str, view_name: 
     cv2.putText(frame, description, (18, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
     cv2.putText(
         frame,
-        f"gripper command={command:+.2f}; pad-center distance={pad_distance * 1000:.1f} mm; tight contact is near -0.10",
+        f"gripper command={command:+.2f}; pad-center distance={pad_distance * 1000:.1f} mm; valid contact is near +0.00",
         (18, 90),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.48,
@@ -174,6 +199,21 @@ def _pad_distance(env: nexus.MyCobotNexusEnv) -> float:
             return float("nan")
         positions.append(np.asarray(env.data.geom_xpos[geom_id], dtype=float))
     return float(np.linalg.norm(positions[1] - positions[0]))
+
+
+def _draw_invalid_overlap_cue(frame: np.ndarray) -> None:
+    height, width = frame.shape[:2]
+    cx = width - 190
+    cy = 165
+    cv2.rectangle(frame, (cx - 145, cy - 62), (cx + 150, cy + 58), (255, 255, 255), -1)
+    cv2.rectangle(frame, (cx - 145, cy - 62), (cx + 150, cy + 58), (35, 35, 35), 1)
+    cv2.putText(frame, "INVALID OVERLAP", (cx - 128, cy - 33), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 210), 2, cv2.LINE_AA)
+    cv2.putText(frame, "pads have crossed", (cx - 112, cy + 37), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (30, 30, 30), 1, cv2.LINE_AA)
+    overlay = frame.copy()
+    cv2.circle(overlay, (cx, cy), 28, (0, 0, 255), -1)
+    cv2.addWeighted(overlay, 0.42, frame, 0.58, 0, frame)
+    cv2.line(frame, (cx - 72, cy), (cx + 72, cy), (0, 0, 255), 4, cv2.LINE_AA)
+    cv2.line(frame, (cx, cy - 36), (cx, cy + 36), (0, 0, 255), 4, cv2.LINE_AA)
 
 
 def _draw_legend(frame: np.ndarray) -> None:
