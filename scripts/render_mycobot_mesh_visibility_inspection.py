@@ -25,6 +25,9 @@ VISIBILITY_MODES = (
     "audit_mesh",
     "audit_all",
     "audit_connectors",
+    "skeleton_only",
+    "gripper_mesh",
+    "gripper_audit",
 )
 
 
@@ -73,7 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=",".join(VISIBILITY_MODES),
         help=(
             "Comma-separated layers to render: mesh_only, mesh_markers, pads_markers, "
-            "collision_only, all, audit_mesh, audit_all, audit_connectors."
+            "collision_only, all, audit_mesh, audit_all, audit_connectors, "
+            "skeleton_only, gripper_mesh, gripper_audit."
         ),
     )
     return parser
@@ -242,7 +246,7 @@ def _add_debug_connector_geoms(root: ET.Element) -> None:
                 "name": f"debug_connector_{parent_name}_to_{child_name}",
                 "type": "capsule",
                 "fromto": f"0 0 0 {pos[0]:.9g} {pos[1]:.9g} {pos[2]:.9g}",
-                "size": "0.0022",
+                "size": "0.004",
                 "rgba": "0.95 0.18 0.05 0.82",
                 "contype": "0",
                 "conaffinity": "0",
@@ -322,8 +326,63 @@ def _apply_visibility_mode(env: nexus.MyCobotNexusEnv, mode: str, snapshot: dict
                 env.model.geom_rgba[geom_id, 3] = 0.08
             else:
                 env.model.geom_rgba[geom_id, 3] = 0.0
-    show_markers = mode in {"mesh_markers", "pads_markers", "all", "audit_all", "audit_connectors"}
+        elif mode == "skeleton_only":
+            if name.startswith("debug_connector_"):
+                env.model.geom_rgba[geom_id, :] = [1.0, 0.05, 0.0, 1.0]
+            else:
+                env.model.geom_rgba[geom_id, 3] = 0.0
+        elif mode == "gripper_mesh":
+            if is_mesh and _is_gripper_geom(name):
+                env.model.geom_rgba[geom_id, :] = _gripper_geom_color(name, alpha=1.0)
+            else:
+                env.model.geom_rgba[geom_id, 3] = 0.0
+        elif mode == "gripper_audit":
+            if name.startswith("debug_connector_"):
+                env.model.geom_rgba[geom_id, :] = [1.0, 0.05, 0.0, 0.72]
+            elif is_pad:
+                env.model.geom_rgba[geom_id, 3] = 0.22
+            elif is_mesh and _is_gripper_geom(name):
+                env.model.geom_rgba[geom_id, :] = _gripper_geom_color(name, alpha=1.0)
+            elif is_mesh:
+                env.model.geom_rgba[geom_id, 3] = 0.04
+            else:
+                env.model.geom_rgba[geom_id, 3] = 0.0
+    show_markers = mode in {
+        "mesh_markers",
+        "pads_markers",
+        "all",
+        "audit_all",
+        "audit_connectors",
+        "skeleton_only",
+        "gripper_audit",
+    }
     env.model.site_rgba[:, 3] = snapshot["site"][:, 3] if show_markers else 0.0
+    if mode in {"skeleton_only", "gripper_audit"}:
+        env.model.site_size[:] = np.maximum(env.model.site_size, 0.0075)
+    elif mode == "gripper_mesh":
+        env.model.site_rgba[:, 3] = 0.0
+
+
+def _is_gripper_geom(name: str) -> bool:
+    return name.startswith("gripper_")
+
+
+def _gripper_geom_color(name: str, *, alpha: float) -> list[float]:
+    if "base" in name:
+        return [0.1, 0.1, 0.1, alpha]
+    if "left1" in name:
+        return [0.0, 0.85, 0.1, alpha]
+    if "left2" in name:
+        return [0.2, 1.0, 0.45, alpha]
+    if "left3" in name:
+        return [0.0, 0.55, 0.0, alpha]
+    if "right1" in name:
+        return [0.05, 0.25, 1.0, alpha]
+    if "right2" in name:
+        return [0.35, 0.55, 1.0, alpha]
+    if "right3" in name:
+        return [0.0, 0.05, 0.8, alpha]
+    return [0.75, 0.75, 0.75, alpha]
 
 
 def _view_specs(model_profile: str) -> list[tuple[str, tuple[str, ...], str]]:
