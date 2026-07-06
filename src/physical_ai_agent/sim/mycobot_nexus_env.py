@@ -2046,6 +2046,9 @@ def _convert_collada_mesh_to_obj(
     unit = root.find("c:asset/c:unit", namespace)
     scale = float(unit.attrib.get("meter", "1.0")) if unit is not None else 1.0
     geometries = _collada_geometry_meshes(root, namespace)
+    if scale >= 1.0 and _collada_geometry_max_extent(geometries) > 2.0:
+        # Some official 280 Pi wrist meshes declare meters while storing millimeter vertices.
+        scale = 0.001
     library_nodes = {
         f"#{node.attrib['id']}": node
         for node in root.findall(".//c:library_nodes/c:node", namespace)
@@ -2109,6 +2112,19 @@ def _collada_geometry_meshes(
             _collada_triangle_indices(mesh, namespace),
         )
     return geometries
+
+
+def _collada_geometry_max_extent(
+    geometries: dict[str, tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]],
+) -> float:
+    max_extent = 0.0
+    for vertices, _faces in geometries.values():
+        if not vertices:
+            continue
+        mins = [min(vertex[index] for vertex in vertices) for index in range(3)]
+        maxs = [max(vertex[index] for vertex in vertices) for index in range(3)]
+        max_extent = max(max_extent, *(maxs[index] - mins[index] for index in range(3)))
+    return max_extent
 
 
 def _append_collada_node_instances(

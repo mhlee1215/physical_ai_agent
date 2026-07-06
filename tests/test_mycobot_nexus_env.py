@@ -10,6 +10,7 @@ from physical_ai_agent.sim.mycobot_nexus_env import (
     MYCOBOT_TEACHER_JOINT_NAMES,
     OFFICIAL_GRIPPER_MESH_NAMES,
     _collada_triangle_indices,
+    _convert_collada_mesh_to_obj,
     build_mycobot_nexus_scene_model,
     mycobot_nexus_contract,
     sample_mycobot_nexus_action,
@@ -439,6 +440,23 @@ class MyCobotNexusEnvTest(unittest.TestCase):
             [(0, 1, 2), (0, 2, 3)],
         )
 
+    def test_collada_converter_scales_suspect_meter_meshes_as_millimeters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            dae_path = tmp_path / "suspect_meter_mesh.dae"
+            obj_path = tmp_path / "suspect_meter_mesh.obj"
+            dae_path.write_text(_suspect_meter_collada_triangle(), encoding="utf-8")
+
+            _convert_collada_mesh_to_obj(dae_path, obj_path, bake_visual_scene=False)
+
+            vertices = [
+                tuple(float(value) for value in line.split()[1:4])
+                for line in obj_path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("v ")
+            ]
+        max_x = max(vertex[0] for vertex in vertices)
+        self.assertAlmostEqual(max_x, 0.0384, places=6)
+
 
 
 def _write_minimal_280_pi_adaptive_ros1_tree(tmp_path: Path) -> Path:
@@ -505,6 +523,30 @@ def _write_minimal_320_adaptive_ros2_tree(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return ros_root
+
+
+def _suspect_meter_collada_triangle() -> str:
+    return """
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><unit meter="1.0" name="meter" /></asset>
+  <library_geometries>
+    <geometry id="mesh">
+      <mesh>
+        <source id="mesh-position" name="position">
+          <float_array id="mesh-position-array" count="9">0 0 0 38.4 0 0 0 38.4 0</float_array>
+        </source>
+        <vertices id="mesh-vertices">
+          <input semantic="POSITION" source="#mesh-position" />
+        </vertices>
+        <triangles count="1">
+          <input semantic="VERTEX" source="#mesh-vertices" offset="0" />
+          <p>0 1 2</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+</COLLADA>
+""".strip()
 
 
 def _tiny_collada_triangle() -> str:
