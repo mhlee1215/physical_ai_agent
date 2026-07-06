@@ -29,6 +29,8 @@ from physical_ai_agent.sim.mycobot_nexus_env import (
 
 
 FLOAT_TOLERANCE = 1e-6
+PAD_MESH_CENTER_TOLERANCE = 0.018
+PAD_TIP_EXTENSION_TOLERANCE = 0.006
 PAD_SPECS = {
     "left_finger_pad": {
         "parent": ADAPTIVE_LEFT_FINGER_PAD_PARENT,
@@ -171,8 +173,48 @@ def _expected_proxy_specs(official_gripper_root: Path) -> dict[str, dict[str, An
                 "conaffinity": 1,
                 "selection": pad_spec["selection"],
                 "mesh_bbox": {"mins": mins, "maxs": maxs},
+                "mesh_alignment": _pad_mesh_alignment(pad_spec["pos"], mins, maxs),
             }
     return specs
+
+
+def _pad_mesh_alignment(
+    pad_pos: tuple[float, float, float],
+    mins: tuple[float, float, float],
+    maxs: tuple[float, float, float],
+) -> dict[str, Any]:
+    mesh_center = tuple((mins[index] + maxs[index]) * 0.5 for index in range(3))
+    signed_tip = maxs[0] if pad_pos[0] >= 0 else mins[0]
+    pad_tip_delta = abs(abs(pad_pos[0]) - abs(signed_tip))
+    lateral_delta = abs(pad_pos[1] - mesh_center[1])
+    vertical_delta = abs(pad_pos[2] - mesh_center[2])
+    errors = []
+    if pad_tip_delta > PAD_TIP_EXTENSION_TOLERANCE:
+        errors.append(
+            "pad local X is not near the visible fingertip mesh tip: "
+            f"pad_x={pad_pos[0]:.6g}, mesh_tip_x={signed_tip:.6g}, delta={pad_tip_delta:.6g}"
+        )
+    if lateral_delta > PAD_MESH_CENTER_TOLERANCE:
+        errors.append(
+            "pad local Y is too far from the visible fingertip mesh center: "
+            f"pad_y={pad_pos[1]:.6g}, mesh_center_y={mesh_center[1]:.6g}, delta={lateral_delta:.6g}"
+        )
+    if vertical_delta > PAD_MESH_CENTER_TOLERANCE:
+        errors.append(
+            "pad local Z is too far from the visible fingertip mesh center: "
+            f"pad_z={pad_pos[2]:.6g}, mesh_center_z={mesh_center[2]:.6g}, delta={vertical_delta:.6g}"
+        )
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "mesh_center": mesh_center,
+        "signed_mesh_tip_x": signed_tip,
+        "pad_tip_delta": pad_tip_delta,
+        "lateral_delta": lateral_delta,
+        "vertical_delta": vertical_delta,
+        "tip_tolerance": PAD_TIP_EXTENSION_TOLERANCE,
+        "center_tolerance": PAD_MESH_CENTER_TOLERANCE,
+    }
 
 
 def _actual_proxy_specs(scene_path: Path) -> dict[str, dict[str, Any]]:
@@ -210,6 +252,9 @@ def _compare_proxy(expected: dict[str, Any], actual: dict[str, Any]) -> list[str
     for field in ("pos", "size", "friction"):
         if not _tuple_close(expected[field], actual.get(field)):
             errors.append(f"{field}: expected {expected[field]}, got {actual.get(field)}")
+    alignment = expected.get("mesh_alignment", {})
+    if alignment and not alignment.get("passed", False):
+        errors.extend(alignment.get("errors", []))
     return errors
 
 

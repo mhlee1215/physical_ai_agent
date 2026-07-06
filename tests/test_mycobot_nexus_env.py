@@ -472,15 +472,18 @@ def _write_minimal_280_pi_adaptive_ros1_tree(tmp_path: Path) -> Path:
         )
     for name in (
         "gripper_base",
-        "gripper_left1",
         "gripper_left2",
         "gripper_left3",
-        "gripper_right1",
         "gripper_right2",
         "gripper_right3",
     ):
         (adaptive_mesh_dir / f"{name}.dae").write_text(
             _tiny_collada_triangle(),
+            encoding="utf-8",
+        )
+    for name in ("gripper_left1", "gripper_right1"):
+        (adaptive_mesh_dir / f"{name}.dae").write_text(
+            _minimal_280_fingertip_collada_triangle(),
             encoding="utf-8",
         )
     (arm_mesh_dir / "mycobot_280_pi.urdf").write_text(
@@ -523,6 +526,30 @@ def _write_minimal_320_adaptive_ros2_tree(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return ros_root
+
+
+def _minimal_280_fingertip_collada_triangle() -> str:
+    return """
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><unit meter="1.0" name="meter" /></asset>
+  <library_geometries>
+    <geometry id="mesh">
+      <mesh>
+        <source id="mesh-position" name="position">
+          <float_array id="mesh-position-array" count="9">-0.03176 -0.01318 0 0.0275 0.01318 0 0 0 0.012</float_array>
+        </source>
+        <vertices id="mesh-vertices">
+          <input semantic="POSITION" source="#mesh-position" />
+        </vertices>
+        <triangles count="1">
+          <input semantic="VERTEX" source="#mesh-vertices" offset="0" />
+          <p>0 1 2</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+</COLLADA>
+""".strip()
 
 
 def _suspect_meter_collada_triangle() -> str:
