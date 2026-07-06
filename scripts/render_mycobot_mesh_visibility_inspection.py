@@ -28,6 +28,8 @@ VISIBILITY_MODES = (
     "skeleton_only",
     "gripper_mesh",
     "gripper_mesh_close",
+    "gripper_complete",
+    "full_body_gripper_readable",
     "gripper_audit",
 )
 
@@ -78,7 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated layers to render: mesh_only, mesh_markers, pads_markers, "
             "collision_only, all, audit_mesh, audit_all, audit_connectors, "
-            "skeleton_only, gripper_mesh, gripper_mesh_close, gripper_audit."
+            "skeleton_only, gripper_mesh, gripper_mesh_close, gripper_complete, "
+            "full_body_gripper_readable, gripper_audit."
         ),
     )
     return parser
@@ -340,6 +343,22 @@ def _apply_visibility_mode(env: nexus.MyCobotNexusEnv, mode: str, snapshot: dict
                 env.model.geom_rgba[geom_id, :] = _gripper_geom_color(name, alpha=1.0)
             else:
                 env.model.geom_rgba[geom_id, 3] = 0.0
+        elif mode == "gripper_complete":
+            if is_pad:
+                env.model.geom_rgba[geom_id, :] = _pad_color(name, alpha=0.55)
+            elif is_mesh and _is_gripper_geom(name):
+                env.model.geom_rgba[geom_id, :] = _gripper_geom_color(name, alpha=1.0)
+            else:
+                env.model.geom_rgba[geom_id, 3] = 0.0
+        elif mode == "full_body_gripper_readable":
+            if is_pad:
+                env.model.geom_rgba[geom_id, :] = _pad_color(name, alpha=0.42)
+            elif is_mesh and _is_gripper_geom(name):
+                env.model.geom_rgba[geom_id, :] = _gripper_geom_color(name, alpha=1.0)
+            elif is_mesh:
+                env.model.geom_rgba[geom_id, 3] = 0.58
+            else:
+                env.model.geom_rgba[geom_id, 3] = 0.0
         elif mode == "gripper_audit":
             if name.startswith("debug_connector_"):
                 env.model.geom_rgba[geom_id, :] = [1.0, 0.05, 0.0, 0.46]
@@ -363,8 +382,16 @@ def _apply_visibility_mode(env: nexus.MyCobotNexusEnv, mode: str, snapshot: dict
     env.model.site_rgba[:, 3] = snapshot["site"][:, 3] if show_markers else 0.0
     if mode in {"skeleton_only", "gripper_audit"}:
         env.model.site_size[:] = np.maximum(env.model.site_size, 0.0075)
-    elif mode in {"gripper_mesh", "gripper_mesh_close"}:
+    elif mode in {"gripper_mesh", "gripper_mesh_close", "gripper_complete", "full_body_gripper_readable"}:
         env.model.site_rgba[:, 3] = 0.0
+
+
+def _pad_color(name: str, *, alpha: float) -> list[float]:
+    if name == "left_finger_pad":
+        return [0.0, 1.0, 0.0, alpha]
+    if name == "right_finger_pad":
+        return [0.0, 0.25, 1.0, alpha]
+    return [1.0, 0.0, 1.0, alpha]
 
 
 def _is_gripper_geom(name: str) -> bool:
