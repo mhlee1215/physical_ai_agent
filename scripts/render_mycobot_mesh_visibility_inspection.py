@@ -16,6 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import physical_ai_agent.sim.mycobot_nexus_env as nexus  # noqa: E402
 
 
+VISIBILITY_MODES = ("mesh_only", "mesh_markers", "pads_markers", "collision_only", "all")
+
+
 BODY_MARKERS = {
     "g_base": "1 1 0 1",
     "base": "1 1 0 1",
@@ -56,11 +59,17 @@ def build_parser() -> argparse.ArgumentParser:
         default="fast",
         help="Use a small deterministic camera set by default; exhaustive keeps the broad search for debugging.",
     )
+    parser.add_argument(
+        "--visibility-modes",
+        default=",".join(VISIBILITY_MODES),
+        help="Comma-separated layers to render: mesh_only, mesh_markers, pads_markers, collision_only, all.",
+    )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    visibility_modes = _parse_visibility_modes(args.visibility_modes)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     _install_isolated_scene_override()
     env = nexus.MyCobotNexusEnv(
@@ -77,6 +86,7 @@ def main() -> None:
     renderer = None
     try:
         renderer = env._mujoco.Renderer(env.model, height=args.height, width=args.width)
+        rgba_snapshot = _rgba_snapshot(env)
         env.reset(seed=1)
         gate7 = nexus._adaptive_gate7_arm_qpos(args.model_profile)
         neutral = tuple(0.0 for _ in gate7)
@@ -93,16 +103,25 @@ def main() -> None:
             env._set_gripper(command=gripper_command)
             env._mujoco.mj_forward(env.model, env.data)
             pose_report = _pose_report(env, label, gripper_command)
-            view_reports = []
-            for view_name, target_names, mode in _view_specs(args.model_profile):
-                rgb, camera_meta = _render_best_view(env, renderer, target_names, mode, args.camera_search)
-                bgr = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
-                _draw_label(bgr, label, view_name, camera_meta, env)
-                path = args.output_dir / f"{label}_{view_name}.png"
-                cv2.imwrite(str(path), bgr)
-                frames.append(path)
-                view_reports.append({"view": view_name, "path": str(path), **camera_meta})
-            pose_report["views"] = view_reports
+            mode_reports = []
+            for visibility_mode in visibility_modes:
+                _apply_visibility_mode(env, visibility_mode, rgba_snapshot)
+                view_reports = []
+                for view_name, target_names, mode in _view_specs(args.model_profile):
+                    rgb, camera_meta = _render_best_view(env, renderer, target_names, mode, args.camera_search)
+                    bgr = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
+                    _draw_label(bgr, label, f"{visibility_mode} | {view_name}", camera_meta, env)
+                    path = args.output_dir / f"{label}_{visibility_mode}_{view_name}.png"
+                    cv2.imwrite(str(path), bgr)
+                    frames.append(path)
+                    view_reports.append({
+                        "visibility_mode": visibility_mode,
+                        "view": view_name,
+                        "path": str(path),
+                        **camera_meta,
+                    })
+                mode_reports.append({"visibility_mode": visibility_mode, "views": view_reports})
+            pose_report["visibility_modes"] = mode_reports
             reports.append(pose_report)
         sheet_path = _write_sheet(args.output_dir, frames)
         report = {
@@ -111,6 +130,7 @@ def main() -> None:
             "scene_path": str(env.scene_path),
             "sheet_path": str(sheet_path),
             "frames": [str(path) for path in frames],
+            "visibility_modes": visibility_modes,
             "poses": reports,
             "body_connectivity": _body_connectivity(env),
         }
@@ -187,6 +207,55 @@ def _install_isolated_scene_override() -> None:
 
     wrapper._mesh_visibility_wrapper = True  # type: ignore[attr-defined]
     nexus.build_mycobot_nexus_scene_model = wrapper
+
+
+def _parse_visibility_modes(raw: str) -> list[str]:
+    modes = [part.strip() for part in raw.split(",") if part.strip()]
+    unknown = sorted(set(modes) - set(VISIBILITY_MODES))
+    if unknown:
+        raise SystemExit(f"unknown visibility mode(s): {', '.join(unknown)}")
+    return modes or list(VISIBILITY_MODES)
+
+
+def _rgba_snapshot(env: nexus.MyCobotNexusEnv) -> dict[str, np.ndarray]:
+    return {
+        "geom": env.model.geom_rgba.copy(),
+        "site": env.model.site_rgba.copy(),
+    }
+
+
+def _apply_visibility_mode(env: nexus.MyCobotNexusEnv, mode: str, snapshot: dict[str, np.ndarray]) -> None:
+    env.model.geom_rgba[:, :] = snapshot["geom"]
+    env.model.site_rgba[:, :] = snapshot["site"]
+    for geom_id in range(env.model.ngeom):
+        name = env._mujoco.mj_id2name(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, geom_id) or ""
+        geom_type = int(env.model.geom_type[geom_id])
+        mesh_id = int(env.model.geom_dataid[geom_id])
+        is_pad = name in {"left_finger_pad", "right_finger_pad"}
+        is_mesh = geom_type == int(env._mujoco.mjtGeom.mjGEOM_MESH) and mesh_id >= 0
+        is_collision = not is_mesh and not is_pad and name != nexus.TASK_CUBE_GEOM
+        if mode == "mesh_only":
+            env.model.geom_rgba[geom_id, 3] = 1.0 if is_mesh else 0.0
+        elif mode == "mesh_markers":
+            env.model.geom_rgba[geom_id, 3] = 1.0 if is_mesh else 0.0
+        elif mode == "pads_markers":
+            env.model.geom_rgba[geom_id, 3] = 0.78 if is_pad else 0.08 if is_mesh else 0.0
+        elif mode == "collision_only":
+            if is_pad:
+                env.model.geom_rgba[geom_id, :] = [0.0, 1.0, 0.0, 0.65] if name == "left_finger_pad" else [0.0, 0.25, 1.0, 0.65]
+            elif is_collision:
+                env.model.geom_rgba[geom_id, :] = [1.0, 0.0, 1.0, 0.45]
+            else:
+                env.model.geom_rgba[geom_id, 3] = 0.0
+        elif mode == "all":
+            if is_pad:
+                env.model.geom_rgba[geom_id, 3] = 0.72
+            elif is_collision:
+                env.model.geom_rgba[geom_id, :] = [1.0, 0.0, 1.0, 0.32]
+            elif is_mesh:
+                env.model.geom_rgba[geom_id, 3] = 1.0
+    show_markers = mode in {"mesh_markers", "pads_markers", "all"}
+    env.model.site_rgba[:, 3] = snapshot["site"][:, 3] if show_markers else 0.0
 
 
 def _view_specs(model_profile: str) -> list[tuple[str, tuple[str, ...], str]]:
