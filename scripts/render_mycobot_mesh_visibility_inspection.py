@@ -16,7 +16,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import physical_ai_agent.sim.mycobot_nexus_env as nexus  # noqa: E402
 
 
-VISIBILITY_MODES = ("mesh_only", "mesh_markers", "pads_markers", "collision_only", "all")
+VISIBILITY_MODES = (
+    "mesh_only",
+    "mesh_markers",
+    "pads_markers",
+    "collision_only",
+    "all",
+    "audit_mesh",
+    "audit_all",
+    "audit_connectors",
+)
 
 
 BODY_MARKERS = {
@@ -62,7 +71,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--visibility-modes",
         default=",".join(VISIBILITY_MODES),
-        help="Comma-separated layers to render: mesh_only, mesh_markers, pads_markers, collision_only, all.",
+        help=(
+            "Comma-separated layers to render: mesh_only, mesh_markers, pads_markers, "
+            "collision_only, all, audit_mesh, audit_all, audit_connectors."
+        ),
     )
     return parser
 
@@ -171,10 +183,10 @@ def _install_isolated_scene_override() -> None:
             elif name == "right_finger_pad":
                 geom.set("rgba", "0 0.25 1 0.75")
             elif "gripper" in name or "gripper" in mesh:
-                geom.set("rgba", "0.16 0.16 0.15 1")
+                geom.set("rgba", "0.05 0.05 0.045 1")
                 geom.attrib.pop("material", None)
             elif name.endswith("_visual_0") or mesh:
-                geom.set("rgba", "0.74 0.72 0.66 1")
+                geom.set("rgba", "0.78 0.75 0.62 1")
                 geom.attrib.pop("material", None)
         for body in root.findall(".//body"):
             name = body.attrib.get("name", "")
@@ -186,10 +198,11 @@ def _install_isolated_scene_override() -> None:
                         "name": f"{name}_origin_marker",
                         "type": "sphere",
                         "pos": "0 0 0",
-                        "size": "0.008",
+                        "size": "0.0045",
                         "rgba": BODY_MARKERS[name],
                     },
                 )
+        _add_debug_connector_geoms(root)
         visual = root.find("visual")
         if visual is None:
             visual = ET.SubElement(root, "visual")
@@ -207,6 +220,41 @@ def _install_isolated_scene_override() -> None:
 
     wrapper._mesh_visibility_wrapper = True  # type: ignore[attr-defined]
     nexus.build_mycobot_nexus_scene_model = wrapper
+
+
+def _add_debug_connector_geoms(root: ET.Element) -> None:
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    for child in root.findall(".//body"):
+        child_name = child.attrib.get("name", "")
+        parent = parent_map.get(child)
+        if parent is None or parent.tag != "body":
+            continue
+        parent_name = parent.attrib.get("name", "")
+        if parent_name not in BODY_MARKERS or child_name not in BODY_MARKERS:
+            continue
+        pos = _float_triplet(child.attrib.get("pos", "0 0 0"))
+        if float(np.linalg.norm(np.asarray(pos, dtype=float))) < 1e-6:
+            continue
+        ET.SubElement(
+            parent,
+            "geom",
+            {
+                "name": f"debug_connector_{parent_name}_to_{child_name}",
+                "type": "capsule",
+                "fromto": f"0 0 0 {pos[0]:.9g} {pos[1]:.9g} {pos[2]:.9g}",
+                "size": "0.0022",
+                "rgba": "0.95 0.18 0.05 0.82",
+                "contype": "0",
+                "conaffinity": "0",
+            },
+        )
+
+
+def _float_triplet(raw: str) -> tuple[float, float, float]:
+    values = [float(value) for value in raw.split()]
+    if len(values) != 3:
+        raise ValueError(f"expected 3 floats, got: {raw}")
+    return values[0], values[1], values[2]
 
 
 def _parse_visibility_modes(raw: str) -> list[str]:
@@ -254,7 +302,27 @@ def _apply_visibility_mode(env: nexus.MyCobotNexusEnv, mode: str, snapshot: dict
                 env.model.geom_rgba[geom_id, :] = [1.0, 0.0, 1.0, 0.32]
             elif is_mesh:
                 env.model.geom_rgba[geom_id, 3] = 1.0
-    show_markers = mode in {"mesh_markers", "pads_markers", "all"}
+        elif mode == "audit_mesh":
+            env.model.geom_rgba[geom_id, 3] = 1.0 if is_mesh else 0.0
+        elif mode == "audit_all":
+            if name.startswith("debug_connector_"):
+                env.model.geom_rgba[geom_id, :] = [0.95, 0.18, 0.05, 0.9]
+            elif is_pad:
+                env.model.geom_rgba[geom_id, 3] = 0.34
+            elif is_collision:
+                env.model.geom_rgba[geom_id, :] = [1.0, 0.0, 1.0, 0.18]
+            elif is_mesh:
+                env.model.geom_rgba[geom_id, 3] = 1.0
+        elif mode == "audit_connectors":
+            if name.startswith("debug_connector_"):
+                env.model.geom_rgba[geom_id, :] = [0.95, 0.18, 0.05, 0.95]
+            elif is_pad:
+                env.model.geom_rgba[geom_id, 3] = 0.18
+            elif is_mesh:
+                env.model.geom_rgba[geom_id, 3] = 0.08
+            else:
+                env.model.geom_rgba[geom_id, 3] = 0.0
+    show_markers = mode in {"mesh_markers", "pads_markers", "all", "audit_all", "audit_connectors"}
     env.model.site_rgba[:, 3] = snapshot["site"][:, 3] if show_markers else 0.0
 
 
