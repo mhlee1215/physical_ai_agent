@@ -30,9 +30,9 @@ This branch adds dry scene-building support for the 280 Pi adaptive profile:
 3. Attach the adaptive gripper to the terminal 280 Pi flange link when available.
 4. Convert referenced Collada meshes into local OBJ files for MuJoCo XML generation.
 5. Add the same Nexus cube/table scene and transparent finger-pad contact proxies used by the current adaptive gripper POC.
-6. Expose the profile in the CLI and dry contract.
+6. Add a 280-specific collision-proxy verifier for the official adaptive gripper finger pads.`n7. Expose the profile in the CLI and dry contract.
 
-This is a profile/asset-routing gate. It does not yet prove physical fidelity or dataset quality.
+This is a profile/asset-routing and collision-proxy gate. It does not by itself prove physical fidelity or dataset quality.
 
 
 
@@ -45,6 +45,34 @@ For the side-by-side evidence boundary, see
 [`mycobot_280_vs_320_adaptive_parity_report.md`](./mycobot_280_vs_320_adaptive_parity_report.md).
 
 
+
+
+### Gate 5 Mimic/Jaw-Gap Validation
+
+The 280 Pi profile now has a dedicated mimic-motion verifier for the official ROS1 adaptive gripper URDF:
+
+```bash
+PYTHONPATH=src:. python3 scripts/verify_mycobot_280_pi_adaptive_mimic_motion.py   --official-gripper-root _vendor/mycobot_ros   --output-dir _workspace/parity_280_gate5_mimic_motion
+```
+
+Current local real-asset result: the verifier runs and writes JSON, Markdown, and SVG evidence, but the strict monotonic jaw-gap check reports failed for the full official controller range. The measured jaw gap goes from about 0.0266 m at the lower limit to a near-closed minimum around 0.0021 m, then opens slightly to about 0.00418 m at the upper limit. That means 280 jaw motion is not yet documented with the same clean Gate 5 parity claim as the 320 ladder.
+
+This does not invalidate Gate 7 contact by itself; it narrows the next investigation to the effective 280 gripper command range and lift-phase contact retention.
+
+### Cube Mass / Contact Note
+
+The Nexus task cube in the generated MuJoCo scene is a 0.03 m cube with mass 0.005 kg and high contact friction. MuJoCo can absolutely make an object too heavy or too light relative to actuator strength, solver settings, pad friction, and lift acceleration. In the current 280 failure, though, the cube already reaches two-pad contact during close and then loses it at the lift transition, so mass is a secondary tuning axis after jaw-gap range, pad-frame evidence, and lift trajectory/contact retention.
+
+Verify the 280 collision proxy before running physics gates:
+
+```bash
+PYTHONPATH=src:. python3 scripts/verify_mycobot_280_pi_adaptive_collision_proxy.py \
+  --official-gripper-root _vendor/mycobot_ros \
+  --output-dir _workspace/mycobot_280_pi_collision_proxy_verify
+```
+
+This Gate 6-style check compares the generated `left_finger_pad` and `right_finger_pad` geoms against the 280 adaptive gripper source links, including parent link, local pad position, size, friction, `condim`, contact type, and contact affinity. It verifies our own conversion-layer contact proxy contract, not manufacturer-supplied friction calibration.
+
 Preflight local readiness before running either physics gate:
 
 ```bash
@@ -54,7 +82,7 @@ PYTHONPATH=src:. python3 scripts/check_mycobot_280_pi_gate8_readiness.py \
   --output _workspace/mycobot_280_pi_gate8_readiness/report.json
 ```
 
-On the current Codex WSL workspace this preflight is blocked because `mujoco`, `_vendor/mycobot_mujoco`, and `_vendor/mycobot_ros` are not available. That is an execution-environment blocker, not evidence that the 280 profile failed physics.
+If this preflight is blocked, that is an execution-environment or asset-checkout blocker, not evidence that the 280 profile failed physics. In this branch, the 280 collision-proxy verifier itself is covered by standard-library tests and does not require importing MuJoCo.
 
 ```bash
 PYTHONPATH=src:. python3 scripts/mycobot_280_pi_adaptive_static_contact_smoke.py \
@@ -83,7 +111,7 @@ PYTHONPATH=src:. python3 scripts/export_mycobot_280_pi_adaptive_teacher_dataset.
   --render-every 4
 ```
 
-This is not yet a passed 280 physics claim in the current workspace. It is the parity entrypoint and manifest wiring. Actual Gate 7/8 pass evidence still requires a MuJoCo-capable Python plus the official `mycobot_mujoco` and `mycobot_ros` assets.
+This is not yet a raw-contact-only 280 physics claim. It is the parity entrypoint and manifest wiring. Actual raw Gate 7/8 pass evidence still requires a MuJoCo-capable Python plus the official `mycobot_mujoco` and `mycobot_ros` assets, followed by metric and render inspection.
 
 ## Capture Contract Gate
 

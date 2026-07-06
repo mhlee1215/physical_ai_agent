@@ -15,6 +15,14 @@ REQUIRED_MYCOBOT_ROS_PATHS = [
     Path("mycobot_description/urdf/adaptive_gripper/mycobot_adaptive_gripper.urdf"),
 ]
 GATE_COMMANDS = {
+    "gate5_mimic_motion": (
+        "PYTHONPATH=src:. python3 scripts/verify_mycobot_280_pi_adaptive_mimic_motion.py "
+        "--official-gripper-root {official_gripper_root}"
+    ),
+    "gate6_collision_proxy": (
+        "PYTHONPATH=src:. python3 scripts/verify_mycobot_280_pi_adaptive_collision_proxy.py "
+        "--official-gripper-root {official_gripper_root}"
+    ),
     "gate7_static_contact": (
         "PYTHONPATH=src:. python3 scripts/mycobot_280_pi_adaptive_static_contact_smoke.py "
         "--asset-root {asset_root} --official-gripper-root {official_gripper_root}"

@@ -41,6 +41,10 @@ class MyCobot280PiGate8ParityTest(unittest.TestCase):
 
         self.assertEqual(static_args.model_profile, MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER)
         self.assertEqual(grasp_args.model_profile, MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER)
+        self.assertFalse(grasp_args.disable_teacher_attachment)
+
+        raw_grasp_args = pi_grasp_lift_parser().parse_args(["--disable-teacher-attachment"])
+        self.assertTrue(raw_grasp_args.disable_teacher_attachment)
 
     def test_280_teacher_export_manifest_uses_280_joint_order_and_robot_label(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

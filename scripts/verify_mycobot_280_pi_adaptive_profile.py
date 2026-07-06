@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from physical_ai_agent.sim.mycobot_nexus_env import (
     MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
-    MYCOBOT_MODEL_JOINT_NAMES,
+    MYCOBOT_320_MODEL_JOINT_NAMES,
     OFFICIAL_280_PI_URDF_RELATIVE_PATH,
     OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH,
     OFFICIAL_320_GRIPPER_JOINT_NAMES,
@@ -137,8 +137,9 @@ def verify_280_pi_adaptive_profile(
 
 
 def _required_name_checks(names: set[str | None]) -> list[ProfileCheck]:
-    required = [
-        *MYCOBOT_MODEL_JOINT_NAMES,
+    required: list[str | tuple[str, ...]] = [
+        *MYCOBOT_320_MODEL_JOINT_NAMES[:-1],
+        ("joint6output_to_joint6", "joint7_to_joint6"),
         "joint6_flange",
         "gripper_base",
         *OFFICIAL_320_GRIPPER_JOINT_NAMES,
@@ -148,14 +149,18 @@ def _required_name_checks(names: set[str | None]) -> list[ProfileCheck]:
         "task_cube",
         "nexus_work_mat",
     ]
-    return [
-        ProfileCheck(
-            name=f"scene_name:{name}",
-            status="passed" if name in names else "failed",
-            detail=name,
+    checks = []
+    for item in required:
+        aliases = item if isinstance(item, tuple) else (item,)
+        detail = "|".join(aliases)
+        checks.append(
+            ProfileCheck(
+                name=f"scene_name:{detail}",
+                status="passed" if any(name in names for name in aliases) else "failed",
+                detail=detail,
+            )
         )
-        for name in required
-    ]
+    return checks
 
 
 def _required_mesh_checks(mesh_files: set[str]) -> list[ProfileCheck]:

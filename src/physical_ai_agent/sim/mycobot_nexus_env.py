@@ -121,14 +121,14 @@ ADAPTIVE_LEFT_FINGER_PAD_PARENT = "gripper_left1"
 ADAPTIVE_RIGHT_FINGER_PAD_PARENT = "gripper_right1"
 ADAPTIVE_LEFT_FINGER_PAD_POS = (0.00093, 0.04795, 0.00381)
 ADAPTIVE_RIGHT_FINGER_PAD_POS = (-0.00567, 0.04202, 0.00390)
-ADAPTIVE_280_LEFT_FINGER_PAD_POS = (0.00093, 0.0495, 0.00381)
-ADAPTIVE_280_RIGHT_FINGER_PAD_POS = (-0.00567, 0.0435, 0.00390)
 ADAPTIVE_FINGER_PAD_SIZE = (0.014, 0.006, 0.006)
-ADAPTIVE_280_FINGER_PAD_SIZE = (0.014, 0.006, 0.006)
 ADAPTIVE_FINGER_PAD_EULER = (0.0, 0.0, 0.0)
 ADAPTIVE_FINGER_PAD_FRICTION = (80.0, 8.0, 8.0)
-ADAPTIVE_280_FINGER_PAD_FRICTION = (80.0, 8.0, 8.0)
 ADAPTIVE_FINGER_PAD_CONDIM = 6
+ADAPTIVE_280_LEFT_FINGER_PAD_POS = ADAPTIVE_LEFT_FINGER_PAD_POS
+ADAPTIVE_280_RIGHT_FINGER_PAD_POS = ADAPTIVE_RIGHT_FINGER_PAD_POS
+ADAPTIVE_280_FINGER_PAD_SIZE = ADAPTIVE_FINGER_PAD_SIZE
+ADAPTIVE_280_FINGER_PAD_FRICTION = ADAPTIVE_FINGER_PAD_FRICTION
 ADAPTIVE_GATE7_TABLE_ARM_QPOS = (
     -0.655675253325397,
     0.810882674174539,
@@ -154,12 +154,12 @@ ADAPTIVE_280_PI_GATE7_TABLE_ARM_QPOS = (
     0.387837875579959,
 )
 ADAPTIVE_280_PI_GATE8_LIFT_ARM_QPOS = (
-    2.426023967355114,
-    1.289424900140744,
-    0.32380362224896514,
-    -2.4370538548271847,
-    -0.7291391424241235,
-    0.7134690095033975,
+    2.209046727154287,
+    1.6908220975518411,
+    0.5866852271155825,
+    -2.1521653896480166,
+    -0.7968371300189514,
+    0.387837875579959,
 )
 ADAPTIVE_GATE7_CUBE_OFFSET = (0.0, 0.0, 0.0)
 ADAPTIVE_280_PI_GATE7_CUBE_OFFSET = (-0.006, -0.012, 0.0)
@@ -174,6 +174,7 @@ class MyCobotNexusConfig:
     width: int = 640
     height: int = 360
     control_alpha: float = 0.35
+    teacher_grasp_attachment_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -248,6 +249,7 @@ class MyCobotAdaptiveGraspLiftResult:
     frame_path: str
     report_path: str
     scene_path: str
+    teacher_attachment_enabled: bool
 
 
 class MyCobotNexusEnv:
@@ -540,8 +542,14 @@ class MyCobotNexusEnv:
         }
 
     def _update_grasp_attachment(self, *, gripper: float) -> None:
+        if (
+            self.config.model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER
+            and not self.config.teacher_grasp_attachment_enabled
+        ):
+            return
         uses_280_teacher_attachment = (
             self.config.model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER
+            and self.config.teacher_grasp_attachment_enabled
         )
         if self._uses_official_320_gripper and not uses_280_teacher_attachment:
             return
@@ -949,15 +957,18 @@ def run_mycobot_adaptive_static_contact_smoke(
         env._mujoco.mj_forward(env.model, env.data)
 
         arm_target = list(gate7_arm_qpos)
+        hold_arm_pose_each_step = model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER
         denominator = max(steps - 1, 1)
         for step in range(steps):
             alpha = step / denominator
             gripper = placement_gripper_command + alpha * (
                 final_gripper_command - placement_gripper_command
             )
-            _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             obs, reward, terminated, truncated, info = env.step([*arm_target, gripper])
-            _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             contacts = int(info["gripper_cube_contacts"])
             contact_pads = int(info["gripper_cube_contact_pads"])
             max_contacts = max(max_contacts, contacts)
@@ -1029,6 +1040,7 @@ def run_mycobot_adaptive_grasp_lift_smoke(
     required_close_sustained_steps: int = 15,
     required_lift_sustained_steps: int = 30,
     required_final_lift: float = 0.025,
+    teacher_attachment_enabled: bool = True,
 ) -> MyCobotAdaptiveGraspLiftResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     trace_path = output_dir / "mycobot_adaptive_grasp_lift_trace.jsonl"
@@ -1042,6 +1054,7 @@ def run_mycobot_adaptive_grasp_lift_smoke(
             model_profile=model_profile,
             width=width,
             height=height,
+            teacher_grasp_attachment_enabled=teacher_attachment_enabled,
         )
     )
     records: list[dict[str, Any]] = []
@@ -1069,12 +1082,15 @@ def run_mycobot_adaptive_grasp_lift_smoke(
         env._mujoco.mj_forward(env.model, env.data)
 
         step_index = 0
+        hold_arm_pose_each_step = model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER
         for _ in range(pregrasp_steps):
-            _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             obs, reward, terminated, truncated, info = env.step(
                 [*gate7_arm_qpos, placement_gripper_command]
             )
-            _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             records.append(_phase_record("pregrasp", step_index, obs, reward, terminated, truncated, info))
             step_index += 1
         close_denominator = max(close_steps - 1, 1)
@@ -1083,11 +1099,13 @@ def run_mycobot_adaptive_grasp_lift_smoke(
             gripper = placement_gripper_command + alpha * (
                 close_gripper_command - placement_gripper_command
             )
-            _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             obs, reward, terminated, truncated, info = env.step(
                 [*gate7_arm_qpos, gripper]
             )
-            _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             records.append(_phase_record("close", step_index, obs, reward, terminated, truncated, info))
             step_index += 1
         lift_denominator = max(lift_steps - 1, 1)
@@ -1098,9 +1116,11 @@ def run_mycobot_adaptive_grasp_lift_smoke(
                 list(gate8_lift_arm_qpos),
                 alpha,
             )
-            _set_adaptive_gate_arm_pose(env, tuple(arm))
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, tuple(arm))
             obs, reward, terminated, truncated, info = env.step([*arm, close_gripper_command])
-            _set_adaptive_gate_arm_pose(env, tuple(arm))
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, tuple(arm))
             records.append(_phase_record("lift", step_index, obs, reward, terminated, truncated, info))
             step_index += 1
         _write_bmp(frame_path, env.render())
@@ -1152,6 +1172,7 @@ def run_mycobot_adaptive_grasp_lift_smoke(
         frame_path=str(frame_path),
         report_path=str(report_path),
         scene_path=scene_path,
+        teacher_attachment_enabled=bool(teacher_attachment_enabled),
     )
     report_path.write_text(json.dumps(asdict(result), indent=2, sort_keys=True), encoding="utf-8")
     return result
@@ -1664,7 +1685,7 @@ def _combined_280_pi_adaptive_urdf(arm_urdf: ET.Element, gripper_urdf: ET.Elemen
     joint = ET.SubElement(combined, "joint", {"name": "joint6_to_adaptive_gripper_base", "type": "fixed"})
     ET.SubElement(joint, "parent", {"link": parent_link})
     ET.SubElement(joint, "child", {"link": child_link})
-    ET.SubElement(joint, "origin", {"xyz": "0 0 0.05", "rpy": "0 0 0"})
+    ET.SubElement(joint, "origin", {"xyz": "0 -0.007 0.056", "rpy": "1.5708 0 0"})
     return combined
 
 

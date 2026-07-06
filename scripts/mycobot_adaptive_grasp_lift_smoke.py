@@ -64,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--required-close-sustained-steps", type=int, default=15)
     parser.add_argument("--required-lift-sustained-steps", type=int, default=30)
     parser.add_argument("--required-final-lift", type=float, default=0.025)
+    parser.add_argument(
+        "--disable-teacher-attachment",
+        action="store_true",
+        help="Disable the 280 teacher cube attachment path and require raw contact physics metrics.",
+    )
     return parser
 
 
@@ -85,6 +90,7 @@ def main() -> None:
         required_close_sustained_steps=args.required_close_sustained_steps,
         required_lift_sustained_steps=args.required_lift_sustained_steps,
         required_final_lift=args.required_final_lift,
+        teacher_attachment_enabled=not args.disable_teacher_attachment,
     )
     print(json.dumps(asdict(result), indent=2, sort_keys=True))
     if result.status != "passed":

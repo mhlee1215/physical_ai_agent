@@ -16,9 +16,9 @@ The target hardware for this branch is the user's myCobot 280 Raspberry Pi
 | Area | 320 M5 2022 adaptive path | 280 Pi adaptive branch |
 | --- | --- | --- |
 | Official source profile | ROS2 Humble `mycobot_320_m5_2022_adaptive_gripper.urdf` plus `pro_adaptive_gripper` meshes. | ROS1 `mycobot_280_pi.urdf` plus ROS1 `adaptive_gripper/mycobot_adaptive_gripper.urdf`. |
-| Source/mesh/pose gates | Gates 1-6 passed for source routing, kinematic tree, mesh transform, visual pose, mimic motion, and collision proxy. | Profile builder and verifier exist for the 280 Pi + adaptive gripper composition. Real asset execution is pending because this workspace lacks `_vendor/mycobot_ros`. |
-| Gate 7 static contact | Passed. Evidence: `gripper_cube_contact_pads=2`, `gripper_cube_contacts=6`, `best_sustained_contact_steps=45` with requirement 15. | Wrapper is wired: `scripts/mycobot_280_pi_adaptive_static_contact_smoke.py`. Execution is blocked locally by missing `mujoco`, `_vendor/mycobot_mujoco`, and `_vendor/mycobot_ros`. |
-| Gate 8 grasp-lift | Passed. Evidence: `close_best_sustained_contact_steps=27`, `lift_best_sustained_contact_steps=60`, `lift_two_pad_contact_steps=60`, `final_gripper_cube_contact_pads=2`, `final_gripper_cube_contacts=6`, `final_cube_lift=0.0367 m`. | Wrapper is wired: `scripts/mycobot_280_pi_adaptive_grasp_lift_smoke.py`. It uses the same metric definitions, but no 280 physics pass is claimed yet. |
+| Source/mesh/pose gates | Gates 1-6 passed for source routing, kinematic tree, mesh transform, visual pose, mimic motion, and collision proxy. | Profile builder plus 280-specific collision-proxy verifier exist for the 280 Pi + adaptive gripper composition. Gate 6-style proxy verification checks parent link, local pad position, size, friction, `condim`, contact type, and contact affinity. |
+| Gate 7 static contact | Passed. Evidence: `gripper_cube_contact_pads=2`, `gripper_cube_contacts=6`, `best_sustained_contact_steps=45` with requirement 15. | Passed locally with bundled MuJoCo runtime. Evidence: `gripper_cube_contact_pads=2`, `gripper_cube_contacts=8`, `best_sustained_contact_steps=106` with requirement 15. |
+| Gate 8 grasp-lift | Passed. Evidence: `close_best_sustained_contact_steps=27`, `lift_best_sustained_contact_steps=60`, `lift_two_pad_contact_steps=60`, `final_gripper_cube_contact_pads=2`, `final_gripper_cube_contacts=6`, `final_cube_lift=0.0367 m`. | Teacher-attachment Gate 8 passed previously; raw-contact-only Gate 8 now has an explicit `--disable-teacher-attachment` mode and currently fails because lift contact is not retained. Best raw run after pose search: close contact passes, but lift contact remains below the 30-step threshold. |
 | Teacher dataset POC | Exported 10 episodes, 1600 frames, 400 rendered frames, and `failed_episodes=[]` from the Gate 8 scripted trajectory. | Wrapper is wired: `scripts/export_mycobot_280_pi_adaptive_teacher_dataset.py`. It should be run only after 280 Gate 7/8 pass in a MuJoCo-capable environment. |
 | Dataset-quality exporter | Current 320 artifact is a local `mycobot_jsonl_v1` teacher POC, not a full LeRobotDataset training result. | Adds stricter capture verification and LeRobot-style export entrypoints that require real trace fields and real `top`/`wrist` image files. |
 | Learned policy evidence | No 320 SmolVLA training/eval claim from this Gate 8 POC. | No 280 SmolVLA training/eval claim yet. The exporter writes a tiny-smoke plan, not an executed training run. |
@@ -58,7 +58,15 @@ that reports these missing dependencies explicitly.
 
 ## Next Commands
 
-Run the readiness gate first:
+Run the 280 collision proxy gate first:
+
+```bash
+PYTHONPATH=src:. python3 scripts/verify_mycobot_280_pi_adaptive_collision_proxy.py \
+  --official-gripper-root _vendor/mycobot_ros \
+  --output-dir _workspace/mycobot_280_pi_collision_proxy_verify
+```
+
+Then run the readiness gate:
 
 ```bash
 PYTHONPATH=src:. python3 scripts/check_mycobot_280_pi_gate8_readiness.py \

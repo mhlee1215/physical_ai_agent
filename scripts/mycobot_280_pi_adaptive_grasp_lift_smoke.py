@@ -57,6 +57,7 @@ def main() -> None:
         required_close_sustained_steps=args.required_close_sustained_steps,
         required_lift_sustained_steps=args.required_lift_sustained_steps,
         required_final_lift=args.required_final_lift,
+        teacher_attachment_enabled=not args.disable_teacher_attachment,
     )
     print(json.dumps(asdict(result), indent=2, sort_keys=True))
     if result.status != "passed":

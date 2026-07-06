@@ -20,6 +20,12 @@ from scripts.mycobot_nexus_smoke import build_parser
 from scripts.verify_mycobot_280_pi_adaptive_profile import (
     verify_280_pi_adaptive_profile,
 )
+from scripts.verify_mycobot_280_pi_adaptive_collision_proxy import (
+    verify_280_pi_adaptive_collision_proxy,
+)
+from scripts.verify_mycobot_280_pi_adaptive_mimic_motion import (
+    verify_280_pi_adaptive_mimic_motion,
+)
 from scripts.verify_mycobot_320_adaptive_kinematic_tree import (
     verify_adaptive_kinematic_tree,
 )
@@ -364,6 +370,40 @@ class MyCobotNexusEnvTest(unittest.TestCase):
             self.assertTrue(Path(report.artifacts["json"]).exists())
             self.assertTrue(Path(report.artifacts["markdown"]).exists())
             self.assertTrue(Path(report.artifacts["svg"]).exists())
+
+    def test_280_pi_adaptive_mimic_motion_verifier_writes_visual_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ros_root = _write_minimal_280_pi_adaptive_ros1_tree(tmp_path)
+            report = verify_280_pi_adaptive_mimic_motion(
+                official_gripper_root=ros_root,
+                output_dir=tmp_path / "verify_280_mimic_motion",
+            )
+
+            self.assertEqual(report.sample_count, 5)
+            self.assertGreater(abs(report.jaw_gap_delta), 0.0)
+            self.assertTrue(Path(report.artifacts["json"]).exists())
+            self.assertTrue(Path(report.artifacts["markdown"]).exists())
+            self.assertTrue(Path(report.artifacts["svg"]).exists())
+
+
+    def test_280_pi_adaptive_collision_proxy_verifier_writes_visual_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ros_root = _write_minimal_280_pi_adaptive_ros1_tree(tmp_path)
+            report = verify_280_pi_adaptive_collision_proxy(
+                official_gripper_root=ros_root,
+                output_dir=tmp_path / "verify_280_collision_proxy",
+            )
+
+            self.assertEqual(report.status, "passed")
+            self.assertEqual(report.model_profile, MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER)
+            self.assertEqual(report.compared_proxy_count, 2)
+            self.assertEqual(report.failed_proxy_count, 0)
+            self.assertTrue(Path(report.artifacts["json"]).exists())
+            self.assertTrue(Path(report.artifacts["markdown"]).exists())
+            self.assertTrue(Path(report.artifacts["svg"]).exists())
+
 
     def test_sample_and_sanitize_teacher_action_keep_seven_dim_contract(self) -> None:
         action = sample_mycobot_nexus_action(step=1, total_steps=4)
