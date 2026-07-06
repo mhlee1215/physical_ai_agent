@@ -338,13 +338,13 @@ def _apply_visibility_mode(env: nexus.MyCobotNexusEnv, mode: str, snapshot: dict
                 env.model.geom_rgba[geom_id, 3] = 0.0
         elif mode == "gripper_audit":
             if name.startswith("debug_connector_"):
-                env.model.geom_rgba[geom_id, :] = [1.0, 0.05, 0.0, 0.72]
+                env.model.geom_rgba[geom_id, :] = [1.0, 0.05, 0.0, 0.46]
             elif is_pad:
-                env.model.geom_rgba[geom_id, 3] = 0.22
+                env.model.geom_rgba[geom_id, 3] = 0.10
             elif is_mesh and _is_gripper_geom(name):
                 env.model.geom_rgba[geom_id, :] = _gripper_geom_color(name, alpha=1.0)
             elif is_mesh:
-                env.model.geom_rgba[geom_id, 3] = 0.04
+                env.model.geom_rgba[geom_id, 3] = 0.42
             else:
                 env.model.geom_rgba[geom_id, 3] = 0.0
     show_markers = mode in {
@@ -369,19 +369,19 @@ def _is_gripper_geom(name: str) -> bool:
 
 def _gripper_geom_color(name: str, *, alpha: float) -> list[float]:
     if "base" in name:
-        return [0.1, 0.1, 0.1, alpha]
+        return [1.0, 0.72, 0.05, alpha]
     if "left1" in name:
-        return [0.0, 0.85, 0.1, alpha]
+        return [0.0, 0.95, 0.12, alpha]
     if "left2" in name:
-        return [0.2, 1.0, 0.45, alpha]
+        return [0.45, 1.0, 0.25, alpha]
     if "left3" in name:
-        return [0.0, 0.55, 0.0, alpha]
+        return [0.0, 0.62, 0.0, alpha]
     if "right1" in name:
-        return [0.05, 0.25, 1.0, alpha]
+        return [0.06, 0.28, 1.0, alpha]
     if "right2" in name:
-        return [0.35, 0.55, 1.0, alpha]
+        return [0.2, 0.72, 1.0, alpha]
     if "right3" in name:
-        return [0.0, 0.05, 0.8, alpha]
+        return [0.0, 0.08, 0.9, alpha]
     return [0.75, 0.75, 0.75, alpha]
 
 
