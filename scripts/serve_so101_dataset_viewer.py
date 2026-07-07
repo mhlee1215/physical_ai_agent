@@ -31,6 +31,7 @@ DATASET_CONTRACT = Path("configs/so101/training_datasets/dataset_contract.json")
 SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_contract.json")
 TRAINING_DATASET_CONFIGS = [
     Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
+    Path("configs/so101/training_datasets/pick_photoreal.json"),
     Path("configs/so101/training_datasets/pick_from_top_cube_photoreal.json"),
 ]
 INTERACTIVE_RUN_ROOT = Path("_workspace/so101_interactive_sim/runs")

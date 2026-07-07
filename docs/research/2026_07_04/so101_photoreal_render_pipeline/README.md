@@ -247,9 +247,39 @@ The generated local loop-validation root verified in this PR is:
 - 10 episodes, 718 frames total
 - 718 RGB image rows for each of `camera1`, `camera2`, and `camera3`
 - opens as `LeRobotDataset` with all policy images shaped `(3, 256, 256)`
+
+For `pick_cube_train` and `pick_cube_val`, do not keep the legacy generic
+prompt from the source parquet:
+
+```text
+Grasp the visible cube and lift it up.
+```
+
+The photoreal LeRobot converter should be run with
+`--rewrite-color-task-prompts`, which resets the source episode seed in the
+same export-compatible environment and resolves the target object color from
+the environment metadata. The resulting `tasks.parquet` and row `task_index`
+entries use concrete prompts such as:
+
+```text
+Grasp the red cube and lift it up.
+Grasp the green cube and lift it up.
+Grasp the blue cube and lift it up.
+```
+
+The full `pick_cube` photoreal train/eval targets are:
+
+- `_workspace/so101_photoreal_lerobot/pick_cube_train50_ego_wrist_256_seed98200_samples256_nodenoise`
+- `_workspace/so101_photoreal_lerobot/pick_cube_valid24_ego_wrist_256_seed98100_samples256_nodenoise`
 - `training_ready=true`
 - stable render profile: `samples=256`, denoise disabled, DOF off, fixed Cycles
   seed, neutral matte tabletop, no background wall
+
+Example frames committed for PR review:
+
+![pick cube train ep0000 frame0000 camera1](examples/pick_cube_train_ep0000_frame0000_camera1.png)
+
+![pick cube valid ep0000 frame0000 camera1](examples/pick_cube_valid_ep0000_frame0000_camera1.png)
 
 ## MyCobot Render
 

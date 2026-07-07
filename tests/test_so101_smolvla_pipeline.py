@@ -2109,6 +2109,7 @@ class SO101SmolVLAPipelineTest(TestCase):
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (
             Path("configs/so101/training_datasets/pick.json"),
+            Path("configs/so101/training_datasets/pick_photoreal.json"),
             Path("configs/so101/training_datasets/pick_place.json"),
             Path("configs/so101/training_datasets/move_over_cube.json"),
             Path("configs/so101/training_datasets/pick_from_top_cube.json"),
@@ -2155,6 +2156,7 @@ class SO101SmolVLAPipelineTest(TestCase):
     def test_so101_dataset_configs_use_approved_egocentric_camera1(self) -> None:
         for config_path in (
             Path("configs/so101/training_datasets/pick.json"),
+            Path("configs/so101/training_datasets/pick_photoreal.json"),
             Path("configs/so101/training_datasets/pick_place.json"),
             Path("configs/so101/training_datasets/move_over_cube.json"),
             Path("configs/so101/training_datasets/pick_from_top_cube.json"),

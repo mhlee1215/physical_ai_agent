@@ -38,6 +38,22 @@
         "repo_id": "physical-ai-agent/so101-pick-cube-valid24-ego-wrist-256",
         "root": "_workspace/so101_lerobot/pick_cube_valid24_ego_wrist_256_seed98100",
         "expected_episodes": 24
+      },
+      "photoreal": {
+        "train": {
+          "repo_id": "physical-ai-agent/so101-pick-cube-photoreal-train50-ego-wrist-256",
+          "root": "_workspace/so101_photoreal_lerobot/pick_cube_train50_ego_wrist_256_seed98200_samples256_nodenoise",
+          "expected_episodes": 50,
+          "expected_frames": 4598,
+          "task_prompt_source": "episode_seed_target_object_color"
+        },
+        "validation": {
+          "repo_id": "physical-ai-agent/so101-pick-cube-photoreal-valid24-ego-wrist-256",
+          "root": "_workspace/so101_photoreal_lerobot/pick_cube_valid24_ego_wrist_256_seed98100_samples256_nodenoise",
+          "expected_episodes": 24,
+          "expected_frames": 2210,
+          "task_prompt_source": "episode_seed_target_object_color"
+        }
       }
     },
     "pick_and_place_cube": {

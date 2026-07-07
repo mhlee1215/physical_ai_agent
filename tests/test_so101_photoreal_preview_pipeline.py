@@ -285,6 +285,43 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
             config["loop_validation_dataset"]["root"],
         )
 
+    def test_pick_cube_photoreal_config_covers_train_and_eval(self) -> None:
+        config = json.loads(Path("configs/so101/training_datasets/pick_photoreal.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(config["task"], "pick")
+        self.assertEqual(config["camera_contract"]["observation.images.camera1"], "egocentric_cam")
+        self.assertEqual(config["camera_contract"]["observation.images.camera2"], "wrist_cam")
+        self.assertEqual(config["train_dataset"]["dataset_format"], "so101_photoreal_lerobot_v1")
+        self.assertEqual(config["validation_dataset"]["dataset_format"], "so101_photoreal_lerobot_v1")
+        self.assertEqual(config["train_dataset"]["expected_frames"], 4598)
+        self.assertEqual(config["validation_dataset"]["expected_frames"], 2210)
+        self.assertEqual(config["train_dataset"]["task_prompt_source"], "episode_seed_target_object_color")
+        self.assertEqual(config["validation_dataset"]["task_prompt_source"], "episode_seed_target_object_color")
+
+    def test_color_task_prompt_omits_visible_cube(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "build_so101_photoreal_lerobot_dataset",
+            "scripts/build_so101_photoreal_lerobot_dataset.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        try:
+            spec.loader.exec_module(module)
+        except ModuleNotFoundError as exc:
+            if exc.name == "pyarrow":
+                self.skipTest("pyarrow is not installed in this test runtime")
+            raise
+
+        self.assertEqual(
+            module._color_task_prompt(skill_mode="pick_cube", color="green", shape="cube"),
+            "Grasp the green cube and lift it up.",
+        )
+        self.assertNotIn(
+            "visible cube",
+            module._color_task_prompt(skill_mode="pick_cube", color="red", shape="cube"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
