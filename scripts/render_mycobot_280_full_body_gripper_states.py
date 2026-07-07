@@ -33,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--official-gripper-root", type=Path, default=Path("_vendor/mycobot_ros"))
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=960)
+    parser.add_argument(
+        "--hide-official-gripper-base-shell",
+        action="store_true",
+        help="Hide only the official 280 gripper_base visual shell; physics pads/finger links remain visible and active.",
+    )
     return parser
 
 
@@ -79,12 +84,12 @@ def main() -> None:
             )
             for view_name, target, radius, azimuth, elevation, multiplier in specs:
                 camera = visibility._camera(env, target, distance=min(max(radius * multiplier, 0.13), 1.25), azimuth=azimuth, elevation=elevation)
-                _apply_visibility(env, show_cube=show_cube)
+                _apply_visibility(env, show_cube=show_cube, hide_gripper_base_shell=args.hide_official_gripper_base_shell)
                 renderer.update_scene(env.data, camera=camera)
                 rgb = renderer.render()
                 bgr = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
-                _draw_header(bgr, state_name, view_name, description, command, cube_pos)
-                _draw_legend(bgr, show_cube=show_cube)
+                _draw_header(bgr, state_name, view_name, description, command, cube_pos, args.hide_official_gripper_base_shell)
+                _draw_legend(bgr, show_cube=show_cube, hide_gripper_base_shell=args.hide_official_gripper_base_shell)
                 out = args.output_dir / f"{state_name}_{view_name}.png"
                 cv2.imwrite(str(out), bgr)
                 frames.append(out)
@@ -97,6 +102,7 @@ def main() -> None:
             "compact_sheet_path": str(compact),
             "frames": [str(path) for path in frames],
             "panels": panels,
+            "official_gripper_base_shell_hidden": bool(args.hide_official_gripper_base_shell),
             "note": "Full-body visual audit for corrected 280 gripper pads. The box_between_jaws state uses a small audit cube for visibility, not the full task cube size.",
         }
         report_path = args.output_dir / "full_body_gripper_states_report.json"
@@ -179,13 +185,16 @@ def _pad_detail_camera(env: nexus.MyCobotNexusEnv) -> tuple[float, float]:
     return float(np.degrees(np.arctan2(direction[1], direction[0]))), float(np.degrees(np.arcsin(np.clip(direction[2], -1.0, 1.0))))
 
 
-def _apply_visibility(env: nexus.MyCobotNexusEnv, *, show_cube: bool) -> None:
+def _apply_visibility(env: nexus.MyCobotNexusEnv, *, show_cube: bool, hide_gripper_base_shell: bool = False) -> None:
     env.model.site_rgba[:, 3] = 0.0
     for geom_id in range(env.model.ngeom):
         name = env._mujoco.mj_id2name(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, geom_id) or ""
         geom_type = int(env.model.geom_type[geom_id])
         mesh_id = int(env.model.geom_dataid[geom_id])
         is_mesh = geom_type == int(env._mujoco.mjtGeom.mjGEOM_MESH) and mesh_id >= 0
+        if hide_gripper_base_shell and name == "gripper_base_visual_0":
+            env.model.geom_rgba[geom_id, 3] = 0.0
+            continue
         if name in GRIPPER_GEOMS:
             rgba = list(GEOM_COLORS.get(name, (0.85, 0.85, 0.85, 1.0)))
             if name in {"left_finger_pad", "right_finger_pad"}:
@@ -203,16 +212,19 @@ def _apply_visibility(env: nexus.MyCobotNexusEnv, *, show_cube: bool) -> None:
             env.model.geom_rgba[geom_id, 3] = 0.0
 
 
-def _draw_header(frame: np.ndarray, state: str, view: str, description: str, command: float, cube_pos: np.ndarray | None) -> None:
+def _draw_header(frame: np.ndarray, state: str, view: str, description: str, command: float, cube_pos: np.ndarray | None, hide_gripper_base_shell: bool = False) -> None:
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 116), (255, 255, 255), -1)
     cv2.putText(frame, f"280 full body gripper state | {state} | {view}", (18, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.76, (20, 20, 20), 2, cv2.LINE_AA)
     cv2.putText(frame, description, (18, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (45, 45, 45), 1, cv2.LINE_AA)
     cube_text = "small audit cube visible" if cube_pos is not None else "cube hidden"
-    cv2.putText(frame, f"gripper command={command:+.2f}; robot-left pad=green; robot-right pad=blue; {cube_text}", (18, 92), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
+    shell_text = "; official gripper_base shell hidden" if hide_gripper_base_shell else ""
+    cv2.putText(frame, f"gripper command={command:+.2f}; robot-left pad=green; robot-right pad=blue; {cube_text}{shell_text}", (18, 92), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
 
 
-def _draw_legend(frame: np.ndarray, *, show_cube: bool) -> None:
+def _draw_legend(frame: np.ndarray, *, show_cube: bool, hide_gripper_base_shell: bool = False) -> None:
     entries = [("arm/body", None), ("kinematic connector", "connector"), ("gripper base", "gripper_base_visual_0"), ("distal fingers", "gripper_left1_visual_0"), ("support links", "gripper_left2_visual_0"), ("robot-left pad", "left_finger_pad"), ("robot-right pad", "right_finger_pad")]
+    if hide_gripper_base_shell:
+        entries = [entry for entry in entries if entry[1] != "gripper_base_visual_0"]
     if show_cube:
         entries.append(("small audit cube", "cube"))
     x0, y0 = 18, 144

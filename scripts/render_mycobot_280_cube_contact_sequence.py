@@ -37,6 +37,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--official-gripper-root", type=Path, default=Path("_vendor/mycobot_ros"))
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=960)
+    parser.add_argument(
+        "--hide-official-gripper-base-shell",
+        action="store_true",
+        help="Hide only the official 280 gripper_base visual shell; cube/pad/finger physics and visuals remain.",
+    )
     return parser
 
 
@@ -80,18 +85,25 @@ def main() -> None:
             )
             for view_name, target, radius, azimuth, elevation, multiplier in specs:
                 camera = visibility._camera(env, target, distance=min(max(radius * multiplier, 0.13), 1.25), azimuth=azimuth, elevation=elevation)
-                _apply_visibility(env)
+                _apply_visibility(env, hide_gripper_base_shell=args.hide_official_gripper_base_shell)
                 renderer.update_scene(env.data, camera=camera)
                 rgb = renderer.render()
                 bgr = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
-                _draw_header(bgr, state_name, view_name, description, command, metrics)
-                _draw_legend(bgr)
+                _draw_header(bgr, state_name, view_name, description, command, metrics, args.hide_official_gripper_base_shell)
+                _draw_legend(bgr, hide_gripper_base_shell=args.hide_official_gripper_base_shell)
                 out = args.output_dir / f"{state_name}_{view_name}.png"
                 cv2.imwrite(str(out), bgr)
                 frames.append(out)
                 panels.append({"state": state_name, "command": command, "view": view_name, "path": str(out), "metrics": metrics})
         sheet = _write_sheet(args.output_dir, frames, cols=3, tile_size=(640, 480), name="cube_contact_sequence_sheet.png")
-        report = {"status": "passed", "sheet_path": str(sheet), "frames": [str(p) for p in frames], "panels": panels, "note": "Static visual sequence: negative surface clearance indicates the contact-response/normal-force regime, not proven raw lift success."}
+        report = {
+            "status": "passed",
+            "sheet_path": str(sheet),
+            "frames": [str(p) for p in frames],
+            "panels": panels,
+            "official_gripper_base_shell_hidden": bool(args.hide_official_gripper_base_shell),
+            "note": "Static visual sequence: negative surface clearance indicates the contact-response/normal-force regime, not proven raw lift success.",
+        }
         (args.output_dir / "cube_contact_sequence_report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(json.dumps(report, indent=2, sort_keys=True))
     finally:
@@ -212,13 +224,16 @@ def _pad_detail_camera(env: nexus.MyCobotNexusEnv) -> tuple[float, float]:
     return float(np.degrees(np.arctan2(direction[1], direction[0]))), float(np.degrees(np.arcsin(np.clip(direction[2], -1.0, 1.0))))
 
 
-def _apply_visibility(env: nexus.MyCobotNexusEnv) -> None:
+def _apply_visibility(env: nexus.MyCobotNexusEnv, *, hide_gripper_base_shell: bool = False) -> None:
     env.model.site_rgba[:, 3] = 0.0
     for geom_id in range(env.model.ngeom):
         name = env._mujoco.mj_id2name(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, geom_id) or ""
         geom_type = int(env.model.geom_type[geom_id])
         mesh_id = int(env.model.geom_dataid[geom_id])
         is_mesh = geom_type == int(env._mujoco.mjtGeom.mjGEOM_MESH) and mesh_id >= 0
+        if hide_gripper_base_shell and name == "gripper_base_visual_0":
+            env.model.geom_rgba[geom_id, 3] = 0.0
+            continue
         if name in GRIPPER_GEOMS:
             rgba = list(GEOM_COLORS.get(name, (0.85, 0.85, 0.85, 1.0)))
             if name in {ROBOT_LEFT_PAD, ROBOT_RIGHT_PAD}:
@@ -234,16 +249,19 @@ def _apply_visibility(env: nexus.MyCobotNexusEnv) -> None:
             env.model.geom_rgba[geom_id, 3] = 0.0
 
 
-def _draw_header(frame: np.ndarray, state: str, view: str, description: str, command: float, metrics: dict[str, float | str]) -> None:
+def _draw_header(frame: np.ndarray, state: str, view: str, description: str, command: float, metrics: dict[str, float | str], hide_gripper_base_shell: bool = False) -> None:
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 126), (255, 255, 255), -1)
     cv2.putText(frame, f"280 cube approach/contact | {state} | {view}", (18, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (20, 20, 20), 2, cv2.LINE_AA)
     cv2.putText(frame, description, (18, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"robot-left pad=green; robot-right pad=blue; cube/pad collision and friction are enabled", (18, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (45, 45, 45), 1, cv2.LINE_AA)
+    shell_text = "; official gripper_base shell hidden" if hide_gripper_base_shell else ""
+    cv2.putText(frame, f"robot-left pad=green; robot-right pad=blue; cube/pad collision and friction are enabled{shell_text}", (18, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (45, 45, 45), 1, cv2.LINE_AA)
     cv2.putText(frame, f"cmd={command:+.2f}; jaw gap={metrics['jaw_gap_mm']:.1f}mm; cube={metrics['cube_width_mm']:.1f}mm; clearance={metrics['surface_clearance_mm']:.1f}mm; contacts={metrics['pad_cube_contacts']}; {metrics['regime']}", (18, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 90, 0) if metrics['regime'] == 'clearance' else (0, 0, 190), 1, cv2.LINE_AA)
 
 
-def _draw_legend(frame: np.ndarray) -> None:
+def _draw_legend(frame: np.ndarray, *, hide_gripper_base_shell: bool = False) -> None:
     entries = [("arm/body", None), ("robot-left pad", ROBOT_LEFT_PAD), ("robot-right pad", ROBOT_RIGHT_PAD), ("small cube", "cube")]
+    if hide_gripper_base_shell:
+        entries.insert(1, ("gripper_base hidden", "hidden"))
     x0, y0 = 18, 154
     cv2.rectangle(frame, (x0 - 8, y0 - 18), (x0 + 245, y0 + 22 * len(entries) + 10), (255, 255, 255), -1)
     cv2.rectangle(frame, (x0 - 8, y0 - 18), (x0 + 245, y0 + 22 * len(entries) + 10), (75, 75, 75), 1)
@@ -251,6 +269,8 @@ def _draw_legend(frame: np.ndarray) -> None:
         y = y0 + index * 22
         if key is None:
             rgb = (0.86, 0.82, 0.64)
+        elif key == "hidden":
+            rgb = (0.65, 0.65, 0.65)
         elif key == "cube":
             rgb = (0.96, 0.18, 0.08)
         elif key == "connector":

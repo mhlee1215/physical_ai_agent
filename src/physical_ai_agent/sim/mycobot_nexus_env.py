@@ -26,6 +26,20 @@ OFFICIAL_280_PI_URDF_RELATIVE_PATH = Path(
 )
 OFFICIAL_280_PI_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/mycobot_280_pi")
 OFFICIAL_280_PI_BAKED_VISUAL_SCENE_MESHES = frozenset({"G_base", "joint1_pi"})
+# The ROS1 adaptive-gripper Collada files carry node transforms that materially
+# change the visible base/finger geometry. Bake them so the half-round base cowl
+# and external finger linkages keep the vendor-authored spatial relationship.
+OFFICIAL_ADAPTIVE_GRIPPER_BAKED_VISUAL_SCENE_MESHES = frozenset(
+    {
+        "gripper_base",
+        "gripper_left1",
+        "gripper_left2",
+        "gripper_left3",
+        "gripper_right1",
+        "gripper_right2",
+        "gripper_right3",
+    }
+)
 OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH = Path(
     "mycobot_description/urdf/adaptive_gripper/mycobot_adaptive_gripper.urdf"
 )
@@ -126,10 +140,9 @@ ADAPTIVE_FINGER_PAD_SIZE = (0.014, 0.006, 0.006)
 ADAPTIVE_FINGER_PAD_EULER = (0.0, 0.0, 0.0)
 ADAPTIVE_FINGER_PAD_FRICTION = (80.0, 8.0, 8.0)
 ADAPTIVE_FINGER_PAD_CONDIM = 6
-# The 280 ROS1 adaptive-gripper fingertip meshes extend along local X, not local Y like
-# the 320 pro-adaptive gripper. Keep the proxy pad centers on the visible fingertip
-# tips, but make the 280 pads thin along local X so their inner faces oppose each
-# other like gripper jaws instead of rendering as end-to-end blocks.
+# The 280 ROS1 adaptive-gripper visual meshes need baked Collada node transforms,
+# but the MuJoCo contact pads are attached in the joint/body frame that closes the
+# jaws in simulation. Keep these proxy pads on the contact-working fingertip path.
 ADAPTIVE_280_LEFT_FINGER_PAD_POS = (0.0275, 0.0, 0.00381)
 ADAPTIVE_280_RIGHT_FINGER_PAD_POS = (-0.03176, 0.0, 0.00390)
 ADAPTIVE_280_FINGER_PAD_SIZE = (0.003, 0.014, 0.006)
@@ -1597,7 +1610,10 @@ def _build_official_280_pi_adaptive_nexus_scene_model(
         _convert_collada_mesh_to_obj(
             dae_path,
             obj_dir / f"{name}.obj",
-            bake_visual_scene=name in OFFICIAL_280_PI_BAKED_VISUAL_SCENE_MESHES,
+            bake_visual_scene=(
+                name in OFFICIAL_280_PI_BAKED_VISUAL_SCENE_MESHES
+                or name in OFFICIAL_ADAPTIVE_GRIPPER_BAKED_VISUAL_SCENE_MESHES
+            ),
         )
 
     root = ET.Element("mujoco", {"model": "official_280_pi_adaptive_gripper_nexus"})

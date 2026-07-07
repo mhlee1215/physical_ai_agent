@@ -45,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--official-gripper-root", type=Path, default=Path("_vendor/mycobot_ros"))
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=960)
+    parser.add_argument(
+        "--hide-official-gripper-base-shell",
+        action="store_true",
+        help="Hide only the official 280 gripper_base visual shell so finger links and pads can be inspected without that shell.",
+    )
     return parser
 
 
@@ -91,13 +96,19 @@ def main() -> None:
                         azimuth=azimuth,
                         elevation=elevation,
                     )
-                    _apply_visibility(env, visible, visual_alpha=visual_alpha, pad_alpha=pad_alpha)
+                    _apply_visibility(
+                        env,
+                        visible,
+                        visual_alpha=visual_alpha,
+                        pad_alpha=pad_alpha,
+                        hide_gripper_base_shell=args.hide_official_gripper_base_shell,
+                    )
                     renderer.update_scene(env.data, camera=camera)
                     rgb = renderer.render()
                     frame = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
                     pad_distance = _pad_distance(env)
-                    _draw_header(frame, pose_name, panel_name, view_name, description, command, pad_distance)
-                    _draw_legend(frame)
+                    _draw_header(frame, pose_name, panel_name, view_name, description, command, pad_distance, args.hide_official_gripper_base_shell)
+                    _draw_legend(frame, hide_gripper_base_shell=args.hide_official_gripper_base_shell)
                     if pose_name == "overclosed_overlap" and panel_name == "pad_collision_only":
                         _draw_invalid_overlap_cue(frame)
                     out = args.output_dir / f"{pose_name}_{panel_name}_{view_name}.png"
@@ -111,6 +122,7 @@ def main() -> None:
             "frames": [str(path) for path in frames],
             "panels": rows,
             "inventory": _inventory(env),
+            "official_gripper_base_shell_hidden": bool(args.hide_official_gripper_base_shell),
             "note": "Open/contact/overtravel gripper audit separates visual meshes from physics collision pads. The just_contact command is the pre-crossing jaw contact state; overclosed_overlap and overtravel_reopened are shown explicitly as invalid states.",
         }
         report_path = args.output_dir / "open_closed_gripper_audit_report.json"
@@ -149,12 +161,14 @@ def _azimuth_elevation_from_direction(direction: np.ndarray) -> tuple[float, flo
     return azimuth, elevation
 
 
-def _apply_visibility(env: nexus.MyCobotNexusEnv, visible: set[str], *, visual_alpha: float, pad_alpha: float) -> None:
+def _apply_visibility(env: nexus.MyCobotNexusEnv, visible: set[str], *, visual_alpha: float, pad_alpha: float, hide_gripper_base_shell: bool = False) -> None:
     env.model.geom_rgba[:, 3] = 0.0
     env.model.site_rgba[:, 3] = 0.0
     for geom_id in range(env.model.ngeom):
         name = env._mujoco.mj_id2name(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, geom_id) or ""
         if name not in visible:
+            continue
+        if hide_gripper_base_shell and name == "gripper_base_visual_0":
             continue
         rgba = list(GEOM_COLORS.get(name, (0.85, 0.82, 0.64, 1.0)))
         if name in PAD_GEOMS:
@@ -166,7 +180,7 @@ def _apply_visibility(env: nexus.MyCobotNexusEnv, visible: set[str], *, visual_a
         env.model.geom_rgba[geom_id, :] = rgba
 
 
-def _draw_header(frame: np.ndarray, pose_name: str, panel_name: str, view_name: str, description: str, command: float, pad_distance: float) -> None:
+def _draw_header(frame: np.ndarray, pose_name: str, panel_name: str, view_name: str, description: str, command: float, pad_distance: float, hide_gripper_base_shell: bool = False) -> None:
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 116), (255, 255, 255), -1)
     cv2.putText(
         frame,
@@ -178,7 +192,8 @@ def _draw_header(frame: np.ndarray, pose_name: str, panel_name: str, view_name: 
         2,
         cv2.LINE_AA,
     )
-    cv2.putText(frame, description, (18, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
+    shell_text = " official gripper_base shell hidden." if hide_gripper_base_shell else ""
+    cv2.putText(frame, f"{description}.{shell_text}", (18, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
     cv2.putText(
         frame,
         f"gripper command={command:+.2f}; pad-center distance={pad_distance * 1000:.1f} mm; valid contact is near +0.00",
@@ -216,7 +231,7 @@ def _draw_invalid_overlap_cue(frame: np.ndarray) -> None:
     cv2.line(frame, (cx, cy - 36), (cx, cy + 36), (0, 0, 255), 4, cv2.LINE_AA)
 
 
-def _draw_legend(frame: np.ndarray) -> None:
+def _draw_legend(frame: np.ndarray, *, hide_gripper_base_shell: bool = False) -> None:
     entries = [
         ("gripper body/base", "gripper_base_visual_0"),
         ("left distal finger mesh", "gripper_left1_visual_0"),
@@ -226,6 +241,8 @@ def _draw_legend(frame: np.ndarray) -> None:
         ("left collision pad", "left_finger_pad"),
         ("right collision pad", "right_finger_pad"),
     ]
+    if hide_gripper_base_shell:
+        entries = [entry for entry in entries if entry[1] != "gripper_base_visual_0"]
     x0 = 18
     y0 = 148
     width = 366
