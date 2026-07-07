@@ -19,16 +19,20 @@ from scripts.render_mycobot_280_gripper_part_audit import GEOM_COLORS, GRIPPER_G
 ARM_BODY_NAMES = ("g_base", "joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint6_flange", "gripper_base")
 GRIPPER_BODY_NAMES = ("gripper_base", "gripper_left3", "gripper_left2", "gripper_left1", "gripper_right3", "gripper_right2", "gripper_right1")
 ALL_BODY_NAMES = (*ARM_BODY_NAMES, *GRIPPER_BODY_NAMES)
-STATE_SPECS = (
-    ("open", 1.0, False, "open gripper"),
-    ("just_contact", 0.0, False, "closed / just-contact gripper"),
-    ("box_between_jaws", 0.9, True, "gripper around small audit cube"),
+ROBOT_LEFT_PAD = "left_finger_pad"
+ROBOT_RIGHT_PAD = "right_finger_pad"
+AUDIT_CUBE_HALF_SIZE = 0.0045
+SEQUENCE = (
+    ("aligned_open", 1.0, "cube aligned; jaws still open"),
+    ("near_touch", 0.8, "pads moving toward cube"),
+    ("grasp_contact", 0.7, "first compression/contact response"),
+    ("hard_contact", 0.0, "deep contact response / solver repulsion zone"),
 )
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Render full-body 280 robot states with corrected gripper pads.")
-    parser.add_argument("--output-dir", type=Path, default=Path("_workspace/mesh_inspection/mycobot_280_full_body_gripper_states_001"))
+    parser = argparse.ArgumentParser(description="Render 280 full-body gripper/cube approach-contact sequence.")
+    parser.add_argument("--output-dir", type=Path, default=Path("_workspace/mesh_inspection/mycobot_280_cube_contact_sequence_001"))
     parser.add_argument("--asset-root", type=Path, default=Path("_vendor/mycobot_mujoco"))
     parser.add_argument("--official-gripper-root", type=Path, default=Path("_vendor/mycobot_ros"))
     parser.add_argument("--width", type=int, default=1280)
@@ -55,65 +59,46 @@ def main() -> None:
     try:
         renderer = env._mujoco.Renderer(env.model, height=args.height, width=args.width)
         env.reset(seed=1)
+        nexus._set_adaptive_gate_arm_pose(env, nexus._adaptive_gate7_arm_qpos(nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER))
+        _size_audit_cube(env, half_size=AUDIT_CUBE_HALF_SIZE)
+        env._set_gripper(command=0.8)
+        env._mujoco.mj_forward(env.model, env.data)
+        cube_pos, cube_quat = _reference_cube_pose(env)
         frames: list[Path] = []
         panels: list[dict[str, Any]] = []
-        for state_name, command, show_cube, description in STATE_SPECS:
-            nexus._set_adaptive_gate_arm_pose(env, nexus._adaptive_gate7_arm_qpos(nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER))
+        for state_name, command, description in SEQUENCE:
             env._set_gripper(command=command)
+            _set_cube_pose(env, cube_pos, cube_quat)
             env._mujoco.mj_forward(env.model, env.data)
-            cube_pos = None
-            if show_cube:
-                _size_audit_cube(env, half_size=0.0045)
-                cube_pos = _place_cube_between_pads(env)
-                env._mujoco.mj_forward(env.model, env.data)
-            else:
-                _hide_task_cube(env)
+            metrics = _contact_metrics(env, cube_half=AUDIT_CUBE_HALF_SIZE)
             full_target, full_radius = visibility._target_and_radius(env, ALL_BODY_NAMES)
             wrist_target, wrist_radius = visibility._target_and_radius(env, ("joint5", "joint6", "joint6_flange", *GRIPPER_BODY_NAMES))
             pad_target, pad_radius = _pad_target_and_radius(env)
             specs = (
-                ("whole_robot_left", full_target, full_radius, 225.0, -20.0, 3.0),
-                ("whole_robot_right", full_target, full_radius, 135.0, -18.0, 3.0),
-                ("wrist_gripper", wrist_target, wrist_radius, 215.0, -24.0, 2.45),
-                ("pad_detail", pad_target, pad_radius, *_pad_detail_camera(env), 2.55),
+                ("whole_robot", full_target, full_radius, 205.0, -18.0, 3.05),
+                ("wrist_gripper_cube", wrist_target, wrist_radius, 215.0, -24.0, 2.45),
+                ("pad_cube_gap", pad_target, pad_radius, *_pad_detail_camera(env), 2.75),
             )
             for view_name, target, radius, azimuth, elevation, multiplier in specs:
                 camera = visibility._camera(env, target, distance=min(max(radius * multiplier, 0.13), 1.25), azimuth=azimuth, elevation=elevation)
-                _apply_visibility(env, show_cube=show_cube)
+                _apply_visibility(env)
                 renderer.update_scene(env.data, camera=camera)
                 rgb = renderer.render()
                 bgr = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
-                _draw_header(bgr, state_name, view_name, description, command, cube_pos)
-                _draw_legend(bgr, show_cube=show_cube)
+                _draw_header(bgr, state_name, view_name, description, command, metrics)
+                _draw_legend(bgr)
                 out = args.output_dir / f"{state_name}_{view_name}.png"
                 cv2.imwrite(str(out), bgr)
                 frames.append(out)
-                panels.append({"state": state_name, "view": view_name, "path": str(out)})
-        sheet = _write_sheet(args.output_dir, frames, cols=4, tile_size=(560, 420), name="full_body_gripper_states_sheet.png")
-        compact = _write_sheet(args.output_dir, [p for p in frames if p.name.endswith("whole_robot_left.png") or p.name.endswith("wrist_gripper.png") or p.name.endswith("pad_detail.png")], cols=3, tile_size=(640, 480), name="full_body_gripper_states_compact.png")
-        report = {
-            "status": "passed",
-            "sheet_path": str(sheet),
-            "compact_sheet_path": str(compact),
-            "frames": [str(path) for path in frames],
-            "panels": panels,
-            "note": "Full-body visual audit for corrected 280 gripper pads. The box_between_jaws state uses a small audit cube for visibility, not the full task cube size.",
-        }
-        report_path = args.output_dir / "full_body_gripper_states_report.json"
-        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                panels.append({"state": state_name, "command": command, "view": view_name, "path": str(out), "metrics": metrics})
+        sheet = _write_sheet(args.output_dir, frames, cols=3, tile_size=(640, 480), name="cube_contact_sequence_sheet.png")
+        report = {"status": "passed", "sheet_path": str(sheet), "frames": [str(p) for p in frames], "panels": panels, "note": "Static visual sequence: negative surface clearance indicates the contact-response/normal-force regime, not proven raw lift success."}
+        (args.output_dir / "cube_contact_sequence_report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(json.dumps(report, indent=2, sort_keys=True))
     finally:
         if renderer is not None:
             renderer.close()
         env.close()
-
-
-def _hide_task_cube(env: nexus.MyCobotNexusEnv) -> None:
-    geom_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, nexus.TASK_CUBE_GEOM)
-    if geom_id >= 0:
-        env.model.geom_rgba[geom_id, :] = [0.0, 0.0, 0.0, 0.0]
-        qpos = env._cube_freejoint_qpos_index
-        env.data.qpos[qpos:qpos + 3] = [0.4, 0.4, -0.2]
 
 
 def _size_audit_cube(env: nexus.MyCobotNexusEnv, *, half_size: float) -> None:
@@ -123,15 +108,42 @@ def _size_audit_cube(env: nexus.MyCobotNexusEnv, *, half_size: float) -> None:
     env.model.geom_size[geom_id, :3] = [half_size, half_size, half_size]
 
 
-def _place_cube_between_pads(env: nexus.MyCobotNexusEnv) -> np.ndarray:
-    left = _geom_pos(env, "left_finger_pad")
-    right = _geom_pos(env, "right_finger_pad")
+def _reference_cube_pose(env: nexus.MyCobotNexusEnv) -> tuple[np.ndarray, list[float]]:
+    left = _geom_pos(env, ROBOT_LEFT_PAD)
+    right = _geom_pos(env, ROBOT_RIGHT_PAD)
     midpoint = (left + right) * 0.5
+    return midpoint, _quat_align_x_to_vector(right - left)
+
+
+def _set_cube_pose(env: nexus.MyCobotNexusEnv, pos: np.ndarray, quat: list[float]) -> None:
     qpos_index = env._cube_freejoint_qpos_index
-    env.data.qpos[qpos_index:qpos_index + 3] = midpoint
-    env.data.qpos[qpos_index + 3:qpos_index + 7] = _quat_align_x_to_vector(right - left)
+    env.data.qpos[qpos_index:qpos_index + 3] = pos
+    env.data.qpos[qpos_index + 3:qpos_index + 7] = quat
     env.data.qvel[env._cube_freejoint_qvel_index:env._cube_freejoint_qvel_index + 6] = 0.0
-    return midpoint
+
+
+def _contact_metrics(env: nexus.MyCobotNexusEnv, *, cube_half: float) -> dict[str, float | str]:
+    left = _geom_pos(env, ROBOT_LEFT_PAD)
+    right = _geom_pos(env, ROBOT_RIGHT_PAD)
+    delta = right - left
+    center_distance = float(np.linalg.norm(delta))
+    axis = delta / max(center_distance, 1e-9)
+    pad_extent_sum = 0.0
+    for name in (ROBOT_LEFT_PAD, ROBOT_RIGHT_PAD):
+        geom_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, name)
+        mat = np.asarray(env.data.geom_xmat[geom_id], dtype=float).reshape(3, 3)
+        size = np.asarray(env.model.geom_size[geom_id, :3], dtype=float)
+        pad_extent_sum += float(sum(abs(np.dot(axis, mat[:, index])) * size[index] for index in range(3)))
+    jaw_surface_gap = center_distance - pad_extent_sum
+    cube_width = cube_half * 2.0
+    clearance = jaw_surface_gap - cube_width
+    if clearance > 0.001:
+        regime = "clearance"
+    elif clearance > -0.001:
+        regime = "touching"
+    else:
+        regime = "contact_response"
+    return {"pad_center_mm": center_distance * 1000.0, "jaw_gap_mm": jaw_surface_gap * 1000.0, "cube_width_mm": cube_width * 1000.0, "surface_clearance_mm": clearance * 1000.0, "regime": regime}
 
 
 def _quat_align_x_to_vector(vector: np.ndarray) -> list[float]:
@@ -164,22 +176,19 @@ def _geom_pos(env: nexus.MyCobotNexusEnv, name: str) -> np.ndarray:
 
 
 def _pad_target_and_radius(env: nexus.MyCobotNexusEnv) -> tuple[np.ndarray, float]:
-    points = [_geom_pos(env, "left_finger_pad"), _geom_pos(env, "right_finger_pad")]
-    arr = np.vstack(points)
-    return arr.mean(axis=0), max(float(np.linalg.norm(arr[1] - arr[0]) * 1.2), 0.04)
+    arr = np.vstack([_geom_pos(env, ROBOT_LEFT_PAD), _geom_pos(env, ROBOT_RIGHT_PAD), _geom_pos(env, nexus.TASK_CUBE_GEOM)])
+    return arr.mean(axis=0), max(float(np.linalg.norm(arr.max(axis=0) - arr.min(axis=0)) * 1.6), 0.045)
 
 
 def _pad_detail_camera(env: nexus.MyCobotNexusEnv) -> tuple[float, float]:
-    left_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, "left_finger_pad")
-    if left_id < 0:
-        return 90.0, -70.0
+    left_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, ROBOT_LEFT_PAD)
     mat = np.asarray(env.data.geom_xmat[left_id], dtype=float).reshape(3, 3)
     direction = mat[:, 2] + 0.45 * mat[:, 1]
     direction = direction / max(float(np.linalg.norm(direction)), 1e-9)
     return float(np.degrees(np.arctan2(direction[1], direction[0]))), float(np.degrees(np.arcsin(np.clip(direction[2], -1.0, 1.0))))
 
 
-def _apply_visibility(env: nexus.MyCobotNexusEnv, *, show_cube: bool) -> None:
+def _apply_visibility(env: nexus.MyCobotNexusEnv) -> None:
     env.model.site_rgba[:, 3] = 0.0
     for geom_id in range(env.model.ngeom):
         name = env._mujoco.mj_id2name(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, geom_id) or ""
@@ -188,36 +197,32 @@ def _apply_visibility(env: nexus.MyCobotNexusEnv, *, show_cube: bool) -> None:
         is_mesh = geom_type == int(env._mujoco.mjtGeom.mjGEOM_MESH) and mesh_id >= 0
         if name in GRIPPER_GEOMS:
             rgba = list(GEOM_COLORS.get(name, (0.85, 0.85, 0.85, 1.0)))
-            if name in {"left_finger_pad", "right_finger_pad"}:
+            if name in {ROBOT_LEFT_PAD, ROBOT_RIGHT_PAD}:
                 rgba[3] = 0.72
-            elif name in {"gripper_left2_visual_0", "gripper_left3_visual_0", "gripper_right2_visual_0", "gripper_right3_visual_0"}:
-                rgba[3] = 0.78
             env.model.geom_rgba[geom_id, :] = rgba
         elif name == nexus.TASK_CUBE_GEOM:
-            env.model.geom_rgba[geom_id, :] = [0.96, 0.18, 0.08, 0.68 if show_cube else 0.0]
+            env.model.geom_rgba[geom_id, :] = [0.96, 0.18, 0.08, 0.70]
         elif name.startswith("debug_connector_"):
             env.model.geom_rgba[geom_id, 3] = 0.0
         elif is_mesh:
-            env.model.geom_rgba[geom_id, :] = [0.86, 0.82, 0.64, 0.96]
+            env.model.geom_rgba[geom_id, :] = [0.86, 0.82, 0.64, 0.92]
         else:
             env.model.geom_rgba[geom_id, 3] = 0.0
 
 
-def _draw_header(frame: np.ndarray, state: str, view: str, description: str, command: float, cube_pos: np.ndarray | None) -> None:
-    cv2.rectangle(frame, (0, 0), (frame.shape[1], 116), (255, 255, 255), -1)
-    cv2.putText(frame, f"280 full body gripper state | {state} | {view}", (18, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.76, (20, 20, 20), 2, cv2.LINE_AA)
-    cv2.putText(frame, description, (18, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (45, 45, 45), 1, cv2.LINE_AA)
-    cube_text = "small audit cube visible" if cube_pos is not None else "cube hidden"
-    cv2.putText(frame, f"gripper command={command:+.2f}; robot-left pad=green; robot-right pad=blue; {cube_text}", (18, 92), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
+def _draw_header(frame: np.ndarray, state: str, view: str, description: str, command: float, metrics: dict[str, float | str]) -> None:
+    cv2.rectangle(frame, (0, 0), (frame.shape[1], 126), (255, 255, 255), -1)
+    cv2.putText(frame, f"280 cube approach/contact | {state} | {view}", (18, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (20, 20, 20), 2, cv2.LINE_AA)
+    cv2.putText(frame, description, (18, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"robot-left pad=green; robot-right pad=blue; camera view may flip screen left/right", (18, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (45, 45, 45), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"cmd={command:+.2f}; jaw gap={metrics['jaw_gap_mm']:.1f}mm; cube={metrics['cube_width_mm']:.1f}mm; clearance={metrics['surface_clearance_mm']:.1f}mm; {metrics['regime']}", (18, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 90, 0) if metrics['regime'] == 'clearance' else (0, 0, 190), 1, cv2.LINE_AA)
 
 
-def _draw_legend(frame: np.ndarray, *, show_cube: bool) -> None:
-    entries = [("arm/body", None), ("gripper base", "gripper_base_visual_0"), ("distal fingers", "gripper_left1_visual_0"), ("support links", "gripper_left2_visual_0"), ("robot-left pad", "left_finger_pad"), ("robot-right pad", "right_finger_pad")]
-    if show_cube:
-        entries.append(("small audit cube", "cube"))
-    x0, y0 = 18, 144
-    cv2.rectangle(frame, (x0 - 8, y0 - 18), (x0 + 260, y0 + 22 * len(entries) + 10), (255, 255, 255), -1)
-    cv2.rectangle(frame, (x0 - 8, y0 - 18), (x0 + 260, y0 + 22 * len(entries) + 10), (75, 75, 75), 1)
+def _draw_legend(frame: np.ndarray) -> None:
+    entries = [("arm/body", None), ("robot-left pad", ROBOT_LEFT_PAD), ("robot-right pad", ROBOT_RIGHT_PAD), ("small cube", "cube")]
+    x0, y0 = 18, 154
+    cv2.rectangle(frame, (x0 - 8, y0 - 18), (x0 + 245, y0 + 22 * len(entries) + 10), (255, 255, 255), -1)
+    cv2.rectangle(frame, (x0 - 8, y0 - 18), (x0 + 245, y0 + 22 * len(entries) + 10), (75, 75, 75), 1)
     for index, (label, key) in enumerate(entries):
         y = y0 + index * 22
         if key is None:
@@ -226,17 +231,14 @@ def _draw_legend(frame: np.ndarray, *, show_cube: bool) -> None:
             rgb = (0.96, 0.18, 0.08)
         else:
             rgb = GEOM_COLORS.get(key, (1, 1, 1, 1))[:3]
-        color = tuple(int(255 * channel) for channel in rgb)
+        color = tuple(int(255 * c) for c in rgb)
         cv2.rectangle(frame, (x0, y - 11), (x0 + 18, y + 5), (color[2], color[1], color[0]), -1)
         cv2.putText(frame, label, (x0 + 28, y + 2), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (20, 20, 20), 1, cv2.LINE_AA)
 
 
 def _write_sheet(output_dir: Path, frames: list[Path], *, cols: int, tile_size: tuple[int, int], name: str) -> Path:
-    tiles = []
     width, height = tile_size
-    for frame in frames:
-        img = cv2.imread(str(frame))
-        tiles.append(cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA))
+    tiles = [cv2.resize(cv2.imread(str(frame)), (width, height), interpolation=cv2.INTER_AREA) for frame in frames]
     rows = int(np.ceil(len(tiles) / cols))
     sheet = np.full((rows * height, cols * width, 3), 245, np.uint8)
     for index, tile in enumerate(tiles):
