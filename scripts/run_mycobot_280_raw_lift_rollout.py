@@ -50,6 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lift-steps", type=int, default=DEFAULT_LIFT_STEPS)
     parser.add_argument("--lift-scale", type=float, default=1.0, help="Scale the default Gate 7 -> Gate 8 lift delta.")
     parser.add_argument("--actuated-lift", action="store_true", help="Use env.step arm controls during gravity-on lift instead of direct qpos teleporting.")
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--cube-offset-x", type=float, default=0.0)
+    parser.add_argument("--cube-offset-y", type=float, default=0.0)
+    parser.add_argument("--cube-offset-z", type=float, default=0.0)
+    parser.add_argument("--video-path", type=Path, default=None)
+    parser.add_argument("--video-every", type=int, default=0, help="Write one video frame every N simulation steps; 0 disables video.")
+    parser.add_argument("--video-fps", type=float, default=30.0)
     return parser
 
 
@@ -70,7 +77,7 @@ def main() -> None:
     renderer = None
     try:
         renderer = env._mujoco.Renderer(env.model, height=args.height, width=args.width)
-        env.reset(seed=1)
+        env.reset(seed=args.seed)
         gate7_arm_qpos = nexus._adaptive_gate7_arm_qpos(nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER)
         default_gate8_lift_arm_qpos = nexus._adaptive_gate8_lift_arm_qpos(nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER)
         gate8_lift_arm_qpos = tuple(
@@ -83,11 +90,14 @@ def main() -> None:
         env._set_gripper(command=START_COMMAND)
         env._mujoco.mj_forward(env.model, env.data)
         cube_pos, cube_quat = _open_gap_cube_pose(env)
+        cube_pos = cube_pos + np.asarray([args.cube_offset_x, args.cube_offset_y, args.cube_offset_z], dtype=float)
         _set_cube_pose(env, cube_pos, cube_quat)
         env._mujoco.mj_forward(env.model, env.data)
 
         records: list[dict[str, Any]] = []
         frame_paths: list[Path] = []
+        video_writer = _open_video_writer(args.video_path, width=args.width, height=args.height, fps=args.video_fps)
+        wrote_video_steps: set[int] = set()
         total_steps = args.zero_gravity_close_steps + args.gravity_hold_steps + args.lift_steps
         lift_start = args.zero_gravity_close_steps + args.gravity_hold_steps
         frame_steps = {
@@ -131,8 +141,17 @@ def main() -> None:
                 env._mujoco.mj_forward(env.model, env.data)
             record = _rollout_record(env, step=step, phase=phase, command=command, initial_cube_pos=cube_pos)
             records.append(record)
+            if args.video_every > 0 and video_writer is not None and step % args.video_every == 0:
+                video_writer.write(_render_bgr(env, renderer, record))
+                wrote_video_steps.add(step)
             if step in frame_steps:
                 frame_paths.append(_render_frame(env, renderer, args.output_dir, record))
+
+        if video_writer is not None:
+            final_step = total_steps - 1
+            if records and final_step not in wrote_video_steps:
+                video_writer.write(_render_bgr(env, renderer, records[-1]))
+            video_writer.release()
 
         trace_path = args.output_dir / "mycobot_280_raw_lift_rollout_trace.jsonl"
         with trace_path.open("w", encoding="utf-8") as file:
@@ -163,6 +182,9 @@ def main() -> None:
             "lift_steps": args.lift_steps,
             "lift_scale": args.lift_scale,
             "actuated_lift": bool(args.actuated_lift),
+            "seed": args.seed,
+            "cube_offset_m": [args.cube_offset_x, args.cube_offset_y, args.cube_offset_z],
+            "video_path": None if args.video_path is None else str(args.video_path),
             "gravity_note": "Only the close phase is zero-g to establish raw pad contact before gravity-on hold/lift; no teacher attachment is used.",
             "close_best_sustained_two_pad_steps": _best_sustained_two_pad(close_records),
             "hold_best_sustained_two_pad_steps": _best_sustained_two_pad(hold_records),
@@ -185,6 +207,8 @@ def main() -> None:
         print(json.dumps(report, indent=2, sort_keys=True))
         raise SystemExit(0 if status == "passed" else 1)
     finally:
+        if "video_writer" in locals() and video_writer is not None:
+            video_writer.release()
         if renderer is not None:
             renderer.close()
         env.close()
@@ -296,7 +320,17 @@ def _first_contact_loss(records: list[dict[str, Any]]) -> int | None:
     return None
 
 
-def _render_frame(env: nexus.MyCobotNexusEnv, renderer: Any, output_dir: Path, record: dict[str, Any]) -> Path:
+def _open_video_writer(path: Path | None, *, width: int, height: int, fps: float) -> cv2.VideoWriter | None:
+    if path is None:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (int(width), int(height)))
+    if not writer.isOpened():
+        raise RuntimeError(f"failed to open video writer: {path}")
+    return writer
+
+
+def _render_bgr(env: nexus.MyCobotNexusEnv, renderer: Any, record: dict[str, Any]) -> np.ndarray:
     full_target, full_radius = visibility._target_and_radius(env, ALL_BODY_NAMES)
     pad_target, pad_radius = _pad_target_and_radius(env)
     if record["phase"] in {"gravity_hold", "lift_gravity_on"}:
@@ -318,6 +352,11 @@ def _render_frame(env: nexus.MyCobotNexusEnv, renderer: Any, output_dir: Path, r
     bgr = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
     _draw_rollout_header(bgr, record)
     _draw_legend(bgr)
+    return bgr
+
+
+def _render_frame(env: nexus.MyCobotNexusEnv, renderer: Any, output_dir: Path, record: dict[str, Any]) -> Path:
+    bgr = _render_bgr(env, renderer, record)
     out = output_dir / f"step_{int(record['step']):03d}_{record['phase']}.png"
     cv2.imwrite(str(out), bgr)
     return out
