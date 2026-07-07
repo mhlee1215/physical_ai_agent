@@ -323,6 +323,33 @@
       }
     },
     {
+      "name": "pick_from_top_cube_loop_validation",
+      "contract": "skill_dataset_contract",
+      "dataset": "pick_from_top_cube",
+      "split": "loop_validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/pick_from_top_cube_loop_validation10_ego_wrist_256_seed113500",
+      "repo_id": "physical-ai-agent/so101-pick-from-top-cube-loop-validation10-ego-wrist-256",
+      "episodes": 10,
+      "seed": 113500,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "pick_from_top_cube",
+        "approach_steps": 1,
+        "settle_steps": 0,
+        "close_steps": 42,
+        "lift_steps": 58,
+        "move_target_z_offset": 0.7,
+        "pick_start_joint_std": 0.035,
+        "pick_correction_steps": 24,
+        "pick_start_min_abs_y": 0.018,
+        "pick_start_max_abs_y": 0.055,
+        "pick_start_min_actual_abs_y": 0.015,
+        "pick_start_min_actual_z": 0.05,
+        "max_attempt_multiplier": 30
+      }
+    },
+    {
       "name": "move_over_cube_edge_train",
       "contract": "skill_dataset_contract",
       "dataset": "move_over_cube_edge",

@@ -31,6 +31,7 @@ DATASET_CONTRACT = Path("configs/so101/training_datasets/dataset_contract.json")
 SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_contract.json")
 TRAINING_DATASET_CONFIGS = [
     Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
+    Path("configs/so101/training_datasets/pick_from_top_cube_photoreal.json"),
 ]
 INTERACTIVE_RUN_ROOT = Path("_workspace/so101_interactive_sim/runs")
 DEFAULT_VALID_MASK_CHECKPOINT = Path("_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt")
@@ -283,6 +284,10 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
         _so101_photoreal_dataset_catalog_item(repo_root, split, path)
         for split, path in _discover_so101_photoreal_datasets(repo_root).items()
     ]
+    photoreal_items.extend(
+        _dataset_catalog_item(repo_root, split, path, category="photoreal")
+        for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()
+    )
     mycobot_items = [
         _mycobot_dataset_catalog_item(repo_root, split, path)
         for split, path in _discover_mycobot_datasets(repo_root).items()
@@ -681,6 +686,33 @@ def _discover_so101_photoreal_datasets(repo_root: Path) -> dict[str, Path]:
     return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
 
 
+def _discover_so101_photoreal_lerobot_datasets(repo_root: Path) -> dict[str, Path]:
+    discovered = _parse_dataset_env("SO101_PHOTOREAL_LEROBOT_DATASETS")
+    roots = [
+        repo_root / "_workspace" / "so101_photoreal_lerobot",
+        REPO_ROOT / "_workspace" / "so101_photoreal_lerobot",
+    ]
+    seen = {path.resolve() for path in discovered.values()}
+    for root in roots:
+        if not root.exists():
+            continue
+        for manifest_path in sorted(root.glob("*/photoreal_lerobot_manifest.json")):
+            dataset_root = manifest_path.parent
+            resolved = dataset_root.resolve()
+            if resolved in seen:
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if manifest.get("format") != "so101_photoreal_lerobot_v1":
+                continue
+            split = _unique_split_name("photoreal_lerobot_" + _slug(dataset_root.name), discovered)
+            discovered[split] = dataset_root
+            seen.add(resolved)
+    return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
+
+
 def _so101_photoreal_dataset_catalog_item(repo_root: Path, split: str, root: Path) -> dict[str, Any]:
     resolved = _resolve_dataset_path(repo_root, root)
     base = {
@@ -832,6 +864,7 @@ def _training_config_dataset_roots(repo_root: Path) -> dict[str, Path]:
         train = config.get("train_dataset")
         train_datasets = config.get("train_datasets")
         validation = config.get("validation_dataset")
+        loop_validation = config.get("loop_validation_dataset")
         if isinstance(train, dict) and train.get("root"):
             roots[f"{name}_train"] = Path(train["root"])
         if isinstance(train_datasets, list):
@@ -842,6 +875,8 @@ def _training_config_dataset_roots(repo_root: Path) -> dict[str, Path]:
                 roots[split_name] = Path(dataset["root"])
         if isinstance(validation, dict) and validation.get("root"):
             roots[f"{name}_val"] = Path(validation["root"])
+        if isinstance(loop_validation, dict) and loop_validation.get("root"):
+            roots[f"{name}_loop_val"] = Path(loop_validation["root"])
         if isinstance(validation, dict):
             sources = validation.get("hf_resolved_sources") or validation.get("hf_merge_sources")
             if isinstance(sources, list):
@@ -1141,6 +1176,7 @@ def _dataset_roots(repo_root: Path) -> dict[str, Path]:
     roots.update(_official_dataset_roots(repo_root))
     roots.update({split: _resolve_dataset_path(repo_root, root) for split, root in _skill_dataset_roots(repo_root).items()})
     roots.update({split: path.resolve() for split, path in _discover_temporary_datasets(repo_root).items()})
+    roots.update({split: path.resolve() for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()})
     return roots
 
 

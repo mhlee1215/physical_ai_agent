@@ -217,6 +217,7 @@ def render_dataset_preview(
                     log_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
                     if completed.returncode != 0:
                         raise RuntimeError(f"Blender render failed with exit code {completed.returncode}; see {log_path}")
+                    shutil.rmtree(mesh_dir, ignore_errors=True)
                     for camera_key, image_path in image_paths.items():
                         rotation = camera_specs[camera_key].get("rotation_degrees", 0)
                         if rotation:

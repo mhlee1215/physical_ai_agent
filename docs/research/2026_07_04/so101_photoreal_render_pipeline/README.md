@@ -5,7 +5,9 @@ The current training path can build a photoreal dataset root with the same
 episode/frame/action/state contract as the source LeRobot dataset. Legacy
 one-frame probes and preview sidecars are still useful for inspection, but the
 training artifact is the `so101_photoreal_jsonl_v1` dataset under
-`_workspace/so101_photoreal_datasets/`.
+`_workspace/so101_photoreal_datasets/`, or the training-ready
+`so101_photoreal_lerobot_v1` parquet root under
+`_workspace/so101_photoreal_lerobot/`.
 
 ## Example Output
 
@@ -24,6 +26,11 @@ SO101 `pick_cube_train` five-episode start/grip preview:
 SO101 photoreal dataset frames using the stable training-view render profile:
 
 ![SO101 scene-camera photoreal dataset examples](./so101_scene_camera_photoreal_examples.png)
+
+SO101 `pick_from_top_cube` loop-validation frames rendered with the
+training-view profile:
+
+![SO101 pick-from-top-cube photoreal loop validation](./pick_from_top_cube_loop_validation10_contact_sheet.png)
 
 Procedural versus HDRI/PBR assets:
 
@@ -218,6 +225,28 @@ The local generated full dataset used for dashboard QA is:
 - `_workspace/so101_photoreal_datasets/pick_cube_train5episodes_full_256_seed98200`
 - 5 episodes, 461 frames total
 - 461 PNGs for each of `camera1`, `camera2`, and `camera3`
+
+For training/evaluation configs that need LeRobot parquet roots, use the
+strict parquet-image replacement builder. It copies the source LeRobot root,
+preserves state/action/timestamp/task metadata, replaces the embedded
+`observation.images.camera1/camera2/camera3` bytes with RGB photoreal PNGs,
+and writes `photoreal_lerobot_manifest.json`:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python scripts/build_so101_photoreal_lerobot_dataset.py \
+  --source-dataset-root _workspace/so101_lerobot/pick_from_top_cube_loop_validation10_ego_wrist_256_seed113500 \
+  --rendered-dir _workspace/so101_photoreal_renders/pick_from_top_cube_loop_validation10_ego_wrist_256_seed113500_samples256_nodenoise \
+  --output-root _workspace/so101_photoreal_lerobot/pick_from_top_cube_loop_validation10_ego_wrist_256_seed113500_samples256_nodenoise \
+  --repo-id physical-ai-agent/so101-pick-from-top-cube-photoreal-loop-validation10-ego-wrist-256 \
+  --overwrite
+```
+
+The generated local loop-validation root verified in this PR is:
+
+- `_workspace/so101_photoreal_lerobot/pick_from_top_cube_loop_validation10_ego_wrist_256_seed113500_samples256_nodenoise`
+- 10 episodes, 718 frames total
+- 718 RGB image rows for each of `camera1`, `camera2`, and `camera3`
+- opens as `LeRobotDataset` with all policy images shaped `(3, 256, 256)`
 - `training_ready=true`
 - stable render profile: `samples=256`, denoise disabled, DOF off, fixed Cycles
   seed, neutral matte tabletop, no background wall
