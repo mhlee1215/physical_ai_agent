@@ -32,7 +32,6 @@ SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_con
 TRAINING_DATASET_CONFIGS = [
     Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
     Path("configs/so101/training_datasets/pick_photoreal.json"),
-    Path("configs/so101/training_datasets/pick_from_top_cube_photoreal.json"),
 ]
 INTERACTIVE_RUN_ROOT = Path("_workspace/so101_interactive_sim/runs")
 DEFAULT_VALID_MASK_CHECKPOINT = Path("_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt")

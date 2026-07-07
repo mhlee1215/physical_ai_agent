@@ -27,11 +27,6 @@ SO101 photoreal dataset frames using the stable training-view render profile:
 
 ![SO101 scene-camera photoreal dataset examples](./so101_scene_camera_photoreal_examples.png)
 
-SO101 `pick_from_top_cube` loop-validation frames rendered with the
-training-view profile:
-
-![SO101 pick-from-top-cube photoreal loop validation](./pick_from_top_cube_loop_validation10_contact_sheet.png)
-
 Procedural versus HDRI/PBR assets:
 
 ![SO101 procedural versus HDRI PBR](./procedural_vs_hdri_pbr.png)
@@ -230,23 +225,13 @@ For training/evaluation configs that need LeRobot parquet roots, use the
 strict parquet-image replacement builder. It copies the source LeRobot root,
 preserves state/action/timestamp/task metadata, replaces the embedded
 `observation.images.camera1/camera2/camera3` bytes with RGB photoreal PNGs,
-and writes `photoreal_lerobot_manifest.json`:
+and writes `photoreal_lerobot_manifest.json`.
 
-```bash
-PYTHONPATH=src:.:scripts .venv/bin/python scripts/build_so101_photoreal_lerobot_dataset.py \
-  --source-dataset-root _workspace/so101_lerobot/pick_from_top_cube_loop_validation10_ego_wrist_256_seed113500 \
-  --rendered-dir _workspace/so101_photoreal_renders/pick_from_top_cube_loop_validation10_ego_wrist_256_seed113500_samples256_nodenoise \
-  --output-root _workspace/so101_photoreal_lerobot/pick_from_top_cube_loop_validation10_ego_wrist_256_seed113500_samples256_nodenoise \
-  --repo-id physical-ai-agent/so101-pick-from-top-cube-photoreal-loop-validation10-ego-wrist-256 \
-  --overwrite
-```
-
-The generated local loop-validation root verified in this PR is:
-
-- `_workspace/so101_photoreal_lerobot/pick_from_top_cube_loop_validation10_ego_wrist_256_seed113500_samples256_nodenoise`
-- 10 episodes, 718 frames total
-- 718 RGB image rows for each of `camera1`, `camera2`, and `camera3`
-- opens as `LeRobotDataset` with all policy images shaped `(3, 256, 256)`
+The old local `pick_from_top_cube_loop_validation10` photoreal derivative is
+intentionally not registered as a training dataset. Its source prompts used the
+legacy `visible ... cube` wording and visual review showed the rendered final
+frame could disagree with the source success metadata, so the active
+photoreal training lane is the full `pick_cube` train/eval pair below.
 
 For `pick_cube_train` and `pick_cube_val`, do not keep the legacy generic
 prompt from the source parquet:

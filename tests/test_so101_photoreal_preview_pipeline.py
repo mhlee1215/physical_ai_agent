@@ -266,25 +266,6 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
             with Image.open(BytesIO(converted[key][0]["bytes"])) as image:
                 self.assertEqual(image.mode, "RGB")
 
-    def test_pick_from_top_cube_photoreal_config_covers_train_eval_and_loop(self) -> None:
-        config = json.loads(
-            Path("configs/so101/training_datasets/pick_from_top_cube_photoreal.json").read_text(encoding="utf-8")
-        )
-
-        self.assertEqual(config["task"], "pick_from_top_cube")
-        self.assertEqual(config["camera_contract"]["observation.images.camera1"], "egocentric_cam")
-        self.assertEqual(config["camera_contract"]["observation.images.camera2"], "wrist_cam")
-        self.assertEqual(config["train_dataset"]["dataset_format"], "so101_photoreal_lerobot_v1")
-        self.assertEqual(config["validation_dataset"]["dataset_format"], "so101_photoreal_lerobot_v1")
-        self.assertEqual(config["loop_validation_dataset"]["dataset_format"], "so101_photoreal_lerobot_v1")
-        self.assertEqual(config["train_dataset"]["expected_frames"], 7179)
-        self.assertEqual(config["validation_dataset"]["expected_frames"], 1793)
-        self.assertEqual(config["loop_validation_dataset"]["expected_frames"], 718)
-        self.assertEqual(
-            config["closed_loop"]["test_cases"][0]["start_dataset"]["root"],
-            config["loop_validation_dataset"]["root"],
-        )
-
     def test_pick_cube_photoreal_config_covers_train_and_eval(self) -> None:
         config = json.loads(Path("configs/so101/training_datasets/pick_photoreal.json").read_text(encoding="utf-8"))
 

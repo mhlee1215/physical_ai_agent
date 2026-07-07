@@ -2113,7 +2113,6 @@ class SO101SmolVLAPipelineTest(TestCase):
             Path("configs/so101/training_datasets/pick_place.json"),
             Path("configs/so101/training_datasets/move_over_cube.json"),
             Path("configs/so101/training_datasets/pick_from_top_cube.json"),
-            Path("configs/so101/training_datasets/pick_from_top_cube_photoreal.json"),
             Path("configs/so101/training_datasets/all_hf_train_pick_place_closed_loop.json"),
             Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
         ):
@@ -2160,7 +2159,6 @@ class SO101SmolVLAPipelineTest(TestCase):
             Path("configs/so101/training_datasets/pick_place.json"),
             Path("configs/so101/training_datasets/move_over_cube.json"),
             Path("configs/so101/training_datasets/pick_from_top_cube.json"),
-            Path("configs/so101/training_datasets/pick_from_top_cube_photoreal.json"),
             Path("configs/so101/training_datasets/all_hf_train_pick_place_closed_loop.json"),
         ):
             with self.subTest(config=str(config_path)):
