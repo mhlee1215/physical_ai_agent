@@ -25,6 +25,7 @@ OFFICIAL_280_PI_URDF_RELATIVE_PATH = Path(
     "mycobot_description/urdf/mycobot_280_pi/mycobot_280_pi.urdf"
 )
 OFFICIAL_280_PI_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/mycobot_280_pi")
+OFFICIAL_280_PI_BAKED_VISUAL_SCENE_MESHES = frozenset({"G_base", "joint1_pi"})
 OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH = Path(
     "mycobot_description/urdf/adaptive_gripper/mycobot_adaptive_gripper.urdf"
 )
@@ -1596,7 +1597,7 @@ def _build_official_280_pi_adaptive_nexus_scene_model(
         _convert_collada_mesh_to_obj(
             dae_path,
             obj_dir / f"{name}.obj",
-            bake_visual_scene=False,
+            bake_visual_scene=name in OFFICIAL_280_PI_BAKED_VISUAL_SCENE_MESHES,
         )
 
     root = ET.Element("mujoco", {"model": "official_280_pi_adaptive_gripper_nexus"})
