@@ -196,7 +196,7 @@ def _apply_visibility(env: nexus.MyCobotNexusEnv, *, show_cube: bool) -> None:
         elif name == nexus.TASK_CUBE_GEOM:
             env.model.geom_rgba[geom_id, :] = [0.96, 0.18, 0.08, 0.68 if show_cube else 0.0]
         elif name.startswith("debug_connector_"):
-            env.model.geom_rgba[geom_id, 3] = 0.0
+            env.model.geom_rgba[geom_id, :] = [0.95, 0.18, 0.05, 0.65]
         elif is_mesh:
             env.model.geom_rgba[geom_id, :] = [0.86, 0.82, 0.64, 0.96]
         else:
@@ -212,7 +212,7 @@ def _draw_header(frame: np.ndarray, state: str, view: str, description: str, com
 
 
 def _draw_legend(frame: np.ndarray, *, show_cube: bool) -> None:
-    entries = [("arm/body", None), ("gripper base", "gripper_base_visual_0"), ("distal fingers", "gripper_left1_visual_0"), ("support links", "gripper_left2_visual_0"), ("robot-left pad", "left_finger_pad"), ("robot-right pad", "right_finger_pad")]
+    entries = [("arm/body", None), ("kinematic connector", "connector"), ("gripper base", "gripper_base_visual_0"), ("distal fingers", "gripper_left1_visual_0"), ("support links", "gripper_left2_visual_0"), ("robot-left pad", "left_finger_pad"), ("robot-right pad", "right_finger_pad")]
     if show_cube:
         entries.append(("small audit cube", "cube"))
     x0, y0 = 18, 144
@@ -224,6 +224,8 @@ def _draw_legend(frame: np.ndarray, *, show_cube: bool) -> None:
             rgb = (0.86, 0.82, 0.64)
         elif key == "cube":
             rgb = (0.96, 0.18, 0.08)
+        elif key == "connector":
+            rgb = (0.95, 0.18, 0.05)
         else:
             rgb = GEOM_COLORS.get(key, (1, 1, 1, 1))[:3]
         color = tuple(int(255 * channel) for channel in rgb)

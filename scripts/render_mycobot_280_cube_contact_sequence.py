@@ -43,7 +43,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    visibility._install_isolated_scene_override()
     env = nexus.MyCobotNexusEnv(
         nexus.MyCobotNexusConfig(
             asset_root=args.asset_root,
@@ -101,6 +100,15 @@ def main() -> None:
         env.close()
 
 
+def _restore_cube_collision(env: nexus.MyCobotNexusEnv) -> None:
+    geom_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, nexus.TASK_CUBE_GEOM)
+    if geom_id < 0:
+        raise RuntimeError(f"missing geom: {nexus.TASK_CUBE_GEOM}")
+    env.model.geom_contype[geom_id] = 1
+    env.model.geom_conaffinity[geom_id] = 1
+    env.model.geom_friction[geom_id, :3] = [60.0, 6.0, 6.0]
+
+
 def _size_audit_cube(env: nexus.MyCobotNexusEnv, *, half_size: float) -> None:
     geom_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, nexus.TASK_CUBE_GEOM)
     if geom_id < 0:
@@ -143,7 +151,23 @@ def _contact_metrics(env: nexus.MyCobotNexusEnv, *, cube_half: float) -> dict[st
         regime = "touching"
     else:
         regime = "contact_response"
-    return {"pad_center_mm": center_distance * 1000.0, "jaw_gap_mm": jaw_surface_gap * 1000.0, "cube_width_mm": cube_width * 1000.0, "surface_clearance_mm": clearance * 1000.0, "regime": regime}
+    contacts = _pad_cube_contact_count(env)
+    return {"pad_center_mm": center_distance * 1000.0, "jaw_gap_mm": jaw_surface_gap * 1000.0, "cube_width_mm": cube_width * 1000.0, "surface_clearance_mm": clearance * 1000.0, "pad_cube_contacts": contacts, "regime": regime}
+
+
+def _pad_cube_contact_count(env: nexus.MyCobotNexusEnv) -> int:
+    cube_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, nexus.TASK_CUBE_GEOM)
+    pad_ids = {
+        env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, ROBOT_LEFT_PAD),
+        env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, ROBOT_RIGHT_PAD),
+    }
+    count = 0
+    for index in range(int(env.data.ncon)):
+        contact = env.data.contact[index]
+        pair = {int(contact.geom1), int(contact.geom2)}
+        if cube_id in pair and pair.intersection(pad_ids):
+            count += 1
+    return count
 
 
 def _quat_align_x_to_vector(vector: np.ndarray) -> list[float]:
@@ -203,7 +227,7 @@ def _apply_visibility(env: nexus.MyCobotNexusEnv) -> None:
         elif name == nexus.TASK_CUBE_GEOM:
             env.model.geom_rgba[geom_id, :] = [0.96, 0.18, 0.08, 0.70]
         elif name.startswith("debug_connector_"):
-            env.model.geom_rgba[geom_id, 3] = 0.0
+            env.model.geom_rgba[geom_id, :] = [0.95, 0.18, 0.05, 0.72]
         elif is_mesh:
             env.model.geom_rgba[geom_id, :] = [0.86, 0.82, 0.64, 0.92]
         else:
@@ -214,8 +238,8 @@ def _draw_header(frame: np.ndarray, state: str, view: str, description: str, com
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 126), (255, 255, 255), -1)
     cv2.putText(frame, f"280 cube approach/contact | {state} | {view}", (18, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (20, 20, 20), 2, cv2.LINE_AA)
     cv2.putText(frame, description, (18, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"robot-left pad=green; robot-right pad=blue; camera view may flip screen left/right", (18, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (45, 45, 45), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"cmd={command:+.2f}; jaw gap={metrics['jaw_gap_mm']:.1f}mm; cube={metrics['cube_width_mm']:.1f}mm; clearance={metrics['surface_clearance_mm']:.1f}mm; {metrics['regime']}", (18, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 90, 0) if metrics['regime'] == 'clearance' else (0, 0, 190), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"robot-left pad=green; robot-right pad=blue; cube/pad collision and friction are enabled", (18, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (45, 45, 45), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"cmd={command:+.2f}; jaw gap={metrics['jaw_gap_mm']:.1f}mm; cube={metrics['cube_width_mm']:.1f}mm; clearance={metrics['surface_clearance_mm']:.1f}mm; contacts={metrics['pad_cube_contacts']}; {metrics['regime']}", (18, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 90, 0) if metrics['regime'] == 'clearance' else (0, 0, 190), 1, cv2.LINE_AA)
 
 
 def _draw_legend(frame: np.ndarray) -> None:
@@ -229,6 +253,8 @@ def _draw_legend(frame: np.ndarray) -> None:
             rgb = (0.86, 0.82, 0.64)
         elif key == "cube":
             rgb = (0.96, 0.18, 0.08)
+        elif key == "connector":
+            rgb = (0.95, 0.18, 0.05)
         else:
             rgb = GEOM_COLORS.get(key, (1, 1, 1, 1))[:3]
         color = tuple(int(255 * c) for c in rgb)
