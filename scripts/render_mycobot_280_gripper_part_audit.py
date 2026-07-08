@@ -42,14 +42,14 @@ LABELS = {
 
 GEOM_COLORS = {
     "gripper_base_visual_0": (1.0, 0.72, 0.05, 1.0),
-    "gripper_left1_visual_0": (0.0, 0.95, 0.12, 1.0),
+    "gripper_left1_visual_0": (0.72, 1.0, 0.56, 0.86),
     "gripper_left2_visual_0": (0.45, 1.0, 0.25, 1.0),
     "gripper_left3_visual_0": (0.0, 0.62, 0.0, 1.0),
-    "gripper_right1_visual_0": (0.06, 0.28, 1.0, 1.0),
+    "gripper_right1_visual_0": (0.50, 0.68, 1.0, 0.86),
     "gripper_right2_visual_0": (0.2, 0.72, 1.0, 1.0),
     "gripper_right3_visual_0": (0.0, 0.08, 0.9, 1.0),
-    "left_finger_pad": (0.0, 1.0, 0.0, 0.78),
-    "right_finger_pad": (0.0, 0.25, 1.0, 0.78),
+    "left_finger_pad": (0.01, 0.12, 0.02, 1.0),
+    "right_finger_pad": (0.01, 0.03, 0.18, 1.0),
 }
 
 BODY_NAMES = (

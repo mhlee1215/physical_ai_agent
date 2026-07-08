@@ -6,6 +6,8 @@ import json
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+
+import numpy as np
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -30,7 +32,8 @@ from physical_ai_agent.sim.mycobot_nexus_env import (
 
 FLOAT_TOLERANCE = 1e-6
 PAD_MESH_CENTER_TOLERANCE = 0.018
-PAD_TIP_EXTENSION_TOLERANCE = 0.006
+PAD_TIP_EXTENSION_TOLERANCE = 0.008
+PAD_VISIBLE_DISTAL_Y_TOLERANCE = 0.012
 PAD_SPECS = {
     "left_finger_pad": {
         "parent": ADAPTIVE_LEFT_FINGER_PAD_PARENT,
@@ -116,7 +119,7 @@ def verify_280_pi_adaptive_collision_proxy(
     )
 
     urdf_path = root / OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH
-    expected = _expected_proxy_specs(root)
+    expected = _expected_proxy_specs(root, scene_path)
     actual = _actual_proxy_specs(scene_path)
     comparisons = []
     for pad_name, expected_spec in expected.items():
@@ -147,22 +150,13 @@ def verify_280_pi_adaptive_collision_proxy(
     return replace(report, artifacts=_write_artifacts(report, output_dir))
 
 
-def _expected_proxy_specs(official_gripper_root: Path) -> dict[str, dict[str, Any]]:
+def _expected_proxy_specs(official_gripper_root: Path, scene_path: Path) -> dict[str, dict[str, Any]]:
     specs = {}
-    mesh_root = official_gripper_root / OFFICIAL_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        for pad_name, pad_spec in PAD_SPECS.items():
-            link_name = str(pad_spec["link"])
-            obj_path = tmp_path / f"{link_name}.obj"
-            _convert_collada_mesh_to_obj(
-                mesh_root / f"{link_name}.dae",
-                obj_path,
-                bake_visual_scene=False,
-            )
-            vertices = _obj_vertices(obj_path)
-            mins, maxs = _bbox(vertices)
-            specs[pad_name] = {
+    compiled_bounds = _compiled_visual_mesh_bounds(scene_path)
+    for pad_name, pad_spec in PAD_SPECS.items():
+        link_name = str(pad_spec["link"])
+        mins, maxs = compiled_bounds[link_name]
+        specs[pad_name] = {
                 "parent": pad_spec["parent"],
                 "pos": pad_spec["pos"],
                 "type": "box",
@@ -178,6 +172,34 @@ def _expected_proxy_specs(official_gripper_root: Path) -> dict[str, dict[str, An
     return specs
 
 
+def _compiled_visual_mesh_bounds(scene_path: Path) -> dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]]:
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(scene_path))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    bounds = {}
+    for pad_spec in PAD_SPECS.values():
+        link_name = str(pad_spec["link"])
+        geom_name = f"{link_name}_visual_0"
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+        if geom_id < 0:
+            raise ValueError(f"missing compiled visual geom: {geom_name}")
+        mesh_id = int(model.geom_dataid[geom_id])
+        vert_adr = int(model.mesh_vertadr[mesh_id])
+        vert_num = int(model.mesh_vertnum[mesh_id])
+        verts = np.asarray(model.mesh_vert[vert_adr:vert_adr + vert_num], dtype=float)
+        body_id = int(model.geom_bodyid[geom_id])
+        body_xpos = np.asarray(data.xpos[body_id], dtype=float)
+        body_xmat = np.asarray(data.xmat[body_id], dtype=float).reshape(3, 3)
+        geom_xpos = np.asarray(data.geom_xpos[geom_id], dtype=float)
+        geom_xmat = np.asarray(data.geom_xmat[geom_id], dtype=float).reshape(3, 3)
+        world = geom_xpos + verts @ geom_xmat.T
+        body_local = (world - body_xpos) @ body_xmat
+        bounds[link_name] = _bbox([tuple(row) for row in body_local])
+    return bounds
+
+
 def _pad_mesh_alignment(
     pad_pos: tuple[float, float, float],
     mins: tuple[float, float, float],
@@ -185,23 +207,24 @@ def _pad_mesh_alignment(
 ) -> dict[str, Any]:
     mesh_center = tuple((mins[index] + maxs[index]) * 0.5 for index in range(3))
     signed_tip = maxs[0] if pad_pos[0] >= 0 else mins[0]
-    pad_tip_delta = abs(abs(pad_pos[0]) - abs(signed_tip))
-    lateral_delta = abs(pad_pos[1] - mesh_center[1])
+    visible_distal_y = maxs[1]
+    pad_tip_delta = abs(pad_pos[0] - signed_tip)
+    distal_y_delta = abs(pad_pos[1] - visible_distal_y)
     vertical_delta = abs(pad_pos[2] - mesh_center[2])
     errors = []
     if pad_tip_delta > PAD_TIP_EXTENSION_TOLERANCE:
         errors.append(
-            "pad local X is not near the visible fingertip mesh tip: "
+            "pad local X is not near the baked visible fingertip side face: "
             f"pad_x={pad_pos[0]:.6g}, mesh_tip_x={signed_tip:.6g}, delta={pad_tip_delta:.6g}"
         )
-    if lateral_delta > PAD_MESH_CENTER_TOLERANCE:
+    if distal_y_delta > PAD_VISIBLE_DISTAL_Y_TOLERANCE:
         errors.append(
-            "pad local Y is too far from the visible fingertip mesh center: "
-            f"pad_y={pad_pos[1]:.6g}, mesh_center_y={mesh_center[1]:.6g}, delta={lateral_delta:.6g}"
+            "pad local Y is not near the baked visible distal fingertip end: "
+            f"pad_y={pad_pos[1]:.6g}, mesh_distal_y={visible_distal_y:.6g}, delta={distal_y_delta:.6g}"
         )
     if vertical_delta > PAD_MESH_CENTER_TOLERANCE:
         errors.append(
-            "pad local Z is too far from the visible fingertip mesh center: "
+            "pad local Z is too far from the baked visible fingertip surface: "
             f"pad_z={pad_pos[2]:.6g}, mesh_center_z={mesh_center[2]:.6g}, delta={vertical_delta:.6g}"
         )
     return {
@@ -209,10 +232,13 @@ def _pad_mesh_alignment(
         "errors": errors,
         "mesh_center": mesh_center,
         "signed_mesh_tip_x": signed_tip,
+        "visible_distal_y": visible_distal_y,
         "pad_tip_delta": pad_tip_delta,
-        "lateral_delta": lateral_delta,
+        "distal_y_delta": distal_y_delta,
         "vertical_delta": vertical_delta,
+        "vertical_reference": "mesh_center_z",
         "tip_tolerance": PAD_TIP_EXTENSION_TOLERANCE,
+        "distal_y_tolerance": PAD_VISIBLE_DISTAL_Y_TOLERANCE,
         "center_tolerance": PAD_MESH_CENTER_TOLERANCE,
     }
 

@@ -198,7 +198,7 @@ def _apply_visibility(env: nexus.MyCobotNexusEnv, *, show_cube: bool, hide_gripp
         if name in GRIPPER_GEOMS:
             rgba = list(GEOM_COLORS.get(name, (0.85, 0.85, 0.85, 1.0)))
             if name in {"left_finger_pad", "right_finger_pad"}:
-                rgba[3] = 0.72
+                rgba[3] = 1.0
             elif name in {"gripper_left2_visual_0", "gripper_left3_visual_0", "gripper_right2_visual_0", "gripper_right3_visual_0"}:
                 rgba[3] = 0.78
             env.model.geom_rgba[geom_id, :] = rgba

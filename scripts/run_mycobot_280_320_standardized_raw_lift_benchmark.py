@@ -44,7 +44,7 @@ MODEL_SPECS = (
         "profile": nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
         "official_gripper_root_arg": "ros_root",
         "start_command": 1.0,
-        "contact_command": 0.7,
+        "contact_command": -0.15,
     },
     {
         "name": "320_m5_adaptive",

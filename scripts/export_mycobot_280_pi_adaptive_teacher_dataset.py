@@ -19,6 +19,12 @@ def main() -> None:
         model_profile=MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
         output_dir=Path("_workspace/mycobot_teacher_datasets/mycobot_280_pi_adaptive_gate8_10eps"),
         official_gripper_root=Path("_vendor/mycobot_ros"),
+        placement_gripper_command=1.0,
+        close_gripper_command=-0.15,
+        cube_half_size=0.0045,
+        pregrasp_steps=72,
+        close_steps=100,
+        lift_steps=140,
     )
     args = parser.parse_args()
     report = export_dataset(

@@ -143,9 +143,9 @@ ADAPTIVE_FINGER_PAD_CONDIM = 6
 # The 280 ROS1 adaptive-gripper visual meshes need baked Collada node transforms,
 # but the MuJoCo contact pads are attached in the joint/body frame that closes the
 # jaws in simulation. Keep these proxy pads on the contact-working fingertip path.
-ADAPTIVE_280_LEFT_FINGER_PAD_POS = (0.0275, 0.0, 0.00381)
-ADAPTIVE_280_RIGHT_FINGER_PAD_POS = (-0.03176, 0.0, 0.00390)
-ADAPTIVE_280_FINGER_PAD_SIZE = (0.003, 0.014, 0.006)
+ADAPTIVE_280_LEFT_FINGER_PAD_POS = (0.0198, 0.0413, -0.0082)
+ADAPTIVE_280_RIGHT_FINGER_PAD_POS = (-0.0210, 0.0416, -0.0082)
+ADAPTIVE_280_FINGER_PAD_SIZE = (0.001, 0.012, 0.008)
 ADAPTIVE_280_FINGER_PAD_FRICTION = ADAPTIVE_FINGER_PAD_FRICTION
 ADAPTIVE_GATE7_TABLE_ARM_QPOS = (
     -0.655675253325397,

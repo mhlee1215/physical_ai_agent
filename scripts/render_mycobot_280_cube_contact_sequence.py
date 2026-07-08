@@ -24,9 +24,9 @@ ROBOT_RIGHT_PAD = "right_finger_pad"
 AUDIT_CUBE_HALF_SIZE = 0.0045
 SEQUENCE = (
     ("aligned_open", 1.0, "cube aligned; jaws still open"),
-    ("near_touch", 0.8, "pads moving toward cube"),
-    ("grasp_contact", 0.7, "first compression/contact response"),
-    ("hard_contact", 0.0, "deep contact response / solver repulsion zone"),
+    ("near_touch", 0.00, "pads nearly touching cube"),
+    ("grasp_contact", -0.05, "first compression/contact response"),
+    ("hard_contact", -0.15, "visible contact compression / solver response zone"),
 )
 
 
@@ -237,7 +237,7 @@ def _apply_visibility(env: nexus.MyCobotNexusEnv, *, hide_gripper_base_shell: bo
         if name in GRIPPER_GEOMS:
             rgba = list(GEOM_COLORS.get(name, (0.85, 0.85, 0.85, 1.0)))
             if name in {ROBOT_LEFT_PAD, ROBOT_RIGHT_PAD}:
-                rgba[3] = 0.72
+                rgba[3] = 1.0
             env.model.geom_rgba[geom_id, :] = rgba
         elif name == nexus.TASK_CUBE_GEOM:
             env.model.geom_rgba[geom_id, :] = [0.96, 0.18, 0.08, 0.70]
