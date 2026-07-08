@@ -21,6 +21,31 @@ OFFICIAL_320_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/mycobot_320_m5_
 OFFICIAL_320_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH = Path(
     "mycobot_description/urdf/pro_adaptive_gripper"
 )
+OFFICIAL_280_PI_URDF_RELATIVE_PATH = Path(
+    "mycobot_description/urdf/mycobot_280_pi/mycobot_280_pi.urdf"
+)
+OFFICIAL_280_PI_MESH_RELATIVE_PATH = Path("mycobot_description/urdf/mycobot_280_pi")
+OFFICIAL_280_PI_BAKED_VISUAL_SCENE_MESHES = frozenset({"G_base", "joint1_pi"})
+# The ROS1 adaptive-gripper Collada files carry node transforms that materially
+# change the visible base/finger geometry. Bake them so the half-round base cowl
+# and external finger linkages keep the vendor-authored spatial relationship.
+OFFICIAL_ADAPTIVE_GRIPPER_BAKED_VISUAL_SCENE_MESHES = frozenset(
+    {
+        "gripper_base",
+        "gripper_left1",
+        "gripper_left2",
+        "gripper_left3",
+        "gripper_right1",
+        "gripper_right2",
+        "gripper_right3",
+    }
+)
+OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH = Path(
+    "mycobot_description/urdf/adaptive_gripper/mycobot_adaptive_gripper.urdf"
+)
+OFFICIAL_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH = Path(
+    "mycobot_description/urdf/adaptive_gripper"
+)
 OFFICIAL_GRIPPER_MESH_NAMES = [
     "gripper_base",
     "gripper_left",
@@ -44,6 +69,15 @@ OFFICIAL_320_LINK_NAMES = [
 ]
 OFFICIAL_320_ARM_LINK_NAMES = OFFICIAL_320_LINK_NAMES[:7]
 OFFICIAL_320_GRIPPER_LINK_NAMES = OFFICIAL_320_LINK_NAMES[7:]
+OFFICIAL_ADAPTIVE_GRIPPER_LINK_NAMES = [
+    "gripper_base",
+    "gripper_left1",
+    "gripper_left2",
+    "gripper_left3",
+    "gripper_right1",
+    "gripper_right2",
+    "gripper_right3",
+]
 MYCOBOT_MODEL_JOINT_NAMES = [
     "joint2_to_joint1",
     "joint3_to_joint2",
@@ -97,6 +131,7 @@ TCP_SITE = "mycobot_tcp_site"
 MODEL_PROFILE_280_JN = "280-jn"
 MODEL_PROFILE_320_GRIPPER = "320-m5-2022-gripper"
 MODEL_PROFILE_320_ADAPTIVE_GRIPPER = "320-m5-2022-adaptive-gripper"
+MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER = "280-pi-adaptive-gripper"
 ADAPTIVE_LEFT_FINGER_PAD_PARENT = "gripper_left1"
 ADAPTIVE_RIGHT_FINGER_PAD_PARENT = "gripper_right1"
 ADAPTIVE_LEFT_FINGER_PAD_POS = (0.00093, 0.04795, 0.00381)
@@ -105,6 +140,13 @@ ADAPTIVE_FINGER_PAD_SIZE = (0.014, 0.006, 0.006)
 ADAPTIVE_FINGER_PAD_EULER = (0.0, 0.0, 0.0)
 ADAPTIVE_FINGER_PAD_FRICTION = (80.0, 8.0, 8.0)
 ADAPTIVE_FINGER_PAD_CONDIM = 6
+# The 280 ROS1 adaptive-gripper visual meshes need baked Collada node transforms,
+# but the MuJoCo contact pads are attached in the joint/body frame that closes the
+# jaws in simulation. Keep these proxy pads on the contact-working fingertip path.
+ADAPTIVE_280_LEFT_FINGER_PAD_POS = (0.0198, 0.0413, -0.0082)
+ADAPTIVE_280_RIGHT_FINGER_PAD_POS = (-0.0210, 0.0416, -0.0082)
+ADAPTIVE_280_FINGER_PAD_SIZE = (0.001, 0.012, 0.008)
+ADAPTIVE_280_FINGER_PAD_FRICTION = ADAPTIVE_FINGER_PAD_FRICTION
 ADAPTIVE_GATE7_TABLE_ARM_QPOS = (
     -0.655675253325397,
     0.810882674174539,
@@ -121,6 +163,24 @@ ADAPTIVE_GATE8_LIFT_ARM_QPOS = (
     -1.3210836913320143,
     -0.6780218616382665,
 )
+ADAPTIVE_280_PI_GATE7_TABLE_ARM_QPOS = (
+    2.209046727154287,
+    1.7708220975518412,
+    0.4366852271155825,
+    -2.4021653896480166,
+    -0.7968371300189514,
+    0.387837875579959,
+)
+ADAPTIVE_280_PI_GATE8_LIFT_ARM_QPOS = (
+    2.209046727154287,
+    1.6908220975518411,
+    0.5866852271155825,
+    -2.1521653896480166,
+    -0.7968371300189514,
+    0.387837875579959,
+)
+ADAPTIVE_GATE7_CUBE_OFFSET = (0.0, 0.0, 0.0)
+ADAPTIVE_280_PI_GATE7_CUBE_OFFSET = (-0.006, -0.012, 0.0)
 
 
 @dataclass(frozen=True)
@@ -132,6 +192,7 @@ class MyCobotNexusConfig:
     width: int = 640
     height: int = 360
     control_alpha: float = 0.35
+    teacher_grasp_attachment_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -206,6 +267,7 @@ class MyCobotAdaptiveGraspLiftResult:
     frame_path: str
     report_path: str
     scene_path: str
+    teacher_attachment_enabled: bool
 
 
 class MyCobotNexusEnv:
@@ -234,7 +296,11 @@ class MyCobotNexusEnv:
         self.asset_root = config.asset_root.expanduser()
         self.work_dir = config.work_dir.expanduser()
         self.model_path = self.asset_root / MYCOBOT_MODEL_RELATIVE_PATH
-        if config.model_profile in {MODEL_PROFILE_320_GRIPPER, MODEL_PROFILE_320_ADAPTIVE_GRIPPER}:
+        if config.model_profile in {
+            MODEL_PROFILE_320_GRIPPER,
+            MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+        }:
             self.model_path = Path("")
         elif not self.model_path.exists():
             raise FileNotFoundError(
@@ -281,7 +347,10 @@ class MyCobotNexusEnv:
             OFFICIAL_320_GRIPPER_JOINT_NAMES,
         )
         self._uses_official_320_adaptive_gripper = (
-            config.model_profile == MODEL_PROFILE_320_ADAPTIVE_GRIPPER
+            config.model_profile in {
+                MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+                MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+            }
             and self._uses_official_320_gripper
         )
         gripper_joint_names = (
@@ -491,19 +560,32 @@ class MyCobotNexusEnv:
         }
 
     def _update_grasp_attachment(self, *, gripper: float) -> None:
-        if self._uses_official_320_gripper:
+        if (
+            self.config.model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER
+            and not self.config.teacher_grasp_attachment_enabled
+        ):
+            return
+        uses_280_teacher_attachment = (
+            self.config.model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER
+            and self.config.teacher_grasp_attachment_enabled
+        )
+        if self._uses_official_320_gripper and not uses_280_teacher_attachment:
             return
         cube = self._cube_position()
         tcp = self._tcp_position()
         if not self._grasp_attached:
             pad_midpoint = self._finger_pad_midpoint()
             pad_threshold = 0.14 if self._uses_official_320_gripper else 0.08
+            pad_contacts = self._gripper_cube_contact_pad_count()
             close_enough = (
                 _distance(cube, tcp) < 0.04
                 or _distance(cube, pad_midpoint) < pad_threshold
                 or self._gripper_cube_contacts() > 0
+                or pad_contacts >= 2
             )
-            if float(gripper) <= -0.5 and close_enough:
+            attach_gripper_threshold = -0.1 if uses_280_teacher_attachment else -0.5
+            verified_280_contact = not uses_280_teacher_attachment or pad_contacts >= 2
+            if float(gripper) <= attach_gripper_threshold and close_enough and verified_280_contact:
                 self._grasp_attached = True
         if not self._grasp_attached:
             return
@@ -834,6 +916,7 @@ def run_mycobot_adaptive_static_contact_smoke(
     output_dir: Path,
     asset_root: Path,
     official_gripper_root: Path,
+    model_profile: str = MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
     steps: int = 80,
     seed: int = 1,
     width: int = 640,
@@ -851,7 +934,7 @@ def run_mycobot_adaptive_static_contact_smoke(
             asset_root=asset_root,
             work_dir=output_dir,
             official_gripper_root=official_gripper_root,
-            model_profile=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            model_profile=model_profile,
             width=width,
             height=height,
         )
@@ -865,22 +948,24 @@ def run_mycobot_adaptive_static_contact_smoke(
     final_cube_position: list[float] = []
     try:
         env.reset(seed=seed)
-        for qpos_index, value in zip(env._qpos_indices, ADAPTIVE_GATE7_TABLE_ARM_QPOS, strict=True):
+        gate7_arm_qpos = _adaptive_gate7_arm_qpos(model_profile)
+        for qpos_index, value in zip(env._qpos_indices, gate7_arm_qpos, strict=True):
             env.data.qpos[qpos_index] = float(value)
         if env._uses_official_320_gripper:
             for actuator_index, value in zip(
                 env._arm_actuator_indices,
-                ADAPTIVE_GATE7_TABLE_ARM_QPOS,
+                gate7_arm_qpos,
                 strict=True,
             ):
                 env.data.ctrl[actuator_index] = float(value)
         env._set_gripper(command=placement_gripper_command)
         env._mujoco.mj_forward(env.model, env.data)
         pad_midpoint = env._finger_pad_midpoint()
+        cube_offset = _adaptive_gate7_cube_offset(model_profile)
         initial_cube_position = [
-            float(pad_midpoint[0]),
-            float(pad_midpoint[1]),
-            float(TASK_CUBE_POS[2]),
+            float(pad_midpoint[0] + cube_offset[0]),
+            float(pad_midpoint[1] + cube_offset[1]),
+            float(TASK_CUBE_POS[2] + cube_offset[2]),
         ]
         for axis, value in enumerate(initial_cube_position):
             env.data.qpos[env._cube_freejoint_qpos_index + axis] = float(value)
@@ -889,14 +974,19 @@ def run_mycobot_adaptive_static_contact_smoke(
         env._cube_initial_pos = list(initial_cube_position)
         env._mujoco.mj_forward(env.model, env.data)
 
-        arm_target = list(ADAPTIVE_GATE7_TABLE_ARM_QPOS)
+        arm_target = list(gate7_arm_qpos)
+        hold_arm_pose_each_step = model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER
         denominator = max(steps - 1, 1)
         for step in range(steps):
             alpha = step / denominator
             gripper = placement_gripper_command + alpha * (
                 final_gripper_command - placement_gripper_command
             )
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             obs, reward, terminated, truncated, info = env.step([*arm_target, gripper])
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             contacts = int(info["gripper_cube_contacts"])
             contact_pads = int(info["gripper_cube_contact_pads"])
             max_contacts = max(max_contacts, contacts)
@@ -956,6 +1046,7 @@ def run_mycobot_adaptive_grasp_lift_smoke(
     output_dir: Path,
     asset_root: Path,
     official_gripper_root: Path,
+    model_profile: str = MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
     seed: int = 1,
     width: int = 640,
     height: int = 480,
@@ -967,6 +1058,7 @@ def run_mycobot_adaptive_grasp_lift_smoke(
     required_close_sustained_steps: int = 15,
     required_lift_sustained_steps: int = 30,
     required_final_lift: float = 0.025,
+    teacher_attachment_enabled: bool = True,
 ) -> MyCobotAdaptiveGraspLiftResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     trace_path = output_dir / "mycobot_adaptive_grasp_lift_trace.jsonl"
@@ -977,9 +1069,10 @@ def run_mycobot_adaptive_grasp_lift_smoke(
             asset_root=asset_root,
             work_dir=output_dir,
             official_gripper_root=official_gripper_root,
-            model_profile=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            model_profile=model_profile,
             width=width,
             height=height,
+            teacher_grasp_attachment_enabled=teacher_attachment_enabled,
         )
     )
     records: list[dict[str, Any]] = []
@@ -987,14 +1080,17 @@ def run_mycobot_adaptive_grasp_lift_smoke(
     final_cube_position: list[float] = []
     try:
         env.reset(seed=seed)
-        _set_adaptive_gate_arm_pose(env, ADAPTIVE_GATE7_TABLE_ARM_QPOS)
+        gate7_arm_qpos = _adaptive_gate7_arm_qpos(model_profile)
+        gate8_lift_arm_qpos = _adaptive_gate8_lift_arm_qpos(model_profile)
+        _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
         env._set_gripper(command=placement_gripper_command)
         env._mujoco.mj_forward(env.model, env.data)
         pad_midpoint = env._finger_pad_midpoint()
+        cube_offset = _adaptive_gate7_cube_offset(model_profile)
         initial_cube_position = [
-            float(pad_midpoint[0]),
-            float(pad_midpoint[1]),
-            float(TASK_CUBE_POS[2]),
+            float(pad_midpoint[0] + cube_offset[0]),
+            float(pad_midpoint[1] + cube_offset[1]),
+            float(TASK_CUBE_POS[2] + cube_offset[2]),
         ]
         for axis, value in enumerate(initial_cube_position):
             env.data.qpos[env._cube_freejoint_qpos_index + axis] = float(value)
@@ -1004,10 +1100,15 @@ def run_mycobot_adaptive_grasp_lift_smoke(
         env._mujoco.mj_forward(env.model, env.data)
 
         step_index = 0
+        hold_arm_pose_each_step = model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER
         for _ in range(pregrasp_steps):
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             obs, reward, terminated, truncated, info = env.step(
-                [*ADAPTIVE_GATE7_TABLE_ARM_QPOS, placement_gripper_command]
+                [*gate7_arm_qpos, placement_gripper_command]
             )
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             records.append(_phase_record("pregrasp", step_index, obs, reward, terminated, truncated, info))
             step_index += 1
         close_denominator = max(close_steps - 1, 1)
@@ -1016,20 +1117,28 @@ def run_mycobot_adaptive_grasp_lift_smoke(
             gripper = placement_gripper_command + alpha * (
                 close_gripper_command - placement_gripper_command
             )
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             obs, reward, terminated, truncated, info = env.step(
-                [*ADAPTIVE_GATE7_TABLE_ARM_QPOS, gripper]
+                [*gate7_arm_qpos, gripper]
             )
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, gate7_arm_qpos)
             records.append(_phase_record("close", step_index, obs, reward, terminated, truncated, info))
             step_index += 1
         lift_denominator = max(lift_steps - 1, 1)
         for step in range(lift_steps):
             alpha = _smoothstep(step / lift_denominator)
             arm = _lerp_vector(
-                list(ADAPTIVE_GATE7_TABLE_ARM_QPOS),
-                list(ADAPTIVE_GATE8_LIFT_ARM_QPOS),
+                list(gate7_arm_qpos),
+                list(gate8_lift_arm_qpos),
                 alpha,
             )
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, tuple(arm))
             obs, reward, terminated, truncated, info = env.step([*arm, close_gripper_command])
+            if hold_arm_pose_each_step:
+                _set_adaptive_gate_arm_pose(env, tuple(arm))
             records.append(_phase_record("lift", step_index, obs, reward, terminated, truncated, info))
             step_index += 1
         _write_bmp(frame_path, env.render())
@@ -1081,14 +1190,34 @@ def run_mycobot_adaptive_grasp_lift_smoke(
         frame_path=str(frame_path),
         report_path=str(report_path),
         scene_path=scene_path,
+        teacher_attachment_enabled=bool(teacher_attachment_enabled),
     )
     report_path.write_text(json.dumps(asdict(result), indent=2, sort_keys=True), encoding="utf-8")
     return result
 
 
+def _adaptive_gate7_arm_qpos(model_profile: str) -> tuple[float, ...]:
+    if model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER:
+        return ADAPTIVE_280_PI_GATE7_TABLE_ARM_QPOS
+    return ADAPTIVE_GATE7_TABLE_ARM_QPOS
+
+
+def _adaptive_gate8_lift_arm_qpos(model_profile: str) -> tuple[float, ...]:
+    if model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER:
+        return ADAPTIVE_280_PI_GATE8_LIFT_ARM_QPOS
+    return ADAPTIVE_GATE8_LIFT_ARM_QPOS
+
+
+def _adaptive_gate7_cube_offset(model_profile: str) -> tuple[float, float, float]:
+    if model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER:
+        return ADAPTIVE_280_PI_GATE7_CUBE_OFFSET
+    return ADAPTIVE_GATE7_CUBE_OFFSET
+
+
 def _set_adaptive_gate_arm_pose(env: MyCobotNexusEnv, qpos: tuple[float, ...]) -> None:
-    for qpos_index, value in zip(env._qpos_indices, qpos, strict=True):
+    for qpos_index, dof_index, value in zip(env._qpos_indices, env._dof_indices, qpos, strict=True):
         env.data.qpos[qpos_index] = float(value)
+        env.data.qvel[dof_index] = 0.0
     if env._uses_official_320_gripper:
         for actuator_index, value in zip(env._arm_actuator_indices, qpos, strict=True):
             env.data.ctrl[actuator_index] = float(value)
@@ -1135,6 +1264,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             MODEL_PROFILE_280_JN,
             MODEL_PROFILE_320_GRIPPER,
             MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+            MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
         ],
         "asset_source": "https://github.com/elephantrobotics/mycobot_mujoco",
         "model_relative_path": str(MYCOBOT_MODEL_RELATIVE_PATH),
@@ -1147,6 +1277,7 @@ def mycobot_nexus_contract() -> dict[str, Any]:
             "official_parallel_gripper",
             "official_320_m5_2022_gripper",
             "official_320_m5_2022_adaptive_gripper",
+            "official_280_pi_adaptive_gripper",
             "official_320_m5_2022_friction_contact_gripper",
             "synthetic_parallel_gripper_fallback",
             "teacher_grasp_attachment_proxy",
@@ -1160,14 +1291,18 @@ def mycobot_nexus_contract() -> dict[str, Any]:
         "official_320_m5_2022_adaptive_gripper_meshes": str(
             OFFICIAL_320_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH
         ),
+        "official_280_pi_urdf": str(OFFICIAL_280_PI_URDF_RELATIVE_PATH),
+        "official_280_pi_meshes": str(OFFICIAL_280_PI_MESH_RELATIVE_PATH),
+        "official_adaptive_gripper_urdf": str(OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH),
+        "official_adaptive_gripper_meshes": str(OFFICIAL_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH),
         "real_robot_execution": "disabled",
         "poc_boundary": (
             "Kinematic qpos-target MuJoCo env. It steps a real myCobot model in a "
-            "Nexus-style cube scene. The preferred gripper path uses official "
+            "Nexus-style cube scene. The preferred legacy gripper path uses official "
             "mycobot_ros 280 JN parallel-gripper visual meshes with transparent "
-            "contact pads. The 320 M5 2022 profile uses the official 320 arm "
-            "URDF plus a functional friction-contact gripper at the official "
-            "flange; its grasp-lift success requires both finger pads to contact "
+            "contact pads. The 320 M5 2022 and 280 Pi adaptive profiles use official "
+            "arm/adaptive-gripper URDF sources plus functional friction-contact "
+            "finger pads; grasp-lift success requires both finger pads to contact "
             "the cube without teacher attachment."
         ),
     }
@@ -1224,6 +1359,12 @@ def build_mycobot_nexus_scene_model(
             scene_path=scene_path,
             official_gripper_root=official_gripper_root,
             model_profile=model_profile,
+        )
+        return
+    if model_profile == MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER:
+        _build_official_280_pi_adaptive_nexus_scene_model(
+            scene_path=scene_path,
+            official_gripper_root=official_gripper_root,
         )
         return
     if model_profile != MODEL_PROFILE_280_JN:
@@ -1417,13 +1558,206 @@ def _build_official_320_nexus_scene_model(
     for node in _nexus_scene_nodes():
         worldbody.append(node)
     base = ET.SubElement(worldbody, "body", {"name": "base", "pos": "0 0 0"})
-    _add_urdf_visual_geoms(base, "base", link_visuals)
-    _append_urdf_children(base, "base", children_by_parent, link_visuals)
+    _add_urdf_visual_geoms(base, "base", link_visuals, mesh_prefix="official_320")
+    _append_urdf_children(
+        base,
+        "base",
+        children_by_parent,
+        link_visuals,
+        mesh_prefix="official_320",
+    )
     _add_320_official_gripper_contact_pads(base)
     _add_320_position_actuators(root)
 
     scene_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(scene_path, encoding="utf-8", xml_declaration=True)
+
+
+def _build_official_280_pi_adaptive_nexus_scene_model(
+    *,
+    scene_path: Path,
+    official_gripper_root: Path | None,
+) -> None:
+    if official_gripper_root is None:
+        raise FileNotFoundError(
+            "official myCobot ROS root is required for model_profile="
+            f"{MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER}"
+        )
+    ros_root = official_gripper_root.expanduser()
+    arm_urdf_path = ros_root / OFFICIAL_280_PI_URDF_RELATIVE_PATH
+    gripper_urdf_path = ros_root / OFFICIAL_ADAPTIVE_GRIPPER_URDF_RELATIVE_PATH
+    arm_mesh_root = ros_root / OFFICIAL_280_PI_MESH_RELATIVE_PATH
+    gripper_mesh_root = ros_root / OFFICIAL_ADAPTIVE_GRIPPER_MESH_RELATIVE_PATH
+    if not arm_urdf_path.exists():
+        raise FileNotFoundError(f"missing official 280 Pi URDF: {arm_urdf_path}")
+    if not gripper_urdf_path.exists():
+        raise FileNotFoundError(f"missing official adaptive gripper URDF: {gripper_urdf_path}")
+
+    arm_urdf = ET.parse(arm_urdf_path).getroot()
+    gripper_urdf = ET.parse(gripper_urdf_path).getroot()
+    urdf = _combined_280_pi_adaptive_urdf(arm_urdf, gripper_urdf)
+    link_visuals = _urdf_link_visuals(urdf)
+    joints = _urdf_joints(urdf)
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for joint in joints:
+        children_by_parent.setdefault(str(joint["parent"]), []).append(joint)
+
+    mesh_names = sorted({visual["mesh"] for visuals in link_visuals.values() for visual in visuals})
+    obj_dir = scene_path.parent / "official_280_pi_adaptive_meshes"
+    obj_dir.mkdir(parents=True, exist_ok=True)
+    for name in mesh_names:
+        dae_path = _find_required_mesh(name, (arm_mesh_root, gripper_mesh_root))
+        _convert_collada_mesh_to_obj(
+            dae_path,
+            obj_dir / f"{name}.obj",
+            bake_visual_scene=(
+                name in OFFICIAL_280_PI_BAKED_VISUAL_SCENE_MESHES
+                or name in OFFICIAL_ADAPTIVE_GRIPPER_BAKED_VISUAL_SCENE_MESHES
+            ),
+        )
+
+    root = ET.Element("mujoco", {"model": "official_280_pi_adaptive_gripper_nexus"})
+    ET.SubElement(root, "compiler", {"angle": "radian", "eulerseq": "XYZ"})
+    ET.SubElement(
+        root,
+        "option",
+        {
+            "timestep": "0.001",
+            "cone": "elliptic",
+            "impratio": "100",
+            "iterations": "120",
+            "ls_iterations": "40",
+        },
+    )
+    asset = ET.SubElement(root, "asset")
+    ET.SubElement(
+        asset,
+        "texture",
+        {
+            "name": "nexus_skybox",
+            "type": "skybox",
+            "builtin": "gradient",
+            "rgb1": "0.78 0.82 0.86",
+            "rgb2": "0.96 0.97 0.96",
+            "width": "256",
+            "height": "256",
+        },
+    )
+    _add_material(asset, "nexus_floor", "0.78 0.80 0.77 1", specular="0.12")
+    _add_material(asset, "nexus_mat", "0.37 0.43 0.45 1", specular="0.08")
+    _add_material(asset, "task_cube", "0.92 0.24 0.15 1", specular="0.22")
+    for name in mesh_names:
+        ET.SubElement(
+            asset,
+            "mesh",
+            {"name": f"official_280pi_{name}", "file": str((obj_dir / f"{name}.obj").resolve())},
+        )
+
+    visual = ET.SubElement(root, "visual")
+    ET.SubElement(
+        visual,
+        "headlight",
+        {
+            "ambient": "0.36 0.36 0.34",
+            "diffuse": "0.76 0.74 0.68",
+            "specular": "0.12 0.12 0.12",
+        },
+    )
+    ET.SubElement(visual, "map", {"znear": "0.01", "zfar": "10"})
+    ET.SubElement(visual, "global", {"offwidth": "960", "offheight": "720"})
+
+    root_link = "base" if "base" in link_visuals else _first_urdf_link_name(urdf)
+    worldbody = ET.SubElement(root, "worldbody")
+    for node in _nexus_scene_nodes():
+        worldbody.append(node)
+    base = ET.SubElement(worldbody, "body", {"name": root_link, "pos": "0 0 0"})
+    _add_urdf_visual_geoms(base, root_link, link_visuals, mesh_prefix="official_280pi")
+    _append_urdf_children(
+        base,
+        root_link,
+        children_by_parent,
+        link_visuals,
+        mesh_prefix="official_280pi",
+    )
+    _add_320_official_gripper_contact_pads(
+        base,
+        left_pos=ADAPTIVE_280_LEFT_FINGER_PAD_POS,
+        right_pos=ADAPTIVE_280_RIGHT_FINGER_PAD_POS,
+        pad_size=ADAPTIVE_280_FINGER_PAD_SIZE,
+        friction=ADAPTIVE_280_FINGER_PAD_FRICTION,
+        solref="0.004 1",
+        solimp="0.9 0.99 0.001",
+        mass="0.005",
+    )
+    _add_280_pi_position_actuators(root)
+
+    scene_path.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(root).write(scene_path, encoding="utf-8", xml_declaration=True)
+
+
+def _combined_280_pi_adaptive_urdf(arm_urdf: ET.Element, gripper_urdf: ET.Element) -> ET.Element:
+    combined = ET.Element("robot", {"name": "mycobot_280_pi_adaptive_gripper"})
+    for source in (arm_urdf, gripper_urdf):
+        for child in source:
+            if child.tag in {"link", "joint"}:
+                combined.append(ET.fromstring(ET.tostring(child, encoding="unicode")))
+    parent_link = _preferred_existing_link(arm_urdf, ("joint6_flange", "link6", "joint6"))
+    child_link = _preferred_existing_link(gripper_urdf, ("gripper_base",))
+    joint = ET.SubElement(combined, "joint", {"name": "joint6_to_adaptive_gripper_base", "type": "fixed"})
+    ET.SubElement(joint, "parent", {"link": parent_link})
+    ET.SubElement(joint, "child", {"link": child_link})
+    ET.SubElement(joint, "origin", {"xyz": "0 -0.007 0.056", "rpy": "1.5708 0 0"})
+    return combined
+
+
+def _preferred_existing_link(urdf: ET.Element, preferred: tuple[str, ...]) -> str:
+    names = [link.attrib["name"] for link in urdf.findall("link") if "name" in link.attrib]
+    for name in preferred:
+        if name in names:
+            return name
+    if not names:
+        raise ValueError("URDF has no links")
+    return names[-1]
+
+
+def _first_urdf_link_name(urdf: ET.Element) -> str:
+    link = urdf.find("link")
+    if link is None or "name" not in link.attrib:
+        raise ValueError("URDF has no named root link")
+    return link.attrib["name"]
+
+
+def _find_required_mesh(name: str, mesh_roots: tuple[Path, ...]) -> Path:
+    for root in mesh_roots:
+        candidate = root / f"{name}.dae"
+        if candidate.exists():
+            return candidate
+    roots = ", ".join(str(root) for root in mesh_roots)
+    raise FileNotFoundError(f"missing official mesh {name}.dae under: {roots}")
+
+
+def _add_280_pi_position_actuators(root: ET.Element) -> None:
+    actuator = ET.SubElement(root, "actuator")
+    arm_ranges = {
+        "joint2_to_joint1": "-2.93 2.93",
+        "joint3_to_joint2": "-2.35 2.35",
+        "joint4_to_joint3": "-2.53 2.53",
+        "joint5_to_joint4": "-2.53 2.53",
+        "joint6_to_joint5": "-2.93 2.93",
+        "joint6output_to_joint6": "-3.14 3.14",
+    }
+    for joint_name in MYCOBOT_320_MODEL_JOINT_NAMES:
+        ET.SubElement(
+            actuator,
+            "position",
+            {
+                "name": f"act_{joint_name}",
+                "joint": joint_name,
+                "kp": "60",
+                "ctrlrange": arm_ranges[joint_name],
+                "ctrllimited": "true",
+            },
+        )
 
 
 def _add_320_position_actuators(root: ET.Element) -> None:
@@ -1500,6 +1834,7 @@ def _append_urdf_children(
     children_by_parent: dict[str, list[dict[str, Any]]],
     link_visuals: dict[str, list[dict[str, str]]],
     *,
+    mesh_prefix: str = "official_320",
     skip_gripper_tree: bool = False,
 ) -> None:
     for joint in children_by_parent.get(parent_link, []):
@@ -1524,12 +1859,18 @@ def _append_urdf_children(
                     "damping": "0.35",
                 },
             )
-        _add_urdf_visual_geoms(body, str(joint["child"]), link_visuals)
+        _add_urdf_visual_geoms(
+            body,
+            str(joint["child"]),
+            link_visuals,
+            mesh_prefix=mesh_prefix,
+        )
         _append_urdf_children(
             body,
             str(joint["child"]),
             children_by_parent,
             link_visuals,
+            mesh_prefix=mesh_prefix,
             skip_gripper_tree=skip_gripper_tree,
         )
 
@@ -1538,6 +1879,8 @@ def _add_urdf_visual_geoms(
     body: ET.Element,
     link_name: str,
     link_visuals: dict[str, list[dict[str, str]]],
+    *,
+    mesh_prefix: str = "official_320",
 ) -> None:
     for index, visual in enumerate(link_visuals.get(link_name, [])):
         ET.SubElement(
@@ -1546,7 +1889,7 @@ def _add_urdf_visual_geoms(
             {
                 "name": f"{link_name}_visual_{index}",
                 "type": "mesh",
-                "mesh": f"official_320_{visual['mesh']}",
+                "mesh": f"{mesh_prefix}_{visual['mesh']}",
                 "pos": _clean_float_string(visual["xyz"]),
                 "euler": _clean_float_string(visual["rpy"]),
                 "contype": "0",
@@ -1555,7 +1898,17 @@ def _add_urdf_visual_geoms(
         )
 
 
-def _add_320_official_gripper_contact_pads(base: ET.Element) -> None:
+def _add_320_official_gripper_contact_pads(
+    base: ET.Element,
+    *,
+    left_pos: tuple[float, float, float] = ADAPTIVE_LEFT_FINGER_PAD_POS,
+    right_pos: tuple[float, float, float] = ADAPTIVE_RIGHT_FINGER_PAD_POS,
+    pad_size: tuple[float, float, float] = ADAPTIVE_FINGER_PAD_SIZE,
+    friction: tuple[float, float, float] = ADAPTIVE_FINGER_PAD_FRICTION,
+    solref: str = "0.001 1",
+    solimp: str = "0.995 0.999 0.0001",
+    mass: str = "0.02",
+) -> None:
     gripper_base = base.find(".//body[@name='gripper_base']")
     if gripper_base is not None:
         ET.SubElement(
@@ -1568,14 +1921,24 @@ def _add_320_official_gripper_contact_pads(base: ET.Element) -> None:
         _add_320_official_finger_pad(
             left,
             "left_finger_pad",
-            pos=ADAPTIVE_LEFT_FINGER_PAD_POS,
+            pos=left_pos,
+            pad_size=pad_size,
+            friction=friction,
+            solref=solref,
+            solimp=solimp,
+            mass=mass,
         )
     right = base.find(f".//body[@name='{ADAPTIVE_RIGHT_FINGER_PAD_PARENT}']")
     if right is not None:
         _add_320_official_finger_pad(
             right,
             "right_finger_pad",
-            pos=ADAPTIVE_RIGHT_FINGER_PAD_POS,
+            pos=right_pos,
+            pad_size=pad_size,
+            friction=friction,
+            solref=solref,
+            solimp=solimp,
+            mass=mass,
         )
 
 
@@ -1584,6 +1947,11 @@ def _add_320_official_finger_pad(
     pad_name: str,
     *,
     pos: tuple[float, float, float],
+    pad_size: tuple[float, float, float] = ADAPTIVE_FINGER_PAD_SIZE,
+    friction: tuple[float, float, float] = ADAPTIVE_FINGER_PAD_FRICTION,
+    solref: str = "0.001 1",
+    solimp: str = "0.995 0.999 0.0001",
+    mass: str = "0.02",
 ) -> None:
     ET.SubElement(
         parent,
@@ -1593,15 +1961,15 @@ def _add_320_official_finger_pad(
             "type": "box",
             "pos": _float_sequence(pos),
             "euler": _float_sequence(ADAPTIVE_FINGER_PAD_EULER),
-            "size": _float_sequence(ADAPTIVE_FINGER_PAD_SIZE),
+            "size": _float_sequence(pad_size),
             "rgba": "0.08 0.08 0.08 0",
-            "friction": _float_sequence(ADAPTIVE_FINGER_PAD_FRICTION),
+            "friction": _float_sequence(friction),
             "condim": str(ADAPTIVE_FINGER_PAD_CONDIM),
-            "solref": "0.001 1",
-            "solimp": "0.995 0.999 0.0001",
+            "solref": solref,
+            "solimp": solimp,
             "contype": "1",
             "conaffinity": "1",
-            "mass": "0.02",
+            "mass": mass,
         },
     )
 
@@ -1699,6 +2067,9 @@ def _convert_collada_mesh_to_obj(
     unit = root.find("c:asset/c:unit", namespace)
     scale = float(unit.attrib.get("meter", "1.0")) if unit is not None else 1.0
     geometries = _collada_geometry_meshes(root, namespace)
+    if scale >= 1.0 and _collada_geometry_max_extent(geometries) > 2.0:
+        # Some official 280 Pi wrist meshes declare meters while storing millimeter vertices.
+        scale = 0.001
     library_nodes = {
         f"#{node.attrib['id']}": node
         for node in root.findall(".//c:library_nodes/c:node", namespace)
@@ -1762,6 +2133,19 @@ def _collada_geometry_meshes(
             _collada_triangle_indices(mesh, namespace),
         )
     return geometries
+
+
+def _collada_geometry_max_extent(
+    geometries: dict[str, tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]],
+) -> float:
+    max_extent = 0.0
+    for vertices, _faces in geometries.values():
+        if not vertices:
+            continue
+        mins = [min(vertex[index] for vertex in vertices) for index in range(3)]
+        maxs = [max(vertex[index] for vertex in vertices) for index in range(3)]
+        max_extent = max(max_extent, *(maxs[index] - mins[index] for index in range(3)))
+    return max_extent
 
 
 def _append_collada_node_instances(
@@ -1901,7 +2285,39 @@ def _collada_triangle_indices(
                     raw[index + stride * 2 + vertex_offset],
                 )
             )
+    for polygon_node in mesh.findall("c:polygons", namespace):
+        inputs = polygon_node.findall("c:input", namespace)
+        if not inputs:
+            continue
+        stride = max(int(item.attrib.get("offset", "0")) for item in inputs) + 1
+        vertex_offset = next(
+            (
+                int(item.attrib.get("offset", "0"))
+                for item in inputs
+                if item.attrib.get("semantic") == "VERTEX"
+            ),
+            0,
+        )
+        for p_node in polygon_node.findall("c:p", namespace):
+            if p_node.text is None:
+                continue
+            raw = [int(value) for value in p_node.text.split()]
+            polygon = [
+                raw[index + vertex_offset]
+                for index in range(0, len(raw), stride)
+                if index + vertex_offset < len(raw)
+            ]
+            triangles.extend(_triangulate_polygon_indices(polygon))
     return triangles
+
+
+def _triangulate_polygon_indices(indices: list[int]) -> list[tuple[int, int, int]]:
+    if len(indices) < 3:
+        return []
+    return [
+        (indices[0], indices[index], indices[index + 1])
+        for index in range(1, len(indices) - 1)
+    ]
 
 
 def _add_official_gripper_assets(asset: ET.Element, mesh_dir: Path) -> None:
