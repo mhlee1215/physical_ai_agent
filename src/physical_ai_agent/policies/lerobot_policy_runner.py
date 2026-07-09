@@ -4,6 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from physical_ai_agent.so101_visual_servo import (
+    VisualServoError,
+    controller_error_for_camera,
+    select_visual_servo_camera,
+    visual_servo_delta_q_for_camera,
+)
+
 
 @dataclass
 class LeRobotPolicyRunner:
@@ -20,25 +27,140 @@ class LeRobotPolicyRunner:
     env_preprocessor: Any | None = None
     env_postprocessor: Any | None = None
     processor_source: str = "unknown"
+    visual_servo_head: Any | None = None
 
     def select_action(self, observation: dict[str, Any]) -> Any:
+        return self.select_action_with_trace(observation)["action"]
+
+    def select_action_with_trace(self, observation: dict[str, Any]) -> dict[str, Any]:
         action_key = _lerobot_action_key()
         inference_mode = _torch_inference_mode()
 
+        processed_observation = self._preprocess_observation(observation)
+        with inference_mode:
+            raw_action = self.policy.select_action(processed_observation)
+        postprocessed_action = self.postprocessor(raw_action)
+
+        if self.env_postprocessor is not None:
+            action_transition = self.env_postprocessor({action_key: postprocessed_action})
+            action = action_transition[action_key]
+        else:
+            action = postprocessed_action
+        return {
+            "action": action,
+            "raw_action": raw_action,
+            "postprocessed_action": postprocessed_action,
+            "processor_source": self.processor_source,
+            "preprocessor_steps": [type(step).__name__ for step in getattr(self.preprocessor, "steps", [])],
+            "postprocessor_steps": [type(step).__name__ for step in getattr(self.postprocessor, "steps", [])],
+        }
+
+    def predict_action_chunk_with_trace(self, observation: dict[str, Any], *, noise: Any | None = None) -> dict[str, Any]:
+        action_key = _lerobot_action_key()
+        inference_mode = _torch_inference_mode()
+        processed_observation = self._preprocess_observation(observation)
+        with inference_mode:
+            raw_action_chunk = self.policy.predict_action_chunk(processed_observation, noise=noise)
+        postprocessed_action_chunk = self._postprocess_action_chunk(raw_action_chunk)
+        if self.env_postprocessor is not None:
+            action_transition = self.env_postprocessor({action_key: postprocessed_action_chunk})
+            action_chunk = action_transition[action_key]
+        else:
+            action_chunk = postprocessed_action_chunk
+        return {
+            "action_chunk": action_chunk,
+            "raw_action_chunk": raw_action_chunk,
+            "postprocessed_action_chunk": postprocessed_action_chunk,
+            "processed_observation": processed_observation,
+            "processor_source": self.processor_source,
+            "preprocessor_steps": [type(step).__name__ for step in getattr(self.preprocessor, "steps", [])],
+            "postprocessor_steps": [type(step).__name__ for step in getattr(self.postprocessor, "steps", [])],
+        }
+
+    def predict_visual_servo_with_trace(self, observation: dict[str, Any]) -> dict[str, Any]:
+        from physical_ai_agent.policies.so101_visual_servo_head import extract_smolvla_camera_patch_features
+
+        if self.visual_servo_head is None:
+            raise RuntimeError("visual_servo_head.pt is required for visual_servo_delta_q rollout")
+        inference_mode = _torch_inference_mode()
+        processed_observation = self._preprocess_observation(observation)
+        with inference_mode:
+            pred = self.visual_servo_head(extract_smolvla_camera_patch_features(self.policy, processed_observation))
+        camera1 = pred["camera1"][0].detach().float().cpu().tolist()
+        camera2 = pred["camera2"][0].detach().float().cpu().tolist()
+        stop_prob = float(_torch_sigmoid(pred["stop_logit"][0]))
+        camera1_visible_prob = float(_torch_sigmoid(pred["camera1_visible_logit"][0]))
+        camera2_visible_prob = float(_torch_sigmoid(pred["camera2_visible_logit"][0]))
+        servo_selection = select_visual_servo_camera(
+            camera1_error=camera1,
+            camera2_error=camera2,
+            camera1_visible_prob=camera1_visible_prob,
+            camera2_visible_prob=camera2_visible_prob,
+        )
+        servo_camera = str(servo_selection["servo_camera"])
+        servo_error = camera2 if servo_camera == "camera2" else camera1
+        raw_error = VisualServoError(
+            wrist_dx_norm=float(servo_error[0]),
+            wrist_dy_norm=float(servo_error[1]),
+            edge_angle_error=float(servo_error[2]),
+            stop_prob=stop_prob,
+        )
+        controller_error = controller_error_for_camera(raw_error, servo_camera)
+        delta_q = visual_servo_delta_q_for_camera(
+            raw_error,
+            servo_camera,
+            qpos=_float_sequence(observation.get("observation.state")),
+        )
+        return {
+            "camera1": {"dx_norm": float(camera1[0]), "dy_norm": float(camera1[1]), "edge_angle_error": float(camera1[2]), "visible": camera1_visible_prob >= 0.5, "visible_prob": camera1_visible_prob},
+            "camera2": {"dx_norm": float(camera2[0]), "dy_norm": float(camera2[1]), "edge_angle_error": float(camera2[2]), "visible": camera2_visible_prob >= 0.5, "visible_prob": camera2_visible_prob},
+            "servo_camera": servo_camera,
+            "servo_selection": servo_selection,
+            "controller_error": {
+                "dx_norm": float(controller_error.wrist_dx_norm),
+                "dy_norm": float(controller_error.wrist_dy_norm),
+                "edge_angle_error": float(controller_error.edge_angle_error),
+            },
+            "stop_prob": stop_prob,
+            "delta_q": [float(value) for value in delta_q],
+            "processor_source": self.processor_source,
+        }
+
+    def _preprocess_observation(self, observation: dict[str, Any]) -> dict[str, Any]:
         processed_observation = dict(observation)
         if self.env_preprocessor is not None:
             processed_observation = self.env_preprocessor(processed_observation)
-
         processed_observation = self.preprocessor(processed_observation)
-        processed_observation = _move_tensors_to_policy_device(processed_observation, self.policy)
-        with inference_mode:
-            action = self.policy.select_action(processed_observation)
-        action = self.postprocessor(action)
+        return _move_tensors_to_policy_device(processed_observation, self.policy)
 
-        if self.env_postprocessor is not None:
-            action_transition = self.env_postprocessor({action_key: action})
-            action = action_transition[action_key]
-        return action
+    def _postprocess_action_chunk(self, raw_action_chunk: Any) -> Any:
+        try:
+            return self.postprocessor(raw_action_chunk)
+        except Exception:  # noqa: BLE001 - some processor versions only accept one action at a time.
+            import torch
+
+            chunk = torch.as_tensor(raw_action_chunk)
+            if chunk.ndim != 3:
+                raise
+            pieces = [self.postprocessor(chunk[:, index, :]) for index in range(chunk.shape[1])]
+            return torch.stack([torch.as_tensor(piece) for piece in pieces], dim=1)
+
+
+def _float_sequence(value: Any) -> list[float]:
+    if value is None:
+        return []
+    try:
+        if hasattr(value, "detach"):
+            value = value.detach().cpu()
+        if hasattr(value, "numpy"):
+            value = value.numpy()
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        if value and isinstance(value[0], list):
+            value = value[0]
+        return [float(item) for item in value]
+    except Exception:
+        return []
 
 
 def load_lerobot_policy_runner(
@@ -81,12 +203,36 @@ def load_lerobot_policy_runner(
     )
     _align_processor_stats_to_declared_features(preprocessor)
     _align_processor_stats_to_declared_features(postprocessor)
+    visual_servo_head = _load_visual_servo_head_if_present(Path(policy_path), device=device)
     return LeRobotPolicyRunner(
         policy=policy,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
         processor_source=processor_source,
+        visual_servo_head=visual_servo_head,
     )
+
+
+def _load_visual_servo_head_if_present(policy_path: Path, *, device: str) -> Any | None:
+    path = _visual_servo_head_path(policy_path)
+    if path is None:
+        return None
+    from physical_ai_agent.policies.so101_visual_servo_head import load_visual_servo_head
+
+    return load_visual_servo_head(path, device=device)
+
+
+def _visual_servo_head_path(policy_path: Path) -> Path | None:
+    for path in (policy_path / "visual_servo_head.pt", policy_path.parent / "visual_servo_head.pt"):
+        if path.exists():
+            return path
+    return None
+
+
+def _torch_sigmoid(value: Any) -> Any:
+    import torch
+
+    return torch.sigmoid(value).detach().cpu()
 
 
 def _load_pre_post_processors(*, policy: Any, policy_path: str, preprocessor_overrides: dict[str, Any]):

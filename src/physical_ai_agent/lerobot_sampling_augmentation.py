@@ -16,7 +16,13 @@ class SamplingAugmentationConfig:
     image_camera_dropout_prob: float = 0.0
     image_patch_dropout_prob: float = 0.0
     image_patch_mask_ratio: float = 0.0
+    image_blur_prob: float = 0.0
+    image_blur_kernel_size: int = 5
+    image_motion_blur_prob: float = 0.0
+    image_motion_blur_kernel_size: int = 7
+    image_noise_std: float = 0.0
     image_color_jitter: bool = False
+    image_color_jitter_strength: float = 0.08
     image_sharpness_jitter: bool = False
     image_affine_degrees: float = 0.0
     image_affine_translate: float = 0.0
@@ -42,11 +48,17 @@ class SamplingAugmentationConfig:
         image_camera_dropout_prob = float(os.environ.get("SO101_IMAGE_CAMERA_DROPOUT_PROB", "0.0"))
         image_patch_dropout_prob = float(os.environ.get("SO101_IMAGE_PATCH_DROPOUT_PROB", "0.0"))
         image_patch_mask_ratio = float(os.environ.get("SO101_IMAGE_PATCH_MASK_RATIO", "0.0"))
+        image_blur_prob = float(os.environ.get("SO101_IMAGE_BLUR_PROB", "0.0"))
+        image_blur_kernel_size = int(os.environ.get("SO101_IMAGE_BLUR_KERNEL_SIZE", "5"))
+        image_motion_blur_prob = float(os.environ.get("SO101_IMAGE_MOTION_BLUR_PROB", "0.0"))
+        image_motion_blur_kernel_size = int(os.environ.get("SO101_IMAGE_MOTION_BLUR_KERNEL_SIZE", "7"))
+        image_noise_std = float(os.environ.get("SO101_IMAGE_NOISE_STD", "0.0"))
         image_color_jitter = os.environ.get("SO101_IMAGE_COLOR_JITTER", "0") in {
             "1",
             "true",
             "True",
         }
+        image_color_jitter_strength = float(os.environ.get("SO101_IMAGE_COLOR_JITTER_STRENGTH", "0.08"))
         image_sharpness_jitter = os.environ.get("SO101_IMAGE_SHARPNESS_JITTER", "0") in {
             "1",
             "true",
@@ -67,7 +79,13 @@ class SamplingAugmentationConfig:
             image_camera_dropout_prob=image_camera_dropout_prob,
             image_patch_dropout_prob=image_patch_dropout_prob,
             image_patch_mask_ratio=image_patch_mask_ratio,
+            image_blur_prob=image_blur_prob,
+            image_blur_kernel_size=image_blur_kernel_size,
+            image_motion_blur_prob=image_motion_blur_prob,
+            image_motion_blur_kernel_size=image_motion_blur_kernel_size,
+            image_noise_std=image_noise_std,
             image_color_jitter=image_color_jitter,
+            image_color_jitter_strength=image_color_jitter_strength,
             image_sharpness_jitter=image_sharpness_jitter,
             image_affine_degrees=image_affine_degrees,
             image_affine_translate=image_affine_translate,
@@ -78,6 +96,9 @@ class SamplingAugmentationConfig:
                 or image_camera_dropout_prob > 0.0
                 or image_patch_dropout_prob > 0.0
                 or image_patch_mask_ratio > 0.0
+                or image_blur_prob > 0.0
+                or image_motion_blur_prob > 0.0
+                or image_noise_std > 0.0
                 or image_color_jitter
                 or image_sharpness_jitter
                 or image_affine_degrees > 0.0
@@ -284,18 +305,56 @@ def _augment_images_on_device(batch: dict[str, Any], config: SamplingAugmentatio
     for key, value in list(batch.items()):
         if not key.startswith("observation.images.") or not torch.is_tensor(value):
             continue
-        if value.ndim != 4 or value.shape[1] != 3:
+        normalized = _images_to_nchw_batch(value)
+        if normalized is None:
             continue
-        image = value.to(torch.float32).clamp(0.0, 1.0)
-        image = _camera_dropout(image)
-        image = _patch_dropout(image)
+        image, restore = normalized
+        if image.ndim != 4 or image.shape[1] not in (1, 3, 4):
+            continue
+        image = image.to(torch.float32).clamp(0.0, 1.0)
+        image = _camera_dropout(image, config.image_camera_dropout_prob)
+        image = _patch_dropout(image, config.image_patch_dropout_prob)
         if config.image_color_jitter:
-            image = _color_jitter(image)
+            image = _color_jitter(image, strength=config.image_color_jitter_strength)
+        image = _random_blur(image, config.image_blur_prob, config.image_blur_kernel_size)
+        image = _motion_blur(image, config.image_motion_blur_prob, config.image_motion_blur_kernel_size)
+        image = _additive_noise(image, config.image_noise_std)
         if config.image_sharpness_jitter:
             image = _sharpness_jitter(image)
-        image = _affine_jitter(image, F, config)
+        image, theta = _affine_jitter_with_theta(image, F, config)
+        _transform_visual_servo_labels_by_affine(batch, key, theta)
         image = _patch_mask_ratio(image, config.image_patch_mask_ratio)
-        batch[key] = image.to(value.dtype).clamp(0.0, 1.0)
+        batch[key] = restore(image.to(value.dtype).clamp(0.0, 1.0))
+
+
+def _images_to_nchw_batch(value: Any) -> tuple[Any, Any] | None:
+    import math
+
+    if value.ndim < 3:
+        return None
+    shape = tuple(value.shape)
+    if shape[-3] in (1, 3, 4):
+        prefix = shape[:-3]
+        channels, height, width = shape[-3:]
+        batch_size = int(math.prod(prefix)) if prefix else 1
+        flat = value.reshape(batch_size, channels, height, width)
+
+        def restore(image: Any) -> Any:
+            return image.reshape(*prefix, channels, height, width) if prefix else image.reshape(channels, height, width)
+
+        return flat, restore
+    if shape[-1] in (1, 3, 4):
+        prefix = shape[:-3]
+        height, width, channels = shape[-3:]
+        batch_size = int(math.prod(prefix)) if prefix else 1
+        flat = value.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2).contiguous()
+
+        def restore(image: Any) -> Any:
+            restored = image.permute(0, 2, 3, 1).contiguous()
+            return restored.reshape(*prefix, height, width, channels) if prefix else restored.reshape(height, width, channels)
+
+        return flat, restore
+    return None
 
 
 def _dropout_tensor(value: Any, probability: float) -> Any:
@@ -307,11 +366,10 @@ def _dropout_tensor(value: Any, probability: float) -> Any:
     return (value.to(torch.float32) * mask.to(torch.float32)).to(value.dtype)
 
 
-def _camera_dropout(image: Any) -> Any:
-    import os
+def _camera_dropout(image: Any, probability: float) -> Any:
     import torch
 
-    probability = float(os.environ.get("SO101_IMAGE_CAMERA_DROPOUT_PROB", "0.0"))
+    probability = float(probability)
     if probability <= 0.0:
         return image
     batch_size = image.shape[0]
@@ -319,14 +377,13 @@ def _camera_dropout(image: Any) -> Any:
     return image * mask
 
 
-def _patch_dropout(image: Any) -> Any:
-    import os
+def _patch_dropout(image: Any, probability: float) -> Any:
     import torch
 
-    probability = float(os.environ.get("SO101_IMAGE_PATCH_DROPOUT_PROB", "0.0"))
+    probability = float(probability)
     if probability <= 0.0:
         return image
-    batch_size, _channels, height, width = image.shape
+    batch_size, channels, height, width = image.shape
     patch_h = max(1, height // 8)
     patch_w = max(1, width // 8)
     result = image.clone()
@@ -345,7 +402,7 @@ def _patch_mask_ratio(image: Any, ratio: float) -> Any:
     if ratio <= 0.0:
         return image
     ratio = min(ratio, 1.0)
-    batch_size, _channels, height, width = image.shape
+    batch_size, channels, height, width = image.shape
     grid = 8
     patch_h = max(1, height // grid)
     patch_w = max(1, width // grid)
@@ -363,27 +420,107 @@ def _patch_mask_ratio(image: Any, ratio: float) -> Any:
     return result
 
 
-def _color_jitter(image: Any) -> Any:
+def _color_jitter(image: Any, *, strength: float = 0.08) -> Any:
     import torch
 
+    strength = max(0.0, float(strength))
+    if strength <= 0.0:
+        return image
+    brightness_span = min(0.2, strength)
+    contrast_span = min(0.2, strength)
+    saturation_span = min(0.25, strength)
     batch_size = image.shape[0]
     device = image.device
     dtype = image.dtype
-    brightness = _rand_factor(batch_size, device, dtype, 0.8, 1.2)
-    contrast = _rand_factor(batch_size, device, dtype, 0.8, 1.2)
-    saturation = _rand_factor(batch_size, device, dtype, 0.5, 1.5)
+    brightness = _rand_factor(batch_size, device, dtype, 1.0 - brightness_span, 1.0 + brightness_span)
+    contrast = _rand_factor(batch_size, device, dtype, 1.0 - contrast_span, 1.0 + contrast_span)
+    saturation = _rand_factor(batch_size, device, dtype, 1.0 - saturation_span, 1.0 + saturation_span)
 
     image = image * brightness
     mean = image.mean(dim=(2, 3), keepdim=True)
     image = (image - mean) * contrast + mean
     gray = (image[:, 0:1] * 0.299 + image[:, 1:2] * 0.587 + image[:, 2:3] * 0.114)
     image = (image - gray) * saturation + gray
-
-    # Small hue-like channel rotation. It is cheaper than HSV conversion and stays on GPU.
-    roll_mask = torch.rand((batch_size, 1, 1, 1), device=device) < 0.15
-    rolled = torch.roll(image, shifts=1, dims=1)
-    image = torch.where(roll_mask, rolled, image)
     return image.clamp(0.0, 1.0)
+
+
+def _random_blur(image: Any, probability: float, kernel_size: int) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    probability = float(probability)
+    if probability <= 0.0:
+        return image
+    batch_size, channels, _height, _width = image.shape
+    mask = (torch.rand((batch_size, 1, 1, 1), device=image.device) < probability).to(image.dtype)
+    if not bool(mask.any().item()):
+        return image
+    size = max(3, int(kernel_size))
+    if size % 2 == 0:
+        size += 1
+    radius = size // 2
+    coords = torch.arange(size, device=image.device, dtype=image.dtype) - radius
+    sigma = torch.empty((batch_size, 1, 1, 1), device=image.device, dtype=image.dtype).uniform_(0.6, 1.4)
+    kernel_1d = torch.exp(-0.5 * (coords.view(1, 1, 1, size) / sigma).pow(2))
+    kernel_1d = kernel_1d / kernel_1d.sum(dim=-1, keepdim=True)
+    padded = F.pad(image, (radius, radius, 0, 0), mode="replicate")
+    horizontal = torch.empty_like(image)
+    for index in range(batch_size):
+        kernel = kernel_1d[index].view(1, 1, 1, size).repeat(channels, 1, 1, 1)
+        horizontal[index : index + 1] = F.conv2d(padded[index : index + 1], kernel, groups=channels)
+    padded = F.pad(horizontal, (0, 0, radius, radius), mode="replicate")
+    blurred = torch.empty_like(image)
+    for index in range(batch_size):
+        kernel = kernel_1d[index].view(1, 1, size, 1).repeat(channels, 1, 1, 1)
+        blurred[index : index + 1] = F.conv2d(padded[index : index + 1], kernel, groups=channels)
+    return torch.where(mask.bool(), blurred, image).clamp(0.0, 1.0)
+
+
+def _motion_blur(image: Any, probability: float, kernel_size: int) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    probability = float(probability)
+    if probability <= 0.0:
+        return image
+    batch_size, channels, _height, _width = image.shape
+    mask = (torch.rand((batch_size, 1, 1, 1), device=image.device) < probability).to(image.dtype)
+    if not bool(mask.any().item()):
+        return image
+    size = max(3, int(kernel_size))
+    if size % 2 == 0:
+        size += 1
+    radius = size // 2
+    blurred = torch.empty_like(image)
+    horizontal_kernel = torch.ones((channels, 1, 1, size), device=image.device, dtype=image.dtype) / float(size)
+    vertical_kernel = torch.ones((channels, 1, size, 1), device=image.device, dtype=image.dtype) / float(size)
+    diagonal_kernel = torch.eye(size, device=image.device, dtype=image.dtype).view(1, 1, size, size)
+    diagonal_kernel = (diagonal_kernel / diagonal_kernel.sum()).repeat(channels, 1, 1, 1)
+    anti_diagonal_kernel = torch.flip(diagonal_kernel, dims=(2,))
+    padded_line = F.pad(image, (radius, radius, radius, radius), mode="replicate")
+    padded_h = F.pad(image, (radius, radius, 0, 0), mode="replicate")
+    padded_v = F.pad(image, (0, 0, radius, radius), mode="replicate")
+    for index in range(batch_size):
+        direction = int(torch.randint(0, 4, (1,), device=image.device).item())
+        if direction == 0:
+            blurred[index : index + 1] = F.conv2d(padded_h[index : index + 1], horizontal_kernel, groups=channels)
+        elif direction == 1:
+            blurred[index : index + 1] = F.conv2d(padded_v[index : index + 1], vertical_kernel, groups=channels)
+        elif direction == 2:
+            blurred[index : index + 1] = F.conv2d(padded_line[index : index + 1], diagonal_kernel, groups=channels)
+        else:
+            blurred[index : index + 1] = F.conv2d(padded_line[index : index + 1], anti_diagonal_kernel, groups=channels)
+    return torch.where(mask.bool(), blurred, image).clamp(0.0, 1.0)
+
+
+def _additive_noise(image: Any, std: float) -> Any:
+    import torch
+
+    std = float(std)
+    if std <= 0.0:
+        return image
+    noise = torch.randn_like(image, dtype=torch.float32) * std
+    return (image.to(torch.float32) + noise).clamp(0.0, 1.0).to(image.dtype)
 
 
 def _sharpness_jitter(image: Any) -> Any:
@@ -406,14 +543,19 @@ def _sharpness_jitter(image: Any) -> Any:
 
 
 def _affine_jitter(image: Any, functional: Any, config: SamplingAugmentationConfig) -> Any:
+    image, _theta = _affine_jitter_with_theta(image, functional, config)
+    return image
+
+
+def _affine_jitter_with_theta(image: Any, functional: Any, config: SamplingAugmentationConfig) -> tuple[Any, Any | None]:
     import math
     import torch
 
     max_degrees = float(config.image_affine_degrees)
     max_translate = float(config.image_affine_translate)
     if max_degrees <= 0.0 and max_translate <= 0.0:
-        return image
-    batch_size, _channels, height, width = image.shape
+        return image, None
+    batch_size, channels, height, width = image.shape
     device = image.device
     dtype = image.dtype
     degrees = (torch.rand(batch_size, device=device, dtype=dtype) * (2.0 * max_degrees) - max_degrees) * (math.pi / 180.0)
@@ -428,14 +570,50 @@ def _affine_jitter(image: Any, functional: Any, config: SamplingAugmentationConf
     theta[:, 1, 1] = cos
     theta[:, 0, 2] = translate_x
     theta[:, 1, 2] = translate_y
-    grid = functional.affine_grid(theta, size=(batch_size, 3, height, width), align_corners=False)
-    return functional.grid_sample(
+    grid = functional.affine_grid(theta, size=(batch_size, channels, height, width), align_corners=False)
+    image = functional.grid_sample(
         image,
         grid,
         mode="bilinear",
-        padding_mode="border",
+        padding_mode="zeros" if image.device.type == "mps" else "border",
         align_corners=False,
     )
+    return image, theta
+
+
+def _transform_visual_servo_labels_by_affine(batch: dict[str, Any], image_key: str, theta: Any | None) -> None:
+    if theta is None:
+        return
+    camera = image_key.rsplit(".", maxsplit=1)[-1]
+    label_key = f"visual_servo.{camera}"
+    visible_key = f"{label_key}_visible"
+    target = batch.get(label_key)
+    visible = batch.get(visible_key)
+    if target is None or visible is None:
+        return
+    import math
+    import torch
+
+    if not torch.is_tensor(target) or target.ndim != 2 or target.shape[-1] < 3:
+        return
+    target = target.to(device=theta.device, dtype=theta.dtype)
+    visible_mask = visible.to(device=theta.device).bool()
+    if target.shape[0] != theta.shape[0]:
+        return
+
+    rotation = theta[:, :, :2]
+    translation = theta[:, :, 2]
+    # affine_grid theta maps output coords -> input coords, so labels need inverse theta.
+    inv_rotation = rotation.transpose(1, 2)
+    point = torch.bmm(inv_rotation, (target[:, :2] - translation).unsqueeze(-1)).squeeze(-1)
+    angle = target[:, 2] * (math.pi * 0.5)
+    rotation_angle = torch.atan2(rotation[:, 1, 0], rotation[:, 0, 0])
+    angle = torch.remainder(angle - rotation_angle + (math.pi * 0.5), math.pi) - (math.pi * 0.5)
+
+    transformed = target.clone()
+    transformed[:, :2] = point.clamp(-1.0, 1.0)
+    transformed[:, 2] = (angle / (math.pi * 0.5)).clamp(-1.0, 1.0)
+    batch[label_key] = torch.where(visible_mask.unsqueeze(-1), transformed, target).to(batch[label_key].dtype)
 
 
 def _rand_factor(batch_size: int, device: Any, dtype: Any, low: float, high: float) -> Any:

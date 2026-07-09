@@ -17,6 +17,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from physical_ai_agent.so101_resolution_contract import (
+    SO101_IMAGE_HEIGHT,
+    SO101_IMAGE_WIDTH,
+    require_dataset_config_256,
+    require_so101_image_resolution,
+)
+
 
 DEFAULT_ROOT = Path("_workspace/so101_training")
 DEFAULT_LOCK = DEFAULT_ROOT / "active_training.json"
@@ -77,6 +84,11 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tensorboard-port", type=int, default=6006)
     parser.add_argument("--dashboard-port", type=int, default=8767)
     parser.add_argument("--no-tensorboard", action="store_true")
+    parser.add_argument(
+        "--no-tensorboard-tunnel",
+        action="store_true",
+        help="Do not start a cloudflared quick tunnel for external TensorBoard access.",
+    )
     parser.add_argument(
         "--with-dashboard",
         action="store_true",
@@ -160,17 +172,26 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--closed-loop-policy", choices=["off", "periodic", "best_only", "best_or_periodic"], default="periodic")
     parser.add_argument("--closed-loop-runner", choices=["auto", "picklift", "qwen_chain"], default="auto")
-    parser.add_argument(
-        "--closed-loop-eval-skill-mode",
-        choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
-        default=None,
-    )
+    parser.add_argument("--closed-loop-eval-skill-mode", default=None)
     parser.add_argument("--closed-loop-task-prompt")
+    parser.add_argument(
+        "--closed-loop-action-contract-mode",
+        choices=[
+            "processor",
+            "legacy",
+            "processor_dataset_clamp",
+            "processor_gripper_snap",
+            "processor_delta_q",
+            "visual_servo_delta_q",
+            "visual_servo_gt_delta_q",
+        ],
+        help="Action conversion mode for closed-loop evaluator. Defaults to config closed_loop.action_contract_mode or processor.",
+    )
     parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--loop-artifact-width", type=int, default=128)
-    parser.add_argument("--loop-artifact-height", type=int, default=128)
+    parser.add_argument("--loop-artifact-width", type=int, default=256)
+    parser.add_argument("--loop-artifact-height", type=int, default=256)
     parser.add_argument("--loop-artifact-fps", type=int, default=12)
     parser.add_argument("--loop-artifact-every-n-steps", type=int, default=1)
     parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
@@ -258,6 +279,14 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
             python=args.python,
             merge=not args.dry_run,
         )
+    if not args.dry_run:
+        require_dataset_config_256(dataset_config, repo_root=repo_root, context="start_so101_training")
+    require_so101_image_resolution(
+        height=int(args.loop_artifact_height),
+        width=int(args.loop_artifact_width),
+        context="start_so101_training loop artifact media",
+    )
+    _ensure_train_grid_bin_sidecars(dataset_config, repo_root=repo_root, build=not args.dry_run)
     training_args = _forwarded_args(args.training_args, passthrough)
     training_args = _with_dataset_config(training_args, dataset_config, runtime_platform=args.runtime_platform)
     training_args = _with_validation_schedule(training_args, args)
@@ -279,6 +308,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     tensorboard_cmd.extend(
         ["--logdir", str(tensorboard_dir), "--host", args.host, "--port", str(args.tensorboard_port)]
     )
+    tensorboard_tunnel_cmd = _tensorboard_tunnel_command(args.tensorboard_port)
     dashboard_cmd = [
         str(args.python),
         str(repo_root / "scripts" / "serve_so101_training_dashboard.py"),
@@ -322,6 +352,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         train_cmd.extend(["--post-checkpoint-loop-command-json", json.dumps(post_checkpoint_loop_cmds)])
     cache_build_cmds = _cache_build_commands(args.python, repo_root, dataset_config)
     enable_tensorboard = not args.no_tensorboard
+    enable_tensorboard_tunnel = enable_tensorboard and not args.no_tensorboard_tunnel and tensorboard_tunnel_cmd is not None
     enable_dashboard = bool(args.with_dashboard) and not args.no_dashboard
     enable_gpu_monitor = bool(args.with_gpu_monitor) and not args.no_gpu_monitor
     enable_progress_monitor = bool(args.with_progress_monitor) and not args.no_progress_monitor
@@ -336,6 +367,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "train_cmd": train_cmd,
         "dataset_config": dataset_config,
         "tensorboard_cmd": tensorboard_cmd if enable_tensorboard else None,
+        "tensorboard_tunnel_cmd": tensorboard_tunnel_cmd if enable_tensorboard_tunnel else None,
         "dashboard_cmd": dashboard_cmd if enable_dashboard else None,
         "gpu_monitor_cmd": gpu_monitor_cmd if enable_gpu_monitor else None,
         "progress_monitor_cmd": progress_monitor_cmd if enable_progress_monitor else None,
@@ -346,10 +378,18 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "training_run_summary_path": str(training_run_summary_path),
         "tensorboard_url": f"http://127.0.0.1:{args.tensorboard_port}/" if enable_tensorboard else None,
         "mobile_tensorboard_url": _mobile_url(args.tensorboard_port) if enable_tensorboard else None,
+        "external_tensorboard_url": None,
+        "external_tensorboard_note": (
+            "available after start via cloudflared"
+            if enable_tensorboard_tunnel
+            else ("cloudflared unavailable or --no-tensorboard-tunnel" if enable_tensorboard else None)
+        ),
+        "clear_tensorboard_old_data": bool(enable_tensorboard),
         "dashboard_url": f"http://127.0.0.1:{args.dashboard_port}/" if enable_dashboard else None,
         "logs": {
             "train": str(log_dir / "train.log"),
             "tensorboard": str(log_dir / "tensorboard.log") if enable_tensorboard else None,
+            "tensorboard_tunnel": str(log_dir / "tensorboard_tunnel.log") if enable_tensorboard_tunnel else None,
             "dashboard": str(log_dir / "dashboard.log") if enable_dashboard else None,
             "gpu_monitor": str(log_dir / "gpu_monitor.log") if enable_gpu_monitor else None,
             "progress_monitor": str(log_dir / "progress_monitor.log") if enable_progress_monitor else None,
@@ -368,11 +408,23 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         return 0
 
     _run_cache_builds(cache_build_cmds, log_dir=log_dir, cwd=repo_root)
+    if enable_tensorboard:
+        _clear_tensorboard_old_data(tensorboard_dir)
     _write_training_run_summary(training_run_summary_path, launch_plan)
     train = _popen(train_cmd, log_dir / "train.log", cwd=repo_root)
     train_pid_file.write_text(str(train.pid) + "\n", encoding="utf-8")
     tensorboard = (
         _popen(tensorboard_cmd, log_dir / "tensorboard.log", cwd=repo_root) if enable_tensorboard else None
+    )
+    tensorboard_tunnel = (
+        _popen(tensorboard_tunnel_cmd, log_dir / "tensorboard_tunnel.log", cwd=repo_root)
+        if enable_tensorboard_tunnel and tensorboard_tunnel_cmd is not None
+        else None
+    )
+    external_tensorboard_url = (
+        _wait_for_tensorboard_tunnel_url(log_dir / "tensorboard_tunnel.log")
+        if tensorboard_tunnel is not None
+        else None
     )
     dashboard = _popen(dashboard_cmd, log_dir / "dashboard.log", cwd=repo_root) if enable_dashboard else None
     gpu_monitor = (
@@ -388,6 +440,13 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "started_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "train_pid": train.pid,
         "tensorboard_pid": tensorboard.pid if tensorboard else None,
+        "tensorboard_tunnel_pid": tensorboard_tunnel.pid if tensorboard_tunnel else None,
+        "external_tensorboard_url": external_tensorboard_url,
+        "external_tensorboard_note": (
+            None
+            if external_tensorboard_url
+            else launch_plan.get("external_tensorboard_note")
+        ),
         "dashboard_pid": dashboard.pid if dashboard else None,
         "gpu_monitor_pid": gpu_monitor.pid if gpu_monitor else None,
         "progress_monitor_pid": progress_monitor.pid if progress_monitor else None,
@@ -397,6 +456,19 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     current = status(args.lock_file)
     print(json.dumps(current, indent=2, sort_keys=True) if args.json else _human_status(current))
     return 0
+
+
+def _clear_tensorboard_old_data(tensorboard_dir: Path) -> int:
+    if not tensorboard_dir.exists():
+        return 0
+    removed = 0
+    for pattern in ("events.out.tfevents*", "*.profile-empty"):
+        for path in tensorboard_dir.rglob(pattern):
+            if not path.is_file():
+                continue
+            path.unlink()
+            removed += 1
+    return removed
 
 
 def _apply_start_preset(args: argparse.Namespace, passthrough: list[str], *, repo_root: Path) -> list[str]:
@@ -428,10 +500,9 @@ def _apply_start_preset(args: argparse.Namespace, passthrough: list[str], *, rep
         args.closed_loop_policy_num_steps = 10
         args.record_loop_artifacts = True
         args.render_loop_media = True
-        args.loop_artifact_width = 128
-        args.loop_artifact_height = 128
+        args.loop_artifact_width = SO101_IMAGE_WIDTH
+        args.loop_artifact_height = SO101_IMAGE_HEIGHT
         args.loop_artifact_fps = 12
-        args.max_monitored_checkpoints = 160
         args.hf_local_files_only = True
         args.skip_hf_dataset_download = True
         args.python = repo_root / ".venv/bin/python"
@@ -444,6 +515,7 @@ def _apply_start_preset(args: argparse.Namespace, passthrough: list[str], *, rep
                 "--resume=true",
                 "--so101-resume-checkpoint-path=_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/"
                 "qwen_edge_primitives_suite3_resume_009408_aug_full_virtual_statsfix_30000/model/checkpoints/009632",
+                "--checkpoint-retention-policy=best_val_and_closed_loop",
                 "--steps=30000",
             ]
         return passthrough
@@ -455,16 +527,19 @@ def status(lock_file: Path) -> dict[str, Any]:
     record.setdefault("local_training_standard", _local_training_standard(Path(__file__).resolve().parents[1]))
     train = _process_status(record.get("train_pid"))
     tensorboard = _process_status(record.get("tensorboard_pid"))
+    tensorboard_tunnel = _process_status(record.get("tensorboard_tunnel_pid"))
     dashboard = _process_status(record.get("dashboard_pid"))
     gpu_monitor = _process_status(record.get("gpu_monitor_pid"))
     progress_monitor = _process_status(record.get("progress_monitor_pid"))
     record["train"] = train
     record["tensorboard"] = tensorboard
+    record["tensorboard_tunnel"] = tensorboard_tunnel
     record["dashboard"] = dashboard
     record["gpu_monitor"] = gpu_monitor
     record["progress_monitor"] = progress_monitor
     record["active"] = any(
-        bool(process.get("alive")) for process in (train, tensorboard, dashboard, gpu_monitor, progress_monitor)
+        bool(process.get("alive"))
+        for process in (train, tensorboard, tensorboard_tunnel, dashboard, gpu_monitor, progress_monitor)
     )
     if record.get("tensorboard_url") and not record.get("mobile_tensorboard_url"):
         port = _url_port(str(record["tensorboard_url"]))
@@ -487,6 +562,7 @@ def _write_training_run_summary(path: Path, launch_plan: dict[str, Any]) -> None
             "train_cmd",
             "dataset_config",
             "tensorboard_cmd",
+            "tensorboard_tunnel_cmd",
             "dashboard_cmd",
             "gpu_monitor_cmd",
             "progress_monitor_cmd",
@@ -496,6 +572,8 @@ def _write_training_run_summary(path: Path, launch_plan: dict[str, Any]) -> None
             "runtime_contract",
             "tensorboard_url",
             "mobile_tensorboard_url",
+            "external_tensorboard_url",
+            "external_tensorboard_note",
             "dashboard_url",
         )
     }
@@ -531,8 +609,11 @@ def _update_training_registry(repo_root: Path, record: dict[str, Any]) -> None:
         "started_at_utc": record.get("started_at_utc"),
         "tensorboard_url": record.get("tensorboard_url"),
         "mobile_tensorboard_url": record.get("mobile_tensorboard_url"),
+        "external_tensorboard_url": record.get("external_tensorboard_url"),
+        "external_tensorboard_note": record.get("external_tensorboard_note"),
         "train_pid": record.get("train_pid"),
         "tensorboard_pid": record.get("tensorboard_pid"),
+        "tensorboard_tunnel_pid": record.get("tensorboard_tunnel_pid"),
     }
     runs = [row for row in runs if not (isinstance(row, dict) and row.get("training_id") == training_id)]
     runs.append(compact)
@@ -551,6 +632,7 @@ def stop(lock_file: Path, *, timeout_s: float, json_output: bool = False) -> int
         record.get("gpu_monitor_pid"),
         record.get("progress_monitor_pid"),
         record.get("dashboard_pid"),
+        record.get("tensorboard_tunnel_pid"),
         record.get("tensorboard_pid"),
         record.get("train_pid"),
     ]
@@ -577,6 +659,7 @@ def _human_status(record: dict[str, Any]) -> str:
         f"run_dir: {record.get('run_dir', '-')}",
         f"train: {_process_line(record.get('train'))}",
         f"tensorboard: {_process_line(record.get('tensorboard'))}",
+        f"tensorboard_tunnel: {_process_line(record.get('tensorboard_tunnel'))}",
         f"dashboard: {_process_line(record.get('dashboard'))}",
         f"gpu_monitor: {_process_line(record.get('gpu_monitor'))}",
         f"progress_monitor: {_process_line(record.get('progress_monitor'))}",
@@ -585,6 +668,10 @@ def _human_status(record: dict[str, Any]) -> str:
         lines.append(f"tensorboard_url: {record['tensorboard_url']}")
     if record.get("mobile_tensorboard_url"):
         lines.append(f"mobile_tensorboard_url: {record['mobile_tensorboard_url']}")
+    if record.get("external_tensorboard_url"):
+        lines.append(f"external_tensorboard_url: {record['external_tensorboard_url']}")
+    elif record.get("external_tensorboard_note"):
+        lines.append(f"external_tensorboard_url: unavailable ({record['external_tensorboard_note']})")
     if record.get("dashboard_url"):
         lines.append(f"dashboard_url: {record['dashboard_url']}")
     standard = record.get("local_training_standard")
@@ -1035,7 +1122,7 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
     for name, cli_name in (
         ("num_workers", "num_workers"),
         ("batch_size", "batch_size"),
-        ("policy_repo_id", "policy.repo_id"),
+        ("policy_repo_id", "policy.path"),
         ("lightning_precision", "lightning-precision"),
         ("checkpoint_retention_policy", "checkpoint-retention-policy"),
     ):
@@ -1046,6 +1133,50 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
             updated = _ensure_arg(updated, cli_name, str(value))
     if "policy_push_to_hub" in training:
         updated = _ensure_arg(updated, "policy.push_to_hub", str(bool(training["policy_push_to_hub"])).lower())
+    visual_servo = config.get("visual_servo") or {}
+    if not isinstance(visual_servo, dict):
+        raise SystemExit("dataset config visual_servo must be an object")
+    if "loss_weight" in visual_servo:
+        updated = _ensure_arg(updated, "so101-visual-servo-loss-weight", str(visual_servo["loss_weight"]))
+    if "hidden_dim" in visual_servo:
+        updated = _ensure_arg(updated, "so101-visual-servo-hidden-dim", str(visual_servo["hidden_dim"]))
+    action_chunk_consistency = config.get("action_chunk_consistency") or {}
+    if not isinstance(action_chunk_consistency, dict):
+        raise SystemExit("dataset config action_chunk_consistency must be an object")
+    if "steps" in action_chunk_consistency:
+        updated = _ensure_arg(
+            updated,
+            "so101-action-chunk-consistency-steps",
+            str(action_chunk_consistency["steps"]),
+        )
+    if "weight" in action_chunk_consistency:
+        updated = _ensure_arg(
+            updated,
+            "so101-action-chunk-consistency-weight",
+            str(action_chunk_consistency["weight"]),
+        )
+    action_smoothness = config.get("action_smoothness") or {}
+    if not isinstance(action_smoothness, dict):
+        raise SystemExit("dataset config action_smoothness must be an object")
+    if "weight" in action_smoothness:
+        updated = _ensure_arg(updated, "so101-action-smoothness-loss-weight", str(action_smoothness["weight"]))
+    if "include_gripper" in action_smoothness:
+        updated = _ensure_boolean_optional_arg(
+            updated,
+            "so101-action-smoothness-include-gripper",
+            value=bool(action_smoothness["include_gripper"]),
+        )
+    action_teacher_importance = config.get("action_teacher_importance") or {}
+    if not isinstance(action_teacher_importance, dict):
+        raise SystemExit("dataset config action_teacher_importance must be an object")
+    for name, cli_name in (
+        ("delta_weight", "so101-action-delta-loss-weight"),
+        ("gripper_transition_weight", "so101-action-gripper-transition-loss-weight"),
+        ("terminal_steps", "so101-action-terminal-loss-steps"),
+        ("terminal_weight", "so101-action-terminal-loss-weight"),
+    ):
+        if name in action_teacher_importance:
+            updated = _ensure_arg(updated, cli_name, str(action_teacher_importance[name]))
     cache = config.get("predecoded_image_cache") or {}
     if not isinstance(cache, dict):
         raise SystemExit("dataset config predecoded_image_cache must be an object")
@@ -1057,6 +1188,8 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
             continue
         if name in cache and cache.get(name) not in (None, False, {}):
             updated = _ensure_arg(updated, cli_name, str(_resolve_cache_dir(cache, name)))
+    if train.get("grid_bin_sidecar"):
+        updated = _ensure_arg(updated, "train-grid-bin-sidecar", str(train["grid_bin_sidecar"]))
     tensorboard = config.get("tensorboard") or {}
     if not isinstance(tensorboard, dict):
         raise SystemExit("dataset config tensorboard must be an object")
@@ -1075,6 +1208,12 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
         ("image_camera_dropout_prob", "so101-image-camera-dropout-prob"),
         ("image_patch_dropout_prob", "so101-image-patch-dropout-prob"),
         ("image_patch_mask_ratio", "so101-image-patch-mask-ratio"),
+        ("image_blur_prob", "so101-image-blur-prob"),
+        ("image_blur_kernel_size", "so101-image-blur-kernel-size"),
+        ("image_motion_blur_prob", "so101-image-motion-blur-prob"),
+        ("image_motion_blur_kernel_size", "so101-image-motion-blur-kernel-size"),
+        ("image_noise_std", "so101-image-noise-std"),
+        ("image_color_jitter_strength", "so101-image-color-jitter-strength"),
         ("image_affine_degrees", "so101-image-affine-degrees"),
         ("image_affine_translate", "so101-image-affine-translate"),
     ):
@@ -1090,6 +1229,61 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
         if name in augmentation:
             updated = _ensure_boolean_optional_arg(updated, cli_name, value=bool(augmentation[name]))
     return updated
+
+
+def _ensure_train_grid_bin_sidecars(config: dict[str, Any] | None, *, repo_root: Path, build: bool) -> None:
+    if not config:
+        return
+    train_datasets = config.get("train_datasets")
+    if isinstance(train_datasets, list) and train_datasets:
+        for index, entry in enumerate(train_datasets):
+            if not isinstance(entry, dict):
+                raise SystemExit(f"dataset config train_datasets[{index}] must be an object")
+            _ensure_train_grid_bin_sidecar(entry, repo_root=repo_root, build=build)
+        return
+    train = config.get("train_dataset")
+    if not isinstance(train, dict):
+        raise SystemExit("dataset config train_dataset must be an object")
+    _ensure_train_grid_bin_sidecar(train, repo_root=repo_root, build=build)
+
+
+def _ensure_train_grid_bin_sidecar(entry: dict[str, Any], *, repo_root: Path, build: bool) -> None:
+    if not entry.get("root"):
+        raise SystemExit("train dataset entry must include root before grid-bin balancing")
+    sidecar = entry.get("grid_bin_sidecar")
+    if sidecar:
+        sidecar_path = _resolve_root_path(repo_root, Path(str(sidecar)))
+    else:
+        root = Path(str(entry["root"]))
+        sidecar_path = (
+            _resolve_root_path(repo_root, root)
+            / "meta"
+            / "camera_grid_bins"
+            / "observation_images_camera1_4x4_frame0.parquet"
+        )
+        entry["grid_bin_sidecar"] = _relative_or_absolute(repo_root, sidecar_path)
+    if sidecar_path.exists():
+        return
+    if not build:
+        return
+    from scripts.build_so101_camera_grid_bins import build_bins
+
+    build_bins(
+        dataset_root=_resolve_root_path(repo_root, Path(str(entry["root"]))),
+        camera_key="observation.images.camera1",
+        grid_size=4,
+        frame_index=0,
+        min_area=20,
+    )
+    if not sidecar_path.exists():
+        raise SystemExit(f"failed to build required grid-bin sidecar: {sidecar_path}")
+
+
+def _relative_or_absolute(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 def _train_dataset_entries(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1326,7 +1520,9 @@ def _validate_monitoring_contract(
 
     steps_per_epoch = _steps_per_epoch(dataset_config, training_args)
     save_freq = _positive_int_arg(training_args, "save_freq") or _positive_int_arg(training_args, "save-freq")
-    if save_freq is not None:
+    retention_policy = _arg_value(training_args, "checkpoint-retention-policy")
+    strict_checkpoint_retention = retention_policy == "best_val_and_closed_loop"
+    if save_freq is not None and not strict_checkpoint_retention:
         planned_steps = _positive_int_arg(training_args, "steps")
         max_checkpoints = max(1, int(args.max_monitored_checkpoints))
         if planned_steps is not None:
@@ -1377,13 +1573,23 @@ def _validate_monitoring_contract(
 
     closed_loop = dataset_config.get("closed_loop") or {}
     closed_loop_runner = _closed_loop_runner(args, dataset_config)
+    _validate_closed_loop_test_case_commands(
+        dataset_config=dataset_config,
+        post_checkpoint_loop_cmds=post_checkpoint_loop_cmds,
+        errors=errors,
+    )
     if closed_loop_runner != "qwen_chain" and not args.closed_loop_eval_skill_mode and not (
         isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode")
     ):
         errors.append("closed-loop eval skill mode must be set in config closed_loop.eval_skill_mode or CLI.")
     if not _closed_loop_task_prompt(args, dataset_config):
         errors.append("closed-loop task prompt must be set in config closed_loop.task_prompt or CLI.")
-    if closed_loop_runner == "qwen_chain" and _closed_loop_valid_mask_checkpoint(args, dataset_config) is None:
+    action_contract_mode = _closed_loop_action_contract_mode(args, dataset_config)
+    if (
+        closed_loop_runner == "qwen_chain"
+        and action_contract_mode not in {"visual_servo_delta_q", "visual_servo_gt_delta_q"}
+        and _closed_loop_valid_mask_checkpoint(args, dataset_config) is None
+    ):
         errors.append(
             "qwen_chain loop tests require closed_loop.valid_mask_checkpoint or "
             "--closed-loop-valid-mask-checkpoint."
@@ -1414,6 +1620,38 @@ def _validate_monitoring_contract(
     if errors:
         detail = "\n".join(f"- {error}" for error in errors)
         raise SystemExit(f"SO101 monitored training contract failed:\n{detail}")
+
+
+def _validate_closed_loop_test_case_commands(
+    *,
+    dataset_config: dict[str, Any] | None,
+    post_checkpoint_loop_cmds: list[list[str]],
+    errors: list[str],
+) -> None:
+    test_cases = _closed_loop_test_cases(dataset_config)
+    if not test_cases or not post_checkpoint_loop_cmds:
+        return
+    if len(post_checkpoint_loop_cmds) != len(test_cases):
+        errors.append(
+            f"closed-loop command/test-case count mismatch: commands={len(post_checkpoint_loop_cmds)} "
+            f"test_cases={len(test_cases)}"
+        )
+        return
+    for index, (test_case, command) in enumerate(zip(test_cases, post_checkpoint_loop_cmds, strict=True)):
+        expected_id = str(test_case.get("id") or test_case.get("name") or "closed_loop")
+        actual_id = _arg_value(command, "closed-loop-test-id")
+        if actual_id != expected_id:
+            errors.append(
+                f"closed_loop.test_cases[{index}] id mismatch: command has {actual_id!r}, expected {expected_id!r}."
+            )
+        expected_report = _closed_loop_start_report_path(test_case)
+        if expected_report:
+            actual_report = _arg_value(command, "closed-loop-start-report-path")
+            if actual_report != expected_report:
+                errors.append(
+                    f"closed_loop.test_cases[{index}] start report mismatch: command has {actual_report!r}, "
+                    f"expected {expected_report!r}."
+                )
 
 
 def _has_virtual_validation_sources(dataset_config: dict[str, Any] | None) -> bool:
@@ -1572,13 +1810,30 @@ def _progress_monitor_command(
         str(getattr(args, "closed_loop_policy_n_action_steps", 15)),
         "--policy-num-steps",
         str(getattr(args, "closed_loop_policy_num_steps", 10)),
+        "--closed-loop-action-contract-mode",
+        _closed_loop_action_contract_mode(args, dataset_config),
         "--local-files-only",
     ]
+    action_rmse_sweep = ((dataset_config.get("closed_loop") or {}).get("action_rmse_sweep") or {}) if dataset_config else {}
+    if isinstance(action_rmse_sweep, dict):
+        if "enabled" in action_rmse_sweep:
+            cmd.append("--closed-loop-action-rmse-sweep" if action_rmse_sweep.get("enabled") else "--no-closed-loop-action-rmse-sweep")
+        n_action_steps = action_rmse_sweep.get("n_action_steps")
+        if isinstance(n_action_steps, list) and n_action_steps:
+            cmd.extend(
+                [
+                    "--closed-loop-action-rmse-sweep-n-action-steps",
+                    ",".join(str(int(value)) for value in n_action_steps),
+                ]
+            )
     closed_loop_subgoal_sequence = getattr(args, "closed_loop_subgoal_sequence", None)
     if closed_loop_subgoal_sequence:
         cmd.extend(["--closed-loop-subgoal-sequence", str(closed_loop_subgoal_sequence)])
     closed_loop_valid_mask_checkpoint = _closed_loop_valid_mask_checkpoint(args, dataset_config)
-    if closed_loop_valid_mask_checkpoint:
+    if closed_loop_valid_mask_checkpoint and _closed_loop_action_contract_mode(args, dataset_config) not in {
+        "visual_servo_delta_q",
+        "visual_servo_gt_delta_q",
+    }:
         cmd.extend(["--closed-loop-valid-mask-checkpoint", str(closed_loop_valid_mask_checkpoint)])
     closed_loop_task_prompt = _closed_loop_task_prompt(args, dataset_config)
     if closed_loop_task_prompt:
@@ -1677,6 +1932,9 @@ def _closed_loop_test_cases(dataset_config: dict[str, Any] | None) -> list[dict[
             raise SystemExit(f"closed_loop.{source_key}[{index}] must be an object")
         result.append(dict(test_case))
     return result
+
+
+_loop_validation_cases = _closed_loop_test_cases
 
 
 def _apply_closed_loop_test_case(base: list[str], test_case: dict[str, Any]) -> list[str]:
@@ -1825,6 +2083,16 @@ def _closed_loop_valid_mask_checkpoint(args: argparse.Namespace, dataset_config:
     return None
 
 
+def _closed_loop_action_contract_mode(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    value = getattr(args, "closed_loop_action_contract_mode", None)
+    if value:
+        return str(value)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("action_contract_mode"):
+        return str(closed_loop["action_contract_mode"])
+    return "processor"
+
+
 def _qwen_response_json(dataset_config: dict[str, Any]) -> Path | None:
     closed_loop = dataset_config.get("closed_loop") or {}
     if isinstance(closed_loop, dict) and closed_loop.get("qwen_response_json"):
@@ -1886,11 +2154,18 @@ def _cache_build_commands(
                 commands.append(_cache_build_command(python, repo_root, dataset, Path(str(dataset["image_cache_dir"]))))
     else:
         dataset = config.get("train_dataset") or {}
-        if "train" in cache and isinstance(dataset, dict) and "root" in dataset and "repo_id" in dataset:
+        train_cache = cache.get("train")
+        if (
+            train_cache not in (None, False, {})
+            and isinstance(dataset, dict)
+            and "root" in dataset
+            and "repo_id" in dataset
+        ):
             commands.append(_cache_build_command(python, repo_root, dataset, _resolve_cache_dir(cache, "train")))
     for split, dataset_key in (("validation", "validation_dataset"),):
         dataset = config.get(dataset_key) or {}
-        if split not in cache or not isinstance(dataset, dict):
+        split_cache = cache.get(split)
+        if split_cache in (None, False, {}) or not isinstance(dataset, dict):
             continue
         if "root" not in dataset or "repo_id" not in dataset:
             continue
@@ -1955,6 +2230,37 @@ def _tensorboard_executable(python: Path, repo_root: Path) -> list[str] | None:
             return [str(candidate)]
     found = shutil.which("tensorboard")
     return [found] if found else None
+
+
+def _tensorboard_tunnel_command(port: int) -> list[str] | None:
+    cloudflared = shutil.which("cloudflared")
+    if not cloudflared:
+        return None
+    return [
+        cloudflared,
+        "tunnel",
+        "--url",
+        f"http://127.0.0.1:{int(port)}",
+        "--no-autoupdate",
+    ]
+
+
+def _wait_for_tensorboard_tunnel_url(log_path: Path, *, timeout_s: float = 12.0) -> str | None:
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    while time.monotonic() < deadline:
+        url = _tensorboard_tunnel_url_from_log(log_path)
+        if url:
+            return url
+        time.sleep(0.5)
+    return _tensorboard_tunnel_url_from_log(log_path)
+
+
+def _tensorboard_tunnel_url_from_log(log_path: Path) -> str | None:
+    if not log_path.exists():
+        return None
+    text = log_path.read_text(encoding="utf-8", errors="ignore")
+    matches = re.findall(r"https://[A-Za-z0-9.-]+\.trycloudflare\.com", text)
+    return matches[-1] if matches else None
 
 
 def _popen(cmd: list[str], log_path: Path, *, cwd: Path) -> subprocess.Popen[Any]:

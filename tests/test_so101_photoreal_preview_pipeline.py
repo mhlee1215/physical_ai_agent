@@ -75,6 +75,5 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertIn("--asset-root", completed.stdout)
         self.assertIn("--robot-material", completed.stdout)
 
-
 if __name__ == "__main__":
     unittest.main()

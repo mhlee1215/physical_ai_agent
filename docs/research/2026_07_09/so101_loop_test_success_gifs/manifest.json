@@ -1,0 +1,62 @@
+{
+  "best": {
+    "checkpoint": "001080",
+    "duration_s": 106.1305,
+    "env_success_rate": null,
+    "episodes": 6,
+    "eval_skill_mode": "qwen_edge_chain",
+    "grasp_rate": null,
+    "loop_validation_id": "grip_from_above_edge_cube",
+    "operation": "so101_qwen_closed_loop_eval",
+    "policy_rollout_config": {
+      "chunk_size": 50,
+      "n_action_steps": 15,
+      "num_steps": 10
+    },
+    "report_path": "/Users/minhaeng/workspace/physical_ai_agent/_workspace/so101_training/runs/grip_from_above_edge_cube_no_aug_rmse_v1/closed_loop_evals/qwen_chain_grip_from_above_edge_cube_seed98400_001080/qwen_closed_loop_eval_report.json",
+    "step": 1080,
+    "success_rate": 0.3333333333333333,
+    "task_prompt": "From just above one visible green cube edge, move down, close the gripper, and lift.",
+    "test_id": "grip_from_above_edge_cube"
+  },
+  "success_gifs": [
+    {
+      "step": 1080,
+      "checkpoint": "001080",
+      "episode": 2,
+      "source_report": "/Users/minhaeng/workspace/physical_ai_agent/_workspace/so101_training/runs/grip_from_above_edge_cube_no_aug_rmse_v1/closed_loop_evals/qwen_chain_grip_from_above_edge_cube_seed98400_001080/qwen_closed_loop_eval_report.json",
+      "copied_to": "docs/research/2026_07_09/so101_loop_test_success_gifs/step_001080_episode_002_tensorboard_style_success.gif",
+      "rendering_contract": "tensorboard_closed_loop_camera1_camera2_side_by_side",
+      "tensorboard_tag_equivalent": "closed_loop/grip_from_above_edge_cube/rollout_camera1_camera2_episode_002",
+      "final_info": {
+        "energy_norm": 1.9548941942508626,
+        "is_grasped": 1.0,
+        "is_robot_static": false,
+        "lift_height": 0.06094973061378983,
+        "success": true,
+        "tcp_to_obj_dist": 0.014434049929496375
+      },
+      "total_reward": 26.30056192479203,
+      "prompt": "From just above one visible green cube edge, move down, close the gripper, and lift."
+    },
+    {
+      "step": 1080,
+      "checkpoint": "001080",
+      "episode": 3,
+      "source_report": "/Users/minhaeng/workspace/physical_ai_agent/_workspace/so101_training/runs/grip_from_above_edge_cube_no_aug_rmse_v1/closed_loop_evals/qwen_chain_grip_from_above_edge_cube_seed98400_001080/qwen_closed_loop_eval_report.json",
+      "copied_to": "docs/research/2026_07_09/so101_loop_test_success_gifs/step_001080_episode_003_tensorboard_style_success.gif",
+      "rendering_contract": "tensorboard_closed_loop_camera1_camera2_side_by_side",
+      "tensorboard_tag_equivalent": "closed_loop/grip_from_above_edge_cube/rollout_camera1_camera2_episode_003",
+      "final_info": {
+        "energy_norm": 2.0033067512413014,
+        "is_grasped": 1.0,
+        "is_robot_static": false,
+        "lift_height": 0.051000005743686135,
+        "success": true,
+        "tcp_to_obj_dist": 0.013772880309821482
+      },
+      "total_reward": 26.42635855560814,
+      "prompt": "From just above one visible green cube edge, move down, close the gripper, and lift."
+    }
+  ]
+}

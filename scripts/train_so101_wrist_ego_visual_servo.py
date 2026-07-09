@@ -1520,17 +1520,40 @@ def _auxiliary_visual_loss(torch: Any, pred: Any, target: Any) -> Any:
     return visible_loss + coord_loss
 
 
-def make_high_contrast_picklift_env() -> Any:
+def make_high_contrast_picklift_env(
+    target_object_color: str | None = None,
+    *,
+    object_half_sizes: tuple[float, ...] = (0.0125, 0.015, 0.0175),
+    spawn_center: tuple[float, float] = (0.15, 0.0),
+    spawn_min_radius: float = 0.10,
+    spawn_max_radius: float = 0.30,
+    spawn_angle_half_range_deg: float = 90.0,
+) -> Any:
     from so101_nexus_core.config import PickConfig
     from so101_nexus_core.objects import CubeObject
     from so101_nexus_mujoco.pick_env import PickLiftEnv
 
+    colors = ("red", "blue", "green")
+    if target_object_color:
+        color = str(target_object_color).strip().lower()
+        if color not in colors:
+            raise ValueError(f"unsupported high-contrast object color: {target_object_color}")
+        colors = (color,)
     objects = [
         CubeObject(half_size=half_size, mass=0.01, color=color)
-        for half_size in (0.0125, 0.015, 0.0175)
-        for color in ("red", "blue", "green")
+        for half_size in object_half_sizes
+        for color in colors
     ]
-    return PickLiftEnv(config=PickConfig(objects=objects), render_mode=None)
+    return PickLiftEnv(
+        config=PickConfig(
+            objects=objects,
+            spawn_center=spawn_center,
+            spawn_min_radius=spawn_min_radius,
+            spawn_max_radius=spawn_max_radius,
+            spawn_angle_half_range_deg=spawn_angle_half_range_deg,
+        ),
+        render_mode=None,
+    )
 
 
 def _high_contrast_object_description() -> list[dict[str, Any]]:
