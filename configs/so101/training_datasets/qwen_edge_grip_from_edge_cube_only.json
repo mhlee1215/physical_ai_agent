@@ -4,6 +4,7 @@
   "scenario": "pick_up_cube",
   "execution_policy": "qwen_edge_chain",
   "task": "grip_from_edge_cube",
+  "action_mode": "absolute_qpos",
   "train_dataset": {
     "name": "grip_from_edge_cube_train",
     "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-train100-ego-wrist-256",
@@ -11,6 +12,7 @@
     "hf_repo_type": "dataset",
     "hf_path_in_repo": "datasets/grip_from_edge_cube/train",
     "root": "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/grip_from_edge_cube/train",
+    "grid_bin_sidecar": "_workspace/hf_datasets/mhlee1215__so101-nexus-sim-dataset/datasets/grip_from_edge_cube/train/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
     "expected_episodes": 100,
     "expected_frames": 2748
   },
@@ -69,6 +71,7 @@
     "task_prompt": "Close the gripper on the green cube edge and lift.",
     "qwen_object": "green cube",
     "env_object_color": "green",
+    "action_contract_mode": "processor",
     "base_seed": 98300,
     "valid_mask_checkpoint": "_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt",
     "success_metric": "grip_from_edge_cube final success/grasp/lift metrics",

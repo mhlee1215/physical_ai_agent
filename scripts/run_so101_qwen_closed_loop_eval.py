@@ -66,7 +66,41 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps-per-primitive", type=int, default=None)
     parser.add_argument("--policy-n-action-steps", type=int, default=15)
     parser.add_argument("--policy-num-steps", type=int, default=10)
+    parser.add_argument(
+        "--policy-sampling-seed",
+        type=int,
+        default=None,
+        help="Optional deterministic seed for policy action sampling at each re-query boundary.",
+    )
+    parser.add_argument(
+        "--action-contract-mode",
+        choices=[
+            "processor",
+            "legacy",
+            "processor_dataset_clamp",
+            "processor_gripper_snap",
+            "processor_delta_q",
+            "visual_servo_delta_q",
+            "visual_servo_gt_delta_q",
+            "gt_teacher_replay_delta_q",
+            "gt_staged_waypoint_target",
+            "gt_label_nn_staged_waypoint_target",
+        ],
+        default="processor",
+        help=(
+            "How SmolVLA actions are converted before env.step. processor uses saved LeRobot "
+            "pre/postprocessors; legacy reproduces the old direct select_action path; "
+            "processor_dataset_clamp additionally clamps postprocessed actions to train dataset action min/max; "
+            "processor_gripper_snap snaps the gripper axis to train dataset open/closed bounds; "
+            "processor_delta_q treats postprocessed actions as delta-q and executes observation.state + delta."
+        ),
+    )
     parser.add_argument("--valid-mask-checkpoint", type=Path)
+    parser.add_argument(
+        "--allow-fixed-horizon-without-valid-mask",
+        action="store_true",
+        help="Debug only: run each primitive for fixed n_action_steps chunks without a valid-mask checkpoint.",
+    )
     parser.add_argument("--valid-mask-threshold", type=float, default=0.5)
     parser.add_argument("--valid-mask-consecutive", type=int, default=2)
     parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
@@ -76,8 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Render PNG/MP4 media during the rollout. Default records replay metadata only.",
     )
-    parser.add_argument("--artifact-width", type=int, default=128)
-    parser.add_argument("--artifact-height", type=int, default=128)
+    parser.add_argument("--artifact-width", type=int, default=256)
+    parser.add_argument("--artifact-height", type=int, default=256)
     parser.add_argument("--artifact-fps", type=int, default=12)
     parser.add_argument("--artifact-every-n-steps", type=int, default=1)
     parser.add_argument(
@@ -108,7 +142,7 @@ def main() -> None:
             policy_routes=routes,
         )
     else:
-        if args.valid_mask_checkpoint is None:
+        if args.valid_mask_checkpoint is None and not args.allow_fixed_horizon_without_valid_mask:
             raise SystemExit("--valid-mask-checkpoint is required for Qwen closed-loop tests")
         report = run_closed_loop_plan(
             plan=plan,
@@ -123,6 +157,7 @@ def main() -> None:
             max_steps_per_primitive=args.max_steps_per_primitive,
             policy_n_action_steps=args.policy_n_action_steps,
             policy_num_steps=args.policy_num_steps,
+            policy_sampling_seed=args.policy_sampling_seed,
             valid_mask_checkpoint=args.valid_mask_checkpoint,
             valid_mask_threshold=args.valid_mask_threshold,
             valid_mask_consecutive=args.valid_mask_consecutive,
@@ -138,6 +173,7 @@ def main() -> None:
             start_contract=args.start_contract,
             start_report_path=args.start_report_path,
             precondition_plan=precondition_plan,
+            action_contract_mode=args.action_contract_mode,
             env_factory=_env_factory_for_args(args),
         )
     print(json.dumps(report, indent=2, sort_keys=True))

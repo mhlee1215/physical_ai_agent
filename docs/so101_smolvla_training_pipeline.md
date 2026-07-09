@@ -78,9 +78,10 @@ and MPS use the same augmentation path.
 Action smoothness is not data augmentation. Do not use action-label dropout to
 make predicted chunks smoother. If generated action chunks are jittery, prefer:
 
-- training-side temporal smoothness loss on predicted chunks, such as
-  `lambda_smooth * mean((pred_action[t+1] - pred_action[t]) ** 2)`, starting
-  with a small weight like `0.01`;
+- training-side temporal jerk/smoothness loss on the differentiable SmolVLA
+  flow action estimate `action_hat = noise - v_t`, such as
+  `lambda_smooth * mean((action_hat[t+1] - 2 * action_hat[t] + action_hat[t-1]) ** 2)`,
+  starting with a small weight like `0.01`;
 - inference-side temporal ensembling or chunk-boundary smoothing for rollout
   execution.
 
@@ -147,6 +148,38 @@ The manifest requires:
 Use `scripts/so101_dataset_manifest.py validate <manifest>` in CI and after
 dataset generation. Use `from-export-report` to turn an exporter report into a
 validated manifest.
+
+### Move-And-Align V2 Dataset-Generation Augmentation
+
+For `move_and_align_cube_edge`, keep train-time augmentation separate from
+dataset-generation augmentation. The v2 dataset is:
+
+```text
+move_and_align_cube_edge_train_v2
+  - generated teacher trajectories
+  - terminal hold included
+  - near-target correction included
+```
+
+The reproducible export recipe is
+`configs/so101/training_datasets/export_recipes.json` entry
+`move_and_align_cube_edge_train_v2`. It writes:
+
+```text
+_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_300_ego_wrist_256_seed124000
+```
+
+The intended composition is 300 episodes:
+
+- about half standard generated teacher trajectories from the home-closed
+  start distribution;
+- about half near-target correction trajectories that start close to the
+  aligned edge pose with joint/XY perturbations;
+- 20 terminal hold frames after the target edge-aligned pose.
+
+This is not on-the-fly image/state augmentation. It changes the teacher
+trajectory distribution so the policy sees target-near correction and
+goal-hold behavior during supervised training.
 
 ## Teacher/Student Gap
 

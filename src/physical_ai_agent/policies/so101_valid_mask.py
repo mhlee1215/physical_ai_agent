@@ -57,8 +57,12 @@ def execution_horizon_from_valid_probs(
 ) -> tuple[int, str]:
     """Map valid probabilities to the number of action steps to execute."""
 
+    probs = torch.as_tensor(valid_probs).detach().flatten().float()
     horizon = max(1, int(max_horizon))
-    stop_index = first_invalid_step(valid_probs, threshold=threshold, consecutive=consecutive)
+    if probs.numel() > 0:
+        horizon = min(horizon, int(probs.numel()))
+    probs_for_horizon = probs[:horizon]
+    stop_index = first_invalid_step(probs_for_horizon, threshold=threshold, consecutive=consecutive)
     if stop_index is None:
         return horizon, "max_horizon"
     return max(1, min(horizon, int(stop_index))), "valid_mask_stop"

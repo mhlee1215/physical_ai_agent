@@ -199,13 +199,40 @@ Preferred order for dependency-related fixes:
 - Do not persist direct edits to external library files in PRs or handoff
   artifacts.
 
+### Source-Backed Architecture and Algorithm Policy
+
+Before implementing or materially changing model architecture, a well-known
+algorithm, or a named robotics/ML technique, the owner must perform a web
+search for comparable official docs, papers, and open-source implementations.
+Implementation should start from the closest credible source-backed pattern,
+not from a freshly invented design.
+
+Required behavior:
+
+- Search first, then implement. Use official docs, papers, or maintained
+  reference code when available.
+- Record the source-backed rationale in the PR, research note, or concise code
+  comment when the implementation choice is non-obvious.
+- If no good reference exists, say so explicitly and label the implementation
+  as experimental or debug-only.
+- For SmolVLA, visual-servo, affordance, waypoint, action-chunk, verifier,
+  or termination-head work, do not add ad hoc heads, losses, controller
+  conventions, or perception features without this source-backed pass.
+
 ### SO101 SmolVLA Fine-Tuning Watch Policy
 
 For RunPod SO101 SmolVLA fine-tuning babysitting, checkpoint and evaluation
 policy is:
 
-- Keep only the validation-best checkpoint plus one latest checkpoint needed for
-  crash recovery. A pruner may delete older non-best checkpoints after each save.
+- Keep only three best checkpoint aliases while a SO101 training run is active:
+  `best_closed_loop`, `best_val_loss`, and `best_train_loss`. Numeric periodic
+  checkpoint directories are temporary save candidates and must be pruned after
+  each checkpoint event. Do not keep a separate latest checkpoint unless the
+  user explicitly asks for crash-recovery archival storage.
+- After a SO101 training run finishes, delete the run artifact directory if its
+  closed-loop test success rate is exactly `0.0`. Runs without a closed-loop
+  result are missing-evidence runs, not success-zero runs; label them before
+  deciding whether to delete them.
 - SO101 training, supervised evaluation, and loop test are all mandatory phases.
   The canonical flow is owned by the training process: train, run supervised
   evaluation, save checkpoint, then run the scheduled loop test.
@@ -223,8 +250,31 @@ policy is:
   the training loop must invoke loop tests directly after checkpoint/evaluation
   events through the one-shot `scripts/run_so101_training_loop_test.py`
   entrypoint.
-- Whenever TensorBoard is started or reported, include both the local URL and
-  the same-Wi-Fi mobile TensorBoard URL.
+- Every SO101 retraining/restart must begin with a clean TensorBoard view.
+  Before launching the new training process, delete old TensorBoard event files
+  for that run logdir so graphs and images reflect only the current run. During
+  an already-active run, preserve the active writer's event file and restart
+  only TensorBoard when the display needs refreshing.
+- Loop-test review GIFs must match the TensorBoard closed-loop media rendering.
+  If a GIF is checked into a PR, research note, or handoff as closed-loop
+  evidence, generate it from the same side-by-side camera1/camera2 renderer that
+  writes `closed_loop/<test_id>/rollout_camera1_camera2_episode_*` to
+  TensorBoard. Do not use raw rollout GIFs when TensorBoard shows labeled
+  side-by-side policy-input media.
+- Whenever TensorBoard is started or reported, include the TensorBoard access
+  set together: local URL, same-Wi-Fi mobile URL, and an external-access URL.
+  Use a `cloudflared` quick tunnel for the external URL when available; if it
+  is unavailable, report the external URL as unavailable with the reason
+  instead of omitting it.
+- Robot Experiment Manager / dataset viewer servers must be managed by
+  `launchctl`, not by `nohup ... &`. Use
+  `sh scripts/launch_so101_dataset_viewer.sh restart` as the standard start or
+  restart command and `sh scripts/launch_so101_dataset_viewer.sh status` for
+  checks. The LaunchAgent label is
+  `com.physical-ai-agent.dataset-viewer`, and logs are written under
+  `_workspace/logs/`. This avoids Codex command cleanup reaping a background
+  child process and making the server appear to die immediately after a
+  successful `/api/datasets` response.
 - SO101 training-time closed-loop validation must run exactly 10 episodes by
   default. Keep `--closed-loop-episodes 10` in both launcher and monitor
   command paths; use any other count only for an explicitly labeled one-off
@@ -293,11 +343,12 @@ policy is:
   closed-loop test inputs stay unaugmented. Do not use teacher-action dropout in
   BC runs.
 - If SO101 action chunks look jittery, handle it as action smoothness, not data
-  augmentation. Preferred training-side regularization is an explicit temporal
-  smoothness loss on predicted action chunks, for example
-  `lambda_smooth * mean((pred_action[t+1] - pred_action[t]) ** 2)` with a small
-  starting weight such as `0.01`. Preferred inference-side mitigation is
-  temporal ensembling or chunk-boundary smoothing. Do not corrupt teacher action
+  augmentation. Preferred training-side regularization is explicit temporal
+  jerk/smoothness loss on the differentiable SmolVLA flow action estimate
+  `action_hat = noise - v_t`, for example
+  `lambda_smooth * mean((action_hat[t+1] - 2 * action_hat[t] + action_hat[t-1]) ** 2)`
+  with a small starting weight such as `0.01`. Preferred inference-side
+  mitigation is temporal ensembling or chunk-boundary smoothing. Do not corrupt teacher action
   labels to get smoother motion.
 - Pipeline PRs that touch SO101 SmolVLA training, dataset generation,
   augmentation, caching, validation, or closed-loop scheduling must run:
@@ -1902,6 +1953,28 @@ PYTHONPATH=src:. .venv/bin/python scripts/real_so100_pregrasp_probe.py --episode
 PYTHONPATH=src:. .venv/bin/python scripts/real_so100_jaw_readiness.py --image _workspace/real_so100/<new_observe_dir>/frames/camera_0_000001.jpg --output _workspace/real_so100/<new_observe_dir>/camera_0_jaw_readiness_frame_000001.json
 PYTHONPATH=src:. .venv/bin/python scripts/real_so100_next_action_gate.py --pregrasp-probe _workspace/real_so100/<new_observe_dir>/pregrasp_probe_frame_000001.json --jaw-readiness _workspace/real_so100/<new_observe_dir>/camera_0_jaw_readiness_frame_000001.json --object-view-camera 1 --jaw-camera 0 --grasp-outcome _workspace/real_so100/gripper_close_minus120_contact_probe_001/grasp_outcome.json --output _workspace/real_so100/<new_observe_dir>/next_action_gate.json
 ```
+
+## SO101 Training Data Sampling Policy
+
+SO101 SmolVLA training must use camera1 object-position 4x4 grid-bin balanced
+sampling. This is a mandatory launcher/harness contract, not a best-effort
+optimization.
+
+Required behavior:
+
+- Every train dataset entry must have a camera1 grid-bin sidecar at
+  `meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet`, either
+  declared explicitly as `grid_bin_sidecar` or generated by the launcher before
+  training starts.
+- `scripts/start_so101_training.py` must fail before model setup if it cannot
+  provide a grid-bin sidecar for a train split.
+- `scripts/lerobot_train_so101_lightning.py` must route sidecar-backed train
+  datasets through `camera_grid_bin_balanced` sampling. Virtual-merge training
+  must preserve per-child sidecars instead of falling back to ordinary random
+  or dataset-only balanced sampling.
+- Validation and closed-loop test splits remain unbalanced for evaluation.
+  Generate sidecars there only for diagnostics or viewer statistics, not for
+  changing evaluation sampling.
 
 ## AI & Coding-Agent Disclosure Policy for Papers
 

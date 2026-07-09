@@ -6,9 +6,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import numpy as np
+
 from physical_ai_agent.agent_core.qwen_so101_closed_loop import (
     LoopArtifactConfig,
     _apply_start_contract_to_env,
+    _execution_horizon_from_valid_probs,
+    _ground_truth_visual_servo_trace,
+    _select_env_action_with_trace,
+    _visual_servo_should_stop,
+    _visual_servo_waypoint_fallback_reason,
     parse_primitive_policy_routes,
     resolve_policy_routes,
     run_closed_loop_plan,
@@ -20,6 +27,13 @@ from physical_ai_agent.agent_core.qwen_so101_tool_planner import (
 
 
 class QwenSO101ClosedLoopTest(unittest.TestCase):
+    def test_loop_artifact_config_requires_256_resolution(self) -> None:
+        self.assertEqual(LoopArtifactConfig().width, 256)
+        self.assertEqual(LoopArtifactConfig().height, 256)
+
+        with self.assertRaisesRegex(ValueError, "must be 256x256"):
+            LoopArtifactConfig(width=128, height=128)
+
     def test_plan_routes_three_separate_primitive_policies(self) -> None:
         plan = _plan()
         routes = resolve_policy_routes(
@@ -117,6 +131,600 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                 "align_fixed_jaw_cube_edge",
                 "grip_from_edge_cube",
             ],
+        )
+
+    def test_valid_mask_is_requeried_at_action_step_boundaries(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[
+                SO101PrimitiveCall(
+                    0,
+                    "move",
+                    "green cube",
+                    "move_and_align_cube_edge",
+                    "move and align prompt",
+                    40,
+                )
+            ],
+        )
+        valid_mask_head = SequenceValidMaskHead(
+            [
+                [1.0] * 50,
+                [1.0] * 50,
+                [1.0] * 50,
+            ]
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    policy_n_action_steps=15,
+                    valid_mask_head=valid_mask_head,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=fake_batch_builder,
+                )
+            trace_rows = _read_jsonl(Path(report["episodes"][0]["trace_path"]))
+
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["episodes"][0]["steps"], 40)
+        self.assertEqual(valid_mask_head.calls, 3)
+        self.assertEqual(
+            [decision["budget"] for decision in report["episodes"][0]["primitive_summaries"][0]["valid_mask"]["decisions"]],
+            [15, 15, 10],
+        )
+        self.assertEqual(
+            [row["valid_mask"]["chunk_start_primitive_step"] for row in trace_rows if row["primitive_step"] in {0, 15, 30}],
+            [0, 15, 30],
+        )
+
+    def test_valid_mask_and_execution_share_same_predicted_action_chunk(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[
+                SO101PrimitiveCall(
+                    0,
+                    "move",
+                    "green cube",
+                    "move_and_align_cube_edge",
+                    "move and align prompt",
+                    20,
+                )
+            ],
+        )
+        valid_mask_head = SequenceValidMaskHead([[1.0] * 50, [1.0] * 50])
+        executors = []
+
+        def loader(policy_path: str, local_files_only: bool, device: str) -> FakePolicyExecutor:
+            del local_files_only, device
+            executor = FakePolicyExecutor(policy_path)
+            executors.append(executor)
+            return executor
+
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    policy_n_action_steps=15,
+                    valid_mask_head=valid_mask_head,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeEnv,
+                    policy_loader=loader,
+                    batch_builder=fake_batch_builder,
+                )
+            trace_rows = _read_jsonl(Path(report["episodes"][0]["trace_path"]))
+
+        self.assertEqual(executors[0].chunk_calls, 2)
+        self.assertEqual(valid_mask_head.calls, 2)
+        self.assertEqual(trace_rows[0]["action"], [1.0, 0.0, 0.3, 0.4, 0.5, 0.6])
+        self.assertEqual(trace_rows[14]["action"], [1.0, 14.0, 0.3, 0.4, 0.5, 0.6])
+        self.assertEqual(trace_rows[15]["action"], [2.0, 0.0, 0.3, 0.4, 0.5, 0.6])
+        self.assertEqual(trace_rows[0]["policy_output"]["action_chunk_source"], "shared_predict_action_chunk")
+        self.assertEqual(trace_rows[0]["valid_mask"]["action_chunk_source"], "shared_predict_action_chunk")
+
+    def test_policy_input_state_uses_training_qpos_contract_not_env_observation(self) -> None:
+        class ActionSpace:
+            low = [-2.0] * 6
+            high = [2.0] * 6
+
+        class QposEnv(FakeEnv):
+            action_space = ActionSpace()
+
+            @property
+            def unwrapped(self):
+                return self
+
+            def reset(self, seed: int):
+                self.step_count = 0
+                self.qpos = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
+                return [999.0, 998.0, 997.0, 996.0, 995.0, 994.0], {"seed": seed}
+
+            def step(self, action):
+                self.qpos = [float(value) for value in action[:6]]
+                return super().step(action)
+
+        valid_mask_head = SequenceValidMaskHead([[1.0] * 50])
+        helpers = {"_current_qpos": lambda env: env.qpos}
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_export_helpers",
+                    return_value=helpers,
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=SO101ToolPlan(
+                        task="move and align",
+                        model="qwen3-vl-8b-instruct-mlx",
+                        thinking_mode="non-thinking",
+                        calls=[
+                            SO101PrimitiveCall(
+                                0,
+                                "move",
+                                "green cube",
+                                "move_and_align_cube_edge",
+                                "move and align prompt",
+                                1,
+                            )
+                        ],
+                    ),
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    policy_n_action_steps=15,
+                    valid_mask_head=valid_mask_head,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=QposEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=fake_batch_builder,
+                )
+            trace_rows = _read_jsonl(Path(report["episodes"][0]["trace_path"]))
+
+        self.assertEqual(
+            trace_rows[0]["policy_output"]["policy_input_state_raw"],
+            [10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
+        )
+        self.assertNotEqual(trace_rows[0]["policy_output"]["policy_input_state_raw"], trace_rows[0]["observation"])
+
+    def test_valid_mask_stop_ends_primitive_after_current_chunk_decision(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[
+                SO101PrimitiveCall(
+                    0,
+                    "move",
+                    "green cube",
+                    "move_and_align_cube_edge",
+                    "move and align prompt",
+                    40,
+                )
+            ],
+        )
+        valid_mask_head = SequenceValidMaskHead(
+            [
+                [1.0] * 50,
+                [1.0, 0.1, 0.1, *([0.0] * 47)],
+            ]
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            executors = []
+            envs = []
+
+            def loader(policy_path: str, local_files_only: bool, device: str) -> FakePolicyExecutor:
+                del local_files_only, device
+                executor = FakePolicyExecutor(policy_path)
+                executors.append(executor)
+                return executor
+
+            def env_factory(env_id: str, render_mode: str | None = None) -> FakeVisualServoEnv:
+                env = FakeVisualServoEnv(env_id, render_mode)
+                envs.append(env)
+                return env
+
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    policy_n_action_steps=15,
+                    valid_mask_head=valid_mask_head,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=fake_batch_builder,
+                )
+
+        primitive = report["episodes"][0]["primitive_summaries"][0]
+        self.assertEqual(report["episodes"][0]["steps"], 16)
+        self.assertEqual(valid_mask_head.calls, 2)
+        self.assertEqual(primitive["valid_mask"]["reason"], "valid_mask_stop")
+        self.assertEqual([decision["budget"] for decision in primitive["valid_mask"]["decisions"]], [15, 1])
+
+    def test_valid_mask_stop_after_current_chunk_horizon_does_not_end_primitive(self) -> None:
+        horizon, reason = _execution_horizon_from_valid_probs(
+            [1.0] * 15 + [0.0, 0.0],
+            max_horizon=15,
+            threshold=0.5,
+            consecutive=2,
+        )
+
+        self.assertEqual(horizon, 15)
+        self.assertEqual(reason, "max_horizon")
+
+    def test_fixed_horizon_closed_loop_runs_without_valid_mask_head(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[
+                SO101PrimitiveCall(
+                    0,
+                    "move",
+                    "green cube",
+                    "move_and_align_cube_edge",
+                    "move and align prompt",
+                    40,
+                )
+            ],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    max_steps_per_primitive=40,
+                    policy_n_action_steps=15,
+                    valid_mask_head=None,
+                    valid_mask_checkpoint=None,
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeEnv,
+                    policy_loader=fake_policy_loader,
+                    batch_builder=fake_batch_builder,
+                )
+
+        primitive = report["episodes"][0]["primitive_summaries"][0]
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["valid_mask"]["mode"], "fixed_horizon")
+        self.assertEqual(report["valid_mask"]["required_for_loop_test"], False)
+        self.assertEqual(report["episodes"][0]["steps"], 40)
+        self.assertEqual(primitive["valid_mask"]["reason"], "max_horizon")
+        self.assertEqual(
+            [decision["budget"] for decision in primitive["valid_mask"]["decisions"]],
+            [15, 15, 10],
+        )
+        self.assertTrue(all(decision["reason"] == "fixed_horizon" for decision in primitive["valid_mask"]["decisions"]))
+
+    def test_gt_staged_waypoint_closed_loop_does_not_load_policy_or_build_batch(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[SO101PrimitiveCall(0, "move", "green cube", "move_and_align_cube_edge", "move prompt", 3)],
+        )
+
+        def fail_policy_loader(policy_path: str, local_files_only: bool, device: str):
+            del policy_path, local_files_only, device
+            raise AssertionError("GT staged waypoint controller must not load a policy")
+
+        def fail_batch_builder(*args, **kwargs):
+            del args, kwargs
+            raise AssertionError("GT staged waypoint controller must not build a policy batch")
+
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._apply_start_contract_to_env",
+                    return_value={
+                        "applied": True,
+                        "mode": "unit_gt_waypoint",
+                        "observation": [0.0] * 6,
+                        "q_above": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+                        "q_edge": [0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
+                    },
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="unused_policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    max_steps_per_primitive=3,
+                    policy_n_action_steps=15,
+                    valid_mask_head=FakeValidMaskHead(),
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=FakeVisualServoEnv,
+                    policy_loader=fail_policy_loader,
+                    batch_builder=fail_batch_builder,
+                    action_contract_mode="gt_staged_waypoint_target",
+                )
+            trace_rows = _read_jsonl(Path(report["episodes"][0]["trace_path"]))
+
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["valid_mask"]["mode"], "fixed_horizon")
+        self.assertEqual(report["episodes"][0]["steps"], 3)
+        self.assertEqual(trace_rows[0]["policy_output"]["processor_source"], "ground_truth_staged_waypoint")
+        self.assertEqual(trace_rows[0]["action"], [0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+        self.assertEqual(
+            trace_rows[0]["image_feature_mapping"],
+            {
+                "observation.images.camera1": "egocentric_cam",
+                "observation.images.camera2": "wrist_cam",
+            },
+        )
+
+    def test_visual_servo_delta_q_ignores_action_chunk_valid_mask(self) -> None:
+        plan = SO101ToolPlan(
+            task="move and align",
+            model="qwen3-vl-8b-instruct-mlx",
+            thinking_mode="non-thinking",
+            calls=[SO101PrimitiveCall(0, "move", "green cube", "move_and_align_cube_edge", "move prompt", 40)],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            executors = []
+            envs = []
+
+            def loader(policy_path: str, local_files_only: bool, device: str) -> FakePolicyExecutor:
+                del local_files_only, device
+                executor = FakePolicyExecutor(policy_path)
+                executors.append(executor)
+                return executor
+
+            def env_factory(env_id: str, render_mode: str | None = None) -> FakeVisualServoEnv:
+                env = FakeVisualServoEnv(env_id, render_mode)
+                envs.append(env)
+                return env
+
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._make_renderers_or_none",
+                    return_value={"egocentric_cam": object(), "wrist_cam": object()},
+                ),
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._render_policy_cameras",
+                    return_value={"egocentric_cam": "ego_pixels", "wrist_cam": "wrist_pixels"},
+                ),
+            ):
+                report = run_closed_loop_plan(
+                    plan=plan,
+                    output_dir=Path(tmpdir),
+                    default_policy_path="policy",
+                    episodes=1,
+                    seed=7,
+                    device="cpu",
+                    local_files_only=True,
+                    max_steps_per_primitive=40,
+                    policy_n_action_steps=15,
+                    valid_mask_head=FakeValidMaskHead(),
+                    artifact_config=LoopArtifactConfig(enabled=True, render_media=False),
+                    env_factory=env_factory,
+                    policy_loader=loader,
+                    batch_builder=fake_batch_builder,
+                    action_contract_mode="visual_servo_delta_q",
+                )
+                rows = _read_jsonl(Path(report["episodes"][0]["trace_path"]))
+
+        primitive = report["episodes"][0]["primitive_summaries"][0]
+        self.assertEqual(report["valid_mask"]["mode"], "fixed_horizon")
+        self.assertEqual(report["episodes"][0]["steps"], 40)
+        self.assertEqual(primitive["valid_mask"]["reason"], "max_horizon")
+        self.assertTrue(all(decision["reason"] == "fixed_horizon" for decision in primitive["valid_mask"]["decisions"]))
+        self.assertEqual(executors[0].visual_servo_calls, 8)
+        self.assertEqual([round(action[0], 2) for action in envs[0].actions[:4]], [7.01, 7.02, 7.03, 7.04])
+        inference_steps = [
+            row["primitive_step"]
+            for row in rows
+            if row["policy_output"]["visual_servo_hold"]["inference_frame"]
+        ]
+        self.assertEqual(inference_steps, [0, 5, 10, 15, 20, 25, 30, 35])
+
+    def test_ground_truth_visual_servo_trace_uses_rendered_camera_pixels(self) -> None:
+        ego = np.full((64, 64, 3), 128, dtype=np.uint8)
+        wrist = np.full((64, 64, 3), 128, dtype=np.uint8)
+        wrist[10:24, 44:58] = [0, 220, 0]
+
+        trace = _ground_truth_visual_servo_trace({"egocentric_cam": ego, "wrist_cam": wrist})
+
+        self.assertEqual(trace["processor_source"], "ground_truth_visual_servo_label")
+        self.assertEqual(trace["servo_camera"], "camera2")
+        self.assertGreater(trace["camera2"]["dx_norm"], 0.0)
+        self.assertLess(trace["camera2"]["dy_norm"], 0.0)
+        self.assertNotEqual(trace["delta_q"], [0.0] * 6)
+
+    def test_ground_truth_visual_servo_trace_does_not_move_when_target_invisible(self) -> None:
+        image = np.full((64, 64, 3), 128, dtype=np.uint8)
+
+        trace = _ground_truth_visual_servo_trace({"egocentric_cam": image, "wrist_cam": image})
+
+        self.assertFalse(trace[trace["servo_camera"]]["visible"])
+        self.assertEqual(trace["delta_q"], [0.0] * 6)
+
+    def test_ground_truth_visual_servo_action_contract_does_not_fall_back_to_legacy(self) -> None:
+        ego = np.full((64, 64, 3), 128, dtype=np.uint8)
+        wrist = np.full((64, 64, 3), 128, dtype=np.uint8)
+        wrist[10:24, 44:58] = [0, 220, 0]
+
+        result = _select_env_action_with_trace(
+            policy_executor=object(),
+            policy=object(),
+            obs=[0.0] * 6,
+            action_base_qpos=[0.0] * 6,
+            camera_pixels={"egocentric_cam": ego, "wrist_cam": wrist},
+            instruction="move",
+            action_dim=6,
+            action_contract_mode="visual_servo_gt_delta_q",
+            dataset_action_bounds={},
+        )
+
+        self.assertEqual(result["action_contract_mode"], "visual_servo_gt_delta_q")
+        self.assertEqual(result["processor_source"], "ground_truth_visual_servo_label")
+        self.assertNotEqual(result["delta_q_action"], [0.0] * 6)
+
+    def test_ground_truth_visual_servo_uses_waypoint_fallback_when_target_is_occluded(self) -> None:
+        image = np.full((64, 64, 3), 128, dtype=np.uint8)
+
+        result = _select_env_action_with_trace(
+            policy_executor=object(),
+            policy=object(),
+            obs=[0.0] * 6,
+            action_base_qpos=[0.0] * 6,
+            gt_waypoint_qpos=[0.2, -0.2, 0.1, 0.0, 0.3, 0.0],
+            camera_pixels={"egocentric_cam": image, "wrist_cam": image},
+            instruction="move",
+            action_dim=6,
+            action_contract_mode="visual_servo_gt_delta_q",
+            dataset_action_bounds={},
+        )
+
+        self.assertEqual(result["processor_source"], "ground_truth_visual_servo_label_with_waypoint_fallback")
+        self.assertEqual(result["visual_servo_prediction"]["waypoint_fallback"]["reason"], "target_not_visible")
+        self.assertEqual(result["delta_q_action"], [0.08, -0.08, 0.08, 0.0, 0.08, 0.0])
+
+    def test_ground_truth_visual_servo_waypoint_fallback_can_be_latched(self) -> None:
+        image = np.full((64, 64, 3), 128, dtype=np.uint8)
+
+        result = _select_env_action_with_trace(
+            policy_executor=object(),
+            policy=object(),
+            obs=[0.0] * 6,
+            action_base_qpos=[0.0, 0.0, 0.0, 0.0, 0.0, -0.4],
+            gt_waypoint_qpos=[-0.2, 0.2, 0.1, 0.0, -0.3, 0.4],
+            primitive_step=40,
+            waypoint_fallback_reason_override="target_not_visible",
+            camera_pixels={"egocentric_cam": image, "wrist_cam": image},
+            instruction="move",
+            action_dim=6,
+            action_contract_mode="visual_servo_gt_delta_q",
+            dataset_action_bounds={},
+        )
+
+        self.assertEqual(result["processor_source"], "ground_truth_visual_servo_label_with_waypoint_fallback")
+        self.assertEqual(result["visual_servo_prediction"]["waypoint_fallback"]["reason"], "target_not_visible")
+        self.assertEqual(result["delta_q_action"], [-0.08, 0.08, 0.08, 0.0, -0.08, 0.0])
+
+    def test_ground_truth_visual_servo_uses_late_waypoint_fallback_for_diverged_wrist_error(self) -> None:
+        reason = _visual_servo_waypoint_fallback_reason(
+            {
+                "servo_camera": "camera2",
+                "camera2": {
+                    "visible": True,
+                    "dx_norm": -0.2,
+                    "dy_norm": 0.72,
+                    "edge_angle_error": -0.72,
+                },
+            },
+            primitive_step=90,
+        )
+
+        self.assertEqual(reason, "late_wrist_divergence")
+
+    def test_visual_servo_stops_after_waypoint_fallback_when_wrist_target_is_large(self) -> None:
+        self.assertTrue(
+            _visual_servo_should_stop(
+                {
+                    "visual_servo_prediction": {
+                        "servo_camera": "camera2",
+                        "stop_prob": 1.0,
+                        "waypoint_fallback": {"enabled": True, "reason": "camera1_centered_without_wrist_depth"},
+                        "camera2": {
+                            "visible": True,
+                            "dx_norm": 0.1,
+                            "dy_norm": -0.4,
+                            "edge_angle_error": 0.5,
+                            "target_area": 700,
+                        },
+                    }
+                }
+            )
         )
 
     def test_closed_loop_blocks_when_policy_cameras_are_missing(self) -> None:
@@ -486,6 +1094,69 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
         self.assertEqual(state["dataset_task"], "second")
         self.assertEqual(wrapper.env.qpos, [1, 2, 3, 4, 5, 6])
 
+    def test_start_contract_replays_explicit_closed_loop_forced_spawn_xy(self) -> None:
+        class ActionSpace:
+            low = [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+            high = [1.0, 1.0, 1.0, 1.0, 1.0, 2.0]
+
+        class GymEnv:
+            action_space = ActionSpace()
+
+            def __init__(self) -> None:
+                self.unwrapped = self
+                self.qpos = None
+
+            def reset(self, *, seed=None):
+                del seed
+                return [0.0]
+
+        class Wrapper:
+            def __init__(self) -> None:
+                self.env = GymEnv()
+
+        def set_qpos(env, qpos):
+            env.qpos = [float(value) for value in qpos]
+
+        with TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "so101_lerobot_export_report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "episodes": [
+                            {
+                                "seed": 501,
+                                "object_color": "green",
+                                "object_shape": "cube",
+                                "task": "first",
+                                "q_start": [1, 2, 3, 4, 5, 6],
+                                "forced_spawn_xy": [0.03, 0.24],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            wrapper = Wrapper()
+            with (
+                patch(
+                    "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_export_helpers",
+                    return_value={"_set_qpos": set_qpos, "_current_qpos": lambda env: env.qpos},
+                ),
+                patch("physical_ai_agent.agent_core.qwen_so101_closed_loop._set_forced_object_xy") as set_object_xy,
+            ):
+                state = _apply_start_contract_to_env(
+                    env=wrapper,
+                    start_contract="grip_from_edge_cube",
+                    seed=98300,
+                    episode_index=0,
+                    object_color="green",
+                    start_report_path=report_path,
+                )
+
+        set_object_xy.assert_called_once_with(wrapper.env, [0.03, 0.24])
+        self.assertEqual(state["forced_spawn_xy"], [0.03, 0.24])
+        self.assertEqual(wrapper.env.qpos, [1, 2, 3, 4, 5, 6])
+
     def test_loop_validation_splits_replay_their_first_frame_states(self) -> None:
         try:
             import pandas as pd
@@ -659,6 +1330,88 @@ class QwenSO101ClosedLoopTest(unittest.TestCase):
                     self.assertEqual(state["source"], "explicit_loop_validation_first_frame_q_start")
                     self.assertTrue(state["applied"])
 
+    def test_explicit_loop_validation_start_restores_exported_sim_snapshot(self) -> None:
+        class ActionSpace:
+            low = [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+            high = [1.0, 1.0, 1.0, 1.0, 1.0, 2.0]
+
+        class Data:
+            def __init__(self) -> None:
+                self.qpos = np.zeros(8, dtype=float)
+                self.qvel = np.zeros(8, dtype=float)
+                self.ctrl = np.zeros(6, dtype=float)
+
+        class GymEnv:
+            action_space = ActionSpace()
+
+            def __init__(self) -> None:
+                self.unwrapped = self
+                self.data = Data()
+                self.reset_seed = None
+
+            def reset(self, *, seed=None):
+                self.reset_seed = seed
+                self.data.qpos[:] = -1.0
+                self.data.qvel[:] = -2.0
+                self.data.ctrl[:] = -3.0
+                return [0.0]
+
+        class Wrapper:
+            def __init__(self) -> None:
+                self.env = GymEnv()
+
+        helpers = {
+            "_set_qpos": lambda env, qpos: setattr(env, "unexpected_qpos_only_restore", list(qpos)),
+            "_current_qpos": lambda env: env.data.qpos[:6].tolist(),
+        }
+
+        snapshot = {
+            "qpos": [10, 11, 12, 13, 14, 15, 16, 17, 18],
+            "qvel": [20, 21, 22, 23, 24, 25, 26, 27, 28],
+            "ctrl": [30, 31, 32, 33, 34, 35],
+        }
+        with TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "so101_lerobot_export_report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "episodes": [
+                            {
+                                "episode_index": 0,
+                                "seed": 98100,
+                                "object_color": "green",
+                                "object_shape": "cube",
+                                "q_start": [0, 1, 2, 3, 4, 5],
+                                "sim_snapshot": snapshot,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            wrapper = Wrapper()
+            with patch(
+                "physical_ai_agent.agent_core.qwen_so101_closed_loop._fixed_jaw_export_helpers",
+                return_value=helpers,
+            ):
+                state = _apply_start_contract_to_env(
+                    env=wrapper,
+                    start_contract="grip_from_edge_cube",
+                    seed=98100,
+                    episode_index=0,
+                    object_color="green",
+                    start_report_path=report_path,
+                )
+
+        self.assertTrue(state["applied"])
+        self.assertEqual(state["source"], "explicit_loop_validation_first_frame_q_start")
+        self.assertEqual(wrapper.env.reset_seed, 98100)
+        self.assertEqual(wrapper.env.data.qpos.tolist(), snapshot["qpos"][:8])
+        self.assertEqual(wrapper.env.data.qvel.tolist(), snapshot["qvel"][:8])
+        self.assertEqual(wrapper.env.data.ctrl.tolist(), snapshot["ctrl"])
+        self.assertFalse(hasattr(wrapper.env, "unexpected_qpos_only_restore"))
+
 
 def _plan() -> SO101ToolPlan:
     return SO101ToolPlan(
@@ -700,15 +1453,80 @@ class FakePolicy:
         return [[[0.0] * 6 for _index in range(50)]]
 
 
+class FakePolicyExecutor:
+    processor_source = "fake_processor"
+    preprocessor = None
+    postprocessor = None
+
+    def __init__(self, policy_path: str) -> None:
+        self.policy = FakePolicy(policy_path)
+        self.visual_servo_calls = 0
+        self.chunk_calls = 0
+
+    def select_action_with_trace(self, observation):
+        del observation
+        action = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+        return {
+            "action": action,
+            "raw_action": action,
+            "postprocessed_action": action,
+            "processor_source": self.processor_source,
+            "preprocessor_steps": [],
+            "postprocessor_steps": [],
+        }
+
+    def predict_action_chunk_with_trace(self, observation):
+        del observation
+        self.chunk_calls += 1
+        action_chunk = [
+            [float(self.chunk_calls), float(index), 0.3, 0.4, 0.5, 0.6]
+            for index in range(50)
+        ]
+        return {
+            "action_chunk": [action_chunk],
+            "raw_action_chunk": [action_chunk],
+            "postprocessed_action_chunk": [action_chunk],
+            "processed_observation": {"observation.state": [[0.0] * 6]},
+            "processor_source": self.processor_source,
+            "preprocessor_steps": [],
+            "postprocessor_steps": [],
+        }
+
+    def predict_visual_servo_with_trace(self, observation):
+        del observation
+        self.visual_servo_calls += 1
+        return {
+            "camera1": {"dx_norm": 0.1, "dy_norm": -0.1, "edge_angle_error": 0.0, "visible": True},
+            "camera2": {"dx_norm": 0.2, "dy_norm": -0.2, "edge_angle_error": 0.0, "visible": True},
+            "stop_prob": 0.0,
+            "delta_q": [0.01, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "processor_source": self.processor_source,
+        }
+
+
 class FakeValidMaskHead:
     def predict_valid_probs(self, state, action_chunk):
         del state, action_chunk
-        return [[1.0, 0.1, 0.1, *([0.0] * 47)]]
+        return [[0.1, 0.1, *([0.0] * 48)]]
+
+
+class SequenceValidMaskHead:
+    def __init__(self, sequences: list[list[float]]) -> None:
+        self.sequences = list(sequences)
+        self.calls = 0
+        self.action_chunks = []
+
+    def predict_valid_probs(self, state, action_chunk):
+        del state
+        self.action_chunks.append(action_chunk)
+        index = min(self.calls, len(self.sequences) - 1)
+        self.calls += 1
+        return [self.sequences[index]]
 
 
 def fake_policy_loader(policy_path: str, local_files_only: bool, device: str) -> FakePolicy:
     del local_files_only, device
-    return FakePolicy(policy_path)
+    return FakePolicyExecutor(policy_path)
 
 
 def fake_batch_builder(
@@ -753,6 +1571,7 @@ class FakeEnv:
         self.action_dim = 6
         self.step_count = 0
         self.closed = False
+        self.actions = []
 
     def reset(self, seed: int):
         self.step_count = 0
@@ -760,12 +1579,26 @@ class FakeEnv:
 
     def step(self, action):
         self.step_count += 1
+        self.actions.append([float(item) for item in action])
         obs = [float(self.step_count), *[float(item) for item in action[:2]]]
         info = {"success": self.step_count >= 6}
         return obs, 1.0, False, False, info
 
     def close(self) -> None:
         self.closed = True
+
+
+class FakeVisualServoEnv(FakeEnv):
+    def reset(self, seed: int):
+        self.step_count = 0
+        return [float(seed), 0.0, 0.0, 0.0, 0.0, 0.0], {"seed": seed}
+
+    def step(self, action):
+        self.step_count += 1
+        self.actions.append([float(item) for item in action])
+        obs = [float(item) for item in action[:6]]
+        info = {"success": self.step_count >= 6}
+        return obs, 1.0, False, False, info
 
 
 def _read_jsonl(path: Path) -> list[dict]:

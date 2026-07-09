@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-06-23
+Last updated: 2026-07-09
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -25,6 +25,15 @@ near-term paper target is RSS SemRob 2026.
 
 The working method is **Imagine-Then-Act**: an agentic wrapper around a frozen
 lightweight VLA policy.
+
+## Durable Implementation Policy
+
+- Source-backed architecture rule: before implementing or changing model
+  architecture, a well-known algorithm, or a named robotics/ML technique, first
+  search the web for official docs, papers, and similar open-source code. Base
+  the implementation on that evidence and record the source-backed rationale in
+  the work note, PR, or code comment as appropriate. Do not invent architecture
+  changes from scratch when comparable public implementations exist.
 
 The immediate collaboration goal is to produce manuscript-table experiment data
 as quickly and efficiently as possible. Research and orchestration choices should
@@ -61,9 +70,14 @@ paper-facing concepts:
 
 - RunPod SO101 SmolVLA fine-tuning is being monitored through the training
   dashboard and JSONL metrics under the active run directory.
-- Checkpoint retention policy for this lane is validation-best checkpoint plus
-  one latest checkpoint for crash recovery. Do not keep every checkpoint unless
-  the user explicitly asks for archival storage.
+- Checkpoint and run retention policy for this lane is strict. During training,
+  keep only `checkpoints/best_closed_loop`, `checkpoints/best_val_loss`, and
+  `checkpoints/best_train_loss`; numeric periodic checkpoint directories are
+  temporary save candidates and must be pruned after each checkpoint event. Do
+  not keep a separate latest checkpoint unless the user explicitly asks for
+  crash-recovery archival storage. After a run finishes, delete its local run
+  artifact directory if closed-loop test success rate is exactly `0.0`; runs
+  without closed-loop evidence are missing-evidence runs, not success-zero runs.
 - Supervised validation loss and closed-loop evaluation are mandatory parts of
   the SO101 training lane. The training process should own the sequence:
   train, run supervised evaluation, save checkpoint, then run the scheduled
@@ -137,13 +151,38 @@ paper-facing concepts:
   run logdir. Closed-loop tests must be invoked from the training process after
   checkpoint/evaluation events through `scripts/run_so101_training_loop_test.py`,
   not by a separate polling monitor.
-- User policy: whenever TensorBoard is started or reported, provide both the
-  local URL and the same-Wi-Fi mobile TensorBoard URL.
+- User policy: every SO101 retraining/restart must begin with a clean
+  TensorBoard view. Before launching the new training process, delete old
+  TensorBoard event files for that run logdir so graphs and images reflect only
+  the current run. During an already-active run, preserve the active writer's
+  event file and restart only TensorBoard when the display needs refreshing.
+- User policy: loop-test GIFs used as PR/research evidence must be generated
+  with the same TensorBoard closed-loop media renderer as
+  `closed_loop/<test_id>/rollout_camera1_camera2_episode_*`. Do not attach raw
+  rollout GIFs when TensorBoard shows labeled side-by-side camera1/camera2
+  policy-input media.
+- User policy: whenever TensorBoard is started or reported, provide the
+  TensorBoard access set together: local URL, same-Wi-Fi mobile URL, and an
+  external-access URL. Use `cloudflared` quick tunnel for the external URL when
+  available; if unavailable, report the external URL as unavailable with the
+  reason instead of omitting it.
+- User policy: Robot Experiment Manager / dataset viewer servers must be
+  launched with `launchctl` through
+  `sh scripts/launch_so101_dataset_viewer.sh restart`. Do not use
+  `nohup ... &` as the standard path for this server; Codex command cleanup can
+  reap that child process after the tool call, which looks like a silent
+  server death even when the app did not crash. The durable LaunchAgent label is
+  `com.physical-ai-agent.dataset-viewer`; logs live under `_workspace/logs/`.
 - User policy: Qwen-chain SO101 loop tests must use the valid-mask termination
   head, not fixed-length primitive execution. Provide
   `closed_loop.valid_mask_checkpoint` in dataset config or
   `--closed-loop-valid-mask-checkpoint` on the launcher; missing valid-mask
   configuration is a contract failure for validation loop tests.
+- User policy: SO101 training must use camera1 object-position 4x4 grid-bin
+  balanced sampling. Every train split must provide or auto-generate
+  `meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet`; the
+  launcher must fail before model setup if it cannot provide this sidecar.
+  Validation and closed-loop test splits remain unbalanced for evaluation.
 - RunPod experiment-data storage policy: past remote experiment results are not
   needed. Starting now, every new RunPod data-generation, training, evaluation,
   and closed-loop run must end with a local download, local verification, and

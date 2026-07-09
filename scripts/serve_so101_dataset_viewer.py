@@ -28,6 +28,7 @@ DATASET_CONTRACT = Path("configs/so101/training_datasets/dataset_contract.json")
 SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_contract.json")
 TRAINING_DATASET_CONFIGS = [
     Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
+    Path("configs/so101/training_datasets/grip_the_cube_v1.json"),
 ]
 INTERACTIVE_RUN_ROOT = Path("_workspace/so101_interactive_sim/runs")
 DEFAULT_VALID_MASK_CHECKPOINT = Path("_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt")
@@ -1939,9 +1940,10 @@ def _index_html() -> str:
 	        </label>
 	        <label>Data type
 	          <select id="viewKind">
-	            <option value="train" selected>Train datasets</option>
-	            <option value="valid">Validation datasets</option>
-	            <option value="preview">Preview datasets</option>
+	            <option value="train" selected>train</option>
+	            <option value="valid">valid</option>
+	            <option value="closed_loop">closed loop test case</option>
+	            <option value="preview">preview</option>
 	          </select>
 	        </label>
 	        <p id="kindMeta" class="meta"></p>
@@ -2002,6 +2004,10 @@ def _index_html() -> str:
 	      </div>
 	      <p class="meta">Full Loop Test Analyzer is mounted inside Experiment Manager with its original filters, episode selector, diagnostics, media generation, synced camera playback, and raw payload panels.</p>
 	      <iframe id="loopAnalyzerFrame" title="Loop Test Analyzer" src="about:blank"></iframe>
+	      <div hidden>
+	        <div id="loopPolicyCameras"></div>
+	        <div id="loopStartCameras">Episode start images</div>
+	      </div>
 	    </section>
 	    </div>
 	    <div id="simPanel" class="panel" hidden>
@@ -2083,6 +2089,7 @@ def _index_html() -> str:
 	    const viewKind = document.getElementById("viewKind");
 	    const kindMeta = document.getElementById("kindMeta");
 	    const datasetPanel = document.getElementById("datasetPanel");
+	    function loopPlaybackTick() {}
 	    const trainingPanel = document.getElementById("trainingPanel");
 	    const trainingRuns = document.getElementById("trainingRuns");
 	    const trainingDetail = document.getElementById("trainingDetail");

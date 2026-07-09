@@ -74,17 +74,17 @@
     "success_threshold": 0.06,
     "test_cases": [
       {
-        "id": "move_and_align_cube_edge",
-        "description": "Uses the move_and_align_cube_edge training split start states. Passes when the final gripper TCP is immediately above/near the cube by tcp_to_obj_dist threshold.",
+        "id": "move_and_align_cube_edge_train_aligned_debug",
+        "description": "Debug-only loop test. Starts from the first frames of the supervised move_and_align_cube_edge training split so train-set teacher fit and closed-loop rollout use the same episode identities.",
         "episodes": 10,
         "steps": 80,
         "seed": 98100,
         "start_contract": "move_and_align_cube_edge",
         "start_dataset": {
-          "name": "move_and_align_cube_edge_loop_validation",
-          "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-loop-validation10-ego-wrist-256",
-          "root": "_workspace/so101_lerobot/move_and_align_cube_edge_loop_validation10_ego_wrist_256_seed123500",
-          "expected_episodes": 10
+          "name": "move_and_align_cube_edge_train",
+          "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train100-ego-wrist-256",
+          "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train100_ego_wrist_256_seed122000",
+          "expected_episodes": 100
         },
         "success_metric": "tcp_to_object_below_threshold",
         "success_threshold": 0.06,

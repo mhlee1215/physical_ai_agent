@@ -1,0 +1,144 @@
+{
+  "name": "move_and_align_cube_edge_v2_delta_q_reachable_bins_mixed_start",
+  "description": "Delta-q move_and_align_cube_edge training with structurally hard camera1 bins removed. Bins 0-4 are excluded because teacher-feasible trajectories ended with poor edge alignment/tcp distance. Remaining bins 5-15 are balanced per split.",
+  "scenario": "move_and_align_cube_edge",
+  "execution_policy": "single_smolvla_qwen_primitive",
+  "task": "move_and_align_cube_edge",
+  "action_mode": "delta_q",
+  "train_datasets": [
+    {
+      "name": "home_start_reachable_bins_5_15",
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-delta-q-reachable-bins-5-15-home-220-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_reachable_bins_5_15_seed272000",
+      "expected_episodes": 220,
+      "expected_frames": 19360,
+      "grid_bin_sidecar": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_reachable_bins_5_15_seed272000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet"
+    },
+    {
+      "name": "mid_start_reachable_bins_5_15",
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-delta-q-reachable-bins-5-15-mid-start-220-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_reachable_bins_5_15_mid_start_seed272000",
+      "expected_episodes": 220,
+      "expected_frames": 12320,
+      "grid_bin_sidecar": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_reachable_bins_5_15_mid_start_seed272000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet"
+    },
+    {
+      "name": "near_target_start_reachable_bins_5_15",
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-delta-q-reachable-bins-5-15-near-target-start-220-ego-wrist-256",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_reachable_bins_5_15_near_target_start_seed272000",
+      "expected_episodes": 220,
+      "expected_frames": 7920,
+      "grid_bin_sidecar": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_reachable_bins_5_15_near_target_start_seed272000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet"
+    }
+  ],
+  "validation_dataset": {
+    "name": "move_and_align_cube_edge_v2_delta_q_reachable_bins_5_15_eval55",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-eval-v2-delta-q-reachable-bins-5-15-55-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_eval_v2_delta_q_reachable_bins_5_15_seed372000",
+    "expected_episodes": 55,
+    "expected_frames": 4840,
+    "grid_bin_sidecar": "_workspace/so101_lerobot/move_and_align_cube_edge_eval_v2_delta_q_reachable_bins_5_15_seed372000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet"
+  },
+  "camera_contract": {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam",
+    "observation.images.camera3": "wrist_cam duplicate"
+  },
+  "prompt_contract": {
+    "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
+    "source": "reachable camera1 bins 5-15 only"
+  },
+  "training": {
+    "batch_size": 32,
+    "num_workers": 4,
+    "policy_repo_id": "mhlee1215/so101-smolvla-move-and-align-cube-edge-v2-delta-q-reachable-bins",
+    "policy_push_to_hub": false,
+    "steps_per_epoch": 1238,
+    "validation_max_batches": 64,
+    "checkpoint_retention_policy": "best_val_and_closed_loop"
+  },
+  "visual_servo": {
+    "loss_weight": 0.1,
+    "hidden_dim": 128,
+    "label_sidecar": "meta/visual_servo_labels/camera1_camera2_green_cube.parquet",
+    "outputs": ["camera1_dx_dy_angle", "camera2_dx_dy_angle", "stop_prob"]
+  },
+  "predecoded_image_cache": {
+    "root_env": "SO101_PREDECODED_CACHE_ROOT",
+    "default_root": "_workspace/so101_image_cache",
+    "train": {
+      "home_start_reachable_bins_5_15": "move_and_align_cube_edge_train_v2_delta_q_reachable_bins_5_15_seed272000",
+      "mid_start_reachable_bins_5_15": "move_and_align_cube_edge_train_v2_delta_q_reachable_bins_5_15_mid_start_seed272000",
+      "near_target_start_reachable_bins_5_15": "move_and_align_cube_edge_train_v2_delta_q_reachable_bins_5_15_near_target_start_seed272000"
+    },
+    "validation": "move_and_align_cube_edge_eval_v2_delta_q_reachable_bins_5_15_seed372000"
+  },
+  "tensorboard": {
+    "log_input_images_every_n_steps": 50,
+    "log_input_metadata_every_n_steps": 50
+  },
+  "augmentation": {
+    "state_jitter_std": 0.003,
+    "state_jitter_arm_only": true,
+    "state_dropout_prob": 0.02,
+    "state_dropout_keep_gripper": true,
+    "image_camera_dropout_prob": 0.0,
+    "image_patch_dropout_prob": 0.0,
+    "image_patch_mask_ratio": 0.15,
+    "image_color_jitter": true,
+    "image_sharpness_jitter": true,
+    "image_affine_degrees": 5.0,
+    "image_affine_translate": 0.05,
+    "gpu_image_augmentation": true
+  },
+  "closed_loop": {
+    "scenario": "move_and_align_cube_edge",
+    "execution_policy": "single_smolvla_qwen_primitive",
+    "runner": "qwen_chain",
+    "action_contract_mode": "visual_servo_delta_q",
+    "env_id": "MuJoCoPickLift-v1",
+    "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",
+    "qwen_object": "green cube",
+    "env_object_color": "green",
+    "base_seed": 98100,
+    "valid_mask_checkpoint": "_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt",
+    "success_metric": "tcp_to_object_below_threshold",
+    "success_threshold": 0.06,
+    "test_cases": [
+      {
+        "id": "move_and_align_cube_edge_loop_validation_reachable_bins_5_14",
+        "description": "10-episode loop-validation split; one episode per reachable camera1 bin 5-14. Top-row/hard bins 0-4 are excluded.",
+        "episodes": 10,
+        "steps": 80,
+        "seed": 98100,
+        "start_contract": "move_and_align_cube_edge",
+        "start_dataset": {
+          "name": "move_and_align_cube_edge_loop_validation_reachable_bins_5_14",
+          "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-loop-validation-reachable-bins-5-14-10-ego-wrist-256",
+          "root": "_workspace/so101_lerobot/move_and_align_cube_edge_loop_validation_reachable_bins_5_14_10_seed372000",
+          "expected_episodes": 10
+        },
+        "success_metric": "tcp_to_object_below_threshold",
+        "success_threshold": 0.06,
+        "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",
+        "qwen_object": "green cube",
+        "env_object_color": "green",
+        "plan_json": "configs/agent/qwen3_so101_tool_plan_move_and_align_cube_edge_green_cube.json"
+      }
+    ]
+  },
+  "reachable_bin_filter": {
+    "camera_key": "observation.images.camera1",
+    "grid_size": 4,
+    "allowed_bins": [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    "excluded_bins": [0, 1, 2, 3, 4],
+    "exclude_reason": "Mean final edge alignment/tcp distance is too poor for reliable gripping despite teacher accept.",
+    "train_bin_counts": "20 episodes per allowed bin per start split",
+    "validation_bin_counts": "5 episodes per allowed bin",
+    "hold_verification": {
+      "hold_frames": 20,
+      "max_action_norm": 0.00000035762787,
+      "failed_episodes": 0
+    }
+  }
+}

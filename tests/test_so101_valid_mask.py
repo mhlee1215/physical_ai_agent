@@ -47,5 +47,16 @@ class SO101ValidMaskTest(TestCase):
             consecutive=2,
         )
 
-        self.assertEqual(horizon, 15)
+        self.assertEqual(horizon, 3)
+        self.assertEqual(reason, "max_horizon")
+
+    def test_execution_horizon_ignores_invalid_probs_after_max_horizon(self) -> None:
+        horizon, reason = execution_horizon_from_valid_probs(
+            [0.9, 0.8, 0.7, 0.1, 0.1],
+            max_horizon=3,
+            threshold=0.5,
+            consecutive=2,
+        )
+
+        self.assertEqual(horizon, 3)
         self.assertEqual(reason, "max_horizon")

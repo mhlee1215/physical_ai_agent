@@ -139,6 +139,9 @@ Durable SO101 fine-tuning contract:
 - training-time SO101 closed-loop validation defaults to exactly 10 episodes;
   keep `--closed-loop-episodes 10` unless the user explicitly requests a
   labeled one-off smoke/debug count;
+- when a SO101 training dataset has camera1 object-position grid-bin sidecar
+  metadata, use grid-bin balanced sampling for training; keep validation and
+  closed-loop sampling unbalanced;
 - local SO101 training launches default to exactly two processes: the training
   process and one TensorBoard process. Extra dashboards, GPU monitors, progress
   monitors, watchers, alternate TensorBoards, or polling helpers require an

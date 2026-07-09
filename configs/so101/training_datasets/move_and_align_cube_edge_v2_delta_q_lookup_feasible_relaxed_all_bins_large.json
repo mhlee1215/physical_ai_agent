@@ -1,0 +1,147 @@
+{
+  "name": "move_and_align_cube_edge_v2_delta_q_lookup_feasible_relaxed_all_bins_large",
+  "description": "Large delta-q move_and_align_cube_edge train/eval splits generated with camera1 4x4 lookup-balanced object positions and teacher-feasible spawn coordinates.",
+  "scenario": "move_and_align_cube_edge",
+  "execution_policy": "single_smolvla_qwen_primitive",
+  "task": "move_and_align_cube_edge",
+  "action_mode": "delta_q",
+  "train_dataset": {
+    "name": "move_and_align_cube_edge_v2_delta_q_lookup_feasible_relaxed_all_bins_train320",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-delta-q-lookup-feasible-relaxed-all-bins-320-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_lookup_feasible_relaxed_all_bins_320_ego_wrist_256_seed272000",
+    "raw_repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-lookup-feasible-relaxed-all-bins-320-ego-wrist-256",
+    "raw_root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_lookup_feasible_relaxed_all_bins_320_ego_wrist_256_seed272000",
+    "grid_bin_sidecar": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_lookup_feasible_relaxed_all_bins_320_ego_wrist_256_seed272000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+    "expected_episodes": 320,
+    "expected_frames": 28160,
+    "grid_balance": {
+      "camera_key": "observation.images.camera1",
+      "grid_size": 4,
+      "frame_index": 0,
+      "bins": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      "episodes_per_bin": 20,
+      "bin_counts_yx": [
+        [20, 20, 20, 20],
+        [20, 20, 20, 20],
+        [20, 20, 20, 20],
+        [20, 20, 20, 20]
+      ]
+    }
+  },
+  "validation_dataset": {
+    "name": "move_and_align_cube_edge_v2_delta_q_lookup_feasible_relaxed_all_bins_eval80",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-eval-v2-delta-q-lookup-feasible-relaxed-all-bins-80-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_eval_v2_delta_q_lookup_feasible_relaxed_all_bins_80_ego_wrist_256_seed372000",
+    "raw_repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-eval-v2-lookup-feasible-relaxed-all-bins-80-ego-wrist-256",
+    "raw_root": "_workspace/so101_lerobot/move_and_align_cube_edge_eval_v2_lookup_feasible_relaxed_all_bins_80_ego_wrist_256_seed372000",
+    "grid_bin_sidecar": "_workspace/so101_lerobot/move_and_align_cube_edge_eval_v2_delta_q_lookup_feasible_relaxed_all_bins_80_ego_wrist_256_seed372000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+    "expected_episodes": 80,
+    "expected_frames": 7040,
+    "grid_balance": {
+      "camera_key": "observation.images.camera1",
+      "grid_size": 4,
+      "frame_index": 0,
+      "bins": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      "episodes_per_bin": 5,
+      "bin_counts_yx": [
+        [5, 5, 5, 5],
+        [5, 5, 5, 5],
+        [5, 5, 5, 5],
+        [5, 5, 5, 5]
+      ]
+    }
+  },
+  "camera_contract": {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam",
+    "observation.images.camera3": "wrist_cam duplicate"
+  },
+  "prompt_contract": {
+    "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
+    "source": "move_and_align_cube_edge_v2 lookup-balanced train/eval splits"
+  },
+  "training": {
+    "batch_size": 32,
+    "num_workers": 4,
+    "policy_repo_id": "mhlee1215/so101-smolvla-move-and-align-cube-edge-v2-delta-q",
+    "policy_push_to_hub": false,
+    "steps_per_epoch": 880,
+    "validation_max_batches": 64,
+    "checkpoint_retention_policy": "best_val_and_closed_loop"
+  },
+  "predecoded_image_cache": {
+    "root_env": "SO101_PREDECODED_CACHE_ROOT",
+    "default_root": "_workspace/so101_image_cache",
+    "train": "move_and_align_cube_edge_train_v2_delta_q_lookup_feasible_relaxed_all_bins_320_ego_wrist_256_seed272000",
+    "validation": "move_and_align_cube_edge_eval_v2_delta_q_lookup_feasible_relaxed_all_bins_80_ego_wrist_256_seed372000"
+  },
+  "tensorboard": {
+    "log_input_images_every_n_steps": 50,
+    "log_input_metadata_every_n_steps": 50
+  },
+  "augmentation": {
+    "state_jitter_std": 0.003,
+    "state_jitter_arm_only": true,
+    "state_dropout_prob": 0.02,
+    "state_dropout_keep_gripper": true,
+    "image_camera_dropout_prob": 0.0,
+    "image_patch_dropout_prob": 0.0,
+    "image_patch_mask_ratio": 0.15,
+    "image_color_jitter": true,
+    "image_sharpness_jitter": true,
+    "image_affine_degrees": 5.0,
+    "image_affine_translate": 0.05,
+    "gpu_image_augmentation": true
+  },
+  "closed_loop": {
+    "scenario": "move_and_align_cube_edge",
+    "execution_policy": "single_smolvla_qwen_primitive",
+    "runner": "qwen_chain",
+    "action_contract_mode": "processor_delta_q",
+    "env_id": "MuJoCoPickLift-v1",
+    "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",
+    "qwen_object": "green cube",
+    "env_object_color": "green",
+    "base_seed": 98100,
+    "valid_mask_checkpoint": "_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt",
+    "success_metric": "tcp_to_object_below_threshold",
+    "success_threshold": 0.06,
+    "test_cases": [
+      {
+        "id": "move_and_align_cube_edge_loop_validation",
+        "description": "Existing 10-episode move_and_align_cube_edge loop-validation split for delta-q policy debugging.",
+        "episodes": 10,
+        "steps": 80,
+        "seed": 98100,
+        "start_contract": "move_and_align_cube_edge",
+        "start_dataset": {
+          "name": "move_and_align_cube_edge_loop_validation",
+          "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-loop-validation10-ego-wrist-256",
+          "root": "_workspace/so101_lerobot/move_and_align_cube_edge_loop_validation10_ego_wrist_256_seed123500",
+          "expected_episodes": 10
+        },
+        "success_metric": "tcp_to_object_below_threshold",
+        "success_threshold": 0.06,
+        "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",
+        "qwen_object": "green cube",
+        "env_object_color": "green",
+        "plan_json": "configs/agent/qwen3_so101_tool_plan_move_and_align_cube_edge_green_cube.json"
+      }
+    ]
+  },
+  "dataset_generation_augmentation": {
+    "generated_teacher_trajectories": true,
+    "terminal_hold_included": true,
+    "terminal_hold_steps": 20,
+    "near_target_correction_included": false,
+    "near_target_correction_ratio": 0.0,
+    "camera1_lookup_balanced": true,
+    "teacher_feasible_spawn_lookup": true,
+    "spawn_center": [0.2, 0.0],
+    "spawn_min_radius": 0.04,
+    "spawn_max_radius": 0.42,
+    "spawn_angle_half_range_deg": 170.0,
+    "edge_contact_xy_success_threshold": 0.08,
+    "edge_contact_parallel_success_threshold_deg": 180.0
+  }
+}
