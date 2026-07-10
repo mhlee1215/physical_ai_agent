@@ -1,22 +1,20 @@
 {
-  "name": "move_and_align_cube_edge_v2_delta_q_home_balanced_lr",
-  "description": "Home-pose-start-only delta-q split balanced 52:52 by camera1 visible green cube left/right centroid.",
+  "name": "move_and_align_cube_edge_v2_only",
+  "description": "Single-skill SO101 run using the v2 move_and_align_cube_edge train split with dataset-generation augmentation: generated teacher trajectories, terminal hold frames, and near-target correction trajectories.",
   "scenario": "move_and_align_cube_edge",
   "execution_policy": "single_smolvla_qwen_primitive",
   "task": "move_and_align_cube_edge",
-  "action_mode": "delta_q",
   "train_dataset": {
-    "name": "move_and_align_cube_edge_v2_delta_q_home_balanced_lr_train",
-    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-delta-q-home-balanced-lr-104-ego-wrist-256",
-    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_home_balanced_lr_104_ego_wrist_256_seed124000",
-    "grid_bin_sidecar": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_home_balanced_lr_104_ego_wrist_256_seed124000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
-    "expected_episodes": 104,
-    "expected_frames": 9152
+    "name": "move_and_align_cube_edge_v2_train",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-300-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_300_ego_wrist_256_seed124000",
+    "expected_episodes": 300,
+    "expected_frames": 21600
   },
   "validation_dataset": {
-    "name": "move_and_align_cube_edge_delta_q_validation",
-    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-valid25-delta-q-ego-wrist-256",
-    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_valid25_delta_q_ego_wrist_256_seed123000",
+    "name": "move_and_align_cube_edge_validation",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-valid25-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_valid25_ego_wrist_256_seed123000",
     "expected_episodes": 25,
     "expected_frames": 1700
   },
@@ -27,22 +25,31 @@
   },
   "prompt_contract": {
     "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
-    "source": "move_and_align_cube_edge_v2 home balanced left/right train split"
+    "source": "move_and_align_cube_edge_v2 train split"
+  },
+  "dataset_generation_augmentation": {
+    "generated_teacher_trajectories": true,
+    "terminal_hold_included": true,
+    "terminal_hold_steps": 20,
+    "near_target_correction_included": true,
+    "near_target_correction_ratio": 0.5,
+    "near_target_joint_std": 0.075,
+    "near_target_xy_std": 0.025
   },
   "training": {
     "batch_size": 32,
     "num_workers": 4,
-    "policy_repo_id": "mhlee1215/so101-smolvla-move-and-align-cube-edge-v2-delta-q",
+    "policy_repo_id": "mhlee1215/so101-smolvla-move-and-align-cube-edge-v2",
     "policy_push_to_hub": false,
-    "steps_per_epoch": 286,
+    "steps_per_epoch": 675,
     "validation_max_batches": 32,
     "checkpoint_retention_policy": "best_val_and_closed_loop"
   },
   "predecoded_image_cache": {
     "root_env": "SO101_PREDECODED_CACHE_ROOT",
     "default_root": "_workspace/so101_image_cache",
-    "train": "move_and_align_cube_edge_train_v2_delta_q_home_balanced_lr_104_ego_wrist_256_seed124000",
-    "validation": "move_and_align_cube_edge_valid25_delta_q_ego_wrist_256_seed123000"
+    "train": "move_and_align_cube_edge_train_v2_300_ego_wrist_256_seed124000",
+    "validation": "move_and_align_cube_edge_valid25_ego_wrist_256_seed123000"
   },
   "tensorboard": {
     "log_input_images_every_n_steps": 50,
@@ -66,7 +73,20 @@
     "scenario": "move_and_align_cube_edge",
     "execution_policy": "single_smolvla_qwen_primitive",
     "runner": "qwen_chain",
-    "action_contract_mode": "processor_delta_q",
+    "action_rmse_sweep": {
+      "enabled": true,
+      "n_action_steps": [
+        1,
+        3,
+        5,
+        10,
+        15,
+        30,
+        40,
+        50
+      ],
+      "tensorboard_tag": "closed_loop/<test_id>/action_rmse_sweep"
+    },
     "env_id": "MuJoCoPickLift-v1",
     "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",
     "qwen_object": "green cube",
@@ -78,7 +98,7 @@
     "test_cases": [
       {
         "id": "move_and_align_cube_edge_loop_validation",
-        "description": "Home-pose loop_validation split for balanced-left-right training debugging. The policy action is interpreted as delta-q.",
+        "description": "Starts from the first frame of the move_and_align_cube_edge loop_validation split and runs only the move_and_align_cube_edge primitive.",
         "episodes": 10,
         "steps": 80,
         "seed": 98100,
@@ -97,8 +117,5 @@
         "plan_json": "configs/agent/qwen3_so101_tool_plan_move_and_align_cube_edge_green_cube.json"
       }
     ]
-  },
-  "debug_notes": {
-    "selection": "camera1 green cube centroid visible and balanced 52 left / 52 right."
   }
 }

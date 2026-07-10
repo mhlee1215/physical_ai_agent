@@ -250,9 +250,171 @@ Qwen-chain closed-loop validation run on the same checkpoint cadence. In the
 standard local setup this means `validation_interval_steps == save_freq ==
 steps_per_epoch` and `closed-loop-every-epochs=1`.
 
+Monitored SO101 training must fail before training when checkpoint,
+validation, and loop-test cadences drift apart. The effective schedule must
+satisfy `validation_interval_steps == save_freq ==
+steps_per_epoch * closed_loop_every_epochs`, and total `steps` must be
+divisible by `save_freq` so the final checkpoint also has validation and
+loop-test evidence. TensorBoard exposes the countdown as
+`train/checkpoint_steps_remaining` and
+`important/checkpoint_steps_remaining`.
+
 For older expensive CUDA-only closed-loop lanes, best-only or manual final
 evaluation may still be used when the user has not requested per-validation
 closed-loop evidence.
+
+## Config-First Launch Contract
+
+Do not rebuild the same SO101 training command by adding and removing ad hoc
+CLI flags from chat memory. For any repeated or user-facing training run, edit
+the main dataset config first, then launch that config unchanged through the
+canonical launcher.
+
+Default rule:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start
+```
+
+or, equivalently:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start --preset default
+```
+
+When a run needs a different dataset, prompt, loop-test case, RMSE sweep,
+camera/media setting, augmentation setting, action contract, checkpoint
+cadence, or closed-loop runner, update the corresponding JSON config under
+`configs/so101/training/` first. Dataset contracts, export recipes, checksums,
+and dataset-only manifests stay under `configs/so101/training_datasets/`.
+Then run the launcher against that
+config or preset. Do not silently patch those values at launch time with one-off
+CLI flags.
+
+Allowed CLI exceptions:
+
+- `--dry-run`, `--json`, `--replace`, `--lock-file`, ports, host, and runtime
+  platform/device selection;
+- a clearly labeled smoke/debug command that is not presented as a training
+  result;
+- explicit user-requested overrides for one-off investigation, recorded in the
+  handoff or final report.
+
+If an override becomes useful more than once, move it into the main config or a
+named preset before launching another training run.
+
+## Live Training Process Safety Contract
+
+Read-only status/debug commands are allowed without another confirmation:
+`status --json`, `ps`, `tail`, TensorBoard event reads, `stat`, `find`, `du`,
+`rg`, and `sed`.
+
+Mutating or destructive actions require explicit user approval immediately
+before execution. This includes `kill`, `pkill`, SIGTERM, SIGKILL,
+`scripts/start_so101_training.py stop`, restarting/resuming training, deleting
+or resetting TensorBoard event data, pruning/deleting checkpoints beyond the
+configured retention aliases, deleting artifacts, overwriting
+`active_training.json`, `train.pid`, lock files, or active run metadata.
+
+Root-cause analysis requests such as "why", "check", "find cause", or "debug"
+mean gather evidence and report it first. Do not fix, restart, stop, or clean
+up unless the user explicitly approves that mutation.
+
+Never infer liveness from PID only. Report process alive, `train/loss` scalar
+advancing, validation/closed-loop cadence, and `train.log` stdout progress
+separately. If training appears hung, collect those four evidence streams and
+ask before terminating or restarting anything.
+
+## Closed-Loop Evidence Contract
+
+Loop tests are not complete when they only write scalar metrics or static
+input-grid images. Every SO101 closed-loop evaluation used for training
+decisions, PR evidence, or research notes must leave enough TensorBoard media
+to inspect what the policy actually did.
+
+This section is the stable training-result visualization contract. Treat it as
+mandatory harness behavior, not as a reminder. When a training run has a loop
+test, the run is not reviewable until the TensorBoard evidence below exists.
+Do not re-decide the visualization format per runner, per checkpoint, or per
+debug session.
+
+### Training Loop-Test Result Generation Guidelines
+
+During training, do not hand-write TensorBoard loop-test output in a new place.
+The training monitor must append the closed-loop metrics row, then call exactly
+one canonical result-generation function:
+
+```python
+write_so101_training_loop_test_results(run_dir, row, report)
+```
+
+That function owns the stable closed-loop TensorBoard/media contract. If a new
+runner, evaluator, report field, RMSE diagnostic, overlay, or video format is
+needed, update that function or the private helpers it calls. Do not create a
+second rollout visualizer, a runner-specific TensorBoard writer, or a separate
+ad hoc media attachment path.
+
+Required behavior for the function:
+
+- write scalar loop-test metrics;
+- attach the action RMSE sweep plot for action-chunk policies;
+- attach canonical user-facing rollout videos at stable tags;
+- attach raw/debug media only under `extra/closed_loop/...`;
+- attach train reference media when available;
+- keep camera naming and rollout frame overlays consistent across runners.
+
+Closed-loop starts must be dataset-backed. Official training-time loop tests
+must use the train/validation/loop-validation dataset named in the active JSON
+config. For picklift-style evaluators, `closed_loop.test_cases[].start_dataset`
+or `start_report_path` is not just metadata: the evaluator must restore the
+episode `sim_snapshot` from that export report before policy rollout. Do not
+create a new random reset state, a new cube color, or a new object distribution
+inside the evaluator. If a test cannot restore the configured dataset snapshot,
+fail the loop test instead of silently falling back to a fresh reset.
+
+Required TensorBoard outputs:
+
+- `closed_loop/<test_id>/success_rate`, `grasp_rate`, `episodes`, and
+  `duration_s`;
+- `important/closed_loop_success_rate/<test_id>`;
+- `closed_loop/<test_id>/action_rmse_sweep` for action-chunk policies. The
+  default sweep is `n_action_steps=[1,3,5,10,15,30,40,50]`. A missing sweep is
+  a missing diagnostic, not an acceptable visualization. The only allowed
+  exception is a clearly named smoke/debug command that explicitly disables it
+  and is not used as training-result evidence;
+- one canonical animated rollout media tag per episode:
+  `closed_loop/<test_id>/rollout_episode_<NNN>`;
+- when policy-input camera frames are recorded, debug side-by-side policy-input
+  video per episode:
+  `extra/closed_loop/<test_id>/rollout_camera_trace_camera1_camera2_episode_<NNN>`;
+- when the source train/validation root is available, a matching train
+  reference video per episode:
+  `closed_loop/<test_id>/train_reference_camera1_camera2_episode_<NNN>`.
+
+The user-facing rollout visualization must not change tag names or renderer
+priority across runs. The canonical `rollout_episode_<NNN>` tag must be built
+from the side-by-side camera1=egocentric and camera2=wrist policy-input trace.
+Do not silently swap display labels or camera sources to make a viewer look
+plausible. If the evaluator report only contains raw `rollout_gif` paths, the
+canonical rollout is missing evidence; keep raw/debug GIFs only under
+`extra/closed_loop/...` and fix the evaluator to emit policy-input traces.
+
+Every rollout frame should be self-describing:
+
+- episode id and frame/global step;
+- prompt, shortened only for display;
+- camera names;
+- phase/primitive and active camera/servo state when available;
+- predicted/ground-truth target overlays and dx/dy values when available;
+- success/failure state or enough terminal state information to understand the
+  result;
+- green border exactly on frames where model inference/re-query happens.
+
+The action RMSE sweep is a default diagnostic for action-chunk policies. Use the
+configured sweep, normally `n_action_steps=[1,3,5,10,15,30,40,50]`, and make
+the plot x-axis explicit as teacher episode frame index. The y-axis compares
+postprocessed policy action against teacher action at that frame. Missing RMSE
+sweep media is missing diagnostic evidence, not a complete loop-test result.
 
 ## Runtime Platforms
 

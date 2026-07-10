@@ -61,6 +61,20 @@
   "closed_loop": {
     "eval_skill_mode": "move_over_cube",
     "success_metric": "final_tcp_cube_z_offset >= 0.05 and final_tcp_to_obj_dist <= 0.25",
-    "record_rollout_gif": true
+    "record_rollout_gif": true,
+    "action_rmse_sweep": {
+      "enabled": true,
+      "n_action_steps": [
+        1,
+        3,
+        5,
+        10,
+        15,
+        30,
+        40,
+        50
+      ],
+      "tensorboard_tag": "closed_loop/<test_id>/action_rmse_sweep"
+    }
   }
 }

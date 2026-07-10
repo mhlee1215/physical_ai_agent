@@ -16,13 +16,40 @@
       "camera_key": "observation.images.camera1",
       "grid_size": 4,
       "frame_index": 0,
-      "bins": [5, 6, 7, 9, 10, 11],
+      "bins": [
+        5,
+        6,
+        7,
+        9,
+        10,
+        11
+      ],
       "episodes_per_bin": 20,
       "bin_counts_yx": [
-        [0, 0, 0, 0],
-        [0, 20, 20, 20],
-        [0, 20, 20, 20],
-        [0, 0, 0, 0]
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          20,
+          20,
+          20
+        ],
+        [
+          0,
+          20,
+          20,
+          20
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
       ]
     }
   },
@@ -86,6 +113,20 @@
     "scenario": "move_and_align_cube_edge",
     "execution_policy": "single_smolvla_qwen_primitive",
     "runner": "qwen_chain",
+    "action_rmse_sweep": {
+      "enabled": true,
+      "n_action_steps": [
+        1,
+        3,
+        5,
+        10,
+        15,
+        30,
+        40,
+        50
+      ],
+      "tensorboard_tag": "closed_loop/<test_id>/action_rmse_sweep"
+    },
     "action_contract_mode": "processor_delta_q",
     "env_id": "MuJoCoPickLift-v1",
     "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",

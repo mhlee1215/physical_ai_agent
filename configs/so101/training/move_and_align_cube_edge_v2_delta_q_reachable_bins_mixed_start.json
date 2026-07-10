@@ -61,7 +61,11 @@
     "loss_weight": 0.1,
     "hidden_dim": 128,
     "label_sidecar": "meta/visual_servo_labels/camera1_camera2_green_cube.parquet",
-    "outputs": ["camera1_dx_dy_angle", "camera2_dx_dy_angle", "stop_prob"]
+    "outputs": [
+      "camera1_dx_dy_angle",
+      "camera2_dx_dy_angle",
+      "stop_prob"
+    ]
   },
   "predecoded_image_cache": {
     "root_env": "SO101_PREDECODED_CACHE_ROOT",
@@ -95,6 +99,20 @@
     "scenario": "move_and_align_cube_edge",
     "execution_policy": "single_smolvla_qwen_primitive",
     "runner": "qwen_chain",
+    "action_rmse_sweep": {
+      "enabled": true,
+      "n_action_steps": [
+        1,
+        3,
+        5,
+        10,
+        15,
+        30,
+        40,
+        50
+      ],
+      "tensorboard_tag": "closed_loop/<test_id>/action_rmse_sweep"
+    },
     "action_contract_mode": "visual_servo_delta_q",
     "env_id": "MuJoCoPickLift-v1",
     "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",
@@ -130,14 +148,32 @@
   "reachable_bin_filter": {
     "camera_key": "observation.images.camera1",
     "grid_size": 4,
-    "allowed_bins": [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-    "excluded_bins": [0, 1, 2, 3, 4],
+    "allowed_bins": [
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "excluded_bins": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
     "exclude_reason": "Mean final edge alignment/tcp distance is too poor for reliable gripping despite teacher accept.",
     "train_bin_counts": "20 episodes per allowed bin per start split",
     "validation_bin_counts": "5 episodes per allowed bin",
     "hold_verification": {
       "hold_frames": 20,
-      "max_action_norm": 0.00000035762787,
+      "max_action_norm": 3.5762787e-07,
       "failed_episodes": 0
     }
   }

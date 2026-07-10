@@ -61,6 +61,20 @@
   "closed_loop": {
     "eval_skill_mode": "pick_from_top_cube",
     "success_metric": "final_is_grasped > 0.5 and final_lift_height >= 0.05",
-    "record_rollout_gif": true
+    "record_rollout_gif": true,
+    "action_rmse_sweep": {
+      "enabled": true,
+      "n_action_steps": [
+        1,
+        3,
+        5,
+        10,
+        15,
+        30,
+        40,
+        50
+      ],
+      "tensorboard_tag": "closed_loop/<test_id>/action_rmse_sweep"
+    }
   }
 }

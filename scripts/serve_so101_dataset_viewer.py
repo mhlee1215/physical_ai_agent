@@ -26,9 +26,9 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 
 DATASET_CONTRACT = Path("configs/so101/training_datasets/dataset_contract.json")
 SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_contract.json")
-TRAINING_DATASET_CONFIGS = [
-    Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
-    Path("configs/so101/training_datasets/grip_the_cube_v1.json"),
+TRAINING_CONFIGS = [
+    Path("configs/so101/training/qwen_edge_primitives.json"),
+    Path("configs/so101/training/grip_the_cube_v1.json"),
 ]
 INTERACTIVE_RUN_ROOT = Path("_workspace/so101_interactive_sim/runs")
 DEFAULT_VALID_MASK_CHECKPOINT = Path("_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt")
@@ -648,7 +648,7 @@ def _official_dataset_roots(repo_root: Path) -> dict[str, Path]:
 
 def _training_config_dataset_roots(repo_root: Path) -> dict[str, Path]:
     roots: dict[str, Path] = {}
-    for relative_path in TRAINING_DATASET_CONFIGS:
+    for relative_path in TRAINING_CONFIGS:
         path = repo_root / relative_path
         if not path.exists():
             continue
@@ -987,7 +987,7 @@ def _loop_tests_payload(repo_root: Path) -> dict[str, Any]:
                 "status": "available",
                 "summary": {
                     "loop_tests": len(loop_tests),
-                    "source_config": str(repo_root / TRAINING_DATASET_CONFIGS[0]),
+                    "source_config": str(repo_root / TRAINING_CONFIGS[0]),
                 },
                 "loop_tests": loop_tests,
             }
@@ -997,7 +997,7 @@ def _loop_tests_payload(repo_root: Path) -> dict[str, Any]:
 
 
 def _official_closed_loop_test_cases(repo_root: Path) -> list[dict[str, Any]]:
-    config_path = repo_root / TRAINING_DATASET_CONFIGS[0]
+    config_path = repo_root / TRAINING_CONFIGS[0]
     if not config_path.exists():
         return []
     config = json.loads(config_path.read_text(encoding="utf-8"))

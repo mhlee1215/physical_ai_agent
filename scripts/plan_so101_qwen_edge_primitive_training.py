@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-CONFIG = Path("configs/so101/training_datasets/qwen_edge_primitives.json")
+CONFIG = Path("configs/so101/training/qwen_edge_primitives.json")
 LOCAL_STANDARD_DOC = Path("docs/so101_local_training_standard.md")
 QWEN_MOCK_RESPONSE = Path("configs/agent/qwen3_so101_tool_planner_mock_response.json")
 PLAN_NAME = "primitive training with qwen validation v1"

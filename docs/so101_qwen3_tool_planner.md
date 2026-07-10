@@ -155,7 +155,7 @@ grip_from_edge_cube/train
 This is not three independent policies. The combined dataset config is:
 
 ```text
-configs/so101/training_datasets/qwen_edge_primitives.json
+configs/so101/training/qwen_edge_primitives.json
 ```
 
 Generate the concrete run plan:

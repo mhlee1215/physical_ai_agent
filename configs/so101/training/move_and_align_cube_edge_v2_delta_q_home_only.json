@@ -1,22 +1,21 @@
 {
-  "name": "move_and_align_cube_edge_v2_delta_q_only",
-  "description": "Delta-q variant of move_and_align_cube_edge_v2_only. The source absolute-qpos datasets are preserved; this config trains on copied datasets whose action column stores action - observation.state.",
+  "name": "move_and_align_cube_edge_v2_delta_q_home_only",
+  "description": "Home-pose-start-only training subset of move_and_align_cube_edge_v2_delta_q_only for closed-loop debugging.",
   "scenario": "move_and_align_cube_edge",
   "execution_policy": "single_smolvla_qwen_primitive",
   "task": "move_and_align_cube_edge",
   "action_mode": "delta_q",
   "delta_action_source": {
     "mode": "state_to_action",
-    "source_config": "configs/so101/training_datasets/move_and_align_cube_edge_v2_only.json",
+    "source_config": "configs/so101/training/move_and_align_cube_edge_v2_only.json",
     "converter": "scripts/convert_so101_lerobot_actions_to_delta.py"
   },
   "train_dataset": {
-    "name": "move_and_align_cube_edge_v2_delta_q_train",
-    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-delta-q-300-ego-wrist-256",
-    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_300_ego_wrist_256_seed124000",
-    "grid_bin_sidecar": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_300_ego_wrist_256_seed124000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
-    "expected_episodes": 300,
-    "expected_frames": 21600
+    "name": "move_and_align_cube_edge_v2_delta_q_home_only_train",
+    "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-delta-q-home-only-150-ego-wrist-256",
+    "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_delta_q_home_only_150_ego_wrist_256_seed124000",
+    "expected_episodes": 150,
+    "expected_frames": 13200
   },
   "validation_dataset": {
     "name": "move_and_align_cube_edge_delta_q_validation",
@@ -32,7 +31,7 @@
   },
   "prompt_contract": {
     "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
-    "source": "move_and_align_cube_edge_v2 train split"
+    "source": "move_and_align_cube_edge_v2 home-only train split"
   },
   "dataset_generation_augmentation": {
     "generated_teacher_trajectories": true,
@@ -48,14 +47,14 @@
     "num_workers": 4,
     "policy_repo_id": "mhlee1215/so101-smolvla-move-and-align-cube-edge-v2-delta-q",
     "policy_push_to_hub": false,
-    "steps_per_epoch": 675,
+    "steps_per_epoch": 413,
     "validation_max_batches": 32,
     "checkpoint_retention_policy": "best_val_and_closed_loop"
   },
   "predecoded_image_cache": {
     "root_env": "SO101_PREDECODED_CACHE_ROOT",
     "default_root": "_workspace/so101_image_cache",
-    "train": "move_and_align_cube_edge_train_v2_delta_q_300_ego_wrist_256_seed124000",
+    "train": "move_and_align_cube_edge_train_v2_delta_q_home_only_150_ego_wrist_256_seed124000",
     "validation": "move_and_align_cube_edge_valid25_delta_q_ego_wrist_256_seed123000"
   },
   "tensorboard": {
@@ -80,6 +79,20 @@
     "scenario": "move_and_align_cube_edge",
     "execution_policy": "single_smolvla_qwen_primitive",
     "runner": "qwen_chain",
+    "action_rmse_sweep": {
+      "enabled": true,
+      "n_action_steps": [
+        1,
+        3,
+        5,
+        10,
+        15,
+        30,
+        40,
+        50
+      ],
+      "tensorboard_tag": "closed_loop/<test_id>/action_rmse_sweep"
+    },
     "action_contract_mode": "processor_delta_q",
     "env_id": "MuJoCoPickLift-v1",
     "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",
@@ -92,7 +105,7 @@
     "test_cases": [
       {
         "id": "move_and_align_cube_edge_loop_validation",
-        "description": "Starts from the first frame of the move_and_align_cube_edge loop_validation split and runs only the move_and_align_cube_edge primitive. The policy action is interpreted as delta-q.",
+        "description": "Home-pose loop_validation split for home-only training debugging. The policy action is interpreted as delta-q.",
         "episodes": 10,
         "steps": 80,
         "seed": 98100,
@@ -111,5 +124,8 @@
         "plan_json": "configs/agent/qwen3_so101_tool_plan_move_and_align_cube_edge_green_cube.json"
       }
     ]
+  },
+  "debug_notes": {
+    "selection": "Only train episodes whose first-frame observation.state equals the home pose used by loop_validation."
   }
 }

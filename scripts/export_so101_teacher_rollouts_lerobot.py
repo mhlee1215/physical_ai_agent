@@ -499,6 +499,7 @@ def export_teacher_rollouts(
     teacher_renderers = _make_teacher_renderers(env, config)
     action_space_low = np.asarray(env.action_space.low, dtype=np.float32).copy()
     action_space_high = np.asarray(env.action_space.high, dtype=np.float32).copy()
+    allow_diagonal_fixed_jaw = skill_mode != "grip_the_cube_v1"
     spawn_lookup: dict[int, list[list[float]]] = {}
     spawn_lookup_next = {int(bin_id): 0 for bin_id in balance_bins}
     if balance_enabled and grid_balance_spawn_lookup:
@@ -536,6 +537,7 @@ def export_teacher_rollouts(
                 edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
                 edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
                 max_candidates_per_bin=int(grid_lookup_max_candidates_per_bin),
+                allow_diagonal_fixed_jaw=allow_diagonal_fixed_jaw,
             )
         missing = [int(bin_id) for bin_id in balance_bins if not spawn_lookup.get(int(bin_id))]
         if missing:
@@ -634,7 +636,10 @@ def export_teacher_rollouts(
                     )
                     continue
             if skill_mode in FIXED_JAW_SKILL_MODES:
-                candidates = _make_fast_fixed_jaw_teacher_targets(env)
+                candidates = _make_fast_fixed_jaw_teacher_targets(
+                    env,
+                    allow_diagonal=allow_diagonal_fixed_jaw,
+                )
             else:
                 candidates = make_teacher_targets(env)
             if skill_mode in {"move_over_cube", "pick_from_top_cube", *FIXED_JAW_SKILL_MODES}:
@@ -1170,6 +1175,7 @@ def _filter_spawn_lookup_for_teacher_feasibility(
     edge_contact_xy_success_threshold: float,
     edge_contact_parallel_success_threshold_deg: float,
     max_candidates_per_bin: int,
+    allow_diagonal_fixed_jaw: bool,
 ) -> dict[int, list[list[float]]]:
     filtered_lookup: dict[int, list[list[float]]] = {}
     max_candidates_per_bin = max(0, int(max_candidates_per_bin))
@@ -1185,7 +1191,10 @@ def _filter_spawn_lookup_for_teacher_feasibility(
             candidates = _filter_fixed_jaw_move_candidates_in_policy_view(
                 env,
                 renderers=renderers,
-                candidates=_make_fast_fixed_jaw_teacher_targets(env),
+                candidates=_make_fast_fixed_jaw_teacher_targets(
+                    env,
+                    allow_diagonal=allow_diagonal_fixed_jaw,
+                ),
                 move_target_z_offset=move_target_z_offset,
             )
             if not _has_success_contract_fixed_jaw_candidate(
@@ -1278,12 +1287,13 @@ def _camera1_grid_bin_at_qpos(
     return int(y * grid_size + x)
 
 
-def _make_fast_fixed_jaw_teacher_targets(env: Any) -> list[dict[str, Any]]:
+def _make_fast_fixed_jaw_teacher_targets(env: Any, *, allow_diagonal: bool = True) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     specs = [
         spec
         for spec in _grasp_candidate_specs(env)
         if str(spec.get("grasp_mode")) == "overhead"
+        and (allow_diagonal or not str(spec.get("mode", "")).startswith("diag_"))
     ]
     for spec in specs:
         try:

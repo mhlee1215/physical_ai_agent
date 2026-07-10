@@ -37,7 +37,7 @@ explicitly chooses another experiment.
   their sidecars may be generated for diagnostics, but evaluation should keep
   the declared validation/test distribution intact.
 - For the current Qwen primitive lane, the config is:
-  `configs/so101/training_datasets/qwen_edge_primitives.json`.
+  `configs/so101/training/qwen_edge_primitives.json`.
 - The primitive train splits are used together in one training run:
   `move_over_cube_edge/train`, `align_fixed_jaw_cube_edge/train`, and
   `grip_from_edge_cube/train`.

@@ -51,13 +51,50 @@
       "camera_key": "observation.images.camera1",
       "grid_size": 4,
       "frame_index": 0,
-      "bins": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      "bins": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
       "episodes_per_bin": 5,
       "bin_counts_yx": [
-        [5, 5, 5, 5],
-        [5, 5, 5, 5],
-        [5, 5, 5, 5],
-        [5, 5, 5, 5]
+        [
+          5,
+          5,
+          5,
+          5
+        ],
+        [
+          5,
+          5,
+          5,
+          5
+        ],
+        [
+          5,
+          5,
+          5,
+          5
+        ],
+        [
+          5,
+          5,
+          5,
+          5
+        ]
       ]
     }
   },
@@ -111,6 +148,20 @@
     "scenario": "move_and_align_cube_edge",
     "execution_policy": "single_smolvla_qwen_primitive",
     "runner": "qwen_chain",
+    "action_rmse_sweep": {
+      "enabled": true,
+      "n_action_steps": [
+        1,
+        3,
+        5,
+        10,
+        15,
+        30,
+        40,
+        50
+      ],
+      "tensorboard_tag": "closed_loop/<test_id>/action_rmse_sweep"
+    },
     "action_contract_mode": "processor_delta_q",
     "env_id": "MuJoCoPickLift-v1",
     "task_prompt": "Move above one visible green cube edge and align the gripper jaws around it.",
@@ -155,15 +206,18 @@
         "near_target_start_from_teacher_trajectory"
       ],
       "hold_frames": 20,
-      "max_action_norm": 0.00000031715328,
-      "max_state_step_diff_norm": 0.00000031715328,
+      "max_action_norm": 3.1715328e-07,
+      "max_state_step_diff_norm": 3.1715328e-07,
       "failed_episodes": 0
     },
     "near_target_correction_included": true,
     "near_target_correction_source": "trajectory slices, not regenerated IK",
     "camera1_lookup_balanced": true,
     "teacher_feasible_spawn_lookup": true,
-    "spawn_center": [0.2, 0.0],
+    "spawn_center": [
+      0.2,
+      0.0
+    ],
     "spawn_min_radius": 0.04,
     "spawn_max_radius": 0.42,
     "spawn_angle_half_range_deg": 170.0,

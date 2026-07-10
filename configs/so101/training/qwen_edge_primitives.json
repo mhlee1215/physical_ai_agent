@@ -110,6 +110,20 @@
     "scenario": "pick_up_cube",
     "execution_policy": "qwen_edge_chain",
     "runner": "qwen_chain",
+    "action_rmse_sweep": {
+      "enabled": true,
+      "n_action_steps": [
+        1,
+        3,
+        5,
+        10,
+        15,
+        30,
+        40,
+        50
+      ],
+      "tensorboard_tag": "closed_loop/<test_id>/action_rmse_sweep"
+    },
     "env_id": "MuJoCoPickLift-v1",
     "task_prompt": "pick and lift the green cube",
     "qwen_object": "green cube",
