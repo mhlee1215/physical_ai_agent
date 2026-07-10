@@ -16,6 +16,16 @@ focuses on three connected lanes:
 For active project state, read [Summary.md](Summary.md). For collaboration and
 safety rules, read [AGENTS.md](AGENTS.md).
 
+## Screenshots / Visual Evidence
+
+The repository keeps reviewable SO101 rollout media under `docs/research/`.
+These examples use the TensorBoard-style side-by-side policy-input rendering
+contract.
+
+![SO101 closed-loop success rollout episode 002](docs/research/2026_07_09/so101_loop_test_success_gifs/step_001080_episode_002_tensorboard_style_success.gif)
+
+![SO101 closed-loop success rollout episode 003](docs/research/2026_07_09/so101_loop_test_success_gifs/step_001080_episode_003_tensorboard_style_success.gif)
+
 ## Quick Start
 
 Use Python 3.11+.
