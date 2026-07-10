@@ -330,7 +330,16 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     tensorboard_exe = _tensorboard_executable(args.python, repo_root)
     tensorboard_cmd = tensorboard_exe if tensorboard_exe else [str(args.python), "-m", "tensorboard.main"]
     tensorboard_cmd.extend(
-        ["--logdir", str(tensorboard_dir), "--host", args.host, "--port", str(args.tensorboard_port)]
+        [
+            "--logdir",
+            str(tensorboard_dir),
+            "--host",
+            args.host,
+            "--port",
+            str(args.tensorboard_port),
+            "--reload_multifile",
+            "true",
+        ]
     )
     tensorboard_tunnel_cmd = _tensorboard_tunnel_command(args.tensorboard_port)
     dashboard_cmd = [
@@ -2385,6 +2394,9 @@ def _tensorboard_tunnel_url_from_log(log_path: Path) -> str | None:
     if not log_path.exists():
         return None
     text = log_path.read_text(encoding="utf-8", errors="ignore")
+    marker = "Requesting new quick Tunnel on trycloudflare.com"
+    if marker in text:
+        text = text.rsplit(marker, 1)[-1]
     matches = re.findall(r"https://[A-Za-z0-9.-]+\.trycloudflare\.com", text)
     return matches[-1] if matches else None
 

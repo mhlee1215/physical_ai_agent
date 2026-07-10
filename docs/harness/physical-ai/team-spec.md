@@ -260,6 +260,11 @@ policy is:
   the training loop must invoke loop tests directly after checkpoint/evaluation
   events through the one-shot `scripts/run_so101_training_loop_test.py`
   entrypoint.
+- TensorBoard must be launched with `--reload_multifile true` for SO101
+  training runs. The active training writer and post-checkpoint validation or
+  loop-test writers can append separate event files in the same run logdir; the
+  launcher must make TensorBoard poll all active event files instead of only the
+  newest one.
 - SO101 Live Training Process Safety Contract: read-only status/debug commands
   are allowed without another confirmation, including `status --json`, `ps`,
   `tail`, TensorBoard event reads, `stat`, `find`, `du`, `rg`, and `sed`.

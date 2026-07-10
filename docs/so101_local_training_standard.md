@@ -55,6 +55,11 @@ explicitly chooses another experiment.
   mobile URL, and external-access URL. Use a `cloudflared` quick tunnel for the
   external URL when available; if unavailable, report the external URL as
   unavailable with the reason.
+- TensorBoard must run with multifile reload enabled. SO101 training writes
+  from the active training process and from post-checkpoint validation/loop-test
+  one-shot writers in the same run logdir; without multifile reload, TensorBoard
+  can follow the newest event file and stop showing the still-active training
+  event file.
 - Every SO101 retraining/restart starts with a clean TensorBoard view. Before
   launching the new training process, delete old TensorBoard event files for
   that run logdir. During an already-active run, preserve the active writer's

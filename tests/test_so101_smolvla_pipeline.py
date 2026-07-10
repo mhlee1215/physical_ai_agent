@@ -1334,6 +1334,8 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--validation-interval-steps=684", train_cmd)
             self.assertTrue(any(str(part).startswith("--output_dir=") for part in train_cmd))
             self.assertIn("tensorboard_cmd", payload)
+            self.assertIn("--reload_multifile", payload["tensorboard_cmd"])
+            self.assertIn("true", payload["tensorboard_cmd"])
             self.assertIn("mobile_tensorboard_url", payload)
             self.assertIn("external_tensorboard_url", payload)
             self.assertIn("external_tensorboard_note", payload)
@@ -2463,6 +2465,19 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertEqual(
                 _tensorboard_tunnel_url_from_log(log_path),
                 "https://example-alpha.trycloudflare.com",
+            )
+
+            log_path.write_text(
+                "2026-07-08 INF Requesting new quick Tunnel on trycloudflare.com...\n"
+                "2026-07-08 INF |  https://old-alpha.trycloudflare.com                                      |\n"
+                "2026-07-08 INF Requesting new quick Tunnel on trycloudflare.com...\n"
+                "2026-07-08 INF |  https://new-beta.trycloudflare.com                                      |\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                _tensorboard_tunnel_url_from_log(log_path),
+                "https://new-beta.trycloudflare.com",
             )
 
         rendered = _human_status(
