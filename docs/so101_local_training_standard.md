@@ -37,7 +37,7 @@ explicitly chooses another experiment.
   their sidecars may be generated for diagnostics, but evaluation should keep
   the declared validation/test distribution intact.
 - For the current Qwen primitive lane, the config is:
-  `configs/so101/training_datasets/qwen_edge_primitives.json`.
+  `configs/so101/training/qwen_edge_primitives.json`.
 - The primitive train splits are used together in one training run:
   `move_over_cube_edge/train`, `align_fixed_jaw_cube_edge/train`, and
   `grip_from_edge_cube/train`.
@@ -55,6 +55,11 @@ explicitly chooses another experiment.
   mobile URL, and external-access URL. Use a `cloudflared` quick tunnel for the
   external URL when available; if unavailable, report the external URL as
   unavailable with the reason.
+- TensorBoard must run with multifile reload enabled. SO101 training writes
+  from the active training process and from post-checkpoint validation/loop-test
+  one-shot writers in the same run logdir; without multifile reload, TensorBoard
+  can follow the newest event file and stop showing the still-active training
+  event file.
 - Every SO101 retraining/restart starts with a clean TensorBoard view. Before
   launching the new training process, delete old TensorBoard event files for
   that run logdir. During an already-active run, preserve the active writer's

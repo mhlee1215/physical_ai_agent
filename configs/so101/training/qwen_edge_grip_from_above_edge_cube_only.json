@@ -5,13 +5,6 @@
   "execution_policy": "qwen_edge_chain",
   "task": "grip_from_above_edge_cube",
   "action_mode": "absolute_qpos",
-  "train_dataset": {
-    "name": "grip_from_above_edge_cube_dense_true256_hold20_train",
-    "repo_id": "physical-ai-agent/so101-grip-from-above-edge-cube-dense-true256-hold20-train200",
-    "root": "_workspace/so101_lerobot/grip_from_above_edge_cube_dense_true256_hold20_train200_seed134000",
-    "grid_bin_sidecar": "_workspace/so101_lerobot/grip_from_above_edge_cube_dense_true256_hold20_train200_seed134000/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
-    "expected_episodes": 200
-  },
   "validation_dataset": {
     "name": "grip_from_above_edge_cube_dense_true256_hold20_val",
     "repo_id": "physical-ai-agent/so101-grip-from-above-edge-cube-dense-true256-hold20-valid50",

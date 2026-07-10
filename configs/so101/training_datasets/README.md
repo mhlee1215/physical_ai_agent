@@ -1,15 +1,19 @@
-# SO101 Training Dataset Configs
+# SO101 Training Dataset Contracts
 
-Use these JSON files with `scripts/start_so101_training.py --dataset-config`.
-They define the train/validation LeRobot dataset pair and training defaults in
-one place, so long training commands do not need to repeat dataset roots by
-hand.
+This directory is for dataset contracts, export recipes, checksums, and
+dataset-only manifests. User-facing training run configs live under
+`configs/so101/training/`.
+
+Use training configs with `scripts/start_so101_training.py --dataset-config`.
+They define the train/validation LeRobot dataset pair, loop-test cases, and
+training defaults in one place, so long training commands do not need to repeat
+dataset roots by hand.
 
 Example:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
-  --dataset-config configs/so101/training_datasets/pick_place.json \
+  --dataset-config configs/so101/training/grip_the_cube_v1.json \
   --validation-interval-steps 300 \
   -- \
   --config_path=_workspace/so101_smolvla_pure/official_1ep_smoke_local/checkpoints/000020/pretrained_model/train_config.json \
@@ -155,8 +159,26 @@ train/validation roots to LeRobot.
 
 Use `scripts/start_so101_training.py start` as the only SO101 training launcher.
 If a launch shape becomes common, add a `--preset` to that script instead of
-adding another shell wrapper with the same purpose. For example, the local Qwen
-edge loopfix lane is:
+adding another shell wrapper with the same purpose. If neither `--preset` nor
+`--dataset-config` is supplied, the launcher uses the default SO101 preset:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start
+```
+
+The explicit spelling of the same default is:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
+  --preset default
+```
+
+The current default preset is `grip-the-cube-v1-local`, which uses
+`configs/so101/training/grip_the_cube_v1.json`, one TensorBoard
+logdir, validation every epoch, 10 closed-loop episodes, 256x256 loop media,
+`policy_n_action_steps=15`, and the canonical loop-test visualization contract.
+
+The local Qwen edge loopfix lane is:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
@@ -183,12 +205,16 @@ Closed-loop test case workflow:
   seed modulo reset. Keep train and validation splits unchanged, create a
   separate `loop_validation` split when the user asks for exact loop-test
   alignment, and point each official test case at that split through
-  `start_dataset.root` or `start_report_path`. Episode `i` must initialize from
-  the `i`th matching exported episode in that closed-loop report, filtered by
-  `env_object_color` when present. Closed-loop reports must keep the selected
-  `dataset_source_index`, `dataset_candidate_index`, `dataset_episode_seed`,
-  object metadata, and prompt so the viewer can prove alignment with the
-  corresponding split.
+  `start_dataset.root` or `start_report_path`. Episode `i` must initialize by
+  restoring the `sim_snapshot` from the `i`th matching exported episode in that
+  report; do not substitute a fresh `env.reset(seed=...)` state. The evaluator
+  may call reset only as a MuJoCo initialization step before restoring the
+  dataset snapshot. The environment object color must come from the same
+  test-case config/report contract (`env_object_color` / episode
+  `object_color`), never from evaluator defaults. Closed-loop reports must keep
+  the selected `dataset_source_index`, `dataset_candidate_index`,
+  `dataset_episode_seed`, object metadata, prompt, and start report path so the
+  viewer can prove alignment with the corresponding split.
 - Do not rename, remove, or reinterpret closed-loop test cases without explicit
   user approval. Treat them like dataset splits: config first, artifacts second.
 

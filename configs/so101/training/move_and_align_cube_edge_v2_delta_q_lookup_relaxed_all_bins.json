@@ -42,6 +42,24 @@
     "task": "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
     "source": "move_and_align_cube_edge_v2 lookup-balanced train split"
   },
+  "tensorboard": {
+    "log_input_images_every_n_steps": 50,
+    "log_input_metadata_every_n_steps": 50
+  },
+  "augmentation": {
+    "state_jitter_std": 0.003,
+    "state_jitter_arm_only": true,
+    "state_dropout_prob": 0.02,
+    "state_dropout_keep_gripper": true,
+    "image_camera_dropout_prob": 0.0,
+    "image_patch_dropout_prob": 0.0,
+    "image_patch_mask_ratio": 0.15,
+    "image_color_jitter": true,
+    "image_sharpness_jitter": true,
+    "image_affine_degrees": 5.0,
+    "image_affine_translate": 0.05,
+    "gpu_image_augmentation": true
+  },
   "dataset_generation_augmentation": {
     "generated_teacher_trajectories": true,
     "terminal_hold_included": true,

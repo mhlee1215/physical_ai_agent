@@ -1,0 +1,70 @@
+# @package _global_
+
+training_config: configs/so101/training/qwen_edge_primitives.json
+description: Legacy Qwen edge primitive loop-fix local resume entrypoint.
+tags:
+  - so101
+  - smolvla
+  - qwen_edge_primitives
+  - loopfix
+launcher:
+  run_dir: _workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/qwen_edge_primitives_resume_009632_loopfix_30016
+  host: 0.0.0.0
+  tensorboard_port: 6015
+  dashboard_port: 8767
+  tensorboard_enabled: true
+  tensorboard_tunnel_enabled: true
+  dashboard_enabled: false
+  gpu_monitor_enabled: false
+  progress_monitor_enabled: false
+  allow_incomplete_monitoring: false
+  hf_dataset_cache_root: _workspace/hf_datasets
+  skip_hf_dataset_download: true
+  use_local_dataset_roots: false
+  hf_local_files_only: true
+  gpu_monitor_interval_s: 5.0
+  progress_monitor_interval_s: 600
+  progress_monitor_batch_size: 32
+  progress_monitor_validation_max_batches: 32
+  runtime_platform: macos
+  training_device: mps
+  closed_loop_every_epochs: 1
+  closed_loop_episodes: 10
+  closed_loop_steps: 120
+  closed_loop_env_id: MuJoCoPickLift-v1
+  closed_loop_mujoco_gl: glfw
+  max_monitored_checkpoints: 20
+  closed_loop_policy: best_or_periodic
+  closed_loop_runner: qwen_chain
+  closed_loop_eval_skill_mode: qwen_edge_chain
+  closed_loop_task_prompt: null
+  closed_loop_action_contract_mode: processor
+  closed_loop_record_rollout_gif: false
+  record_loop_artifacts: true
+  render_loop_media: true
+  loop_artifact_width: 256
+  loop_artifact_height: 256
+  loop_artifact_fps: 12
+  loop_artifact_every_n_steps: 1
+  qwen_model: qwen3-vl-8b-instruct-mlx
+  qwen_base_url: null
+  qwen_api_key: null
+  qwen_object: null
+  qwen_env_object_color: null
+  closed_loop_subgoal_chain_mode: valid-mask
+  closed_loop_subgoal_sequence: null
+  closed_loop_fixed_subgoal_chunks: 1
+  closed_loop_valid_mask_checkpoint: _workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt
+  closed_loop_valid_mask_threshold: 0.5
+  closed_loop_valid_mask_consecutive: 2
+  closed_loop_policy_n_action_steps: 15
+  closed_loop_policy_num_steps: 10
+  validation_interval_steps: null
+  validation_interval_epochs: 1
+  python: .venv/bin/python
+training_args:
+  - --config_path=_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/qwen_edge_primitives_suite3_resume_009408_aug_full_virtual_statsfix_30000/model/checkpoints/009632/pretrained_model/train_config.json
+  - --resume=true
+  - --so101-resume-checkpoint-path=_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/qwen_edge_primitives_suite3_resume_009408_aug_full_virtual_statsfix_30000/model/checkpoints/009632
+  - --checkpoint-retention-policy=best_val_and_closed_loop
+  - --steps=30016

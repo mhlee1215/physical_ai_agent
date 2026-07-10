@@ -1,217 +1,248 @@
 # physical_ai_agent
 
-Agentic physical AI evaluation stack for Mac-local simulation.
+Mac-local and RunPod-ready physical AI evaluation stack for SO101/SmolVLA,
+MuJoCo/LIBERO experiments, and agentic closed-loop evaluation.
 
-The first milestone is to evaluate whether an agentic wrapper can improve task success for a weak or medium robot policy in LIBERO simulation.
+The repository has grown past the initial scaffold. The current implementation
+focuses on three connected lanes:
 
-## Initial Direction
+- SO101 simulation, dataset generation, SmolVLA fine-tuning, TensorBoard
+  validation, and closed-loop rollouts.
+- Agentic wrappers around lightweight VLA policies, including planner,
+  verifier, retry, and loop-test analysis tools.
+- Real SO-100/SO-101-adjacent safety and observation tooling, kept separate
+  from simulation-only commands.
 
-- Simulation: MuJoCo + LIBERO
-- Robot learning: LeRobot
-- Baselines: random policy, ACT, SmolVLA
-- Agent loop: planner -> policy executor -> verifier -> retry/replan
-- Local inference: Ollama or llama.cpp first, MLX later
-- Target machine: MacBook Pro M5 Pro, 64 GB unified memory
+For active project state, read [Summary.md](Summary.md). For collaboration and
+safety rules, read [AGENTS.md](AGENTS.md).
 
-## Repository Layout
+## Screenshots / Visual Evidence
 
-```text
-apps/
-  agent/                 # future agent service entrypoint
-  web/                   # future debug UI
-configs/
-  agent/                 # planner/verifier configs
-  eval/                  # evaluation configs
-  policy/                # policy configs
-  sim/                   # simulation configs
-docs/
-  agentic_physical_ai_plan.md
-src/
-  physical_ai_agent/
-    agent_core/
-    data/
-    evaluation/
-    inference/
-    observability/
-    policies/
-    safety/
-    sim/
-    skills/
-tests/
-```
+The repository keeps reviewable SO101 rollout media under `docs/research/`.
+These examples use the TensorBoard-style side-by-side policy-input rendering
+contract.
 
-## Planned MVP
+![SO101 closed-loop success rollout episode 002](docs/research/2026_07_09/so101_loop_test_success_gifs/step_001080_episode_002_tensorboard_style_success.gif)
 
-- [ ] Run a LIBERO environment locally.
-- [ ] Execute a random policy and save episode traces.
-- [ ] Add ACT or SmolVLA baseline evaluation.
-- [ ] Add a rule-based planner.
-- [ ] Add a simulation-state verifier.
-- [ ] Add retry after failed subgoals.
-- [ ] Compare `policy_only` against `agentic_retry`.
+![SO101 closed-loop success rollout episode 003](docs/research/2026_07_09/so101_loop_test_success_gifs/step_001080_episode_003_tensorboard_style_success.gif)
 
-See [docs/agentic_physical_ai_plan.md](docs/agentic_physical_ai_plan.md) for the full checklist. See [docs/checkpoint_status.md](docs/checkpoint_status.md) for the current checkpoint ledger through CP24 and the exact claim boundary for each completed gate.
+## Quick Start
 
-## Development
-
-This repo is scaffolded but dependencies are intentionally light for now.
+Use Python 3.11+.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
-python -m physical_ai_agent
-pytest
+pip install -e ".[dev,sim,so101,web,ml]"
 ```
 
-## Checkpoint 01
-
-Use the repo-local script so the checkpoint runs with a Python version compatible with `pyproject.toml`.
+For SmolVLA/LeRobot work:
 
 ```bash
-sh scripts/bootstrap_checkpoint_01.sh
-sh scripts/checkpoint_01.sh
-sh scripts/checkpoint_01.sh --strict-local-sim --probe-mujoco
-sh scripts/checkpoint_01.sh --strict-sim-deps --probe-libero-env
+pip install -e ".[smolvla]"
 ```
 
-The bootstrap command creates `.venv` and installs MuJoCo for the first Mac-local simulation gate. The first checkpoint command verifies the lightweight scaffold and writes evidence to `_workspace/checkpoints/checkpoint_01_smoke.json`. The second checkpoint command verifies the Mac-local MuJoCo simulation path and writes evidence to `_workspace/checkpoints/checkpoint_01_local_sim.json`. The third checkpoint command writes evidence to `_workspace/checkpoints/checkpoint_01_libero_strict.json`; it is expected to fail on macOS or until the full LIBERO/LeRobot dependency path is available on Linux/cloud.
-
-## Checkpoints 02-04
-
-Run a random policy episode, save artifacts, and compute baseline evaluator metrics:
+For ManiSkill work:
 
 ```bash
-sh scripts/checkpoint_02_04.sh
+pip install -e ".[maniskill]"
 ```
 
-Artifacts are written to `_workspace/checkpoints/checkpoint_02_04/`, including `metrics.json`, `summary.md`, per-episode JSONL traces, final PPM frames, and `checkpoint_report.json`.
-
-Current CP02-04 status:
-
-- CP02 random policy episode: implemented and verified.
-- CP03 episode trace/frame/metrics artifacts: implemented and verified.
-- CP04 baseline evaluator metrics and summary: implemented and verified.
-
-## Checkpoints 05-06
-
-Create the policy adapter/action-chunk contract and probe SmolVLA readiness:
+Standard test commands:
 
 ```bash
-sh scripts/bootstrap_checkpoint_05_06.sh
-sh scripts/checkpoint_05_06.sh
-sh scripts/checkpoint_05_06.sh --require-real-smolvla --output-dir _workspace/checkpoints/checkpoint_05_06_require_real
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
+PYTHONPATH=src .venv/bin/python scripts/validate_so101_training_configs.py
+git diff --check
 ```
 
-The bootstrap command installs `lerobot[smolvla]` into `.venv`. Artifacts are written to `_workspace/checkpoints/checkpoint_05_06/`, including `checkpoint_report.json` and `smolvla_blocker.md`. The probe passes when the adapter contract works and either the LeRobot SmolVLA import path is ready or the missing dependency/model blocker is explicitly documented. Use `--require-real-smolvla` when the LeRobot SmolVLA import path must be available. This does not download model weights or prove task-quality inference yet.
-
-## Checkpoints 07-13
-
-Run SO101-Nexus MuJoCo locally, visualize the rollout, validate a LeRobot-compatible environment surface, and produce a SmolVLA dry-run rollout plus demo dataset:
+No-dependency syntax fallback:
 
 ```bash
-sh scripts/bootstrap_checkpoint_07_13.sh
-sh scripts/checkpoint_07_13.sh
+PYTHONPATH=src python3 -B -c "import ast, pathlib; files=list(pathlib.Path('src').rglob('*.py'))+list(pathlib.Path('tests').rglob('*.py')); [ast.parse(p.read_text()) for p in files]; print(f'parsed {len(files)} files')"
 ```
 
-Artifacts are written to `_workspace/checkpoints/checkpoint_07_13/`, including `rollout/so101_rollout.jsonl`, `rollout/so101_rollout.png`, `rollout/so101_rollout.gif`, `smolvla_dry_rollout/smolvla_dry_rollout.jsonl`, `smolvla_dry_rollout/smolvla_dry_rollout.png`, `smolvla_dry_rollout/smolvla_dry_rollout.gif`, `demo_dataset/episodes.jsonl`, `demo_dataset/metadata.json`, and `checkpoint_report.json`.
+## Repository Map
 
-Current CP07-13 status:
+```text
+src/physical_ai_agent/       Core library: policies, env wrappers, sim, eval, schemas.
+scripts/                     Executable training, dataset, viewer, analyzer, and checkpoint tools.
+configs/so101/training/      User-facing SO101 training configs.
+configs/so101/hydra/         Hydra launcher entrypoints for canonical training runs.
+configs/so101/training_datasets/
+                             Dataset contracts, export recipes, and checksums.
+configs/agent/               Qwen/SO101 tool plans and planner config.
+docs/                        Research notes, training standards, harness specs, checkpoint ledger.
+papers/                      RSS SemRob paper workspace.
+experiments/                 Isolated experiment notes and requirements.
+tests/                       Unit/regression tests for contracts and tooling.
+_workspace/                  Local generated artifacts, datasets, checkpoints, TensorBoard logs.
+```
 
-- CP07 SO101-Nexus reset/step: implemented and verified by the checkpoint command.
-- CP08 SO101 rollout trace and visualization: implemented with trace-derived PNG/GIF output.
-- CP09 LeRobot EnvHub-compatible `make_env`: implemented as `physical_ai_agent.envhub.so101_env.make_env`.
-- CP10 SO101 action-chunk policy: implemented as a center-action chunk policy.
-- CP11 SmolVLA dry input mapping: implemented without downloading model weights.
-- CP12 SmolVLA dry rollout visualization: implemented by feeding the dry chunk through SO101-Nexus.
-- CP13 demo dataset generation: implemented as a LeRobot-like JSONL intermediate artifact.
+Do not commit `_workspace/` artifacts, datasets, TensorBoard event files, or
+model checkpoints.
 
-## Checkpoints 14-15
+## SO101 Training Lane
 
-Render the SO101-Nexus MuJoCo scene as real 3D RGB frames, then load LeRobot's pretrained SmolVLA and use its action output to step SO101-Nexus:
+The canonical launcher is:
 
 ```bash
-sh scripts/bootstrap_checkpoint_14_15.sh
-sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
+  --hydra-config training/grip_the_cube_v1
 ```
 
-The strict command may download `lerobot/smolvla_base` from Hugging Face on first run. Artifacts are written to `_workspace/checkpoints/checkpoint_14_15/`, including `render_3d/so101_3d_render.png`, `render_3d/so101_3d_render.gif`, `smolvla_real/smolvla_real_rollout.jsonl`, `smolvla_real/smolvla_real_rollout_3d.png`, `smolvla_real/smolvla_real_rollout_3d.gif`, and `checkpoint_report.json`.
+Resume the current grip-the-cube lane from the retained best closed-loop
+checkpoint:
 
-Current CP14-15 status:
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
+  --hydra-config training/grip_the_cube_v1_resume_best_closed_loop
+```
 
-- CP14 SO101 3D MuJoCo render: implemented and verified with 640x480 PNG/GIF output.
-- CP15 pretrained SmolVLA inference rollout: implemented and verified by loading `SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")`, executing `select_action()`, stepping SO101-Nexus for six steps, and saving a 3D rollout PNG/GIF.
-- The current SmolVLA observation shim uses SO101 state plus zero image tensors and synthetic language tokens, so it proves execution wiring rather than task-quality policy behavior.
+Inspect the active run:
 
-## Live SO101 Viewer
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py status --json
+```
 
-Open a real-time MuJoCo viewer from a normal macOS Terminal session:
+The launcher enforces the current SO101 training contract:
+
+- Hydra/Pydantic config-first launch flow.
+- One training process and one TensorBoard process by default.
+- TensorBoard uses multifile reload because training and loop-test writers can
+  append separate event files in the same run logdir.
+- Checkpoint, validation, and closed-loop cadence are aligned.
+- Training-time closed-loop tests are called from the training process, not by
+  an external polling monitor.
+- Camera contract is `camera1=egocentric_cam`, `camera2=wrist_cam`.
+- SO101 image inputs are kept at the configured SmolVLA-compatible resolution.
+- Training uses grid-bin balanced sampling when the dataset provides camera1
+  object-position sidecar metadata.
+
+Validate training configs before launch:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/validate_so101_training_configs.py
+```
+
+See:
+
+- [docs/so101_local_training_standard.md](docs/so101_local_training_standard.md)
+- [docs/so101_smolvla_training_pipeline.md](docs/so101_smolvla_training_pipeline.md)
+- [configs/so101/training/README.md](configs/so101/training/README.md)
+
+## Experiment Manager
+
+The current web UI is the SO101 Experiment Manager. It combines dataset viewing,
+closed-loop case inspection, training run metadata, loop-test analysis, and
+interactive simulator surfaces.
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/serve_so101_dataset_viewer.py \
+  --host 0.0.0.0 \
+  --port 8768
+```
+
+Open:
+
+```text
+http://127.0.0.1:8768/
+```
+
+For same-Wi-Fi mobile access, use the Mac LAN IP with the same port.
+
+Related analyzer/export tools:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/build_loop_test_analyzer_export.py --help
+PYTHONPATH=src .venv/bin/python scripts/serve_loop_test_analyzer.py --help
+```
+
+## Dataset Tooling
+
+SO101 dataset generation and management is script-driven. Important entrypoints:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/export_so101_training_datasets.py --help
+PYTHONPATH=src .venv/bin/python scripts/export_so101_teacher_rollouts_lerobot.py --help
+PYTHONPATH=src .venv/bin/python scripts/export_so101_pickplace_teacher_rollouts_lerobot.py --help
+PYTHONPATH=src .venv/bin/python scripts/build_so101_camera_grid_bins.py --help
+PYTHONPATH=src .venv/bin/python scripts/build_so101_predecoded_image_cache.py --help
+PYTHONPATH=src .venv/bin/python scripts/write_so101_dataset_checksums.py --help
+```
+
+Dataset contracts live under:
+
+```text
+configs/so101/training_datasets/
+```
+
+Training configs reference datasets from:
+
+```text
+configs/so101/training/
+```
+
+Keep dataset-generation metadata and training-run configs separate.
+
+## Closed-Loop Evaluation
+
+Training-time loop tests are run by the training process through:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/run_so101_training_loop_test.py --help
+```
+
+Standalone SO101 policy evaluators include:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/evaluate_so101_picklift_smolvla_policy.py --help
+PYTHONPATH=src .venv/bin/python scripts/run_so101_qwen_closed_loop_eval.py --help
+PYTHONPATH=src .venv/bin/python scripts/run_so101_qwen_smolvla_e2e.py --help
+```
+
+Expected TensorBoard evidence for training-result loop tests includes rollout
+media and RMSE diagnostics. Static scalar-only loop-test output is not enough
+for review.
+
+## Live SO101 Simulation
+
+Native MuJoCo viewer:
 
 ```bash
 sh scripts/view_so101_live.sh
 ```
 
-On macOS, MuJoCo's live viewer requires `mjpython`. If the repo `.venv` was created from a bundled/symlinked Python and `mjpython` cannot start, create a separate viewer venv from Homebrew or python.org Python:
-
-```bash
-/opt/homebrew/bin/python3 -m venv .venv-viewer
-.venv-viewer/bin/python -m pip install -e ".[so101]"
-PYTHONPATH=src .venv-viewer/bin/mjpython -B -m physical_ai_agent.sim.so101_live_viewer
-```
-
-Optional finite demo:
-
-```bash
-sh scripts/view_so101_live.sh --max-steps 300 --fps 30
-```
-
-Open the native MuJoCo viewer with a browser-based real-time camera-input stream:
+Viewer with policy input cameras:
 
 ```bash
 sh scripts/view_so101_live.sh --show-inputs --fps 15
 ```
 
-When `--show-inputs` is enabled, the script prints a local URL such as `http://127.0.0.1:8765`. Open that URL in a browser to watch `wrist_cam` and `egocentric_cam` as policy inputs plus `top_down` as a debug view. The live viewer uses a deterministic smooth action policy and is meant for visual inspection. GUI windows may not open from headless agent sessions; use the CP14/15 GIF artifacts or CP18/19 input previews when running in a headless context.
-
-Run the browser-based live simulator with pretrained SmolVLA action chunks:
+Browser-only live simulator with SmolVLA inference:
 
 ```bash
-sh scripts/view_so101_live.sh --browser-only --policy smolvla --allow-download --smolvla-action-steps 15 --show-inputs --fps 2
+sh scripts/view_so101_live.sh \
+  --browser-only \
+  --policy smolvla \
+  --allow-download \
+  --smolvla-action-steps 15 \
+  --show-inputs \
+  --fps 2
 ```
 
-This path avoids the macOS `mjpython` native-window trampoline by streaming the MuJoCo 3D scene, `wrist_cam`, `egocentric_cam`, `top_down`, action bars, image-feature mapping, chunk status, and inference latency to `http://127.0.0.1:8765`. It loads `lerobot/smolvla_base` in an isolated worker process, predicts an action chunk, executes 15 actions from that chunk, steps SO101-Nexus with each selected action, and refreshes the chunk after 15 executed actions so the sim does not blindly consume all 50 predicted actions from a stale observation.
-
-## Interactive SO101 Sim Control
-
-Run a lightweight command loop that Codex can drive without opening a GUI:
+Lightweight command-loop simulator:
 
 ```bash
 sh scripts/so101_interactive_sim.sh
-```
-
-Open the lightweight browser control GUI:
-
-```bash
 sh scripts/so101_interactive_sim.sh --gui --port 8766 --output-dir _workspace/so101_interactive/gui
 ```
 
-Then open `http://127.0.0.1:8766`.
+Simulation artifacts are written under `_workspace/`.
 
-Scripted usage for repeatable agent steps:
+## Visual RL and Visual Servo Experiments
 
-```bash
-sh scripts/so101_interactive_sim.sh \
-  --output-dir _workspace/so101_interactive/demo \
-  --command observe \
-  --command 'nudge shoulder_pan 0.1' \
-  --command 'action [0,0,0,0,0,0]'
-```
-
-The command surface is intentionally close to the real SO-100/SO-101 six-joint order (`shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `wrist_roll`, `gripper`), but this path is simulation-only. It writes `session_manifest.json`, `latest_observation.json`, and `events.jsonl`; all artifacts keep `send_action_called=false` and `real_robot_safe_to_execute=false`. See `docs/sim_to_real_so101_interactive_contract.md` before using any sim candidate as input to a future real SO-101 adapter.
-
-## Visual RL Observation Wrapper
-
-Wrap SO101-Nexus Gymnasium environments so RL policies receive rendered camera images instead of only state vectors:
+Visual RL smoke:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_smoke.py \
@@ -222,9 +253,7 @@ PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_smoke.py \
   --steps 4
 ```
 
-The wrapper exposes `Dict(image=uint8[3,H,W], state=float32[N])` by default. Artifacts are written under `_workspace/so101_visual_rl/smoke/`, including `visual_rl_manifest.json` and per-step camera frames. Use `--no-state` for image-only observations or `--channel-last` for `uint8[H,W,3]`.
-
-Run a tiny CNN actor-critic against the same visual observation stream and apply one trainability update:
+Visual policy smoke:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_policy_smoke.py \
@@ -235,175 +264,67 @@ PYTHONPATH=src .venv/bin/python scripts/so101_visual_rl_policy_smoke.py \
   --rollout-steps 4
 ```
 
-This writes `_workspace/so101_visual_rl/policy_smoke/visual_policy_smoke_manifest.json` plus `policy_obs_*.png` camera frames. The manifest records image/state/action shapes, rollout rewards, actor-critic losses, entropy, and gradient norm.
-
-Train the lightweight visual actor-critic and replay the learned checkpoint in the browser viewer:
+Other experimental training entrypoints include:
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_rl.py \
-  --env-id MuJoCoReach-v1 \
-  --camera-name wrist_cam \
-  --width 64 \
-  --height 64 \
-  --updates 80 \
-  --rollout-steps 32 \
-  --output-dir _workspace/so101_visual_rl/train_reach
-
-PYTHONPATH=src .venv/bin/python -B -m physical_ai_agent.sim.so101_live_viewer \
-  --env-id MuJoCoReach-v1 \
-  --policy visual-rl \
-  --visual-policy-checkpoint _workspace/so101_visual_rl/train_reach/so101_visual_rl_policy.pt \
-  --visual-policy-camera wrist_cam \
-  --browser-only \
-  --input-port 8766 \
-  --fps 12
+PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_rl.py --help
+PYTHONPATH=src .venv/bin/python scripts/train_so101_wrist_ego_visual_servo.py --help
+PYTHONPATH=src .venv/bin/python scripts/train_so101_lerobot_visual_bc.py --help
 ```
 
-The training run writes `training_manifest.json` and `so101_visual_rl_policy.pt`. The browser viewer shows the 3D scene, camera inputs, action bars, and the loaded visual-RL checkpoint name.
+## Checkpoint Smoke Gates
 
-For a more stable controller-prior policy, train a visual target-error estimator and use it through the Jacobian reach controller:
-
-```bash
-PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_reach_delta.py \
-  --env-id MuJoCoReach-v1 \
-  --camera-name top_down \
-  --width 64 \
-  --height 64 \
-  --samples 12000 \
-  --epochs 30 \
-  --output-dir _workspace/so101_visual_rl/reach_delta
-
-PYTHONPATH=src .venv/bin/python -B -m physical_ai_agent.sim.so101_live_viewer \
-  --env-id MuJoCoReach-v1 \
-  --policy visual-reach \
-  --visual-reach-checkpoint _workspace/so101_visual_rl/reach_delta/so101_visual_reach_delta.pt \
-  --visual-reach-camera top_down \
-  --browser-only \
-  --input-port 8766 \
-  --fps 12
-```
-
-This policy predicts the 3D target-minus-gripper error from visual observations and lets the Jacobian controller turn that estimate into joint actions.
-
-To save intermediate generation videos and loss/evaluation plots:
+The historical checkpoint gates are still available and useful for regression
+checks:
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/train_so101_visual_reach_delta.py \
-  --env-id MuJoCoReach-v1 \
-  --camera-name top_down \
-  --width 64 \
-  --height 64 \
-  --samples 12000 \
-  --epochs 30 \
-  --eval-every 5 \
-  --eval-steps 100 \
-  --video-steps 100 \
-  --output-dir _workspace/so101_visual_rl/reach_delta_artifacts
-```
-
-This writes `plots/loss_curve.png`, `plots/eval_curve.png`, per-generation GIFs under `videos/`, and checkpoint snapshots under `checkpoints/`. Use the live viewer with `--max-steps N` to avoid an unbounded stream.
-
-Object pickup is possible through `MuJoCoPickLift-v1` or `MuJoCoPickAndPlace-v1`, but it needs a staged visual policy: object reach, grasp close, and lift/placing. The reach-delta trainer is the first stage; pickup should add object-relative delta, gripper command, and lift-height success metrics.
-
-## Checkpoint 16
-
-Capture and preview the actual inputs available to policies before adding planner or verifier logic:
-
-```bash
+sh scripts/checkpoint_01.sh
+sh scripts/checkpoint_02_04.sh
+sh scripts/checkpoint_05_06.sh
+sh scripts/checkpoint_07_13.sh
+sh scripts/checkpoint_14_15.sh --allow-download --require-3d-render --require-real-smolvla
 sh scripts/checkpoint_16.sh
-```
-
-Artifacts are written to `_workspace/checkpoints/checkpoint_16/`, including `so101_inputs/input_manifest.json`, `so101_inputs/input_preview.png`, `so101_inputs/input_preview.gif`, and per-step camera frames under `so101_inputs/frames/`. Current SO101-Nexus environments expose one camera input, `wrist_cam`; observation vectors are shape 6 for reach/move, 18 for pick-lift, and 24 for pick-and-place.
-
-## Checkpoint 17
-
-Capture a two-view visual input bundle for future LeRobot/SmolVLA multi-image batches:
-
-```bash
 sh scripts/checkpoint_17.sh
-```
-
-Artifacts are written to `_workspace/checkpoints/checkpoint_17/`, including `so101_multi_inputs/input_manifest.json`, `so101_multi_inputs/input_preview.png`, `so101_multi_inputs/input_preview.gif`, and per-step `wrist_cam` plus `top_down` frames. `wrist_cam` is the SO101-Nexus named camera; `top_down` is a MuJoCo virtual camera rendered without editing the SO101 XML. The planned LeRobot feature keys are `observation.images.wrist_cam` and `observation.images.top_down`.
-
-## Checkpoints 18-19
-
-Capture the policy/debug visual-input split, then run pretrained SmolVLA with real SO101 camera frames instead of zero image tensors:
-
-```bash
 sh scripts/checkpoint_18.sh
 sh scripts/checkpoint_19.sh --allow-download --require-real-smolvla
-```
-
-CP18 writes `wrist_cam` and `egocentric_cam` as policy inputs plus `top_down` as a debug input. CP19 maps those real frames into LeRobot's pretrained SmolVLA image feature keys: `observation.images.camera1 <- wrist_cam`, `observation.images.camera2 <- egocentric_cam`, and `observation.images.camera3 <- egocentric_cam` as a non-zero duplicate fallback. Artifacts are written under `_workspace/checkpoints/checkpoint_18/` and `_workspace/checkpoints/checkpoint_19/`.
-
-## Checkpoints 20-23
-
-Add the first agentic wrapper around SO101 evaluation: rule-based planning, simulation-state verification, retry, and a policy-only vs agentic-retry comparison report.
-
-```bash
 sh scripts/checkpoint_20.sh
 sh scripts/checkpoint_21.sh
 sh scripts/checkpoint_22.sh
 sh scripts/checkpoint_23.sh
-```
-
-CP20 writes a deterministic subgoal plan for `reach_target`. CP21 verifies a subgoal from SO101 simulator state using `tcp_to_target_dist` and `success`. CP22 executes the planned subgoals with one retry budget per failed subgoal and records verifier decisions in the trace. CP23 writes `_workspace/checkpoints/checkpoint_23/comparison/comparison_report.md` comparing `policy_only` and `agentic_retry` runs.
-
-## Checkpoint 24: ManiSkill / ManiSkill-HAB
-
-Add the first research-relevant Mac-local benchmark gate beyond the SO101 smoke path:
-
-```bash
-sh scripts/bootstrap_checkpoint_24.sh
-sh scripts/checkpoint_24.sh
 sh scripts/checkpoint_24.sh --require-maniskill
-sh scripts/checkpoint_24.sh --require-maniskill --episodes 20 --steps 100 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_pickcube_baselines_20ep_100step
-sh scripts/checkpoint_24.sh --require-maniskill --episodes 10 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_dry_10ep_50step
-sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_1ep_1step
-sh scripts/checkpoint_24.sh --require-maniskill --episodes 1 --steps 1 --policy smolvla_real --allow-download --real-images --output-dir _workspace/checkpoints/checkpoint_24_pickcube_smolvla_real_images_1ep_1step
-sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADSetTableVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_hab_settable_val_2ep_50step
-sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADPrepareGroceriesVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --output-dir _workspace/checkpoints/checkpoint_24_hab_preparegroceries_val_2ep_50step
-sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADSetTableVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_hab_settable_val_smolvla_dry_2ep_50step
-sh scripts/checkpoint_24.sh --require-maniskill --no-fallback-env --env-id ReplicaCADPrepareGroceriesVal_SceneManipulation-v1 --episodes 2 --steps 50 --policy zero --policy smolvla_dry --output-dir _workspace/checkpoints/checkpoint_24_hab_preparegroceries_val_smolvla_dry_2ep_50step
 ```
 
-CP24 targets ManiSkill first and records the ManiSkill-HAB expansion path as the next suite target. The non-strict command writes `_workspace/checkpoints/checkpoint_24/checkpoint_report.json`, documents a dependency blocker when `mani_skill` is not installed, and always writes `smolvla_maniskill_eval_plan.md` plus `checkpoint_25_robocasa_plan.md`. The strict command requires a real ManiSkill reset/step rollout and writes `maniskill_rollout/episodes.jsonl`, `metrics.json`, and `summary.md`.
+See [docs/checkpoint_status.md](docs/checkpoint_status.md) for checkpoint
+claim boundaries and evidence paths.
 
-For a first Mac-local baseline number, run the longer command above. It evaluates `random` and `zero` policies on the same `PickCube-v1` seeds and writes per-policy success rate, mean reward sum, and mean episode steps under `maniskill_rollout/metrics.json`.
+## RunPod
 
-For a small Mac-local HAB probe, install the extra scene/object assets once:
+RunPod is used for heavier SmolVLA/LIBERO/SO101 training and evaluation. The
+repo keeps setup and lifecycle helpers under `scripts/`:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -B -m mani_skill.utils.download_asset ReplicaCAD -y
-PYTHONPATH=src .venv/bin/python -B -m mani_skill.utils.download_asset ReplicaCADRearrange -y
-PYTHONPATH=src .venv/bin/python -B -m mani_skill.utils.download_asset ycb -y
+RUNPOD_SSH='<pod-user>@ssh.runpod.io' sh scripts/runpod_check.sh
+RUNPOD_API_KEY='<api-key>' RUNPOD_POD_ID='<pod-id>' sh scripts/runpod_pod.sh stop
 ```
 
-Then run the two `ReplicaCAD...SceneManipulation` commands above. The `--no-fallback-env` flag keeps these probes honest: if the HAB task cannot load, the checkpoint fails instead of silently falling back to `Empty-v1`.
+Current policy: completed remote experiment datasets, results, and checkpoints
+must be downloaded locally, verified, then removed from the remote artifact
+directory. Do not leave old experiment output on remote storage by default.
 
-The default research target is `PickCube-v1`. On macOS, SAPIEN needs a working Vulkan loader plus MoltenVK ICD to create the render device used by ManiSkill manipulation assets. Install them once with:
+## Real Robot Boundary
 
-```bash
-/opt/homebrew/bin/brew install vulkan-loader vulkan-tools molten-vk
-```
+Real SO-100/SO-101-adjacent scripts live in `scripts/real_so100_*` and related
+docs/skills. Treat them separately from simulation commands.
 
-`scripts/checkpoint_24.sh` automatically exports the Homebrew Vulkan loader and MoltenVK ICD paths when they exist. In Codex sandboxed sessions, Metal may still be hidden from MoltenVK; run the strict command from a normal macOS Terminal or with an unsandboxed command runner. If `PickCube-v1` is still blocked, CP24 falls back to `Empty-v1` to prove the ManiSkill evaluation pipeline is executable while preserving the `PickCube-v1` blocker in `maniskill_blocker.md`.
+Before any real-hardware action, read the repo-local hardware contracts and use
+read-only observation/proposal paths first. Simulation candidates are not
+automatically safe to execute on hardware.
 
-The SmolVLA layer is not treated as task-quality ManiSkill evaluation until two bridges exist: a ManiSkill observation-to-LeRobot feature bridge and a SmolVLA action-chunk-to-ManiSkill action bridge. CP24 records that installation and adapter plan explicitly.
+## Development Notes
 
-`smolvla_dry` validates that bridge shape without loading model weights. It writes `maniskill_rollout/smolvla_dry_bridge_manifest.json` with the mapped feature keys, state dimension, synthetic image feature shape, instruction, and ManiSkill action-space shape. Treat it as a wiring baseline, not as pretrained SmolVLA task performance.
-
-`smolvla_real` loads LeRobot's pretrained `lerobot/smolvla_base`, builds a ManiSkill-shaped batch, calls `select_action()`, clips the resulting action into the ManiSkill action space, and steps the environment. By default it uses state plus zero image tensors for the smallest model-call probe. Add `--real-images` to create the ManiSkill env with `obs_mode=rgb`, map `sensor_data.base_camera.rgb` into SmolVLA image features, and save `maniskill_rollout/smolvla_real_input.png`, per-step frames under `maniskill_rollout/smolvla_real_frames/`, and `maniskill_rollout/smolvla_real_rollout.gif`. This proves real model inference with real ManiSkill camera frames, but it is still a one-camera Mac-local probe rather than a full paper-scale visual policy evaluation.
-
-## Checkpoint 25: RoboCasa
-
-Register RoboCasa / RoboCasa365 as the heavier long-horizon household manipulation checkpoint:
-
-```bash
-sh scripts/checkpoint_25.sh
-sh scripts/checkpoint_25.sh --probe-reset-step --require-robocasa --task CloseFridge
-```
-
-The non-strict command writes `_workspace/checkpoints/checkpoint_25_robocasa/checkpoint_report.json`, records a dependency blocker when `robocasa` / `robosuite` are not installed, and saves `robocasa_install_and_eval.md` plus `robocasa365_reference_table.md`. The strict command requires a real RoboCasa reset/step rollout through `robocasa.utils.env_utils.create_env()`.
-
-CP25 is separate from CP24 because RoboCasa assets are larger and the paper-comparable target is RoboCasa365, not a lightweight Mac-local smoke. The generated eval plan records the `lerobot/smolvla_robocasa` command shape, the required RoboCasa camera rename map, and the 20-episodes-per-task protocol used for published RoboCasa365-style results.
+- Use `rg` for repository search.
+- Prefer config edits over ad hoc training flags.
+- Keep generated datasets, checkpoints, TensorBoard event data, videos, and
+  local experiment artifacts out of PRs.
+- For README-level status, link to durable docs instead of copying large
+  research logs into this file.

@@ -136,18 +136,82 @@ Durable SO101 fine-tuning contract:
 - SO101 training, supervised evaluation, and loop test are mandatory phases;
   the training process owns the sequence and invokes loop tests directly after
   checkpoint/evaluation events;
+- checkpoint, validation, and closed-loop timing must be one aligned step
+  event: `validation_interval_steps == save_freq ==
+  steps_per_epoch * closed_loop_every_epochs`, and total `steps` must be
+  divisible by `save_freq`. Monitored runs must log
+  `train/checkpoint_steps_remaining` and
+  `important/checkpoint_steps_remaining`;
 - training-time SO101 closed-loop validation defaults to exactly 10 episodes;
   keep `--closed-loop-episodes 10` unless the user explicitly requests a
   labeled one-off smoke/debug count;
 - when a SO101 training dataset has camera1 object-position grid-bin sidecar
   metadata, use grid-bin balanced sampling for training; keep validation and
   closed-loop sampling unbalanced;
+- SO101 training launches are Hydra/Pydantic config-first. For repeated or
+  user-facing runs, edit the Hydra entrypoint under
+  `configs/so101/hydra/training/` and the referenced JSON config under
+  `configs/so101/training/` first, then run
+  `scripts/start_so101_training.py start --hydra-config <name>` or a named
+  preset against that config unchanged. Do not rebuild stable behavior with ad
+  hoc CLI flags for prompt, dataset, loop-test cases, RMSE sweep, media,
+  augmentation, action contract, checkpoint cadence, or runner. One-off CLI
+  overrides must be clearly labeled smoke/debug or explicitly requested by the
+  user; repeated overrides must be promoted into the config or preset;
+- SO101 launcher/runtime defaults live in the selected Hydra entrypoint's
+  `launcher:` block. After the user approves a default entrypoint, do not edit
+  that default again unless the user directly asks to change the default
+  policy. Do not keep hidden Python fallback values for prompt, dataset,
+  loop-test cases, RMSE sweep, media resolution, augmentation, action contract,
+  checkpoint cadence, runner, device, or ports; missing required values should
+  fail before training instead of being guessed in code;
+- SO101 training config edits must pass the Pydantic/Hydra validator
+  `PYTHONPATH=src .venv/bin/python scripts/validate_so101_training_configs.py`;
+  the launcher also validates the selected config before command construction;
 - local SO101 training launches default to exactly two processes: the training
   process and one TensorBoard process. Extra dashboards, GPU monitors, progress
   monitors, watchers, alternate TensorBoards, or polling helpers require an
   explicit user request;
+- TensorBoard must be launched with `--reload_multifile true` for SO101
+  training runs. The active training writer and post-checkpoint validation or
+  loop-test writers can append separate event files in the same run logdir; the
+  launcher must make TensorBoard poll all active event files instead of only the
+  newest one;
+- SO101 Live Training Process Safety Contract: read-only status/debug commands
+  are allowed without another confirmation, including `status --json`, `ps`,
+  `tail`, TensorBoard event reads, `stat`, `find`, `du`, `rg`, and `sed`.
+  Mutating or destructive actions require explicit user approval immediately
+  before execution. This includes `kill`, `pkill`, SIGTERM, SIGKILL,
+  `scripts/start_so101_training.py stop`, restarting/resuming training,
+  deleting or resetting TensorBoard event data, pruning/deleting checkpoints
+  beyond the configured retention aliases, deleting artifacts, overwriting
+  `active_training.json`, `train.pid`, lock files, or active run metadata.
+  Root-cause analysis requests such as "why", "check", "find cause", or
+  "debug" mean gather evidence and report it first; do not fix, restart, stop,
+  or clean up unless the user explicitly approves that mutation. Never infer
+  liveness from PID only. Report process alive, `train/loss` scalar advancing,
+  validation/closed-loop cadence, and `train.log` stdout progress separately.
+  If training appears hung, collect those four evidence streams and ask before
+  terminating or restarting anything;
 - TensorBoard reports must include both the local URL and the same-Wi-Fi mobile
   URL;
+- SO101 loop-test TensorBoard evidence must include animated rollout media and
+  RMSE diagnostics, not only static images or scalar success rates:
+  `closed_loop/<test_id>/rollout_episode_<NNN>` for every episode,
+  `closed_loop/<test_id>/action_rmse_sweep` for action-chunk policies, and
+  matching train reference when policy-input camera frames are available. The
+  action RMSE sweep is mandatory training-result evidence unless a clearly
+  named smoke/debug command explicitly disables it. The canonical rollout tag
+  must be generated from the labeled camera1=egocentric/camera2=wrist
+  policy-input trace; raw GIFs are debug media only under `extra/closed_loop`
+  and must not replace canonical rollout evidence;
+- loop-test GIF/video frames must show episode/frame, prompt, camera names,
+  phase/primitive or active camera when available, target overlays when
+  available, dx/dy values when available, terminal success/failure context, and
+  a green border on model inference/re-query frames;
+- training-time loop-test result generation must call
+  `write_so101_training_loop_test_results(run_dir, row, report)` instead of
+  creating runner-specific TensorBoard/video writers;
 - do not use teacher-action dropout in behavior cloning;
 - action chunk jitter is handled through explicit predicted-action temporal
   smoothness loss or inference-time temporal ensembling/chunk smoothing, not by

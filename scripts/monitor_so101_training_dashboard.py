@@ -72,6 +72,7 @@ def main() -> None:
     parser.add_argument("--closed-loop-start-contract", default="default_reset")
     parser.add_argument("--closed-loop-start-report-path", type=Path)
     parser.add_argument("--closed-loop-env-id", default="MuJoCoPickLift-v1")
+    parser.add_argument("--closed-loop-env-object-color")
     parser.add_argument("--closed-loop-width", type=int, default=256)
     parser.add_argument("--closed-loop-height", type=int, default=256)
     parser.add_argument(
@@ -210,7 +211,7 @@ def check_once(args: argparse.Namespace, run_dir: Path) -> None:
     for checkpoint in checkpoints:
         if checkpoint == "last":
             continue
-        checkpoint_step = _checkpoint_to_step(checkpoint)
+        checkpoint_step = _checkpoint_step(run_dir, checkpoint)
         if checkpoint_step is not None and checkpoint_step < args.min_validation_step:
             continue
         policy_path = checkpoint_root / checkpoint / "pretrained_model"
@@ -379,6 +380,11 @@ def _run_picklift_closed_loop_eval(
     policy_path: Path,
 ) -> dict[str, Any]:
     closed_loop_test_id = str(getattr(args, "closed_loop_test_id", "default") or "default")
+    record_rollout_gif = bool(
+        args.closed_loop_record_rollout_gif
+        or getattr(args, "record_loop_artifacts", False)
+        or getattr(args, "render_loop_media", False)
+    )
     output_dir = run_dir / "closed_loop_evals" / (
         f"{_safe_id(closed_loop_test_id)}_seed{args.closed_loop_seed}_"
         f"nact{args.policy_n_action_steps}_{checkpoint}"
@@ -412,7 +418,7 @@ def _run_picklift_closed_loop_eval(
         str(args.torch_seed),
         "--eval-skill-mode",
         args.closed_loop_eval_skill_mode,
-        "--record-rollout-gif" if args.closed_loop_record_rollout_gif else "--no-record-rollout-gif",
+        "--record-rollout-gif" if record_rollout_gif else "--no-record-rollout-gif",
         "--subgoal-chain-mode",
         args.closed_loop_subgoal_chain_mode,
         "--fixed-subgoal-chunks",
@@ -422,6 +428,11 @@ def _run_picklift_closed_loop_eval(
         "--valid-mask-consecutive",
         str(args.closed_loop_valid_mask_consecutive),
     ]
+    if args.closed_loop_start_report_path is not None:
+        cmd.extend(["--start-report-path", str(args.closed_loop_start_report_path)])
+    env_object_color = args.closed_loop_env_object_color or args.qwen_env_object_color
+    if env_object_color:
+        cmd.extend(["--env-object-color", str(env_object_color)])
     if args.closed_loop_subgoal_sequence:
         cmd.extend(["--subgoal-sequence", args.closed_loop_subgoal_sequence])
     valid_mask_checkpoint = _checkpoint_valid_mask_head(policy_path) or args.closed_loop_valid_mask_checkpoint
@@ -451,6 +462,15 @@ def _run_picklift_closed_loop_eval(
     report_path = output_dir / "so101_picklift_smolvla_eval_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     report.setdefault("closed_loop_test_id", closed_loop_test_id)
+    _attach_action_rmse_sweep(
+        args=args,
+        checkpoint=checkpoint,
+        policy_path=policy_path,
+        valid_mask_checkpoint=valid_mask_checkpoint,
+        closed_loop_test_id=closed_loop_test_id,
+        output_dir=output_dir,
+        report=report,
+    )
     return report
 
 
@@ -598,16 +618,15 @@ def _attach_action_rmse_sweep(
     args: argparse.Namespace,
     checkpoint: str,
     policy_path: Path,
-    valid_mask_checkpoint: Path,
+    valid_mask_checkpoint: Path | None,
     closed_loop_test_id: str,
     output_dir: Path,
     report: dict[str, Any],
 ) -> None:
     if not bool(getattr(args, "closed_loop_action_rmse_sweep", True)):
         return
-    if getattr(args, "closed_loop_runner", "") != "qwen_chain":
-        return
     if getattr(args, "closed_loop_start_report_path", None) is None:
+        report["action_rmse_sweep_error"] = "missing_closed_loop_start_report_path"
         return
     try:
         sweep = _run_action_rmse_sweep(
@@ -635,7 +654,7 @@ def _run_action_rmse_sweep(
     args: argparse.Namespace,
     checkpoint: str,
     policy_path: Path,
-    valid_mask_checkpoint: Path,
+    valid_mask_checkpoint: Path | None,
     closed_loop_test_id: str,
     output_dir: Path,
 ) -> dict[str, Any]:
@@ -650,7 +669,7 @@ def _run_action_rmse_sweep(
     teacher_frames = 0
     for n_action_steps in n_values:
         n_dir = sweep_dir / f"nact{int(n_action_steps):02d}"
-        cmd = _qwen_closed_loop_sweep_command(
+        cmd = _closed_loop_sweep_command(
             args=args,
             policy_path=policy_path,
             valid_mask_checkpoint=valid_mask_checkpoint,
@@ -683,28 +702,37 @@ def _run_action_rmse_sweep(
                 }
             )
             continue
-        sweep_report = json.loads((n_dir / "qwen_closed_loop_eval_report.json").read_text(encoding="utf-8"))
+        sweep_report_path = _closed_loop_eval_report_path(n_dir, runner=str(getattr(args, "closed_loop_runner", "")))
+        sweep_report = json.loads(sweep_report_path.read_text(encoding="utf-8"))
+        first_episode = (sweep_report.get("episodes") or [{}])[0]
         trace_path = _first_trace_path(sweep_report)
         episode_index = _first_dataset_episode_index(sweep_report)
-        if trace_path is None or episode_index is None:
+        if episode_index is None:
             rows.append(
                 {
                     "n_action_steps": int(n_action_steps),
                     "success": False,
-                    "error": "missing_trace_path_or_dataset_episode_index",
+                    "error": "missing_dataset_episode_index",
                     "run_dir": str(n_dir),
                 }
             )
             continue
-        series, teacher_count = _teacher_action_rmse_series(
-            dataset_root=dataset_root,
-            episode_index=int(episode_index),
-            rollout_jsonl=trace_path,
-        )
+        if trace_path is not None:
+            series, teacher_count = _teacher_action_rmse_series(
+                dataset_root=dataset_root,
+                episode_index=int(episode_index),
+                rollout_jsonl=trace_path,
+            )
+        else:
+            series, teacher_count = _teacher_action_rmse_series_from_records(
+                dataset_root=dataset_root,
+                episode_index=int(episode_index),
+                records=first_episode.get("records") or [],
+            )
         teacher_frames = max(teacher_frames, teacher_count)
         series_by_n[int(n_action_steps)] = series
         summary = _summarize_rmse_series(series)
-        final_info = (((sweep_report.get("episodes") or [{}])[0]).get("final_info") or {})
+        final_info = first_episode.get("final_info") or first_episode
         rows.append(
             {
                 "n_action_steps": int(n_action_steps),
@@ -737,6 +765,49 @@ def _run_action_rmse_sweep(
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     payload["json_path"] = str(json_path)
     return payload
+
+
+def _closed_loop_eval_report_path(output_dir: Path, *, runner: str) -> Path:
+    names = (
+        ("qwen_closed_loop_eval_report.json", "so101_picklift_smolvla_eval_report.json")
+        if runner == "qwen_chain"
+        else ("so101_picklift_smolvla_eval_report.json", "qwen_closed_loop_eval_report.json")
+    )
+    for name in names:
+        path = output_dir / name
+        if path.exists():
+            return path
+    raise FileNotFoundError(f"closed-loop eval report not found under {output_dir}")
+
+
+def _closed_loop_sweep_command(
+    *,
+    args: argparse.Namespace,
+    policy_path: Path,
+    valid_mask_checkpoint: Path | None,
+    output_dir: Path,
+    n_action_steps: int,
+) -> list[str]:
+    runner = str(getattr(args, "closed_loop_runner", "") or "picklift")
+    if runner == "qwen_chain":
+        if valid_mask_checkpoint is None:
+            raise RuntimeError("qwen_chain RMSE sweep requires a valid-mask checkpoint")
+        return _qwen_closed_loop_sweep_command(
+            args=args,
+            policy_path=policy_path,
+            valid_mask_checkpoint=valid_mask_checkpoint,
+            output_dir=output_dir,
+            n_action_steps=n_action_steps,
+        )
+    if runner in {"picklift", "auto"}:
+        return _picklift_closed_loop_sweep_command(
+            args=args,
+            policy_path=policy_path,
+            valid_mask_checkpoint=valid_mask_checkpoint,
+            output_dir=output_dir,
+            n_action_steps=n_action_steps,
+        )
+    raise RuntimeError(f"unsupported closed-loop runner for RMSE sweep: {runner}")
 
 
 def _qwen_closed_loop_sweep_command(
@@ -808,6 +879,69 @@ def _qwen_closed_loop_sweep_command(
     return cmd
 
 
+def _picklift_closed_loop_sweep_command(
+    *,
+    args: argparse.Namespace,
+    policy_path: Path,
+    valid_mask_checkpoint: Path | None,
+    output_dir: Path,
+    n_action_steps: int,
+) -> list[str]:
+    cmd = [
+        args.python,
+        str(args.repo_root / "scripts" / "evaluate_so101_picklift_smolvla_policy.py"),
+        "--policy-path",
+        str(policy_path),
+        "--output-dir",
+        str(output_dir),
+        "--episodes",
+        "1",
+        "--steps",
+        str(args.closed_loop_steps),
+        "--seed",
+        str(args.closed_loop_seed),
+        "--device",
+        args.policy_device,
+        "--width",
+        str(args.closed_loop_width),
+        "--height",
+        str(args.closed_loop_height),
+        "--policy-n-action-steps",
+        str(n_action_steps),
+        "--policy-num-steps",
+        str(args.policy_num_steps),
+        "--sample-input-grid-count",
+        str(args.closed_loop_input_grid_count),
+        "--torch-seed",
+        str(args.torch_seed),
+        "--eval-skill-mode",
+        args.closed_loop_eval_skill_mode,
+        "--no-record-rollout-gif",
+        "--subgoal-chain-mode",
+        args.closed_loop_subgoal_chain_mode,
+        "--fixed-subgoal-chunks",
+        str(args.closed_loop_fixed_subgoal_chunks),
+        "--valid-mask-threshold",
+        str(args.closed_loop_valid_mask_threshold),
+        "--valid-mask-consecutive",
+        str(args.closed_loop_valid_mask_consecutive),
+    ]
+    if args.closed_loop_start_report_path is not None:
+        cmd.extend(["--start-report-path", str(args.closed_loop_start_report_path)])
+    env_object_color = args.closed_loop_env_object_color or args.qwen_env_object_color
+    if env_object_color:
+        cmd.extend(["--env-object-color", str(env_object_color)])
+    if args.closed_loop_subgoal_sequence:
+        cmd.extend(["--subgoal-sequence", args.closed_loop_subgoal_sequence])
+    if valid_mask_checkpoint:
+        cmd.extend(["--valid-mask-checkpoint", str(valid_mask_checkpoint)])
+    if args.closed_loop_task_prompt:
+        cmd.extend(["--task-prompt", args.closed_loop_task_prompt])
+    if args.local_files_only:
+        cmd.append("--local-files-only")
+    return cmd
+
+
 def _closed_loop_sweep_dataset_root(args: argparse.Namespace) -> Path:
     start_report = Path(args.closed_loop_start_report_path)
     if not start_report.is_absolute():
@@ -839,6 +973,12 @@ def _first_dataset_episode_index(report: dict[str, Any]) -> int | None:
             value = state.get(key)
             if value is not None:
                 return int(value)
+        value = episode.get("dataset_episode_index")
+        if value is not None:
+            return int(value)
+        value = episode.get("episode")
+        if value is not None:
+            return int(value)
     return None
 
 
@@ -867,6 +1007,39 @@ def _teacher_action_rmse_series(*, dataset_root: Path, episode_index: int, rollo
             rollout_actions.append([float(value) for value in action[:6]])
     if not rollout_actions:
         raise ValueError(f"no rollout actions found in {rollout_jsonl}")
+    rollout = np.asarray(rollout_actions, dtype=float)
+    horizon = min(len(teacher), len(rollout))
+    rmse = np.sqrt(((rollout[:horizon] - teacher[:horizon]) ** 2).mean(axis=1))
+    return [float(value) for value in rmse.tolist()], int(len(teacher))
+
+
+def _teacher_action_rmse_series_from_records(
+    *,
+    dataset_root: Path,
+    episode_index: int,
+    records: list[dict[str, Any]],
+) -> tuple[list[float], int]:
+    import numpy as np
+    import pandas as pd
+
+    files = sorted((dataset_root / "data").glob("chunk-*/*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"no LeRobot parquet files under {dataset_root / 'data'}")
+    table = pd.concat(
+        [pd.read_parquet(path, columns=["episode_index", "frame_index", "action"]) for path in files],
+        ignore_index=True,
+    )
+    episode = table[table["episode_index"] == int(episode_index)].sort_values("frame_index")
+    if episode.empty:
+        raise ValueError(f"episode_index {episode_index} not found under {dataset_root}")
+    teacher = np.stack(episode["action"].to_numpy()).astype(float)[:, :6]
+    rollout_actions = []
+    for record in records:
+        action = record.get("action") or record.get("raw_action")
+        if action is not None:
+            rollout_actions.append([float(value) for value in action[:6]])
+    if not rollout_actions:
+        raise ValueError("no rollout record actions found")
     rollout = np.asarray(rollout_actions, dtype=float)
     horizon = min(len(teacher), len(rollout))
     rmse = np.sqrt(((rollout[:horizon] - teacher[:horizon]) ** 2).mean(axis=1))
@@ -1071,13 +1244,18 @@ def _checkpoint_root(args: argparse.Namespace, run_dir: Path) -> Path:
 def _checkpoint_names(checkpoints_dir: Path) -> list[str]:
     if not checkpoints_dir.exists():
         return []
-    return sorted(path.name for path in checkpoints_dir.iterdir() if path.is_dir() and path.name.isdigit())
+    names = [
+        path.name
+        for path in checkpoints_dir.iterdir()
+        if path.is_dir() and path.name != "last" and (path.name.isdigit() or (path / "pretrained_model").exists())
+    ]
+    return sorted(names, key=lambda name: (_checkpoint_sort_step(_run_dir_from_checkpoint_root(checkpoints_dir), name), name))
 
 
 def _validation_already_recorded(run_dir: Path, checkpoint: str) -> bool:
     path = run_dir / "metrics" / "validation_metrics.jsonl"
     for row in _read_jsonl(path):
-        if str(row.get("checkpoint")) == checkpoint:
+        if _metric_checkpoint_matches(run_dir, row, checkpoint):
             return True
     return False
 
@@ -1085,7 +1263,7 @@ def _validation_already_recorded(run_dir: Path, checkpoint: str) -> bool:
 def _validation_deferred_already_recorded(run_dir: Path, checkpoint: str) -> bool:
     path = run_dir / "metrics" / "monitor_events.jsonl"
     for row in _read_jsonl(path):
-        if row.get("kind") == "validation_deferred" and str(row.get("checkpoint")) == checkpoint:
+        if row.get("kind") == "validation_deferred" and _metric_checkpoint_matches(run_dir, row, checkpoint):
             return True
     return False
 
@@ -1149,6 +1327,7 @@ def _should_run_closed_loop(args: argparse.Namespace, run_dir: Path, checkpoint:
         for row in _read_jsonl(run_dir / "metrics" / "closed_loop_metrics.jsonl")
         if str(row.get("test_id", "default")) == test_id
     ]
+    schedule_checkpoint = _checkpoint_schedule_name(run_dir, checkpoint)
     return should_run_closed_loop(
         schedule=SO101TrainingSchedule(
             closed_loop_policy=policy,
@@ -1158,7 +1337,7 @@ def _should_run_closed_loop(args: argparse.Namespace, run_dir: Path, checkpoint:
             overfit_patience_checkpoints=args.overfit_patience_checkpoints,
             overfit_min_delta=args.overfit_min_delta,
         ),
-        checkpoint=checkpoint,
+        checkpoint=schedule_checkpoint,
         validation_rows=_read_jsonl(run_dir / "metrics" / "validation_metrics.jsonl"),
         closed_loop_rows=closed_loop_rows,
     )
@@ -1228,7 +1407,7 @@ def _is_best_validation_checkpoint(run_dir: Path, checkpoint: str) -> bool:
 def _closed_loop_already_recorded(run_dir: Path, checkpoint: str) -> bool:
     path = run_dir / "metrics" / "closed_loop_metrics.jsonl"
     for row in _read_jsonl(path):
-        if str(row.get("checkpoint")) == checkpoint:
+        if _metric_checkpoint_matches(run_dir, row, checkpoint):
             return True
     return False
 
@@ -1240,7 +1419,7 @@ def _append_validation_metric(
     args: argparse.Namespace,
 ) -> None:
     row = {
-        "step": _checkpoint_to_step(checkpoint),
+        "step": _checkpoint_step(run_dir, checkpoint),
         "loss": report["loss_mean"],
         "postprocessed_action_rmse_mean": report.get("postprocessed_action_rmse_mean"),
         "postprocessed_action_global_rmse": report.get("postprocessed_action_global_rmse"),
@@ -1260,7 +1439,7 @@ def _append_validation_metric(
 
 def _append_closed_loop_metric(run_dir: Path, checkpoint: str, report: dict[str, Any]) -> None:
     row = {
-        "step": _checkpoint_to_step(checkpoint),
+        "step": _checkpoint_step(run_dir, checkpoint),
         "checkpoint": checkpoint,
         "test_id": report.get("closed_loop_test_id", "default"),
         "loop_validation_id": report.get("closed_loop_test_id", "default"),
@@ -1276,6 +1455,18 @@ def _append_closed_loop_metric(run_dir: Path, checkpoint: str, report: dict[str,
         "policy_rollout_config": report.get("policy_rollout_config"),
     }
     _append_jsonl(run_dir / "metrics" / "closed_loop_metrics.jsonl", row)
+    write_so101_training_loop_test_results(run_dir, row, report)
+
+
+def write_so101_training_loop_test_results(run_dir: Path, row: dict[str, Any], report: dict[str, Any]) -> None:
+    """Write the canonical SO101 training-time loop-test evidence package.
+
+    Training loop-test result generation must go through this function. It owns
+    the stable TensorBoard tag contract for closed-loop scalars, RMSE sweep
+    plots, canonical rollout videos, debug raw-media mirrors, and train
+    references. Do not add ad hoc loop-test TensorBoard writers elsewhere.
+    """
+
     _write_closed_loop_tensorboard(run_dir, row, report)
 
 
@@ -1318,7 +1509,7 @@ def _write_validation_tensorboard(run_dir: Path, row: dict[str, Any]) -> None:
 
 
 def _smolvla_tensorboard_log_dir(run_dir: Path) -> Path:
-    return run_dir / "tensorboard" / "so101_smolvla"
+    return run_dir / "tensorboard"
 
 
 def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: dict[str, Any]) -> None:
@@ -1327,11 +1518,14 @@ def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: d
     except Exception:
         return
 
-    # Keep loop-test writers out of the main training run. TensorBoard can merge
-    # multiple event writers under one run in confusing ways, which hides or
-    # de-emphasizes the main train/val loss traces.
-    log_dir = run_dir / "tensorboard" / "so101_closed_loop"
+    log_dir = _smolvla_tensorboard_log_dir(run_dir)
     step = int(row.get("step") or 0)
+    side_by_side_videos = _closed_loop_policy_camera_side_by_side_videos(report)
+    raw_rollout_videos = _closed_loop_rollout_gif_videos(report)
+    rollout_videos = _canonical_closed_loop_rollout_videos(
+        side_by_side_videos=side_by_side_videos,
+        raw_rollout_videos=raw_rollout_videos,
+    )
     with SummaryWriter(log_dir=str(log_dir)) as writer:
         test_id = _safe_id(str(row.get("test_id") or "default"))
         for key in ("success_rate", "grasp_rate", "episodes", "duration_s"):
@@ -1340,15 +1534,6 @@ def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: d
                 writer.add_scalar(f"closed_loop/{test_id}/{key}", float(value), global_step=step)
                 if key == "success_rate":
                     writer.add_scalar(f"{IMPORTANT_CLOSED_LOOP_SUCCESS_RATE_TAG}/{test_id}", float(value), global_step=step)
-        for camera_name, image_path in _first_closed_loop_input_grid_paths(report).items():
-            image = _read_hwc_image(Path(image_path))
-            if image is not None:
-                writer.add_image(
-                    f"closed_loop/input_{camera_name}_grid",
-                    image,
-                    global_step=step,
-                    dataformats="HWC",
-                )
         rmse_plot = _closed_loop_action_rmse_sweep_plot_path(report)
         if rmse_plot is not None:
             image = _read_hwc_image(rmse_plot)
@@ -1359,9 +1544,23 @@ def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: d
                     global_step=step,
                     dataformats="HWC",
                 )
-        for camera_name, video in _closed_loop_policy_camera_side_by_side_videos(report).items():
+        for video_name, video in rollout_videos.items():
             writer.add_video(
-                f"closed_loop/{test_id}/rollout_{camera_name}",
+                f"closed_loop/{test_id}/rollout_{video_name}",
+                video,
+                global_step=step,
+                fps=12,
+            )
+        for camera_name, video in side_by_side_videos.items():
+            writer.add_video(
+                f"extra/closed_loop/{test_id}/rollout_camera_trace_{camera_name}",
+                video,
+                global_step=step,
+                fps=12,
+            )
+        for video_name, video in raw_rollout_videos.items():
+            writer.add_video(
+                f"extra/closed_loop/{test_id}/raw_rollout_gif_{video_name}",
                 video,
                 global_step=step,
                 fps=12,
@@ -1373,16 +1572,6 @@ def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: d
                 global_step=step,
                 fps=12,
             )
-
-
-def _first_closed_loop_input_grid_paths(report: dict[str, Any]) -> dict[str, str]:
-    for episode in report.get("episodes") or []:
-        paths = episode.get("input_grid_paths")
-        if isinstance(paths, dict) and paths:
-            return {str(key): str(value) for key, value in paths.items()}
-    return {}
-
-
 def _closed_loop_action_rmse_sweep_plot_path(report: dict[str, Any]) -> Path | None:
     sweep = report.get("action_rmse_sweep")
     if not isinstance(sweep, dict):
@@ -1434,6 +1623,58 @@ def _closed_loop_policy_camera_side_by_side_videos(report: dict[str, Any]) -> di
         if video is not None:
             videos[f"camera1_camera2_episode_{episode_index:03d}"] = video
     return videos
+
+
+def _canonical_closed_loop_rollout_videos(
+    *,
+    side_by_side_videos: dict[str, Any],
+    raw_rollout_videos: dict[str, Any],
+) -> dict[str, Any]:
+    _ = raw_rollout_videos
+    return {
+        key.replace("camera1_camera2_", ""): value
+        for key, value in side_by_side_videos.items()
+        if key.startswith("camera1_camera2_episode_")
+    }
+
+
+def _closed_loop_rollout_gif_videos(report: dict[str, Any]) -> dict[str, Any]:
+    videos = {}
+    for episode in report.get("episodes") or []:
+        episode_index = _int_or_none(episode.get("episode"))
+        gif_path_value = episode.get("rollout_gif")
+        if episode_index is None or not gif_path_value:
+            continue
+        video = _gif_path_to_tensorboard_video(Path(str(gif_path_value)), max_frames=160)
+        if video is not None:
+            videos[f"episode_{episode_index:03d}"] = video
+    return videos
+
+
+def _gif_path_to_tensorboard_video(gif_path: Path, *, max_frames: int) -> Any | None:
+    if not gif_path.exists():
+        return None
+    try:
+        import imageio.v2 as imageio
+        import numpy as np
+        import torch
+
+        frames = []
+        for frame in imageio.mimread(gif_path):
+            array = np.asarray(frame)
+            if array.ndim == 2:
+                array = np.repeat(array[:, :, None], 3, axis=2)
+            if array.shape[2] > 3:
+                array = array[:, :, :3]
+            frames.append(array.astype("uint8", copy=False))
+            if len(frames) >= max(1, int(max_frames)):
+                break
+        if not frames:
+            return None
+        stacked = np.stack(frames, axis=0)
+        return torch.from_numpy(stacked).permute(0, 3, 1, 2).unsqueeze(0)
+    except Exception:
+        return None
 
 
 def _export_closed_loop_tensorboard_style_gifs(
@@ -2199,6 +2440,60 @@ def _checkpoint_to_step(checkpoint: str) -> int | None:
         return int(checkpoint)
     except ValueError:
         return None
+
+
+def _run_dir_from_checkpoint_root(checkpoints_dir: Path) -> Path:
+    checkpoints_dir = Path(checkpoints_dir)
+    if checkpoints_dir.name == "checkpoints" and checkpoints_dir.parent.name == "model":
+        return checkpoints_dir.parent.parent
+    return checkpoints_dir.parent
+
+
+def _checkpoint_step(run_dir: Path, checkpoint: str) -> int | None:
+    numeric = _checkpoint_to_step(checkpoint)
+    if numeric is not None:
+        return numeric
+    state = _read_json(run_dir / "model" / "checkpoints" / "retention_state.json")
+    if not isinstance(state, dict):
+        state = _read_json(run_dir / "checkpoints" / "retention_state.json")
+    if not isinstance(state, dict):
+        return None
+    alias_to_key = {
+        "best_train_loss": "best_train_loss_step",
+        "best_val_loss": "best_val_loss_step",
+        "best_closed_loop": "best_closed_loop_step",
+    }
+    value = state.get(alias_to_key.get(str(checkpoint), ""))
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _checkpoint_sort_step(run_dir: Path, checkpoint: str) -> int:
+    step = _checkpoint_step(run_dir, checkpoint)
+    return int(step) if step is not None else 10**12
+
+
+def _checkpoint_schedule_name(run_dir: Path, checkpoint: str) -> str:
+    step = _checkpoint_step(run_dir, checkpoint)
+    return f"{int(step):06d}" if step is not None else checkpoint
+
+
+def _metric_checkpoint_matches(run_dir: Path, row: dict[str, Any], checkpoint: str) -> bool:
+    row_checkpoint = str(row.get("checkpoint"))
+    if row_checkpoint == str(checkpoint):
+        return True
+    target_step = _checkpoint_step(run_dir, checkpoint)
+    if target_step is None:
+        return False
+    row_step = row.get("step")
+    if isinstance(row_step, int) and row_step == target_step:
+        return True
+    if isinstance(row_step, str) and row_step.isdigit() and int(row_step) == target_step:
+        return True
+    return row_checkpoint == f"{int(target_step):06d}"
 
 
 def _now_local() -> str:

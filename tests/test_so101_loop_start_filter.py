@@ -97,7 +97,7 @@ class SO101LoopStartFilterTest(unittest.TestCase):
             self.assertEqual(filtered["loop_filter"]["source_camera1_grid_bin_sidecar"], str(camera1_sidecar))
 
     def test_grip_from_above_config_uses_filtered_loop_report_when_artifact_exists(self) -> None:
-        config_path = Path("configs/so101/training_datasets/qwen_edge_grip_from_above_edge_cube_only.json")
+        config_path = Path("configs/so101/training/qwen_edge_grip_from_above_edge_cube_only.json")
         config = json.loads(config_path.read_text(encoding="utf-8"))
         test_case = config["closed_loop"]["test_cases"][0]
         self.assertEqual(test_case["episodes"], 6)

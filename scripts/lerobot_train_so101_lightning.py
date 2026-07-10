@@ -299,6 +299,13 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     validation_dataset_loaders = _make_validation_dataset_dataloaders(cfg, wrapper_args)
     validation_step_interval = _validation_step_interval(wrapper_args)
     validation_epoch_interval = _validation_epoch_interval(wrapper_args, validation_step_interval)
+    _require_aligned_checkpoint_validation_loop_cadence(
+        cfg=cfg,
+        wrapper_args=wrapper_args,
+        validation_step_interval=validation_step_interval,
+        validation_epoch_interval=validation_epoch_interval,
+        dataloader=dataloader,
+    )
     logging.info(
         "Validation schedule: enabled=%s step_interval=%s epoch_interval=%s",
         validation_dataloader is not None or bool(validation_dataset_loaders),
@@ -342,9 +349,11 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         log_input_images_every_n_steps=int(wrapper_args.log_input_images_every_n_steps),
         log_input_metadata_every_n_steps=_metadata_log_interval(wrapper_args),
         initial_step=resume_step,
+        checkpoint_save_freq=int(cfg.save_freq),
+        total_steps=int(cfg.steps),
     )
     tb_log_dir = (wrapper_args.tensorboard_log_dir or cfg.output_dir / "tensorboard").resolve()
-    logger = TensorBoardLogger(save_dir=str(tb_log_dir), name="so101_smolvla", version="")
+    logger = TensorBoardLogger(save_dir=str(tb_log_dir), name="", version="")
     _log_training_run_texts(
         logger=logger,
         summary_path=wrapper_args.training_run_summary_path,
@@ -1219,6 +1228,50 @@ def _validation_epoch_interval(args: argparse.Namespace, step_interval: int) -> 
     return 0 if value is None else max(0, int(value))
 
 
+def _require_aligned_checkpoint_validation_loop_cadence(
+    *,
+    cfg: TrainPipelineConfig,
+    wrapper_args: argparse.Namespace,
+    validation_step_interval: int,
+    validation_epoch_interval: int,
+    dataloader: Any,
+) -> None:
+    if not bool(cfg.save_checkpoint):
+        return
+    save_freq = int(cfg.save_freq)
+    if save_freq <= 0:
+        raise SystemExit("checkpoint save cadence must be positive; set --save_freq > 0.")
+    if int(cfg.steps) > 0 and int(cfg.steps) % save_freq != 0:
+        raise SystemExit(
+            f"training steps ({int(cfg.steps)}) must be divisible by checkpoint save cadence "
+            f"({save_freq}) so final checkpoint, validation, and loop test stay aligned."
+        )
+    has_loop_tests = bool(_post_checkpoint_loop_commands(wrapper_args))
+    if validation_step_interval > 0:
+        if validation_step_interval != save_freq:
+            raise SystemExit(
+                f"validation cadence ({validation_step_interval} steps) must match checkpoint save cadence "
+                f"({save_freq} steps) so validation, checkpoint, and loop test run on the same step."
+            )
+        return
+    if validation_epoch_interval > 0:
+        try:
+            steps_per_epoch = int(len(dataloader))
+        except TypeError as exc:
+            raise SystemExit(
+                "epoch-based validation requires a dataloader with a known length so it can align with checkpoint cadence."
+            ) from exc
+        expected_save_freq = steps_per_epoch * validation_epoch_interval
+        if expected_save_freq != save_freq:
+            raise SystemExit(
+                f"epoch validation cadence ({validation_epoch_interval} epochs x {steps_per_epoch} steps) "
+                f"must match checkpoint save cadence ({save_freq} steps)."
+            )
+        return
+    if has_loop_tests:
+        raise SystemExit("loop tests require validation cadence; set --validation-interval-steps or --validation-interval-epochs.")
+
+
 def _metadata_log_interval(args: argparse.Namespace) -> int:
     value = args.log_input_metadata_every_n_steps
     if value is None:
@@ -1432,6 +1485,8 @@ class _SO101LightningModule:
         log_input_images_every_n_steps: int,
         log_input_metadata_every_n_steps: int,
         initial_step: int = 0,
+        checkpoint_save_freq: int = 0,
+        total_steps: int = 0,
     ) -> Any:
         class SO101LightningModuleImpl(LightningModule):
             def __init__(self) -> None:
@@ -1467,6 +1522,8 @@ class _SO101LightningModule:
                 self.input_image_cameras = input_image_cameras
                 self.log_input_images_every_n_steps = max(0, int(log_input_images_every_n_steps))
                 self.log_input_metadata_every_n_steps = max(0, int(log_input_metadata_every_n_steps))
+                self.checkpoint_save_freq = max(0, int(checkpoint_save_freq))
+                self.total_steps = max(0, int(total_steps))
                 self._last_step_started = 0.0
                 self.last_train_loss: float | None = None
                 self.last_validation_loss: float | None = None
@@ -1534,9 +1591,18 @@ class _SO101LightningModule:
                     batch_size=batch_size,
                     log_step=train_log_step,
                 )
-                self.log("train/loss_progbar", loss, on_step=True, on_epoch=False, prog_bar=True, batch_size=batch_size)
+                self.log(
+                    "train/loss_progbar",
+                    loss,
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=True,
+                    logger=False,
+                    batch_size=batch_size,
+                )
                 self._log_train_dataset_losses(raw_batch, batch, batch_size=batch_size)
                 self._log_train_scalar("train/batch_size", float(batch_size), batch_size=batch_size, log_step=train_log_step)
+                self._log_checkpoint_schedule_metrics(batch_size=batch_size, log_step=train_log_step)
                 self._log_train_scalar("extra/train/update_s", update_s, batch_size=batch_size, log_step=train_log_step)
                 self._log_train_scalar("extra/train/data_s", dataloading_s, batch_size=batch_size, log_step=train_log_step)
                 self._log_train_scalar(
@@ -1588,6 +1654,26 @@ class _SO101LightningModule:
                     return
                 for tag, value in _system_metrics_for_current_process().items():
                     self._log_train_scalar(tag, value, batch_size=batch_size, log_step=step)
+
+            def _log_checkpoint_schedule_metrics(self, *, batch_size: int, log_step: int) -> None:
+                if self.checkpoint_save_freq <= 0:
+                    return
+                remainder = int(log_step) % self.checkpoint_save_freq
+                remaining = 0 if remainder == 0 else self.checkpoint_save_freq - remainder
+                if self.total_steps > 0:
+                    remaining = min(remaining, max(0, self.total_steps - int(log_step)))
+                self._log_train_scalar(
+                    "train/checkpoint_steps_remaining",
+                    float(remaining),
+                    batch_size=batch_size,
+                    log_step=log_step,
+                )
+                self._log_train_scalar(
+                    "important/checkpoint_steps_remaining",
+                    float(remaining),
+                    batch_size=batch_size,
+                    log_step=log_step,
+                )
 
             def on_train_epoch_end(self) -> None:
                 if not self._has_validation_loaders() or self.validation_epoch_interval <= 0:
