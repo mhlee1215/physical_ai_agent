@@ -21,6 +21,16 @@ from physical_ai_agent.so101_smolvla_pipeline import (
     should_run_closed_loop,
     validate_smolvla_train_config,
 )
+from physical_ai_agent.so101_resolution_contract import (
+    require_dataset_config_256,
+    require_lerobot_dataset_256,
+)
+from physical_ai_agent.so101_hydra_config import load_so101_hydra_training_config
+from physical_ai_agent.so101_training_config_schema import (
+    load_so101_training_schema,
+    validate_so101_training_config,
+    validate_so101_training_config_dir,
+)
 from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE
 
 
@@ -28,6 +38,57 @@ def _ensure_scripts_on_path() -> None:
     scripts_path = str(Path("scripts").resolve())
     if scripts_path not in sys.path:
         sys.path.insert(0, scripts_path)
+
+
+def _write_lerobot_resolution_info(root: Path, image_shape: list[int]) -> None:
+    meta = root / "meta"
+    meta.mkdir(parents=True, exist_ok=True)
+    features = {
+        key: {"dtype": "image", "shape": image_shape, "names": ["height", "width", "channels"]}
+        for key in (
+            "observation.images.camera1",
+            "observation.images.camera2",
+            "observation.images.camera3",
+        )
+    }
+    (meta / "info.json").write_text(json.dumps({"features": features}), encoding="utf-8")
+
+
+def _closed_loop_action_rmse_sweep_config() -> dict[str, object]:
+    return {
+        "enabled": True,
+        "n_action_steps": [1, 3, 5, 10, 15, 30, 40, 50],
+        "tensorboard_tag": "closed_loop/<test_id>/action_rmse_sweep",
+    }
+
+
+class _PickleSafeFakeLeRobotDataset:
+    def __init__(self, name: str, length: int) -> None:
+        from types import SimpleNamespace
+
+        self.name = name
+        self.repo_id = name
+        self.root = f"/tmp/{name}"
+        self.meta = SimpleNamespace(
+            fps=30,
+            features={"action": {"shape": [1]}},
+            stats={
+                "action": {
+                    "min": [0.0],
+                    "max": [float(length)],
+                    "mean": [float(length) / 2.0],
+                    "std": [1.0],
+                    "count": [length],
+                },
+            },
+        )
+        self.items = list(range(length))
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, index: int) -> dict[str, int | str]:
+        return {"source": self.name, "value": self.items[index]}
 
 
 class SO101SmolVLAPipelineTest(TestCase):
@@ -56,6 +117,62 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("cuda", contract.prefer_device_backends)
         self.assertIn("mps", contract.prefer_device_backends)
 
+    def test_so101_training_configs_validate_against_schema_contract(self) -> None:
+        schema = load_so101_training_schema(Path.cwd())
+        self.assertEqual(schema["title"], "SO101 training run config")
+        self.assertIn("train_dataset", schema["properties"])
+        self.assertIn("train_datasets", schema["properties"])
+        self.assertEqual(
+            schema["$defs"]["CameraContractConfig"]["properties"]["observation.images.camera1"]["const"],
+            "egocentric_cam",
+        )
+        self.assertEqual(
+            schema["$defs"]["CameraContractConfig"]["properties"]["observation.images.camera2"]["const"],
+            "wrist_cam",
+        )
+
+        results = validate_so101_training_config_dir(repo_root=Path.cwd())
+        errors = [error for result in results for error in result.errors]
+        self.assertEqual(errors, [])
+
+    def test_so101_hydra_training_entry_resolves_to_pydantic_training_config(self) -> None:
+        entry, config = load_so101_hydra_training_config("training/grip_the_cube_v1", repo_root=Path.cwd())
+
+        self.assertEqual(entry.training_config, "configs/so101/training/grip_the_cube_v1.json")
+        self.assertEqual(config.name, "grip_the_cube_v1")
+        self.assertEqual(config.camera_contract.camera1, "egocentric_cam")
+        self.assertEqual(config.camera_contract.camera2, "wrist_cam")
+        self.assertIn("--policy.type=smolvla", entry.training_args)
+
+    def test_so101_training_config_schema_rejects_ambiguous_train_split_definition(self) -> None:
+        config = {
+            "name": "bad",
+            "description": "bad config",
+            "task": "bad_task",
+            "train_dataset": {"repo_id": "repo/train", "root": "_workspace/train"},
+            "train_datasets": [{"name": "train_a", "repo_id": "repo/train-a", "root": "_workspace/train_a"}],
+            "validation_dataset": {"repo_id": "repo/val", "root": "_workspace/val"},
+            "camera_contract": {
+                "observation.images.camera1": "top_down",
+                "observation.images.camera2": "wrist_cam",
+            },
+            "tensorboard": {
+                "log_input_images_every_n_steps": 50,
+                "log_input_metadata_every_n_steps": 50,
+            },
+            "augmentation": {
+                "state_jitter_std": 0.003,
+                "state_dropout_prob": 0.02,
+                "image_camera_dropout_prob": 0.0,
+                "image_patch_dropout_prob": 0.0,
+                "image_patch_mask_ratio": 0.15,
+            },
+        }
+
+        errors = validate_so101_training_config(config, repo_root=Path.cwd())
+        self.assertTrue(any("define exactly one of train_dataset or train_datasets" in error for error in errors))
+        self.assertTrue(any("camera_contract.observation.images.camera1" in error for error in errors))
+
     def test_train_config_matches_smolvla_so101_contract(self) -> None:
         contract = SmolVLASO101Contract()
         config = {
@@ -83,6 +200,32 @@ class SO101SmolVLAPipelineTest(TestCase):
             "observation.images.camera1.shape [3, 96, 96] != [3, 256, 256]",
             validate_smolvla_train_config(config, contract),
         )
+
+    def test_lerobot_dataset_resolution_contract_rejects_96px_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_lerobot_resolution_info(root, [96, 96, 3])
+
+            with self.assertRaisesRegex(ValueError, "expected \\[256, 256, 3\\]"):
+                require_lerobot_dataset_256(root, context="unit")
+
+    def test_dataset_config_resolution_contract_checks_train_val_and_loop_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            train = root / "train"
+            val = root / "val"
+            loop = root / "loop"
+            _write_lerobot_resolution_info(train, [256, 256, 3])
+            _write_lerobot_resolution_info(val, [256, 256, 3])
+            _write_lerobot_resolution_info(loop, [96, 96, 3])
+            config = {
+                "train_dataset": {"root": str(train)},
+                "validation_dataset": {"root": str(val)},
+                "closed_loop": {"test_cases": [{"start_dataset": {"root": str(loop)}}]},
+            }
+
+            with self.assertRaisesRegex(ValueError, "closed_loop.test_cases\\[0\\].start_dataset"):
+                require_dataset_config_256(config, repo_root=Path.cwd(), context="unit")
 
     def test_dataset_manifest_requires_doubled_recovery_data_without_sticky_grasp(self) -> None:
         manifest = SO101DatasetManifest(
@@ -241,6 +384,52 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("recovery_or_off_nominal_states", constants)
         self.assertIn("reject_preclose_contact", constants)
 
+    def test_training_launcher_does_not_build_literal_empty_cache_paths(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = {
+            "train_dataset": {"repo_id": "repo/train", "root": "_workspace/train"},
+            "validation_dataset": {"repo_id": "repo/validation", "root": "_workspace/validation"},
+            "predecoded_image_cache": {
+                "default_root": "_workspace/so101_image_cache",
+                "train": {},
+                "validation": {},
+            },
+        }
+
+        commands = start_so101_training._cache_build_commands(
+            Path(sys.executable),
+            Path.cwd(),
+            config,
+        )
+
+        self.assertEqual(commands, [])
+
+    def test_training_launcher_builds_explicit_split_image_caches(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = {
+            "train_dataset": {"repo_id": "repo/train", "root": "_workspace/train"},
+            "validation_dataset": {"repo_id": "repo/validation", "root": "_workspace/validation"},
+            "predecoded_image_cache": {
+                "default_root": "_workspace/so101_image_cache",
+                "train": "train_cache",
+                "validation": "validation_cache",
+            },
+        }
+
+        commands = start_so101_training._cache_build_commands(
+            Path(sys.executable),
+            Path.cwd(),
+            config,
+        )
+
+        self.assertEqual(len(commands), 2)
+        self.assertIn("_workspace/so101_image_cache/train_cache", commands[0])
+        self.assertIn("_workspace/so101_image_cache/validation_cache", commands[1])
+
     def test_pickplace_exporter_uses_egocentric_wrist_student_camera_contract(self) -> None:
         source = Path("scripts/export_so101_pickplace_teacher_rollouts_lerobot.py").read_text(
             encoding="utf-8"
@@ -288,13 +477,41 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("--validation-interval-epochs", constants)
         self.assertIn("--validation-every-n-train-steps", constants)
         self.assertIn("--post-checkpoint-loop-command-json", constants)
+        self.assertIn("train/checkpoint_steps_remaining", constants)
+        self.assertIn("important/checkpoint_steps_remaining", constants)
+        self.assertIn("validation cadence (", constants)
+        self.assertIn("checkpoint save cadence must be positive; set --save_freq > 0.", constants)
         self.assertIn("--log-input-images-every-n-steps", constants)
         self.assertIn("--log-input-metadata-every-n-steps", constants)
         self.assertIn("--so101-action-prefix-loss-steps", constants)
         self.assertIn("--so101-action-prefix-loss-weight", constants)
+        self.assertIn("--so101-action-chunk-consistency-steps", constants)
+        self.assertIn("--so101-action-chunk-consistency-weight", constants)
+        self.assertIn("--so101-action-delta-loss-weight", constants)
+        self.assertIn("--so101-action-gripper-transition-loss-weight", constants)
+        self.assertIn("--so101-action-terminal-loss-steps", constants)
+        self.assertIn("--so101-action-terminal-loss-weight", constants)
+        self.assertIn("--so101-action-smoothness-loss-weight", constants)
+        self.assertIn("--so101-action-smoothness-include-gripper", constants)
+        self.assertIn("--so101-valid-mask-loss-weight", constants)
+        self.assertIn("--so101-valid-mask-hidden-dim", constants)
         self.assertIn("loss_unweighted", constants)
         self.assertIn("loss_prefix_weight", constants)
         self.assertIn("loss_prefix_steps", constants)
+        self.assertIn("action_chunk_consistency_loss", constants)
+        self.assertIn("action_chunk_consistency_weight", constants)
+        self.assertIn("action_chunk_consistency_steps", constants)
+        self.assertIn("action_delta_loss_weight", constants)
+        self.assertIn("action_gripper_transition_loss_weight", constants)
+        self.assertIn("action_terminal_loss_steps", constants)
+        self.assertIn("action_terminal_loss_weight", constants)
+        self.assertIn("action_smoothness_loss", constants)
+        self.assertIn("action_smoothness_loss_weight", constants)
+        self.assertIn("action_smoothness_include_gripper", constants)
+        self.assertIn("action_importance_weight_mean", constants)
+        self.assertIn("valid_mask_loss", constants)
+        self.assertIn("valid_mask_accuracy", constants)
+        self.assertIn("action_is_pad_as_termination_proxy", constants)
         self.assertIn("camera1,camera2", constants)
         self.assertIn("input", constants)
         self.assertIn("augmented_input", constants)
@@ -317,8 +534,16 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("TensorBoardLogger", names)
         self.assertIn("Trainer", names)
         self.assertIn("save_checkpoint", names)
+        self.assertIn("save_valid_mask_head", names)
         self.assertIn("augment_batch_on_device", names)
         self.assertIn("_action_chunk_jitter_metrics", names)
+        self.assertIn("_tensorboard_image_with_visual_servo_target", names)
+        self.assertIn("_tensorboard_image_grid_with_visual_servo_target", names)
+        self.assertIn("_draw_visual_servo_target_on_image", names)
+        self.assertIn("train/loss_progbar", constants)
+        self.assertIn("logger=False", source)
+        self.assertIn("visual_servo.camera1_visible", constants)
+        self.assertIn("visual_servo.camera2_visible", constants)
 
     def test_lightning_validation_dataloader_returns_dataloader(self) -> None:
         source = Path("scripts/lerobot_train_so101_lightning.py").read_text(encoding="utf-8")
@@ -337,6 +562,49 @@ class SO101SmolVLAPipelineTest(TestCase):
                 and value.func.attr == "DataLoader"
                 for value in returns
             )
+        )
+
+    def test_visual_servo_training_uses_label_safe_single_view_augmentation(self) -> None:
+        _ensure_scripts_on_path()
+        import lerobot_train_so101_lightning as train
+        from physical_ai_agent.lerobot_sampling_augmentation import SamplingAugmentationConfig
+
+        config = SamplingAugmentationConfig(
+            image_affine_degrees=5.0,
+            image_affine_translate=0.05,
+            image_patch_mask_ratio=0.15,
+            image_color_jitter=True,
+            image_sharpness_jitter=True,
+            gpu_image_augmentation=True,
+            enabled=True,
+        )
+
+        safe = train._single_view_augmentation_for_visual_servo_labels(config, enabled=True)
+
+        self.assertEqual(safe.image_affine_degrees, 5.0)
+        self.assertEqual(safe.image_affine_translate, 0.05)
+        self.assertEqual(safe.image_patch_mask_ratio, 0.0)
+        self.assertTrue(safe.image_color_jitter)
+        self.assertTrue(safe.image_sharpness_jitter)
+
+    def test_training_scalar_tags_keep_visual_servo_summary_in_main_view(self) -> None:
+        _ensure_scripts_on_path()
+        import lerobot_train_so101_lightning as train
+
+        self.assertEqual(train._scalar_metric_tag("train", "visual_servo_loss"), "train/visual_servo_loss")
+        self.assertEqual(train._scalar_metric_tag("train", "visual_servo_mse"), "train/visual_servo_mse")
+        self.assertEqual(train._scalar_metric_tag("train", "visual_servo_rmse"), "train/visual_servo_rmse")
+        self.assertEqual(
+            train._scalar_metric_tag("train", "visual_servo_camera1_dx_mae"),
+            "extra/train/visual_servo_camera1_dx_mae",
+        )
+        self.assertEqual(
+            train._scalar_metric_tag("train", "visual_servo_camera1_rmse"),
+            "extra/train/visual_servo_camera1_rmse",
+        )
+        self.assertEqual(
+            train._scalar_metric_tag("train", "losses_after_forward"),
+            "extra/train/losses_after_forward",
         )
 
     def test_training_dashboard_is_dataset_and_closed_loop_only(self) -> None:
@@ -369,12 +637,115 @@ class SO101SmolVLAPipelineTest(TestCase):
         source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
 
         self.assertIn("writer.add_video", source)
-        self.assertIn("rollout_{camera_name}", source)
+        self.assertIn("rollout_{video_name}", source)
+        self.assertIn("extra/closed_loop/{test_id}/rollout_camera_trace_{camera_name}", source)
+        self.assertIn("extra/closed_loop/{test_id}/raw_rollout_gif_{video_name}", source)
+        self.assertIn("_canonical_closed_loop_rollout_videos", source)
+        self.assertIn("_closed_loop_rollout_gif_videos(report)", source)
+        self.assertIn("_gif_path_to_tensorboard_video", source)
         self.assertIn("_closed_loop_frame_label", source)
         self.assertIn('"camera1"', source)
         self.assertIn('"camera2"', source)
         self.assertIn("observation.images.camera1", source)
         self.assertIn("observation.images.camera2", source)
+        self.assertNotIn("closed_loop/input_{camera_name}_grid", source)
+        self.assertNotIn("_first_closed_loop_input_grid_paths", source)
+
+    def test_training_monitor_canonical_rollout_refuses_raw_single_view_fallback(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+
+        raw = {"episode_000": object()}
+        self.assertEqual(
+            monitor._canonical_closed_loop_rollout_videos(side_by_side_videos={}, raw_rollout_videos=raw),
+            {},
+        )
+        side = {"camera1_camera2_episode_000": object()}
+        self.assertEqual(
+            sorted(monitor._canonical_closed_loop_rollout_videos(side_by_side_videos=side, raw_rollout_videos=raw)),
+            ["episode_000"],
+        )
+
+    def test_picklift_loop_eval_writes_policy_input_trace_for_tensorboard_rollout(self) -> None:
+        _ensure_scripts_on_path()
+        import evaluate_so101_picklift_smolvla_policy as evaluator
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = evaluator._write_policy_trace_images(
+                camera_pixels={
+                    "egocentric_cam": np.zeros((8, 9, 3), dtype=np.uint8),
+                    "wrist_cam": np.ones((8, 9, 3), dtype=np.uint8) * 255,
+                },
+                output_dir=root,
+                episode=3,
+                seed=98103,
+                step=7,
+                enabled=True,
+            )
+            self.assertEqual(sorted(paths), ["egocentric_cam", "wrist_cam"])
+            trace_path = evaluator._write_policy_trace(
+                root / "traces" / "episode_003_seed_98103_policy_inputs.jsonl",
+                [
+                    {
+                        "episode": 3,
+                        "global_step": 7,
+                        "prompt": "grip the green cube and lift",
+                        "image_feature_mapping": evaluator.POLICY_DISPLAY_IMAGE_FEATURE_MAPPING,
+                        "media": {"policy_input_images": paths},
+                    }
+                ],
+            )
+            self.assertIsNotNone(trace_path)
+            payload = json.loads(Path(trace_path).read_text(encoding="utf-8"))
+            self.assertEqual(payload["image_feature_mapping"]["observation.images.camera1"], "egocentric_cam")
+            self.assertEqual(payload["image_feature_mapping"]["observation.images.camera2"], "wrist_cam")
+            self.assertNotIn("observation.images.camera3", payload["image_feature_mapping"])
+
+    def test_picklift_loop_eval_uses_dataset_start_report_snapshot_contract(self) -> None:
+        source = Path("scripts/evaluate_so101_picklift_smolvla_policy.py").read_text(encoding="utf-8")
+
+        self.assertIn("--start-report-path", source)
+        self.assertIn("--env-object-color", source)
+        self.assertIn("_load_start_report_episodes", source)
+        self.assertIn("_restore_report_start_state", source)
+        self.assertIn("_restore_sim_state(env, restored)", source)
+        self.assertIn("start_report_path", source)
+        self.assertIn('"source": "start_report_path"', source)
+
+    def test_picklift_loop_command_forwards_dataset_start_report_and_object_color(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = json.loads(Path("configs/so101/training/grip_the_cube_v1.json").read_text(encoding="utf-8"))
+        test_case = config["closed_loop"]["test_cases"][0]
+        base = [
+            sys.executable,
+            "scripts/run_so101_training_loop_test.py",
+            "--closed-loop-test-id",
+            "stale",
+            "--closed-loop-start-report-path",
+            "_workspace/so101_lerobot/stale/so101_lerobot_export_report.json",
+            "--closed-loop-env-object-color",
+            "red",
+        ]
+
+        command = start_so101_training._post_checkpoint_loop_commands(
+            progress_monitor_cmd=base,
+            dataset_config=config,
+        )[0]
+        expected_report = str(Path(test_case["start_dataset"]["root"]) / "so101_lerobot_export_report.json")
+        self.assertEqual(command[command.index("--closed-loop-start-report-path") + 1], expected_report)
+        self.assertEqual(command[command.index("--closed-loop-env-object-color") + 1], "green")
+
+    def test_training_monitor_exports_review_gifs_with_tensorboard_style(self) -> None:
+        source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+
+        self.assertIn("def _export_closed_loop_tensorboard_style_gifs", source)
+        self.assertIn("_closed_loop_policy_camera_side_by_side_videos(report)", source)
+        self.assertIn("_write_tensorboard_video_gif", source)
+        self.assertIn("tensorboard_closed_loop_camera1_camera2_side_by_side", source)
 
     def test_training_monitor_overlays_episode_and_frame_on_closed_loop_rollout(self) -> None:
         _ensure_scripts_on_path()
@@ -419,6 +790,115 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIsNotNone(video)
             self.assertEqual(tuple(video.shape), (1, 1, 3, 64, 96))
             self.assertLess(int(video[0, 0, :, 0, 0].max()), 20)
+
+    def test_training_monitor_overlays_rollout_prediction_target(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+        import numpy as np
+
+        image = np.zeros((80, 100, 3), dtype=np.uint8)
+        rendered = monitor._overlay_closed_loop_frame_label(
+            image,
+            "ep 000 | frame 000",
+            target={"dx_norm": 0.5, "dy_norm": -0.5, "label": "pred", "color": (0, 220, 255)},
+        )
+
+        self.assertGreater(int(rendered[:, :, 1].max()), 200)
+        self.assertGreater(int(rendered[:, :, 2].max()), 200)
+
+    def test_training_monitor_rollout_prediction_target_shows_visible_probability(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+
+        low = monitor._target_overlay_from_mapping(
+            {"dx_norm": 0.0, "dy_norm": 0.0, "visible": True, "visible_prob": 0.2},
+            camera="camera1",
+            label="pred",
+            color=(0, 220, 255),
+        )
+        high = monitor._target_overlay_from_mapping(
+            {"dx_norm": 0.0, "dy_norm": 0.0, "visible": True, "visible_prob": 0.9},
+            camera="camera1",
+            label="pred",
+            color=(0, 220, 255),
+        )
+
+        self.assertEqual(low["label"], "pred vis=0.20")
+        self.assertEqual(high["label"], "pred vis=0.90")
+        self.assertLess(low["color"][1], high["color"][1])
+        self.assertLess(low["color"][2], high["color"][2])
+
+    def test_training_monitor_marks_active_servo_camera_and_phase(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+        import numpy as np
+
+        row = {
+            "primitive_id": "align_fixed_jaw_cube_edge",
+            "policy_output": {
+                "visual_servo_prediction": {
+                    "servo_selection": {"servo_camera": "camera2"},
+                }
+            },
+        }
+
+        camera1 = monitor._closed_loop_frame_metadata(row, "observation.images.camera1")
+        camera2 = monitor._closed_loop_frame_metadata(row, "observation.images.camera2")
+
+        self.assertFalse(camera1["active"])
+        self.assertTrue(camera2["active"])
+        self.assertEqual(camera2["phase"], "align_fixed_jaw_cube_edge")
+
+        rendered = monitor._overlay_closed_loop_frame_label(
+            np.zeros((80, 100, 3), dtype=np.uint8),
+            "ep 000 | frame 000",
+            metadata=camera2,
+        )
+        self.assertGreater(int(rendered[:, :, 2].max()), 200)
+        self.assertIn("phase: align_fixed_jaw_cube_edge", monitor._phase_label(camera2))
+
+    def test_training_monitor_marks_only_recorded_inference_frames(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+
+        self.assertTrue(
+            monitor._is_closed_loop_inference_frame(
+                {"policy_output": {"visual_servo_hold": {"inference_frame": True}}},
+                1,
+                15,
+            )
+        )
+        self.assertFalse(
+            monitor._is_closed_loop_inference_frame(
+                {"policy_output": {"visual_servo_hold": {"inference_frame": False}}},
+                0,
+                15,
+            )
+        )
+
+    def test_training_monitor_reads_reference_gt_target_from_visual_servo_sidecar(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+        import pandas as pd
+
+        row = pd.Series({"episode_index": 0, "frame_index": 2})
+        sidecar = pd.DataFrame(
+            [
+                {
+                    "episode_index": 0,
+                    "frame_index": 2,
+                    "camera1_visible": True,
+                    "camera1_dx_norm": -0.25,
+                    "camera1_dy_norm": 0.5,
+                }
+            ]
+        ).set_index(["episode_index", "frame_index"])
+
+        target = monitor._reference_target_overlay(sidecar, row, "camera1")
+
+        self.assertEqual(target["label"], "gt")
+        self.assertEqual(target["dx_norm"], -0.25)
+        self.assertEqual(target["dy_norm"], 0.5)
 
     def test_training_monitor_uses_macos_safe_mujoco_gl(self) -> None:
         sys.path.insert(0, str(Path("scripts").resolve()))
@@ -564,6 +1044,23 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(dataset.source_for_index(4), {"dataset_index": 1, "dataset_name": "b", "local_index": 2})
         self.assertTrue(dataset.disable_episode_aware_sampler)
         self.assertTrue(dataset.requires_dataset_balanced_sampler)
+
+    def test_virtual_merge_concat_dataset_is_pickle_safe_for_workers(self) -> None:
+        import pickle
+
+        from physical_ai_agent.so101_lerobot_concat import LeRobotConcatDataset
+
+        dataset = LeRobotConcatDataset(
+            [_PickleSafeFakeLeRobotDataset("a", 2), _PickleSafeFakeLeRobotDataset("b", 3)],
+            names=["a", "b"],
+        )
+
+        restored = pickle.loads(pickle.dumps(dataset))
+
+        self.assertEqual(len(restored), 5)
+        self.assertEqual(restored[4]["source"], "b")
+        self.assertEqual(restored.meta.fps, 30)
+        self.assertIn("action", restored.meta.stats)
 
     def test_virtual_merge_balanced_sampler_draws_each_dataset_evenly(self) -> None:
         import torch
@@ -818,8 +1315,6 @@ class SO101SmolVLAPipelineTest(TestCase):
                     str(Path(tmpdir) / "active.json"),
                     "--run-dir",
                     str(Path(tmpdir) / "run"),
-                    "--validation-interval-steps",
-                    "10",
                     "--",
                     "--dataset.repo_id=physical-ai-agent/test",
                     "--policy.type=smolvla",
@@ -836,29 +1331,37 @@ class SO101SmolVLAPipelineTest(TestCase):
             train_cmd = payload["train_cmd"]
             self.assertEqual(sum("lerobot_train_so101_lightning.py" in part for part in train_cmd), 1)
             self.assertIn("--dataset.repo_id=physical-ai-agent/test", train_cmd)
-            self.assertIn("--validation-interval-steps=10", train_cmd)
+            self.assertIn("--validation-interval-steps=684", train_cmd)
             self.assertTrue(any(str(part).startswith("--output_dir=") for part in train_cmd))
             self.assertIn("tensorboard_cmd", payload)
+            self.assertIn("--reload_multifile", payload["tensorboard_cmd"])
+            self.assertIn("true", payload["tensorboard_cmd"])
             self.assertIn("mobile_tensorboard_url", payload)
+            self.assertIn("external_tensorboard_url", payload)
+            self.assertIn("external_tensorboard_note", payload)
             self.assertIsNone(payload["dashboard_cmd"])
             self.assertIsNone(payload["gpu_monitor_cmd"])
             self.assertIsNone(payload["progress_monitor_cmd"])
 
-    def test_single_training_launcher_defaults_validation_to_closed_loop_cadence(self) -> None:
+    def test_single_training_launcher_accepts_hydra_training_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             completed = subprocess.run(
                 [
                     sys.executable,
                     "scripts/start_so101_training.py",
                     "start",
+                    "--hydra-config",
+                    "training/grip_the_cube_v1",
                     "--dry-run",
+                    "--skip-hf-dataset-download",
+                    "--hf-local-files-only",
+                    "--no-tensorboard-tunnel",
                     "--lock-file",
                     str(Path(tmpdir) / "active.json"),
                     "--run-dir",
                     str(Path(tmpdir) / "run"),
-                    "--",
-                    "--dataset.repo_id=physical-ai-agent/test",
-                    "--policy.type=smolvla",
+                    "--python",
+                    sys.executable,
                 ],
                 check=False,
                 text=True,
@@ -868,7 +1371,37 @@ class SO101SmolVLAPipelineTest(TestCase):
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
-            self.assertIn("--validation-interval-epochs=1", payload["train_cmd"])
+            self.assertEqual(payload["hydra_config"], "training/grip_the_cube_v1")
+            self.assertEqual(
+                payload["hydra_entry"]["training_config"],
+                "configs/so101/training/grip_the_cube_v1.json",
+            )
+            self.assertEqual(payload["dataset_config"]["name"], "grip_the_cube_v1")
+            self.assertIn("--policy.type=smolvla", payload["train_cmd"])
+            self.assertIn("--steps=30096", payload["train_cmd"])
+
+    def test_single_training_launcher_defaults_validation_to_closed_loop_cadence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--preset",
+                    "default",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertIn("--validation-interval-steps=684", payload["train_cmd"])
 
     def test_single_training_launcher_resumes_from_current_run_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -904,10 +1437,36 @@ class SO101SmolVLAPipelineTest(TestCase):
         start_source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
         monitor_source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
         standard = Path("docs/so101_local_training_standard.md").read_text(encoding="utf-8")
+        hydra_entry, hydra_config = load_so101_hydra_training_config(
+            "training/grip_the_cube_v1",
+            repo_root=Path.cwd(),
+        )
 
-        self.assertIn('parser.add_argument("--closed-loop-episodes", type=int, default=10)', start_source)
+        self.assertIn('parser.add_argument("--closed-loop-episodes", type=int)', start_source)
+        self.assertEqual(hydra_entry.launcher.closed_loop_episodes, 10)
+        self.assertEqual(hydra_config.closed_loop.test_cases[0].episodes, 10)
         self.assertIn('parser.add_argument("--closed-loop-episodes", type=int, default=10)', monitor_source)
         self.assertIn("closed-loop tests must always run exactly 10 episodes", standard)
+
+    def test_so101_launcher_defaults_live_in_hydra_entry_not_code_fallbacks(self) -> None:
+        source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
+        hydra_entry, _ = load_so101_hydra_training_config(
+            "training/grip_the_cube_v1",
+            repo_root=Path.cwd(),
+        )
+
+        self.assertEqual(hydra_entry.launcher.tensorboard_port, 6006)
+        self.assertEqual(hydra_entry.launcher.closed_loop_episodes, 10)
+        self.assertEqual(hydra_entry.launcher.loop_artifact_width, 256)
+        self.assertEqual(hydra_entry.launcher.closed_loop_action_contract_mode, "processor")
+        self.assertNotIn('return "picklift"', source)
+        self.assertNotIn('return "green cube"', source)
+        self.assertNotIn('return "green"', source)
+        self.assertNotIn('return "processor"', source)
+        self.assertNotIn('return "MuJoCoPickLift-v1"', source)
+        self.assertNotIn('getattr(args, "closed_loop_subgoal_chain_mode", "off")', source)
+        self.assertNotIn('getattr(args, "loop_artifact_width", 128)', source)
+        self.assertNotIn('getattr(args, "closed_loop_policy_n_action_steps", 15)', source)
 
     def test_dataset_config_launcher_defaults_closed_loop_to_ten_episodes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -923,7 +1482,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     str(Path(tmpdir) / "run"),
                     "--use-local-dataset-roots",
                     "--dataset-config",
-                    "configs/so101/training_datasets/qwen_edge_primitives.json",
+                    "configs/so101/training/qwen_edge_primitives.json",
                     "--runtime-platform",
                     "macos",
                     "--training-device",
@@ -950,11 +1509,21 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertTrue(any("run_so101_training_loop_test.py" in part for part in loop_cmd))
             self.assertFalse(any("monitor_so101_training_dashboard.py" in part for part in loop_cmd))
 
-    def test_closed_loop_tensorboard_uses_separate_run(self) -> None:
+    def test_training_and_closed_loop_tensorboard_use_single_logdir(self) -> None:
+        train_source = Path("scripts/lerobot_train_so101_lightning.py").read_text(encoding="utf-8")
         source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
 
-        self.assertIn('run_dir / "tensorboard" / "so101_closed_loop"', source)
-        self.assertNotIn('log_dir = run_dir / "tensorboard" / "so101_smolvla"', source)
+        self.assertIn('TensorBoardLogger(save_dir=str(tb_log_dir), name="", version="")', train_source)
+        self.assertIn('return run_dir / "tensorboard"', source)
+        self.assertNotIn('run_dir / "tensorboard" / "so101_closed_loop"', source)
+        self.assertNotIn('run_dir / "tensorboard" / "so101_smolvla"', source)
+
+    def test_picklift_evaluator_accepts_grip_the_cube_v1_skill_mode(self) -> None:
+        source = Path("scripts/evaluate_so101_picklift_smolvla_policy.py").read_text(encoding="utf-8")
+
+        self.assertIn('"grip_the_cube_v1"', source)
+        self.assertIn('if eval_skill_mode == "grip_the_cube_v1":', source)
+        self.assertIn('if eval_skill_mode in {"picklift", "grip_the_cube_v1"}:', source)
 
     def test_qwen_edge_export_templates_are_training_prompts(self) -> None:
         _ensure_scripts_on_path()
@@ -974,10 +1543,44 @@ class SO101SmolVLAPipelineTest(TestCase):
         )
         self.assertEqual(
             COLOR_SHAPE_SKILL_TASK_TEMPLATES["grip_from_edge_cube"],
-            "Close the gripper on the {color} {shape} edge and lift.",
+            "grip the {color} {shape} and lift",
+        )
+        self.assertEqual(
+            COLOR_SHAPE_SKILL_TASK_TEMPLATES["grip_from_above_edge_cube"],
+            "grip the {color} {shape} and lift",
+        )
+        self.assertEqual(
+            COLOR_SHAPE_SKILL_TASK_TEMPLATES["grip_the_cube_v1"],
+            "grip the {color} {shape} and lift",
         )
         for template in COLOR_SHAPE_SKILL_TASK_TEMPLATES.values():
             self.assertNotIn("static finger pad", template)
+
+    def test_grip_the_cube_v1_requires_explicit_roll_alignment_phase(self) -> None:
+        config_path = Path("configs/so101/training/grip_the_cube_v1.json")
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        generation = config["dataset_generation"]
+
+        self.assertEqual(
+            generation["phases"],
+            [
+                "move_to_cube",
+                "roll_align_with_cube_edge",
+                "gripper_descend",
+                "settle_aligned",
+                "close",
+                "lift",
+                "terminal_hold",
+            ],
+        )
+        alignment = generation["alignment_contract"]
+        self.assertEqual(alignment["roll_alignment_phase"], "roll_align_with_cube_edge")
+        self.assertEqual(alignment["descend_phase"], "gripper_descend")
+        self.assertTrue(alignment["pre_close_required"])
+        self.assertLessEqual(alignment["pre_close_edge_parallel_threshold_deg"], 2.0)
+        self.assertLessEqual(alignment["pre_close_static_finger_xy_threshold"], 0.012)
+        self.assertFalse(alignment["diagonal_edge_candidates_allowed"])
+        self.assertNotIn("pre_close_wrist_camera_centered", alignment)
 
     def test_qwen_edge_merge_preserves_dataset_prompt_without_rewrite(self) -> None:
         _ensure_scripts_on_path()
@@ -999,7 +1602,7 @@ class SO101SmolVLAPipelineTest(TestCase):
     def test_dataset_viewer_uses_training_config_group_order_for_default_dataset(self) -> None:
         source = Path("scripts/serve_so101_dataset_viewer.py").read_text(encoding="utf-8")
 
-        self.assertIn('Path("configs/so101/training_datasets/qwen_edge_primitives.json")', source)
+        self.assertIn('Path("configs/so101/training/qwen_edge_primitives.json")', source)
         self.assertIn("const orderedNames = []", source)
         self.assertIn("for (const group of payload.dataset_groups || [])", source)
         self.assertNotIn("Object.keys(datasets).map(name => `<option", source)
@@ -1029,6 +1632,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                             "eval_skill_mode": "pick_from_top_cube",
                             "task_prompt": "Pick the cube from the top and lift it cleanly.",
                             "record_rollout_gif": True,
+                            "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
                         },
                         "predecoded_image_cache": {
                             "root_env": "SO101_TEST_CACHE_ROOT",
@@ -1040,6 +1644,20 @@ class SO101SmolVLAPipelineTest(TestCase):
                             "log_input_images_every_n_steps": 10,
                             "log_input_metadata_every_n_steps": 10,
                         },
+                        "action_chunk_consistency": {
+                            "steps": 15,
+                            "weight": 0.05,
+                        },
+                        "action_smoothness": {
+                            "weight": 0.01,
+                            "include_gripper": False,
+                        },
+                        "action_teacher_importance": {
+                            "delta_weight": 0.75,
+                            "gripper_transition_weight": 1.5,
+                            "terminal_steps": 12,
+                            "terminal_weight": 1.4,
+                        },
                         "augmentation": {
                             "state_jitter_std": 0.01,
                             "state_jitter_arm_only": False,
@@ -1048,6 +1666,9 @@ class SO101SmolVLAPipelineTest(TestCase):
                             "image_camera_dropout_prob": 0.04,
                             "image_patch_dropout_prob": 0.05,
                             "image_patch_mask_ratio": 0.15,
+                            "image_blur_prob": 0.1,
+                            "image_blur_kernel_size": 5,
+                            "image_noise_std": 0.02,
                             "image_color_jitter": True,
                             "image_sharpness_jitter": True,
                             "image_affine_degrees": 5.0,
@@ -1098,10 +1719,10 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--validation-dataset-repo-id=physical-ai-agent/val", train_cmd)
             self.assertIn("--validation-dataset-root=_workspace/val", train_cmd)
             self.assertIn("--num_workers=0", train_cmd)
-            self.assertIn("--policy.repo_id=mhlee1215/test-policy", train_cmd)
+            self.assertIn("--policy.path=mhlee1215/test-policy", train_cmd)
             self.assertIn("--policy.push_to_hub=false", train_cmd)
             self.assertIn("--lightning-precision=bf16-mixed", train_cmd)
-            self.assertIn("--validation-interval-epochs=1", train_cmd)
+            self.assertIn("--validation-interval-steps=42", train_cmd)
             self.assertIn("--save_freq=42", train_cmd)
             self.assertIn("--so101-image-cache-dir=/tmp/so101-cache/train", train_cmd)
             self.assertIn("--validation-image-cache-dir=/tmp/so101-cache/val", train_cmd)
@@ -1132,6 +1753,14 @@ class SO101SmolVLAPipelineTest(TestCase):
             )
             self.assertIn("--log-input-images-every-n-steps=10", train_cmd)
             self.assertIn("--log-input-metadata-every-n-steps=10", train_cmd)
+            self.assertIn("--so101-action-chunk-consistency-steps=15", train_cmd)
+            self.assertIn("--so101-action-chunk-consistency-weight=0.05", train_cmd)
+            self.assertIn("--so101-action-smoothness-loss-weight=0.01", train_cmd)
+            self.assertIn("--no-so101-action-smoothness-include-gripper", train_cmd)
+            self.assertIn("--so101-action-delta-loss-weight=0.75", train_cmd)
+            self.assertIn("--so101-action-gripper-transition-loss-weight=1.5", train_cmd)
+            self.assertIn("--so101-action-terminal-loss-steps=12", train_cmd)
+            self.assertIn("--so101-action-terminal-loss-weight=1.4", train_cmd)
             self.assertIn("--so101-state-jitter-std=0.01", train_cmd)
             self.assertIn("--no-so101-state-jitter-arm-only", train_cmd)
             self.assertIn("--so101-state-dropout-prob=0.02", train_cmd)
@@ -1139,6 +1768,9 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--so101-image-camera-dropout-prob=0.04", train_cmd)
             self.assertIn("--so101-image-patch-dropout-prob=0.05", train_cmd)
             self.assertIn("--so101-image-patch-mask-ratio=0.15", train_cmd)
+            self.assertIn("--so101-image-blur-prob=0.1", train_cmd)
+            self.assertIn("--so101-image-blur-kernel-size=5", train_cmd)
+            self.assertIn("--so101-image-noise-std=0.02", train_cmd)
             self.assertIn("--so101-image-color-jitter", train_cmd)
             self.assertIn("--so101-image-sharpness-jitter", train_cmd)
             self.assertIn("--so101-image-affine-degrees=5.0", train_cmd)
@@ -1173,15 +1805,70 @@ class SO101SmolVLAPipelineTest(TestCase):
             train_cmd = payload["train_cmd"]
 
             self.assertEqual(payload["dataset_config"]["name"], "qwen_edge_primitives")
-            self.assertTrue(str(payload["run_dir"]).endswith("qwen_edge_primitives_resume_009632_loopfix_30000"))
+            self.assertTrue(str(payload["run_dir"]).endswith("qwen_edge_primitives_resume_009632_loopfix_30016"))
             self.assertEqual(payload["tensorboard_url"], "http://127.0.0.1:6015/")
             self.assertIn("--policy.device=mps", train_cmd)
             self.assertIn("--lightning-accelerator=mps", train_cmd)
-            self.assertIn("--steps=30000", train_cmd)
+            self.assertIn("--steps=30016", train_cmd)
+            self.assertIn("--validation-interval-steps=224", train_cmd)
             self.assertIn("--training-run-summary-path", train_cmd)
             self.assertEqual(
                 [case["id"] for case in payload["dataset_config"]["closed_loop"]["test_cases"]],
                 ["move_over_cube_edge", "align_fixed_jaw_cube_edge", "grip_from_edge_cube"],
+            )
+
+    def test_single_training_launcher_has_stable_default_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--json",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            train_cmd = payload["train_cmd"]
+            loop_cmd = payload["post_checkpoint_loop_cmds"][0]
+
+            self.assertEqual(payload["dataset_config"]["name"], "grip_the_cube_v1")
+            self.assertEqual(payload["run_dir"], str(Path("_workspace/so101_training/runs/grip_the_cube_v1_default").resolve()))
+            self.assertEqual(payload["dataset_config"]["action_chunk_consistency"], {"steps": 15, "weight": 0.05})
+            self.assertEqual(payload["dataset_config"]["action_smoothness"], {"weight": 0.01, "include_gripper": False})
+            self.assertIn("--policy.type=smolvla", train_cmd)
+            self.assertIn("--checkpoint-retention-policy=best_val_and_closed_loop", train_cmd)
+            self.assertIn("--so101-action-chunk-consistency-steps=15", train_cmd)
+            self.assertIn("--so101-action-chunk-consistency-weight=0.05", train_cmd)
+            self.assertIn("--so101-action-smoothness-loss-weight=0.01", train_cmd)
+            self.assertIn("--no-so101-action-smoothness-include-gripper", train_cmd)
+            self.assertIn("--closed-loop-runner", loop_cmd)
+            self.assertEqual(loop_cmd[loop_cmd.index("--closed-loop-runner") + 1], "picklift")
+            self.assertIn("--closed-loop-test-id", loop_cmd)
+            self.assertEqual(loop_cmd[loop_cmd.index("--closed-loop-test-id") + 1], "grip_the_cube_v1")
+            self.assertIn("--closed-loop-episodes", loop_cmd)
+            self.assertEqual(loop_cmd[loop_cmd.index("--closed-loop-episodes") + 1], "10")
+            self.assertIn("--record-loop-artifacts", loop_cmd)
+            self.assertIn("--render-loop-media", loop_cmd)
+            self.assertIn("--loop-artifact-width", loop_cmd)
+            self.assertEqual(loop_cmd[loop_cmd.index("--loop-artifact-width") + 1], "256")
+            self.assertIn("--loop-artifact-height", loop_cmd)
+            self.assertEqual(loop_cmd[loop_cmd.index("--loop-artifact-height") + 1], "256")
+            self.assertIn("--policy-n-action-steps", loop_cmd)
+            self.assertEqual(loop_cmd[loop_cmd.index("--policy-n-action-steps") + 1], "15")
+            self.assertIn("--closed-loop-action-rmse-sweep", loop_cmd)
+            self.assertIn("--closed-loop-action-rmse-sweep-n-action-steps", loop_cmd)
+            self.assertEqual(
+                loop_cmd[loop_cmd.index("--closed-loop-action-rmse-sweep-n-action-steps") + 1],
+                "1,3,5,10,15,30,40,50",
             )
 
     def test_single_training_launcher_records_stable_training_id(self) -> None:
@@ -1208,8 +1895,13 @@ class SO101SmolVLAPipelineTest(TestCase):
                         "training": {"steps_per_epoch": 10, "policy_push_to_hub": False},
                         "closed_loop": {
                             "runner": "qwen_chain",
+                            "env_id": "MuJoCoPickLift-v1",
                             "task_prompt": "Close the gripper on the green cube edge and lift.",
+                            "qwen_object": "green cube",
+                            "env_object_color": "green",
+                            "action_contract_mode": "processor",
                             "valid_mask_checkpoint": "_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt",
+                            "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
                             "test_cases": [
                                 {
                                     "id": "grip_from_edge_cube",
@@ -1323,6 +2015,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                         "closed_loop": {
                             "eval_skill_mode": "pick_from_top_cube",
                             "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                            "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
                         },
                     }
                 ),
@@ -1342,6 +2035,10 @@ class SO101SmolVLAPipelineTest(TestCase):
                     str(config),
                     "--runtime-platform",
                     "linux",
+                    "--training-device",
+                    "cuda",
+                    "--closed-loop-mujoco-gl",
+                    "egl",
                     "--",
                     "--policy.type=smolvla",
                 ],
@@ -1383,6 +2080,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                         "closed_loop": {
                             "eval_skill_mode": "pick_from_top_cube",
                             "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                            "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
                         },
                     }
                 ),
@@ -1403,6 +2101,10 @@ class SO101SmolVLAPipelineTest(TestCase):
                     str(config),
                     "--runtime-platform",
                     "linux",
+                    "--training-device",
+                    "cuda",
+                    "--closed-loop-mujoco-gl",
+                    "egl",
                     "--",
                     "--policy.type=smolvla",
                 ],
@@ -1533,6 +2235,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                         "closed_loop": {
                             "eval_skill_mode": "pick_from_top_cube",
                             "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                            "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
                         },
                     }
                 ),
@@ -1554,7 +2257,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     "1",
                     "--",
                     "--policy.type=smolvla",
-                    "--steps=50000",
+                    "--steps=50050",
                     "--save_freq=325",
                 ],
                 check=False,
@@ -1566,6 +2269,236 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("would create about", completed.stderr)
             self.assertIn("--max-monitored-checkpoints", completed.stderr)
+
+    def test_single_training_launcher_allows_dense_checkpoint_candidates_with_strict_retention(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "dataset_config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "train_dataset": {
+                            "repo_id": "physical-ai-agent/train",
+                            "root": "_workspace/train",
+                        },
+                        "validation_dataset": {
+                            "repo_id": "physical-ai-agent/val",
+                            "root": "_workspace/val",
+                        },
+                        "training": {
+                            "checkpoint_retention_policy": "best_val_and_closed_loop",
+                            "steps_per_epoch": 325,
+                        },
+                        "closed_loop": {
+                            "eval_skill_mode": "pick_from_top_cube",
+                            "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                            "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--dataset-config",
+                    str(config),
+                    "--closed-loop-every-epochs",
+                    "1",
+                    "--",
+                    "--policy.type=smolvla",
+                    "--steps=50050",
+                    "--save_freq=325",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertIn("--checkpoint-retention-policy=best_val_and_closed_loop", payload["train_cmd"])
+
+    def test_single_training_launcher_rejects_unaligned_final_checkpoint_step(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "dataset_config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "train_dataset": {
+                            "repo_id": "physical-ai-agent/train",
+                            "root": "_workspace/train",
+                        },
+                        "validation_dataset": {
+                            "repo_id": "physical-ai-agent/val",
+                            "root": "_workspace/val",
+                        },
+                        "training": {
+                            "checkpoint_retention_policy": "best_val_and_closed_loop",
+                            "steps_per_epoch": 10,
+                        },
+                        "closed_loop": {
+                            "eval_skill_mode": "pick_from_top_cube",
+                            "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                            "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--dataset-config",
+                    str(config),
+                    "--",
+                    "--policy.type=smolvla",
+                    "--steps=11",
+                    "--save_freq=10",
+                    "--checkpoint-retention-policy=best_val_and_closed_loop",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("must be divisible by checkpoint save cadence", completed.stderr)
+
+    def test_single_training_launcher_clears_tensorboard_old_data_by_default(self) -> None:
+        from scripts.start_so101_training import _clear_tensorboard_old_data
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tensorboard_dir = Path(tmpdir) / "tensorboard"
+            active_run_dir = tensorboard_dir
+            active_run_dir.mkdir(parents=True)
+            old_event = active_run_dir / "events.out.tfevents.1.host.123.0"
+            profile_marker = active_run_dir / "trace.profile-empty"
+            keep_metadata = active_run_dir / "README.txt"
+            old_event.write_text("old", encoding="utf-8")
+            profile_marker.write_text("old", encoding="utf-8")
+            keep_metadata.write_text("keep", encoding="utf-8")
+
+            removed = _clear_tensorboard_old_data(tensorboard_dir)
+
+            self.assertEqual(removed, 2)
+            self.assertFalse(old_event.exists())
+            self.assertFalse(profile_marker.exists())
+            self.assertTrue(keep_metadata.exists())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "dataset_config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "train_dataset": {
+                            "repo_id": "physical-ai-agent/train",
+                            "root": "_workspace/train",
+                        },
+                        "validation_dataset": {
+                            "repo_id": "physical-ai-agent/val",
+                            "root": "_workspace/val",
+                        },
+                        "training": {"steps_per_epoch": 10},
+                        "closed_loop": {
+                            "eval_skill_mode": "pick_from_top_cube",
+                            "task_prompt": "Pick the cube from the top and lift it cleanly.",
+                            "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/start_so101_training.py",
+                    "start",
+                    "--dry-run",
+                    "--lock-file",
+                    str(Path(tmpdir) / "active.json"),
+                    "--run-dir",
+                    str(Path(tmpdir) / "run"),
+                    "--dataset-config",
+                    str(config),
+                    "--",
+                    "--policy.type=smolvla",
+                    "--steps=10",
+                    "--save_freq=10",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": "src"},
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["clear_tensorboard_old_data"])
+
+    def test_single_training_launcher_reports_tensorboard_access_set(self) -> None:
+        from scripts.start_so101_training import _human_status, _tensorboard_tunnel_url_from_log
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "tensorboard_tunnel.log"
+            log_path.write_text(
+                "2026-07-08 INF +--------------------------------------------------------------------------------------------+\n"
+                "2026-07-08 INF |  https://example-alpha.trycloudflare.com                                      |\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                _tensorboard_tunnel_url_from_log(log_path),
+                "https://example-alpha.trycloudflare.com",
+            )
+
+            log_path.write_text(
+                "2026-07-08 INF Requesting new quick Tunnel on trycloudflare.com...\n"
+                "2026-07-08 INF |  https://old-alpha.trycloudflare.com                                      |\n"
+                "2026-07-08 INF Requesting new quick Tunnel on trycloudflare.com...\n"
+                "2026-07-08 INF |  https://new-beta.trycloudflare.com                                      |\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                _tensorboard_tunnel_url_from_log(log_path),
+                "https://new-beta.trycloudflare.com",
+            )
+
+        rendered = _human_status(
+            {
+                "active": True,
+                "run_dir": "/tmp/run",
+                "train": {"alive": True, "pid": 1},
+                "tensorboard": {"alive": True, "pid": 2},
+                "tensorboard_tunnel": {"alive": True, "pid": 3},
+                "dashboard": {"alive": None, "pid": None},
+                "gpu_monitor": {"alive": None, "pid": None},
+                "progress_monitor": {"alive": None, "pid": None},
+                "tensorboard_url": "http://127.0.0.1:6006/",
+                "mobile_tensorboard_url": "http://192.168.4.46:6006/",
+                "external_tensorboard_url": "https://example-alpha.trycloudflare.com",
+            }
+        )
+
+        self.assertIn("tensorboard_url: http://127.0.0.1:6006/", rendered)
+        self.assertIn("mobile_tensorboard_url: http://192.168.4.46:6006/", rendered)
+        self.assertIn("external_tensorboard_url: https://example-alpha.trycloudflare.com", rendered)
 
     def test_prune_so101_checkpoints_keeps_best_validation_and_latest_candidate(self) -> None:
         from scripts.prune_so101_checkpoints import prune_once
@@ -1610,6 +2543,29 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertTrue((checkpoints / "000650").exists())
             self.assertTrue((checkpoints / "000975").exists())
             self.assertIn("checkpoint_pruned", (metrics / "monitor_events.jsonl").read_text(encoding="utf-8"))
+
+    def test_lightning_retention_policy_keeps_only_three_best_aliases(self) -> None:
+        source = Path("scripts/lerobot_train_so101_lightning.py").read_text(encoding="utf-8")
+
+        self.assertIn('"best_closed_loop", "best_val_loss", "best_train_loss"', source)
+        self.assertIn('"best_train_loss"', source)
+        self.assertIn('"retained_as_best": retained', source)
+        self.assertIn("if checkpoint_dir.exists() and checkpoint_dir.name.isdigit():", source)
+        self.assertNotIn("checkpoint_dir.exists() and checkpoint_dir.name.isdigit() and retained", source)
+
+    def test_validation_input_images_are_logged_on_each_validation_call(self) -> None:
+        source = Path("scripts/lerobot_train_so101_lightning.py").read_text(encoding="utf-8")
+
+        self.assertIn('if split != "val" and step % self.log_input_images_every_n_steps != 0:', source)
+
+    def test_policy_checkpoint_sidecar_valid_mask_head_is_loaded(self) -> None:
+        source = Path("scripts/lerobot_train_so101_lightning.py").read_text(encoding="utf-8")
+
+        self.assertIn("_load_valid_mask_head_from_policy_path_if_available", source)
+        self.assertIn("wrapper_args.lerobot_args = list(lerobot_args)", source)
+        self.assertIn("_policy_path_from_config_or_args", source)
+        self.assertIn('if path.name == "pretrained_model":', source)
+        self.assertIn('candidates.append(path.parent / "valid_mask_head.pt")', source)
 
     def test_so101_training_launcher_resolves_hf_dataset_subfolders_before_training(self) -> None:
         from scripts import start_so101_training
@@ -1722,6 +2678,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     "eval_skill_mode": "pick_and_place_cube",
                     "task_prompt": "Pick up the small red cube and place it on the blue circle.",
                     "record_rollout_gif": True,
+                    "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
                 },
                 "predecoded_image_cache": {
                     "default_root": "_workspace/cache",
@@ -1764,7 +2721,10 @@ class SO101SmolVLAPipelineTest(TestCase):
             progress_cmd = start_so101_training._progress_monitor_command(
                 args=argparse.Namespace(
                     python=Path(sys.executable),
+                    training_device="cuda",
                     progress_monitor_interval_s=600,
+                    progress_monitor_batch_size=32,
+                    progress_monitor_validation_max_batches=32,
                     closed_loop_every_epochs=10,
                     closed_loop_episodes=8,
                     closed_loop_steps=120,
@@ -1773,19 +2733,21 @@ class SO101SmolVLAPipelineTest(TestCase):
                     closed_loop_task_prompt=None,
                     closed_loop_record_rollout_gif=False,
                     record_loop_artifacts=True,
+                    render_loop_media=True,
                     loop_artifact_width=128,
                     loop_artifact_height=128,
                     loop_artifact_fps=12,
                     loop_artifact_every_n_steps=1,
-                    closed_loop_runner="auto",
+                    closed_loop_runner="picklift",
+                    closed_loop_env_id="MuJoCoPickLift-v1",
+                    closed_loop_action_contract_mode="processor",
                     qwen_model="qwen3-vl-8b-instruct-mlx",
                     qwen_base_url=None,
                     qwen_api_key=None,
-                    qwen_response_json=None,
+                    qwen_response_json=Path("configs/agent/qwen3_so101_tool_planner_mock_response.json"),
                     qwen_plan_json=None,
                     qwen_object="green cube",
-                    qwen_env_object_color=None,
-                    closed_loop_env_id=None,
+                    qwen_env_object_color="green",
                     closed_loop_subgoal_chain_mode="off",
                     closed_loop_fixed_subgoal_chunks=1,
                     closed_loop_valid_mask_threshold=0.5,
@@ -1798,7 +2760,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                 run_dir=repo_root / "run",
                 train_output_dir=repo_root / "run/model",
                 dataset_config=resolved,
-                training_args=[],
+                training_args=["--steps_per_epoch=42"],
                 train_pid_file=repo_root / "run/train.pid",
                 runtime_contract={
                     "runtime_platform": "linux",
@@ -1865,6 +2827,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     "eval_skill_mode": "pick_and_place_cube",
                     "task_prompt": "Pick up the small red cube and place it on the blue circle.",
                     "record_rollout_gif": True,
+                    "action_rmse_sweep": _closed_loop_action_rmse_sweep_config(),
                 },
             }
 
@@ -1911,7 +2874,10 @@ class SO101SmolVLAPipelineTest(TestCase):
             progress_cmd = start_so101_training._progress_monitor_command(
                 args=argparse.Namespace(
                     python=Path(sys.executable),
+                    training_device="mps",
                     progress_monitor_interval_s=600,
+                    progress_monitor_batch_size=32,
+                    progress_monitor_validation_max_batches=32,
                     closed_loop_every_epochs=1,
                     closed_loop_episodes=1,
                     closed_loop_steps=90,
@@ -1920,14 +2886,15 @@ class SO101SmolVLAPipelineTest(TestCase):
                     closed_loop_task_prompt=None,
                     closed_loop_record_rollout_gif=False,
                     closed_loop_runner="auto",
+                    closed_loop_env_id="MuJoCoPickLift-v1",
+                    closed_loop_action_contract_mode="processor",
                     qwen_model="qwen3-vl-8b-instruct-mlx",
                     qwen_base_url=None,
                     qwen_api_key=None,
-                    qwen_response_json=None,
+                    qwen_response_json=Path("configs/agent/qwen3_so101_tool_planner_mock_response.json"),
                     qwen_plan_json=None,
                     qwen_object="green cube",
-                    qwen_env_object_color=None,
-                    closed_loop_env_id=None,
+                    qwen_env_object_color="green",
                     record_loop_artifacts=True,
                     render_loop_media=True,
                     loop_artifact_width=128,
@@ -1946,7 +2913,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                 run_dir=repo_root / "run",
                 train_output_dir=repo_root / "run/model",
                 dataset_config=resolved,
-                training_args=[],
+                training_args=["--steps_per_epoch=42"],
                 train_pid_file=repo_root / "run/train.pid",
                 runtime_contract={
                     "runtime_platform": "macos",
@@ -1970,8 +2937,65 @@ class SO101SmolVLAPipelineTest(TestCase):
             self.assertIn("--policy-num-steps", progress_cmd)
             self.assertIn("10", progress_cmd)
 
+            resolved["closed_loop"]["action_contract_mode"] = "visual_servo_delta_q"
+            visual_servo_cmd = start_so101_training._progress_monitor_command(
+                args=argparse.Namespace(
+                    python=Path(sys.executable),
+                    training_device="mps",
+                    progress_monitor_interval_s=600,
+                    progress_monitor_batch_size=32,
+                    progress_monitor_validation_max_batches=32,
+                    closed_loop_every_epochs=1,
+                    closed_loop_episodes=1,
+                    closed_loop_steps=90,
+                    closed_loop_policy="best_or_periodic",
+                    closed_loop_eval_skill_mode=None,
+                    closed_loop_task_prompt=None,
+                    closed_loop_record_rollout_gif=False,
+                    closed_loop_runner="auto",
+                    qwen_model="qwen3-vl-8b-instruct-mlx",
+                    qwen_base_url=None,
+                    qwen_api_key=None,
+                    qwen_response_json=Path("configs/agent/qwen3_so101_tool_planner_mock_response.json"),
+                    qwen_plan_json=None,
+                    qwen_object="green cube",
+                    qwen_env_object_color="green",
+                    closed_loop_env_id="MuJoCoPickLift-v1",
+                    closed_loop_action_contract_mode=None,
+                    record_loop_artifacts=True,
+                    render_loop_media=True,
+                    loop_artifact_width=128,
+                    loop_artifact_height=128,
+                    loop_artifact_fps=12,
+                    loop_artifact_every_n_steps=1,
+                    closed_loop_subgoal_chain_mode="off",
+                    closed_loop_fixed_subgoal_chunks=1,
+                    closed_loop_valid_mask_threshold=0.5,
+                    closed_loop_valid_mask_consecutive=2,
+                    closed_loop_valid_mask_checkpoint=Path("/tmp/valid_mask_head.pt"),
+                    closed_loop_policy_n_action_steps=15,
+                    closed_loop_policy_num_steps=10,
+                ),
+                repo_root=repo_root,
+                run_dir=repo_root / "run",
+                train_output_dir=repo_root / "run/model",
+                dataset_config=resolved,
+                training_args=["--steps_per_epoch=42"],
+                train_pid_file=repo_root / "run/train.pid",
+                runtime_contract={
+                    "runtime_platform": "macos",
+                    "training_device": "mps",
+                    "lightning_accelerator": "mps",
+                    "closed_loop_device": "mps",
+                    "closed_loop_mujoco_gl": "glfw",
+                },
+            )
+            self.assertIn("--closed-loop-action-contract-mode", visual_servo_cmd)
+            self.assertIn("visual_servo_delta_q", visual_servo_cmd)
+            self.assertNotIn("--closed-loop-valid-mask-checkpoint", visual_servo_cmd)
+
     def test_qwen_edge_dataset_config_requires_valid_mask_checkpoint(self) -> None:
-        config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
+        config = json.loads(Path("configs/so101/training/qwen_edge_primitives.json").read_text(encoding="utf-8"))
         closed_loop = config["closed_loop"]
 
         self.assertEqual(config["execution_policy"], "qwen_edge_chain")
@@ -1982,8 +3006,169 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("valid_mask_checkpoint", closed_loop)
         self.assertTrue(str(closed_loop["valid_mask_checkpoint"]).endswith("valid_mask_head.pt"))
 
+    def test_move_and_align_reachable_bins_loop_test_excludes_top_row_bins(self) -> None:
+        import pandas as pd
+
+        config = json.loads(
+            Path(
+                "configs/so101/training/move_and_align_cube_edge_v2_delta_q_reachable_bins_mixed_start.json"
+            ).read_text(encoding="utf-8")
+        )
+        test_case = config["closed_loop"]["test_cases"][0]
+        root = Path(test_case["start_dataset"]["root"])
+        sidecar = root / "meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet"
+
+        self.assertEqual(test_case["id"], "move_and_align_cube_edge_loop_validation_reachable_bins_5_14")
+        self.assertTrue((root / "so101_lerobot_export_report.json").exists())
+        self.assertTrue(sidecar.exists())
+        bins = sorted(pd.read_parquet(sidecar)["grid_bin"].astype(int).unique().tolist())
+        self.assertEqual(bins, list(range(5, 15)))
+        self.assertTrue(set(config["reachable_bin_filter"]["excluded_bins"]).isdisjoint(bins))
+
+    def test_move_and_align_reachable_bins_loop_command_uses_configured_5_14_start_dataset(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = json.loads(
+            Path(
+                "configs/so101/training/move_and_align_cube_edge_v2_delta_q_reachable_bins_mixed_start.json"
+            ).read_text(encoding="utf-8")
+        )
+        test_case = config["closed_loop"]["test_cases"][0]
+        base = [
+            sys.executable,
+            "scripts/run_so101_training_loop_test.py",
+            "--closed-loop-test-id",
+            "stale",
+            "--closed-loop-start-report-path",
+            "_workspace/so101_lerobot/move_and_align_cube_edge_loop_validation10_ego_wrist_256_seed123500/so101_lerobot_export_report.json",
+        ]
+
+        commands = start_so101_training._post_checkpoint_loop_commands(
+            progress_monitor_cmd=base,
+            dataset_config=config,
+        )
+
+        self.assertEqual(len(commands), 1)
+        command = commands[0]
+        expected_report = str(Path(test_case["start_dataset"]["root"]) / "so101_lerobot_export_report.json")
+        self.assertEqual(command[command.index("--closed-loop-test-id") + 1], test_case["id"])
+        self.assertEqual(command[command.index("--closed-loop-start-report-path") + 1], expected_report)
+        self.assertNotIn("seed123500", " ".join(command))
+
+    def test_launcher_rejects_closed_loop_command_mismatched_to_test_case_start_dataset(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = json.loads(
+            Path(
+                "configs/so101/training/move_and_align_cube_edge_v2_delta_q_reachable_bins_mixed_start.json"
+            ).read_text(encoding="utf-8")
+        )
+        errors: list[str] = []
+        start_so101_training._validate_closed_loop_test_case_commands(
+            dataset_config=config,
+            post_checkpoint_loop_cmds=[
+                [
+                    sys.executable,
+                    "scripts/run_so101_training_loop_test.py",
+                    "--closed-loop-test-id",
+                    "move_and_align_cube_edge_loop_validation_reachable_bins_5_14",
+                    "--closed-loop-start-report-path",
+                    "_workspace/so101_lerobot/move_and_align_cube_edge_loop_validation10_ego_wrist_256_seed123500/so101_lerobot_export_report.json",
+                ]
+            ],
+            errors=errors,
+        )
+
+        self.assertTrue(errors)
+        self.assertIn("start report mismatch", errors[0])
+
+    def test_move_and_align_debug_loop_uses_supervised_train_split(self) -> None:
+        _ensure_scripts_on_path()
+        import start_so101_training
+
+        config = json.loads(
+            Path("configs/so101/training/move_and_align_cube_edge_only.json").read_text(encoding="utf-8")
+        )
+        train = config["train_dataset"]
+        test_cases = config["closed_loop"]["test_cases"]
+
+        self.assertEqual(len(test_cases), 1)
+        test_case = test_cases[0]
+        self.assertEqual(test_case["id"], "move_and_align_cube_edge_train_aligned_debug")
+        self.assertEqual(test_case["episodes"], 10)
+        self.assertEqual(test_case["start_contract"], "move_and_align_cube_edge")
+        self.assertIn("Debug-only", test_case["description"])
+        self.assertEqual(test_case["start_dataset"]["name"], train["name"])
+        self.assertEqual(test_case["start_dataset"]["root"], train["root"])
+        self.assertEqual(test_case["start_dataset"]["repo_id"], train["repo_id"])
+        self.assertEqual(test_case["start_dataset"]["expected_episodes"], train["expected_episodes"])
+
+        base = [
+            sys.executable,
+            "scripts/run_so101_training_loop_test.py",
+            "--closed-loop-test-id",
+            "default",
+            "--closed-loop-seed",
+            "98100",
+            "--closed-loop-steps",
+            "160",
+        ]
+        commands = start_so101_training._post_checkpoint_loop_commands(
+            progress_monitor_cmd=base,
+            dataset_config=config,
+        )
+
+        self.assertEqual(len(commands), 1)
+        command = commands[0]
+        self.assertEqual(command[command.index("--closed-loop-test-id") + 1], test_case["id"])
+        self.assertEqual(command[command.index("--closed-loop-start-contract") + 1], "move_and_align_cube_edge")
+        self.assertEqual(
+            command[command.index("--closed-loop-start-report-path") + 1],
+            str(Path(train["root"]) / "so101_lerobot_export_report.json"),
+        )
+
+    def test_move_and_align_v2_dataset_generation_augmentation_contract(self) -> None:
+        exporter_source = Path("scripts/export_so101_teacher_rollouts_lerobot.py").read_text(encoding="utf-8")
+        exporter_constants = {
+            node.value
+            for node in ast.walk(ast.parse(exporter_source))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        self.assertIn("--terminal-hold-steps", exporter_constants)
+        self.assertIn("--move-and-align-near-target-correction-ratio", exporter_constants)
+        self.assertIn("near_target_correction", exporter_constants)
+
+        recipes = json.loads(Path("configs/so101/training_datasets/export_recipes.json").read_text(encoding="utf-8"))
+        recipe = next(item for item in recipes["recipes"] if item["name"] == "move_and_align_cube_edge_train_v2")
+        self.assertEqual(recipe["contract"], "skill_dataset_contract")
+        self.assertEqual(recipe["dataset"], "move_and_align_cube_edge_v2")
+        self.assertEqual(recipe["split"], "train")
+        self.assertEqual(recipe["episodes"], 300)
+        self.assertEqual(recipe["args"]["skill_mode"], "move_and_align_cube_edge")
+        self.assertEqual(recipe["args"]["terminal_hold_steps"], 20)
+        self.assertEqual(recipe["args"]["move_and_align_near_target_correction_ratio"], 0.5)
+        self.assertEqual(recipe["args"]["target_object_color"], "green")
+
+        contract = json.loads(Path("configs/so101/training_datasets/skill_dataset_contract.json").read_text(encoding="utf-8"))
+        v2 = contract["datasets"]["move_and_align_cube_edge_v2"]
+        self.assertEqual(v2["train"]["root"], recipe["root"])
+        self.assertEqual(v2["train"]["repo_id"], recipe["repo_id"])
+        self.assertEqual(v2["train"]["expected_episodes"], recipe["episodes"])
+        self.assertTrue(v2["generation_augmentation"]["terminal_hold_included"])
+        self.assertTrue(v2["generation_augmentation"]["near_target_correction_included"])
+
+        config = json.loads(
+            Path("configs/so101/training/move_and_align_cube_edge_v2_only.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(config["train_dataset"]["root"], recipe["root"])
+        self.assertEqual(config["train_dataset"]["expected_episodes"], 300)
+        self.assertEqual(config["dataset_generation_augmentation"]["terminal_hold_steps"], 20)
+        self.assertEqual(config["dataset_generation_augmentation"]["near_target_correction_ratio"], 0.5)
+
     def test_qwen_edge_loop_validation_cases_match_primitive_dataset_names(self) -> None:
-        config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
+        config = json.loads(Path("configs/so101/training/qwen_edge_primitives.json").read_text(encoding="utf-8"))
         self.assertIn("test_cases", config["closed_loop"])
         self.assertNotIn("suites", config["closed_loop"])
         test_cases = config["closed_loop"]["test_cases"]
@@ -2035,7 +3220,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         _ensure_scripts_on_path()
         import start_so101_training
 
-        config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
+        config = json.loads(Path("configs/so101/training/qwen_edge_primitives.json").read_text(encoding="utf-8"))
         base = [
             sys.executable,
             "scripts/run_so101_training_loop_test.py",
@@ -2065,6 +3250,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     command[command.index("--closed-loop-start-report-path") + 1],
                     str(Path(test_case["start_dataset"]["root"]) / "so101_lerobot_export_report.json"),
                 )
+                self.assertEqual(command[command.index("--closed-loop-env-object-color") + 1], "green")
                 self.assertEqual(command[command.index("--qwen-env-object-color") + 1], "green")
                 self.assertNotIn("--closed-loop-precondition-plan-json", command)
 
@@ -2072,7 +3258,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         _ensure_scripts_on_path()
         import start_so101_training
 
-        config = json.loads(Path("configs/so101/training_datasets/qwen_edge_primitives.json").read_text(encoding="utf-8"))
+        config = json.loads(Path("configs/so101/training/qwen_edge_primitives.json").read_text(encoding="utf-8"))
 
         self.assertIn("train_datasets", config)
         self.assertNotIn("train_dataset", config)
@@ -2106,15 +3292,161 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("IMPORTANT_CLOSED_LOOP_SUCCESS_RATE_TAG", monitor_source)
         self.assertIn("loop_validation_id", monitor_source)
 
+    def test_validation_loss_eval_reports_postprocessed_action_rmse(self) -> None:
+        eval_source = Path("scripts/evaluate_smolvla_supervised_loss.py").read_text(encoding="utf-8")
+        monitor_source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+
+        self.assertIn("postprocessed_action_rmse_mean", eval_source)
+        self.assertIn("postprocessed_action_global_rmse", eval_source)
+        self.assertIn("policy.predict_action_chunk(batch)", eval_source)
+        self.assertIn("_postprocess_action_chunk", eval_source)
+        self.assertIn("val/postprocessed_action_rmse", monitor_source)
+        self.assertIn("IMPORTANT_VAL_POSTPROCESSED_ACTION_RMSE_TAG", monitor_source)
+
+    def test_closed_loop_harness_attaches_action_rmse_sweep_plot_to_tensorboard(self) -> None:
+        config = json.loads(
+            Path("configs/so101/training/qwen_edge_grip_from_above_edge_cube_only.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertTrue(config["closed_loop"]["action_rmse_sweep"]["enabled"])
+        self.assertEqual(config["closed_loop"]["action_rmse_sweep"]["n_action_steps"], [1, 3, 5, 10, 15, 30, 40, 50])
+
+        launcher_source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
+        monitor_source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+        self.assertIn("--closed-loop-action-rmse-sweep-n-action-steps", launcher_source)
+        self.assertIn("_attach_action_rmse_sweep", monitor_source)
+        self.assertIn("closed_loop/{test_id}/action_rmse_sweep", monitor_source)
+        self.assertIn("_plot_action_rmse_sweep", monitor_source)
+        self.assertIn("_picklift_closed_loop_sweep_command", monitor_source)
+        self.assertIn("def _closed_loop_sweep_command", monitor_source)
+        attach_source = monitor_source.split("def _attach_action_rmse_sweep", 1)[1].split(
+            "def _run_action_rmse_sweep",
+            1,
+        )[0]
+        self.assertNotIn("closed_loop_runner", attach_source)
+        self.assertNotIn('getattr(args, "closed_loop_runner", "") != "qwen_chain"', monitor_source)
+        self.assertIn("def write_so101_training_loop_test_results", monitor_source)
+        self.assertIn("write_so101_training_loop_test_results(run_dir, row, report)", monitor_source)
+
+    def test_closed_loop_rmse_sweep_command_dispatches_for_all_supported_runners(self) -> None:
+        _ensure_scripts_on_path()
+        import monitor_so101_training_dashboard as monitor
+
+        picklift_args = argparse.Namespace(closed_loop_runner="picklift")
+        with mock.patch.object(monitor, "_picklift_closed_loop_sweep_command", return_value=["picklift"]) as picklift, mock.patch.object(
+            monitor,
+            "_qwen_closed_loop_sweep_command",
+            return_value=["qwen"],
+        ) as qwen:
+            self.assertEqual(
+                monitor._closed_loop_sweep_command(
+                    args=picklift_args,
+                    policy_path=Path("policy"),
+                    valid_mask_checkpoint=None,
+                    output_dir=Path("out"),
+                    n_action_steps=15,
+                ),
+                ["picklift"],
+            )
+        picklift.assert_called_once()
+        qwen.assert_not_called()
+
+        qwen_args = argparse.Namespace(closed_loop_runner="qwen_chain")
+        with mock.patch.object(monitor, "_picklift_closed_loop_sweep_command", return_value=["picklift"]) as picklift, mock.patch.object(
+            monitor,
+            "_qwen_closed_loop_sweep_command",
+            return_value=["qwen"],
+        ) as qwen:
+            self.assertEqual(
+                monitor._closed_loop_sweep_command(
+                    args=qwen_args,
+                    policy_path=Path("policy"),
+                    valid_mask_checkpoint=Path("valid_mask_head.pt"),
+                    output_dir=Path("out"),
+                    n_action_steps=15,
+                ),
+                ["qwen"],
+            )
+        picklift.assert_not_called()
+        qwen.assert_called_once()
+
+        bad_args = argparse.Namespace(closed_loop_runner="unknown_runner")
+        with self.assertRaises(RuntimeError):
+            monitor._closed_loop_sweep_command(
+                args=bad_args,
+                policy_path=Path("policy"),
+                valid_mask_checkpoint=None,
+                output_dir=Path("out"),
+                n_action_steps=15,
+            )
+
+    def test_harness_documents_closed_loop_gif_and_rmse_evidence_contract(self) -> None:
+        team_spec = Path("docs/harness/physical-ai/team-spec.md").read_text(encoding="utf-8")
+        pipeline = Path("docs/so101_smolvla_training_pipeline.md").read_text(encoding="utf-8")
+        orchestrator = Path(".agents/skills/physical-ai-orchestrator/SKILL.md").read_text(encoding="utf-8")
+        combined = "\n".join([team_spec, pipeline, orchestrator])
+
+        self.assertIn("rollout_episode_<NNN>", combined)
+        self.assertIn("action_rmse_sweep", combined)
+        self.assertIn("mandatory training-result evidence", combined)
+        self.assertIn("n_action_steps=[1,3,5,10,15,30,40,50]", combined)
+        self.assertIn("camera1=egocentric", combined)
+        self.assertIn("camera2=wrist", combined)
+        self.assertIn("green border", combined)
+        self.assertIn("dx/dy values", combined)
+        self.assertIn("terminal success/failure context", combined)
+        self.assertIn("episode id and frame/global step", combined)
+        self.assertIn("canonical", combined)
+        self.assertIn("Training Loop-Test Result Generation Guidelines", combined)
+        self.assertIn("write_so101_training_loop_test_results(run_dir, row, report)", combined)
+        self.assertIn("second rollout visualizer", combined)
+
+    def test_harness_documents_config_first_training_launch_contract(self) -> None:
+        team_spec = Path("docs/harness/physical-ai/team-spec.md").read_text(encoding="utf-8")
+        pipeline = Path("docs/so101_smolvla_training_pipeline.md").read_text(encoding="utf-8")
+        orchestrator = Path(".agents/skills/physical-ai-orchestrator/SKILL.md").read_text(encoding="utf-8")
+        summary = Path("Summary.md").read_text(encoding="utf-8")
+        combined = "\n".join([team_spec, pipeline, orchestrator, summary])
+
+        self.assertIn("Config-First Launch Contract", pipeline)
+        self.assertIn("config-first", combined)
+        self.assertIn("configs/so101/training_datasets/", combined)
+        self.assertIn("scripts/start_so101_training.py start", combined)
+        self.assertIn("Do not reconstruct stable behavior", combined)
+        self.assertIn("prompt, dataset, loop-test cases, RMSE sweep", combined)
+        self.assertIn("promoted into the config or preset", combined)
+
+    def test_delta_q_training_config_preserves_absolute_dataset_and_forwards_closed_loop_contract(self) -> None:
+        config = json.loads(
+            Path("configs/so101/training/move_and_align_cube_edge_v2_delta_q_only.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        absolute_config = json.loads(
+            Path("configs/so101/training/move_and_align_cube_edge_v2_only.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(config["action_mode"], "delta_q")
+        self.assertEqual(config["closed_loop"]["action_contract_mode"], "processor_delta_q")
+        self.assertNotEqual(config["train_dataset"]["root"], absolute_config["train_dataset"]["root"])
+        self.assertNotEqual(config["validation_dataset"]["root"], absolute_config["validation_dataset"]["root"])
+        self.assertIn("convert_so101_lerobot_actions_to_delta.py", config["delta_action_source"]["converter"])
+
+        monitor_source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
+        self.assertIn("--closed-loop-action-contract-mode", monitor_source)
+        self.assertIn("--action-contract-mode", monitor_source)
+        self.assertIn("processor_delta_q", monitor_source)
+
     def test_so101_training_configs_default_to_moderate_augmentation_without_action_dropout(self) -> None:
         for config_path in (
-            Path("configs/so101/training_datasets/pick.json"),
-            Path("configs/so101/training_datasets/pick_photoreal.json"),
-            Path("configs/so101/training_datasets/pick_place.json"),
-            Path("configs/so101/training_datasets/move_over_cube.json"),
-            Path("configs/so101/training_datasets/pick_from_top_cube.json"),
-            Path("configs/so101/training_datasets/all_hf_train_pick_place_closed_loop.json"),
-            Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
+            Path("configs/so101/training/pick.json"),
+            Path("configs/so101/training/pick_photoreal.json"),
+            Path("configs/so101/training/pick_place.json"),
+            Path("configs/so101/training/move_over_cube.json"),
+            Path("configs/so101/training/pick_from_top_cube.json"),
+            Path("configs/so101/training/all_hf_train_pick_place_closed_loop.json"),
+            Path("configs/so101/training/qwen_edge_primitives.json"),
         ):
             with self.subTest(config=str(config_path)):
                 config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -2154,12 +3486,12 @@ class SO101SmolVLAPipelineTest(TestCase):
 
     def test_so101_dataset_configs_use_approved_egocentric_camera1(self) -> None:
         for config_path in (
-            Path("configs/so101/training_datasets/pick.json"),
-            Path("configs/so101/training_datasets/pick_photoreal.json"),
-            Path("configs/so101/training_datasets/pick_place.json"),
-            Path("configs/so101/training_datasets/move_over_cube.json"),
-            Path("configs/so101/training_datasets/pick_from_top_cube.json"),
-            Path("configs/so101/training_datasets/all_hf_train_pick_place_closed_loop.json"),
+            Path("configs/so101/training/pick.json"),
+            Path("configs/so101/training/pick_photoreal.json"),
+            Path("configs/so101/training/pick_place.json"),
+            Path("configs/so101/training/move_over_cube.json"),
+            Path("configs/so101/training/pick_from_top_cube.json"),
+            Path("configs/so101/training/all_hf_train_pick_place_closed_loop.json"),
         ):
             with self.subTest(config=str(config_path)):
                 config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -2228,8 +3560,8 @@ class SO101SmolVLAPipelineTest(TestCase):
 
         for recipe in recipes["recipes"]:
             with self.subTest(recipe=recipe["name"]):
-                self.assertIn("ego_wrist_256", recipe["root"])
-                self.assertIn("ego-wrist-256", recipe["repo_id"])
+                self.assertRegex(recipe["root"], r"(ego_wrist_256|true256)")
+                self.assertRegex(recipe["repo_id"], r"(ego-wrist-256|true256)")
                 self.assertIn(recipe["script"], {
                     "scripts/export_so101_teacher_rollouts_lerobot.py",
                     "scripts/export_so101_pickplace_teacher_rollouts_lerobot.py",
@@ -2284,6 +3616,34 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("teacher-action dropout", docs)
         self.assertIn("temporal smoothness loss", docs)
         self.assertIn("temporal ensembling", docs)
+
+    def test_so101_harness_documents_live_training_process_safety_contract(self) -> None:
+        docs = "\n".join(
+            Path(path).read_text(encoding="utf-8")
+            for path in (
+                "Summary.md",
+                "docs/harness/physical-ai/team-spec.md",
+                "docs/so101_smolvla_training_pipeline.md",
+                ".agents/skills/physical-ai-orchestrator/SKILL.md",
+                ".agents/skills/harness/SKILL.md",
+                ".codex/skills/harness/SKILL.md",
+            )
+        )
+
+        self.assertIn("SO101 Live Training Process Safety Contract", docs)
+        self.assertIn("explicit user approval", docs)
+        self.assertIn("immediately before execution", docs)
+        self.assertIn("scripts/start_so101_training.py stop", docs)
+        self.assertIn("SIGTERM", docs)
+        self.assertIn("SIGKILL", docs)
+        self.assertIn("TensorBoard event data", docs)
+        self.assertIn("active_training.json", docs)
+        self.assertIn("train.pid", docs)
+        self.assertIn("Root-cause analysis", docs)
+        self.assertIn("Never infer liveness from PID only", docs)
+        self.assertIn("train/loss", docs)
+        self.assertIn("validation/closed-loop cadence", docs)
+        self.assertIn("train.log", docs)
 
     def test_so101_training_dataset_configs_match_checksum_manifest(self) -> None:
         checksum_path = Path("configs/so101/training_datasets/checksums.json")

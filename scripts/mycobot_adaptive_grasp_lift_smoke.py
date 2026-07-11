@@ -11,6 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from physical_ai_agent.sim.mycobot_nexus_env import (  # noqa: E402
+    MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+    MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
     run_mycobot_adaptive_grasp_lift_smoke,
 )
 
@@ -45,16 +47,28 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         help="Local clone containing the ROS2 Humble myCobot 320 adaptive gripper URDF.",
     )
+    parser.add_argument(
+        "--model-profile",
+        choices=[MODEL_PROFILE_320_ADAPTIVE_GRIPPER, MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER],
+        default=MODEL_PROFILE_320_ADAPTIVE_GRIPPER,
+        help="Adaptive myCobot source profile to run through this gate.",
+    )
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--pregrasp-steps", type=int, default=20)
     parser.add_argument("--close-steps", type=int, default=80)
     parser.add_argument("--lift-steps", type=int, default=60)
+    parser.add_argument("--placement-gripper-command", type=float, default=0.25)
     parser.add_argument("--close-gripper-command", type=float, default=-0.7)
     parser.add_argument("--required-close-sustained-steps", type=int, default=15)
     parser.add_argument("--required-lift-sustained-steps", type=int, default=30)
     parser.add_argument("--required-final-lift", type=float, default=0.025)
+    parser.add_argument(
+        "--disable-teacher-attachment",
+        action="store_true",
+        help="Disable the 280 teacher cube attachment path and require raw contact physics metrics.",
+    )
     return parser
 
 
@@ -64,16 +78,19 @@ def main() -> None:
         output_dir=args.output_dir,
         asset_root=args.asset_root,
         official_gripper_root=args.official_gripper_root,
+        model_profile=args.model_profile,
         seed=args.seed,
         width=args.width,
         height=args.height,
         pregrasp_steps=args.pregrasp_steps,
         close_steps=args.close_steps,
         lift_steps=args.lift_steps,
+        placement_gripper_command=args.placement_gripper_command,
         close_gripper_command=args.close_gripper_command,
         required_close_sustained_steps=args.required_close_sustained_steps,
         required_lift_sustained_steps=args.required_lift_sustained_steps,
         required_final_lift=args.required_final_lift,
+        teacher_attachment_enabled=not args.disable_teacher_attachment,
     )
     print(json.dumps(asdict(result), indent=2, sort_keys=True))
     if result.status != "passed":

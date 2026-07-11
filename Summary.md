@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-06-23
+Last updated: 2026-07-09
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -25,6 +25,15 @@ near-term paper target is RSS SemRob 2026.
 
 The working method is **Imagine-Then-Act**: an agentic wrapper around a frozen
 lightweight VLA policy.
+
+## Durable Implementation Policy
+
+- Source-backed architecture rule: before implementing or changing model
+  architecture, a well-known algorithm, or a named robotics/ML technique, first
+  search the web for official docs, papers, and similar open-source code. Base
+  the implementation on that evidence and record the source-backed rationale in
+  the work note, PR, or code comment as appropriate. Do not invent architecture
+  changes from scratch when comparable public implementations exist.
 
 The immediate collaboration goal is to produce manuscript-table experiment data
 as quickly and efficiently as possible. Research and orchestration choices should
@@ -61,9 +70,14 @@ paper-facing concepts:
 
 - RunPod SO101 SmolVLA fine-tuning is being monitored through the training
   dashboard and JSONL metrics under the active run directory.
-- Checkpoint retention policy for this lane is validation-best checkpoint plus
-  one latest checkpoint for crash recovery. Do not keep every checkpoint unless
-  the user explicitly asks for archival storage.
+- Checkpoint and run retention policy for this lane is strict. During training,
+  keep only `checkpoints/best_closed_loop`, `checkpoints/best_val_loss`, and
+  `checkpoints/best_train_loss`; numeric periodic checkpoint directories are
+  temporary save candidates and must be pruned after each checkpoint event. Do
+  not keep a separate latest checkpoint unless the user explicitly asks for
+  crash-recovery archival storage. After a run finishes, delete its local run
+  artifact directory if closed-loop test success rate is exactly `0.0`; runs
+  without closed-loop evidence are missing-evidence runs, not success-zero runs.
 - Supervised validation loss and closed-loop evaluation are mandatory parts of
   the SO101 training lane. The training process should own the sequence:
   train, run supervised evaluation, save checkpoint, then run the scheduled
@@ -146,11 +160,81 @@ paper-facing concepts:
   servers or changing ports is allowed only when the user explicitly asks for a
   separate server or the original port is owned by an unrelated process and the
   exception is reported clearly.
+- User policy: SO101 Live Training Process Safety Contract. Read-only status
+  and root-cause checks may inspect `status --json`, `ps`, `tail`, TensorBoard
+  events, `stat`, `find`, `du`, `rg`, and `sed` without another confirmation.
+  Mutating/destructive actions require explicit user approval immediately before
+  execution: `kill`, `pkill`, SIGTERM/SIGKILL,
+  `scripts/start_so101_training.py stop`, training restart/resume,
+  TensorBoard event deletion/reset, checkpoint or artifact deletion beyond the
+  configured retention policy, and overwriting active run state files such as
+  `active_training.json`, `train.pid`, locks, or run metadata. Root-cause
+  requests mean gather evidence and report first; do not fix, stop, restart, or
+  clean up without approval. Never infer liveness from PID only; report process
+  alive, `train/loss` scalar advancing, validation/closed-loop cadence, and
+  `train.log` stdout progress separately.
+- User policy: every SO101 retraining/restart must begin with a clean
+  TensorBoard view. Before launching the new training process, delete old
+  TensorBoard event files for that run logdir so graphs and images reflect only
+  the current run. During an already-active run, preserve the active writer's
+  event file and restart only TensorBoard when the display needs refreshing.
+- User policy: SO101 training launches are Hydra/Pydantic config-first. Runtime
+  defaults live in the selected Hydra entrypoint's `launcher:` block under
+  `configs/so101/hydra/training/`, while dataset/training/augmentation/loop
+  contracts live in the referenced JSON under `configs/so101/training/`. After
+  the user approves a default entrypoint, do not edit that default again unless
+  the user directly asks for a default-policy change. Do not reconstruct stable
+  behavior by dynamically adding/removing CLI flags for prompt, dataset,
+  loop-test cases, RMSE sweep, camera/media, augmentation, action contract,
+  checkpoint cadence, runner, device, or ports. CLI overrides are only for
+  clearly labeled smoke/debug commands, runtime/port/lock plumbing, or explicit
+  one-off user requests; repeated overrides must be promoted into a Hydra
+  entrypoint or JSON config before the next run. Code should fail before
+  training when required values are missing rather than silently choosing Python
+  fallback defaults.
+- User policy: loop-test GIFs used as PR/research evidence must be generated
+  with the same TensorBoard closed-loop media renderer as
+  `closed_loop/<test_id>/rollout_camera1_camera2_episode_*`. Do not attach raw
+  rollout GIFs when TensorBoard shows labeled side-by-side camera1/camera2
+  policy-input media.
+- User policy: SO101 loop-test TensorBoard evidence must include playable
+  rollout media and RMSE diagnostics, not only scalar metrics or static images.
+  Required tags include the stable user-facing
+  `closed_loop/<test_id>/rollout_episode_<NNN>` for every episode and
+  `closed_loop/<test_id>/action_rmse_sweep` for action-chunk policies. RMSE
+  sweep is mandatory training-result evidence unless a clearly named
+  smoke/debug command explicitly disables it. The canonical rollout tag must be
+  generated from side-by-side camera1=egocentric and camera2=wrist policy-input
+  traces; raw GIFs are debug media only under `extra/closed_loop` and must not
+  replace canonical rollout evidence. Rollout frames should show
+  episode/frame, prompt, phase/primitive, active camera/servo state, target
+  overlays and dx/dy values when available, terminal success/failure context,
+  and a green border on model inference/re-query frames. Training-time
+  loop-test result generation must go through the canonical
+  `write_so101_training_loop_test_results(run_dir, row, report)` function;
+  do not create runner-specific TensorBoard/video writers.
+- User policy: whenever TensorBoard is started or reported, provide the
+  TensorBoard access set together: local URL, same-Wi-Fi mobile URL, and an
+  external-access URL. Use `cloudflared` quick tunnel for the external URL when
+  available; if unavailable, report the external URL as unavailable with the
+  reason instead of omitting it.
+- User policy: Robot Experiment Manager / dataset viewer servers must be
+  launched with `launchctl` through
+  `sh scripts/launch_so101_dataset_viewer.sh restart`. Do not use
+  `nohup ... &` as the standard path for this server; Codex command cleanup can
+  reap that child process after the tool call, which looks like a silent
+  server death even when the app did not crash. The durable LaunchAgent label is
+  `com.physical-ai-agent.dataset-viewer`; logs live under `_workspace/logs/`.
 - User policy: Qwen-chain SO101 loop tests must use the valid-mask termination
   head, not fixed-length primitive execution. Provide
   `closed_loop.valid_mask_checkpoint` in dataset config or
   `--closed-loop-valid-mask-checkpoint` on the launcher; missing valid-mask
   configuration is a contract failure for validation loop tests.
+- User policy: SO101 training must use camera1 object-position 4x4 grid-bin
+  balanced sampling. Every train split must provide or auto-generate
+  `meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet`; the
+  launcher must fail before model setup if it cannot provide this sidecar.
+  Validation and closed-loop test splits remain unbalanced for evaluation.
 - RunPod experiment-data storage policy: past remote experiment results are not
   needed. Starting now, every new RunPod data-generation, training, evaluation,
   and closed-loop run must end with a local download, local verification, and

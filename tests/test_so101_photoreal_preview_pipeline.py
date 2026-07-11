@@ -267,7 +267,7 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
                 self.assertEqual(image.mode, "RGB")
 
     def test_pick_cube_photoreal_config_covers_train_and_eval(self) -> None:
-        config = json.loads(Path("configs/so101/training_datasets/pick_photoreal.json").read_text(encoding="utf-8"))
+        config = json.loads(Path("configs/so101/training/pick_photoreal.json").read_text(encoding="utf-8"))
 
         self.assertEqual(config["task"], "pick")
         self.assertEqual(config["camera_contract"]["observation.images.camera1"], "egocentric_cam")
@@ -302,7 +302,6 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
             "visible cube",
             module._color_task_prompt(skill_mode="pick_cube", color="red", shape="cube"),
         )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,8 +25,19 @@ explicitly chooses another experiment.
 
 - Use dataset-config virtual merge declarations, not ad hoc manual pre-merge
   commands.
+- SO101 training must use camera1 object-position 4x4 grid-bin balanced
+  sampling. Every train dataset entry must have
+  `grid_bin_sidecar` pointing to
+  `meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet`.
+  `scripts/start_so101_training.py` is responsible for creating this sidecar
+  when it is missing and for forwarding it to the Lightning trainer. A local
+  training run that cannot provide a grid-bin sidecar must fail before model
+  setup instead of silently falling back to ordinary random sampling.
+- Validation and closed-loop test splits are not rebalanced by the sampler;
+  their sidecars may be generated for diagnostics, but evaluation should keep
+  the declared validation/test distribution intact.
 - For the current Qwen primitive lane, the config is:
-  `configs/so101/training_datasets/qwen_edge_primitives.json`.
+  `configs/so101/training/qwen_edge_primitives.json`.
 - The primitive train splits are used together in one training run:
   `move_over_cube_edge/train`, `align_fixed_jaw_cube_edge/train`, and
   `grip_from_edge_cube/train`.
@@ -40,8 +51,19 @@ explicitly chooses another experiment.
   alternate TensorBoard, or ad hoc polling service unless the user explicitly
   asks for that one-off tool. If the TensorBoard view is stale or wrong, stop
   and restart only the TensorBoard process attached to the current run logdir.
-  Always report both the local TensorBoard URL and the same-Wi-Fi mobile
-  TensorBoard URL.
+  Always report the TensorBoard access set together: local URL, same-Wi-Fi
+  mobile URL, and external-access URL. Use a `cloudflared` quick tunnel for the
+  external URL when available; if unavailable, report the external URL as
+  unavailable with the reason.
+- TensorBoard must run with multifile reload enabled. SO101 training writes
+  from the active training process and from post-checkpoint validation/loop-test
+  one-shot writers in the same run logdir; without multifile reload, TensorBoard
+  can follow the newest event file and stop showing the still-active training
+  event file.
+- Every SO101 retraining/restart starts with a clean TensorBoard view. Before
+  launching the new training process, delete old TensorBoard event files for
+  that run logdir. During an already-active run, preserve the active writer's
+  event file and restart only TensorBoard when the display needs refreshing.
 - Training, supervised evaluation, and loop test are all mandatory. The training
   process owns the sequence; do not use an external polling monitor as the
   default mechanism for discovering checkpoints or triggering loop tests.
@@ -60,6 +82,8 @@ explicitly chooses another experiment.
   steps_per_epoch * closed_loop_every_epochs`.
 - Because validation loss is computed every epoch in this lane, checkpoint save
   and closed-loop test cadence must also be every epoch.
+- Do not pass `--closed-loop-every-epochs 2` for normal user training requests;
+  use the launcher default of `1` unless the user explicitly asks otherwise.
 - Use `--closed-loop-policy periodic` or `--closed-loop-policy best_or_periodic`;
   do not use `best_only`, because it can skip non-best validation checkpoints.
 - For Qwen primitive training, the training-time closed-loop monitor must use
@@ -83,6 +107,14 @@ explicitly chooses another experiment.
   `configs/agent/qwen3_so101_tool_planner_mock_response.json` so the epoch
   validation/closed-loop cadence is not blocked when LM Studio or Qwen is not
   running. Use live Qwen for the final/current-best validation command.
+- Checkpoint/run retention is strict. During training, keep only:
+  `checkpoints/best_closed_loop`, `checkpoints/best_val_loss`, and
+  `checkpoints/best_train_loss`. Periodic numeric checkpoint directories are
+  temporary save candidates and must be pruned after each checkpoint event.
+- After a training run finishes, if its closed-loop test success rate is exactly
+  `0.0`, delete that run's local artifact directory instead of archiving it.
+  Runs without any closed-loop result are not treated as success-zero; label
+  them as missing evidence before deciding whether to delete them.
 
 ## Required Launcher Behavior
 

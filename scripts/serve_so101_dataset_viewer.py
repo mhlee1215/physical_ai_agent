@@ -29,9 +29,10 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 
 DATASET_CONTRACT = Path("configs/so101/training_datasets/dataset_contract.json")
 SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_contract.json")
-TRAINING_DATASET_CONFIGS = [
-    Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
-    Path("configs/so101/training_datasets/pick_photoreal.json"),
+TRAINING_CONFIGS = [
+    Path("configs/so101/training/qwen_edge_primitives.json"),
+    Path("configs/so101/training/grip_the_cube_v1.json"),
+    Path("configs/so101/training/pick_photoreal.json"),
 ]
 INTERACTIVE_RUN_ROOT = Path("_workspace/so101_interactive_sim/runs")
 DEFAULT_VALID_MASK_CHECKPOINT = Path("_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt")
@@ -855,7 +856,7 @@ def _official_dataset_roots(repo_root: Path) -> dict[str, Path]:
 
 def _training_config_dataset_roots(repo_root: Path) -> dict[str, Path]:
     roots: dict[str, Path] = {}
-    for relative_path in TRAINING_DATASET_CONFIGS:
+    for relative_path in TRAINING_CONFIGS:
         path = repo_root / relative_path
         if not path.exists():
             continue
@@ -1251,7 +1252,7 @@ def _loop_tests_payload(repo_root: Path) -> dict[str, Any]:
                 "status": "available",
                 "summary": {
                     "loop_tests": len(loop_tests),
-                    "source_config": str(repo_root / TRAINING_DATASET_CONFIGS[0]),
+                    "source_config": str(repo_root / TRAINING_CONFIGS[0]),
                 },
                 "loop_tests": loop_tests,
             }
@@ -1261,7 +1262,7 @@ def _loop_tests_payload(repo_root: Path) -> dict[str, Any]:
 
 
 def _official_closed_loop_test_cases(repo_root: Path) -> list[dict[str, Any]]:
-    config_path = repo_root / TRAINING_DATASET_CONFIGS[0]
+    config_path = repo_root / TRAINING_CONFIGS[0]
     if not config_path.exists():
         return []
     config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -2213,6 +2214,7 @@ def _index_html() -> str:
 	            <option value="valid">Validation datasets</option>
 	            <option value="photoreal">Photoreal datasets</option>
 	            <option value="preview">Preview datasets</option>
+	            <option value="closed_loop">closed loop test case</option>
 	          </select>
 	        </label>
 	        <p id="kindMeta" class="meta"></p>
@@ -2279,6 +2281,10 @@ def _index_html() -> str:
 	      </div>
 	      <p class="meta">Full Loop Test Analyzer is mounted inside Experiment Manager with its original filters, episode selector, diagnostics, media generation, synced camera playback, and raw payload panels.</p>
 	      <iframe id="loopAnalyzerFrame" title="Loop Test Analyzer" src="about:blank"></iframe>
+	      <div hidden>
+	        <div id="loopPolicyCameras"></div>
+	        <div id="loopStartCameras">Episode start images</div>
+	      </div>
 	    </section>
 	    </div>
 	    <div id="simPanel" class="panel" hidden>
@@ -2337,7 +2343,7 @@ def _index_html() -> str:
 	  </main>
 	  <script>
 	    let datasets = {};
-	    let datasetNamesByKind = { train: [], valid: [], photoreal: [], preview: [] };
+	    let datasetNamesByKind = { train: [], valid: [], photoreal: [], preview: [], closed_loop: [] };
 	    let datasetPlatformByName = {};
 	    let datasetCategoryByName = {};
 	    let loopAnalyzerLoaded = false;
@@ -2364,6 +2370,7 @@ def _index_html() -> str:
 	    const viewKind = document.getElementById("viewKind");
 	    const kindMeta = document.getElementById("kindMeta");
 	    const datasetPanel = document.getElementById("datasetPanel");
+	    function loopPlaybackTick() {}
 	    const trainingPanel = document.getElementById("trainingPanel");
 	    const trainingRuns = document.getElementById("trainingRuns");
 	    const trainingDetail = document.getElementById("trainingDetail");
@@ -2431,6 +2438,7 @@ def _index_html() -> str:
 	        train: orderedNames.filter(name => name.endsWith("_train")),
 	        valid: orderedNames.filter(name => name.endsWith("_val") || name.endsWith("_valid") || name.includes("_validation")),
 	        photoreal: orderedNames.filter(name => isPhotorealDataset(name)),
+	        closed_loop: orderedNames.filter(name => datasetCategoryByName[name] === "closed_loop"),
 	        preview: orderedNames.filter(name => isPreviewDataset(name)),
 	      };
 	      if (!datasetNamesByKind.train.length) datasetNamesByKind.train = orderedNames;
@@ -2477,7 +2485,7 @@ def _index_html() -> str:
 	      const platform = platformKind.value || "so101";
 	      const selectedNames = namesForKindAndPlatform(viewKind.value, platform);
 	      if (!selectedNames.length) {
-	        const fallbackKind = ["photoreal", "preview", "train", "valid"].find(kind => namesForKindAndPlatform(kind, platform).length);
+	        const fallbackKind = ["photoreal", "closed_loop", "preview", "train", "valid"].find(kind => namesForKindAndPlatform(kind, platform).length);
 	        if (fallbackKind && fallbackKind !== viewKind.value) {
 	          viewKind.value = fallbackKind;
 	        }
@@ -2525,6 +2533,7 @@ def _index_html() -> str:
 	    function viewKindLabel(kind) {
 	      if (kind === "valid") return "validation";
 	      if (kind === "photoreal") return "photoreal";
+	      if (kind === "closed_loop") return "closed loop";
 	      if (kind === "preview") return "preview";
 	      return "train";
 	    }

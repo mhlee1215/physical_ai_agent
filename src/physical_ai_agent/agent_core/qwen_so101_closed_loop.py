@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass
+from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
@@ -18,22 +21,53 @@ from physical_ai_agent.policies.smolvla_real import (
     _policy_device_metadata,
     _tensor_to_float_list,
 )
+from physical_ai_agent.policies.lerobot_policy_runner import load_lerobot_policy_runner
+from physical_ai_agent.so101_resolution_contract import (
+    SO101_IMAGE_HEIGHT,
+    SO101_IMAGE_WIDTH,
+    require_lerobot_dataset_256,
+    require_so101_image_resolution,
+)
+from physical_ai_agent.so101_visual_servo import (
+    VisualServoError,
+    controller_error_for_camera,
+    select_visual_servo_camera,
+    visual_servo_delta_q_for_camera,
+)
 from physical_ai_agent.sim.so101_nexus_env import DEFAULT_SO101_ENV_ID, SO101NexusEnv
 
 
 PolicyLoader = Callable[[str, bool, str], Any]
 EnvFactory = Callable[[str, str | None], Any]
 BatchBuilder = Callable[..., tuple[dict[str, Any], dict[str, str]]]
+VISUAL_SERVO_REOBSERVE_STEPS = 5
+GT_STAGED_WAYPOINT_ABOVE_STEPS = 40
+GT_LABEL_NN_WAYPOINT_ROOT = Path(
+    "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_lookup_feasible_relaxed_all_bins_320_ego_wrist_256_seed272000"
+)
+GT_ONLY_ACTION_CONTRACT_MODES = {
+    "visual_servo_gt_delta_q",
+    "gt_teacher_replay_delta_q",
+    "gt_staged_waypoint_target",
+    "gt_label_nn_staged_waypoint_target",
+}
 
 
 @dataclass(frozen=True)
 class LoopArtifactConfig:
     enabled: bool = False
     render_media: bool = False
-    width: int = 128
-    height: int = 128
+    width: int = SO101_IMAGE_WIDTH
+    height: int = SO101_IMAGE_HEIGHT
     fps: int = 12
     every_n_steps: int = 1
+
+    def __post_init__(self) -> None:
+        require_so101_image_resolution(
+            height=int(self.height),
+            width=int(self.width),
+            context="Qwen SO101 closed-loop artifact/policy camera render",
+        )
 
 
 @dataclass(frozen=True)
@@ -136,19 +170,28 @@ def run_closed_loop_plan(
     start_contract: str = "default_reset",
     start_report_path: Path | None = None,
     precondition_plan: SO101ToolPlan | None = None,
+    action_contract_mode: str = "processor",
     env_factory: EnvFactory = SO101NexusEnv,
     policy_loader: PolicyLoader = _load_pretrained_policy,
     batch_builder: BatchBuilder = _build_batch_for_policy,
+    policy_sampling_seed: int | None = None,
 ) -> dict[str, Any]:
     started = perf_counter()
     output_dir.mkdir(parents=True, exist_ok=True)
+    if start_report_path is not None:
+        require_lerobot_dataset_256(
+            Path(start_report_path).parent,
+            context="Qwen SO101 closed-loop start dataset",
+        )
     primitive_policy_paths = primitive_policy_paths or {}
+    if action_contract_mode in {"visual_servo_delta_q", *GT_ONLY_ACTION_CONTRACT_MODES}:
+        valid_mask_head = None
+        valid_mask_checkpoint = None
     if valid_mask_head is None:
-        if valid_mask_checkpoint is None:
-            raise ValueError("Qwen closed-loop tests require valid_mask_checkpoint")
-        from physical_ai_agent.policies.so101_valid_mask import load_valid_mask_head
+        if valid_mask_checkpoint is not None:
+            from physical_ai_agent.policies.so101_valid_mask import load_valid_mask_head
 
-        valid_mask_head = load_valid_mask_head(valid_mask_checkpoint, device=None if device == "auto" else device)
+            valid_mask_head = load_valid_mask_head(valid_mask_checkpoint, device=None if device == "auto" else device)
     precondition_calls = list(precondition_plan.calls) if precondition_plan is not None else []
     routing_plan = _routing_plan_with_preconditions(plan, precondition_calls)
     policy_routes = resolve_policy_routes(
@@ -156,6 +199,7 @@ def run_closed_loop_plan(
         default_policy_path=default_policy_path,
         primitive_policy_paths=primitive_policy_paths,
     )
+    dataset_action_bounds = _dataset_action_bounds_for_policy_routes(policy_routes)
     route_by_primitive = {route.primitive_id: route.policy_path for route in policy_routes}
     policy_cache: dict[str, Any] = {}
     policy_metadata: dict[str, dict[str, Any]] = {}
@@ -189,7 +233,10 @@ def run_closed_loop_plan(
                     start_contract=start_contract,
                     start_report_path=start_report_path,
                     precondition_calls=precondition_calls,
+                    action_contract_mode=action_contract_mode,
+                    dataset_action_bounds=dataset_action_bounds,
                     batch_builder=batch_builder,
+                    policy_sampling_seed=policy_sampling_seed,
                 )
             )
         status = "passed"
@@ -227,14 +274,21 @@ def run_closed_loop_plan(
             "checkpoint": str(valid_mask_checkpoint) if valid_mask_checkpoint else None,
             "threshold": float(valid_mask_threshold),
             "consecutive": int(valid_mask_consecutive),
-            "required_for_loop_test": True,
+            "required_for_loop_test": valid_mask_head is not None,
+            "mode": "valid_mask" if valid_mask_head is not None else "fixed_horizon",
         },
         "policy_metadata": policy_metadata,
         "policy_rollout_config": _merged_policy_rollout_config(policy_metadata),
+        "policy_sampling_seed": int(policy_sampling_seed) if policy_sampling_seed is not None else None,
+        "action_contract_mode": action_contract_mode,
         "loop_artifact_config": asdict(artifact_config or LoopArtifactConfig()),
         "episodes": episodes_out,
         "report_path": str(output_dir / "qwen_closed_loop_eval_report.json"),
     }
+    report["action_contract"] = _action_contract_summary(
+        episodes_out=episodes_out,
+        policy_routes=policy_routes,
+    )
     _write_report(report, Path(report["report_path"]))
     if blocker:
         (output_dir / "qwen_closed_loop_blocker.md").write_text(
@@ -269,7 +323,10 @@ def _run_episode(
     start_contract: str,
     start_report_path: Path | None,
     precondition_calls: list[SO101PrimitiveCall],
+    action_contract_mode: str,
+    dataset_action_bounds: dict[str, Any],
     batch_builder: BatchBuilder,
+    policy_sampling_seed: int | None,
 ) -> dict[str, Any]:
     env = env_factory(env_id, None)
     trace_path = output_dir / f"qwen_closed_loop_episode_{episode:03d}.jsonl"
@@ -314,6 +371,8 @@ def _run_episode(
                 valid_mask_head=valid_mask_head,
                 valid_mask_threshold=valid_mask_threshold,
                 valid_mask_consecutive=valid_mask_consecutive,
+                action_contract_mode=action_contract_mode,
+                dataset_action_bounds=dataset_action_bounds,
                 batch_builder=batch_builder,
             )
             precondition_summaries.append(pre_summary)
@@ -325,29 +384,46 @@ def _run_episode(
             if terminated or truncated:
                 break
             policy_path = route_by_primitive[call.primitive_id]
-            policy = _policy_for_route(
-                policy_cache=policy_cache,
-                policy_metadata=policy_metadata,
-                policy_loader=policy_loader,
-                policy_path=policy_path,
-                local_files_only=local_files_only,
-                device=device,
-            )
-            _override_policy_rollout_config(
-                policy,
-                n_action_steps=policy_n_action_steps,
-                num_steps=policy_num_steps,
-            )
-            policy_rollout_config = _policy_rollout_config(policy)
-            policy_metadata.setdefault(policy_path, {}).update(
-                {"rollout_config": policy_rollout_config}
-            )
-            if hasattr(policy, "reset"):
-                policy.reset()
+            if _action_contract_needs_policy(action_contract_mode):
+                policy_executor = _policy_for_route(
+                    policy_cache=policy_cache,
+                    policy_metadata=policy_metadata,
+                    policy_loader=policy_loader,
+                    policy_path=policy_path,
+                    local_files_only=local_files_only,
+                    device=device,
+                )
+                policy = _policy_model(policy_executor)
+                _override_policy_rollout_config(
+                    policy,
+                    n_action_steps=policy_n_action_steps,
+                    num_steps=policy_num_steps,
+                )
+                policy_rollout_config = _policy_rollout_config(policy)
+                policy_metadata.setdefault(policy_path, {}).update(
+                    {"rollout_config": policy_rollout_config}
+                )
+                if hasattr(policy, "reset"):
+                    policy.reset()
+            else:
+                policy_executor = None
+                policy = None
+                policy_rollout_config = _fixed_rollout_config(
+                    policy_n_action_steps=policy_n_action_steps,
+                    policy_num_steps=policy_num_steps,
+                )
+                policy_metadata.setdefault(policy_path, {}).update(
+                    {"rollout_config": policy_rollout_config, "processor_source": "ground_truth_controller"}
+                )
             primitive_records = 0
             primitive_reward = 0.0
             primitive_frame_paths: list[str] = []
             primitive_row_indexes: list[int] = []
+            visual_servo_hold_remaining = 0
+            visual_servo_held_action: dict[str, Any] | None = None
+            visual_servo_held_image_feature_mapping: dict[str, str] = {}
+            visual_servo_waypoint_latch_remaining = 0
+            visual_servo_waypoint_latch_reason: str | None = None
             camera_pixels = _render_policy_cameras(env, renderers)
             _require_policy_cameras(camera_pixels)
             step_budget = (
@@ -355,101 +431,304 @@ def _run_episode(
                 if max_steps_per_primitive is not None
                 else int(call.max_steps)
             )
-            valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget(
-                policy=policy,
-                obs=obs,
-                camera_pixels=camera_pixels,
-                instruction=call.prompt,
-                local_files_only=local_files_only,
-                batch_builder=batch_builder,
-                valid_mask_head=valid_mask_head,
-                max_horizon=step_budget,
-                threshold=valid_mask_threshold,
-                consecutive=valid_mask_consecutive,
-            )
-            step_budget = min(step_budget, valid_mask_budget)
-            for primitive_step in range(step_budget):
-                record_media = _should_render_media(artifact_config, primitive_step)
-                camera_pixels = _render_policy_cameras(env, renderers)
-                _require_policy_cameras(camera_pixels)
-                policy_input_images = (
-                    _write_policy_input_images(
+            valid_mask_decisions: list[dict[str, Any]] = []
+            valid_mask_stop_reason = "max_horizon"
+            while primitive_records < step_budget:
+                remaining_budget = step_budget - primitive_records
+                chunk_horizon = _valid_mask_requery_horizon(
+                    policy_rollout_config=policy_rollout_config,
+                    policy_n_action_steps=policy_n_action_steps,
+                    remaining_budget=remaining_budget,
+                )
+                chunk_trace = None
+                chunk_actions: list[list[float]] | None = None
+                chunk_raw_actions: list[list[float]] | None = None
+                chunk_postprocessed_actions: list[list[float]] | None = None
+                chunk_image_feature_mapping: dict[str, str] = {}
+                if (
+                    _action_contract_needs_policy(action_contract_mode)
+                    and action_contract_mode
+                    in {"processor", "processor_dataset_clamp", "processor_gripper_snap", "processor_delta_q"}
+                    and hasattr(policy_executor, "predict_action_chunk_with_trace")
+                ):
+                    camera_pixels = _render_policy_cameras(env, renderers)
+                    _require_policy_cameras(camera_pixels)
+                    action_base_qpos = _current_action_qpos(env, obs, action_dim)
+                    raw_observation = _build_raw_lerobot_observation_for_runner(
+                        policy=policy,
+                        observation=action_base_qpos,
                         camera_pixels=camera_pixels,
-                        episode_media_dir=episode_media_dir,
-                        global_step=global_step,
+                        instruction=call.prompt,
                     )
-                    if record_media
-                    else {}
-                )
-                batch, image_feature_mapping = batch_builder(
-                    policy,
-                    obs,
-                    camera_pixels=camera_pixels,
-                    instruction=call.prompt,
-                    local_files_only=local_files_only,
-                )
-                raw_action = policy.select_action(batch)
-                action = _clip_action(_action_to_float_list(raw_action), action_dim)
-                obs, reward, terminated, truncated, info = env.step(action)
-                robot_frame_path = (
-                    _write_robot_frame(
-                        env=env,
-                        renderers=renderers,
-                        episode_media_dir=episode_media_dir,
+                    _seed_policy_sampling(
+                        policy_sampling_seed,
+                        episode=episode,
                         global_step=global_step,
+                        primitive_step=primitive_records,
                     )
-                    if record_media
-                    else None
-                )
-                final_info = dict(info)
-                total_reward += float(reward)
-                primitive_reward += float(reward)
-                row = {
-                    "episode": episode,
-                    "global_step": global_step,
-                    "primitive_step": primitive_step,
-                    "fn": call.fn,
-                    "primitive_id": call.primitive_id,
-                    "prompt": call.prompt,
-                    "policy_path": policy_path,
-                    "policy_rollout_config": policy_rollout_config,
-                    "valid_mask": {
-                        "budget": int(step_budget),
-                        "reason": valid_mask_reason,
-                        "probs": valid_mask_probs,
-                    },
-                    "observation": obs,
-                    "sim_snapshot": _snapshot_sim_state_or_none(env),
-                    "action": action,
-                    "reward": float(reward),
-                    "terminated": bool(terminated),
-                    "truncated": bool(truncated),
-                    "info": _jsonable_info(info),
-                    "image_feature_mapping": image_feature_mapping,
-                    "policy_input_camera_names": sorted(camera_pixels),
-                    "media": {
-                        "policy_input_images": policy_input_images,
-                        "robot_frame": robot_frame_path,
-                        "render_mode": "inline" if record_media else "deferred",
-                    },
-                    "render_replay": {
-                        "env_id": env_id,
-                        "env_config": env_config,
-                        "start_contract": start_contract,
-                        "seed": seed,
-                        "artifact_width": artifact_config.width,
-                        "artifact_height": artifact_config.height,
-                        "artifact_fps": artifact_config.fps,
-                        "artifact_every_n_steps": artifact_config.every_n_steps,
-                    },
+                    chunk_trace = policy_executor.predict_action_chunk_with_trace(raw_observation)
+                    policy_input_motor_state = _action_to_float_list(action_base_qpos)[:action_dim]
+                    chunk_trace["policy_input_motor_state_raw"] = policy_input_motor_state
+                    chunk_trace["policy_input_state_raw"] = policy_input_motor_state
+                    if hasattr(policy, "reset"):
+                        policy.reset()
+                    chunk_actions = _action_chunk_to_float_lists(chunk_trace.get("action_chunk"), action_dim=action_dim)
+                    chunk_raw_actions = _action_chunk_to_float_lists(
+                        chunk_trace.get("raw_action_chunk"),
+                        action_dim=action_dim,
+                    )
+                    chunk_postprocessed_actions = _action_chunk_to_float_lists(
+                        chunk_trace.get("postprocessed_action_chunk"),
+                        action_dim=action_dim,
+                    )
+                    if action_contract_mode == "processor_dataset_clamp":
+                        chunk_actions = [_clamp_action_to_bounds(action, dataset_action_bounds) for action in chunk_actions]
+                    if action_contract_mode == "processor_gripper_snap":
+                        chunk_actions = [_snap_gripper_to_bounds(action, dataset_action_bounds) for action in chunk_actions]
+                    chunk_image_feature_mapping = {
+                        "observation.images.camera1": "egocentric_cam",
+                        "observation.images.camera2": "wrist_cam",
+                        "observation.images.camera3": "wrist_cam",
+                    }
+                if valid_mask_head is None:
+                    valid_mask_budget = chunk_horizon
+                    valid_mask_reason = "fixed_horizon"
+                    valid_mask_probs = []
+                else:
+                    if chunk_trace is not None:
+                        valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget_from_chunk(
+                            processed_observation=chunk_trace.get("processed_observation"),
+                            action_chunk=chunk_trace.get("raw_action_chunk"),
+                            fallback_obs=obs,
+                            valid_mask_head=valid_mask_head,
+                            max_horizon=chunk_horizon,
+                            threshold=valid_mask_threshold,
+                            consecutive=valid_mask_consecutive,
+                        )
+                    else:
+                        valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget(
+                            policy=policy,
+                            obs=obs,
+                            camera_pixels=camera_pixels,
+                            instruction=call.prompt,
+                            local_files_only=local_files_only,
+                            batch_builder=batch_builder,
+                            valid_mask_head=valid_mask_head,
+                            max_horizon=chunk_horizon,
+                            threshold=valid_mask_threshold,
+                            consecutive=valid_mask_consecutive,
+                        )
+                execute_steps = min(remaining_budget, chunk_horizon, valid_mask_budget)
+                if chunk_actions is not None:
+                    execute_steps = min(execute_steps, len(chunk_actions))
+                valid_mask_decision = {
+                    "chunk_start_primitive_step": int(primitive_records),
+                    "chunk_start_global_step": int(global_step),
+                    "budget": int(execute_steps),
+                    "chunk_horizon": int(chunk_horizon),
+                    "reason": valid_mask_reason,
+                    "probs": valid_mask_probs,
+                    "action_chunk_source": "shared_predict_action_chunk" if chunk_trace is not None else "select_action_queue",
                 }
-                primitive_row_indexes.append(len(records))
-                if robot_frame_path:
-                    primitive_frame_paths.append(robot_frame_path)
-                records.append(row)
-                primitive_records += 1
-                global_step += 1
+                valid_mask_decisions.append(valid_mask_decision)
+                for _chunk_step in range(execute_steps):
+                    primitive_step = primitive_records
+                    record_media = _should_render_media(artifact_config, primitive_step)
+                    camera_pixels = _render_policy_cameras(env, renderers)
+                    _require_policy_cameras(camera_pixels)
+                    policy_input_images = (
+                        _write_policy_input_images(
+                            camera_pixels=camera_pixels,
+                            episode_media_dir=episode_media_dir,
+                            global_step=global_step,
+                        )
+                        if record_media
+                        else {}
+                    )
+                    if (
+                        action_contract_mode in {"visual_servo_delta_q", "visual_servo_gt_delta_q"}
+                        and visual_servo_hold_remaining > 0
+                        and visual_servo_held_action is not None
+                    ):
+                        held_delta_q = _action_to_float_list(visual_servo_held_action.get("delta_q_action", []))
+                        held_action = (
+                            _action_from_delta_q(_current_action_qpos(env, obs, action_dim), held_delta_q, action_dim=action_dim)
+                            if held_delta_q
+                            else visual_servo_held_action["action"]
+                        )
+                        processed_action = {
+                            **visual_servo_held_action,
+                            "action": held_action,
+                            "visual_servo_hold": {
+                                "inference_frame": False,
+                                "remaining": int(visual_servo_hold_remaining),
+                            },
+                        }
+                        image_feature_mapping = visual_servo_held_image_feature_mapping
+                        visual_servo_hold_remaining -= 1
+                    else:
+                        if _action_contract_needs_policy(action_contract_mode):
+                            _batch, image_feature_mapping = batch_builder(
+                                policy,
+                                obs,
+                                camera_pixels=camera_pixels,
+                                instruction=call.prompt,
+                                local_files_only=local_files_only,
+                            )
+                        else:
+                            image_feature_mapping = {
+                                "observation.images.camera1": "egocentric_cam",
+                                "observation.images.camera2": "wrist_cam",
+                            }
+                        action_base_qpos = _current_action_qpos(env, obs, action_dim)
+                        if chunk_actions is not None:
+                            image_feature_mapping = chunk_image_feature_mapping
+                            processed_action = _select_env_action_from_chunk_trace(
+                                chunk_actions=chunk_actions,
+                                chunk_raw_actions=chunk_raw_actions,
+                                chunk_postprocessed_actions=chunk_postprocessed_actions,
+                                chunk_trace=chunk_trace,
+                                chunk_step=_chunk_step,
+                                action_base_qpos=action_base_qpos,
+                                action_dim=action_dim,
+                                action_contract_mode=action_contract_mode,
+                                dataset_action_bounds=dataset_action_bounds,
+                            )
+                        else:
+                            _seed_policy_sampling(
+                                policy_sampling_seed,
+                                episode=episode,
+                                global_step=global_step,
+                                primitive_step=primitive_step,
+                            )
+                            processed_action = _select_env_action_with_trace(
+                                policy_executor=policy_executor,
+                                policy=policy,
+                                obs=obs,
+                                action_base_qpos=action_base_qpos,
+                                gt_teacher_delta_q=_gt_teacher_delta_for_start_state(start_state, primitive_step),
+                                primitive_step=primitive_step,
+                                waypoint_fallback_reason_override=(
+                                    visual_servo_waypoint_latch_reason
+                                    if action_contract_mode == "visual_servo_gt_delta_q"
+                                    and visual_servo_waypoint_latch_remaining > 0
+                                    else None
+                                ),
+                                gt_waypoint_qpos=(
+                                    _gt_label_nn_staged_waypoint(camera_pixels, action_base_qpos, primitive_step)
+                                    if action_contract_mode == "gt_label_nn_staged_waypoint_target"
+                                    else _gt_staged_waypoint_for_start_state(start_state, primitive_step)
+                                ),
+                                camera_pixels=camera_pixels,
+                                instruction=call.prompt,
+                                action_dim=action_dim,
+                                action_contract_mode=action_contract_mode,
+                                dataset_action_bounds=dataset_action_bounds,
+                            )
+                        if action_contract_mode in {"visual_servo_delta_q", "visual_servo_gt_delta_q"}:
+                            # ponytail: visual servo must re-observe quickly; 15-step action chunks overshoot.
+                            visual_servo_hold_remaining = min(
+                                VISUAL_SERVO_REOBSERVE_STEPS - 1,
+                                execute_steps - _chunk_step - 1,
+                            )
+                            processed_action = {
+                                **processed_action,
+                                "visual_servo_hold": {
+                                    "inference_frame": True,
+                                    "hold_steps": int(visual_servo_hold_remaining + 1),
+                                },
+                            }
+                            fallback_reason = (
+                                processed_action.get("visual_servo_prediction", {})
+                                .get("waypoint_fallback", {})
+                                .get("reason")
+                            )
+                            if (
+                                action_contract_mode == "visual_servo_gt_delta_q"
+                                and fallback_reason in {"target_not_visible", "camera1_centered_without_wrist_depth"}
+                            ):
+                                # ponytail: once GT visual-servo loses depth near the target, keep settling to the proven waypoint briefly.
+                                visual_servo_waypoint_latch_remaining = max(
+                                    visual_servo_waypoint_latch_remaining,
+                                    30,
+                                )
+                                visual_servo_waypoint_latch_reason = str(fallback_reason)
+                            visual_servo_held_action = processed_action
+                            visual_servo_held_image_feature_mapping = image_feature_mapping
+                    action = processed_action["action"]
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    if visual_servo_waypoint_latch_remaining > 0:
+                        visual_servo_waypoint_latch_remaining -= 1
+                        if visual_servo_waypoint_latch_remaining <= 0:
+                            visual_servo_waypoint_latch_reason = None
+                    robot_frame_path = (
+                        _write_robot_frame(
+                            env=env,
+                            renderers=renderers,
+                            episode_media_dir=episode_media_dir,
+                            global_step=global_step,
+                        )
+                        if record_media
+                        else None
+                    )
+                    final_info = dict(info)
+                    total_reward += float(reward)
+                    primitive_reward += float(reward)
+                    row = {
+                        "episode": episode,
+                        "global_step": global_step,
+                        "primitive_step": primitive_step,
+                        "fn": call.fn,
+                        "primitive_id": call.primitive_id,
+                        "prompt": call.prompt,
+                        "policy_path": policy_path,
+                        "policy_rollout_config": policy_rollout_config,
+                        "valid_mask": valid_mask_decision,
+                        "observation": obs,
+                        "sim_snapshot": _snapshot_sim_state_or_none(env),
+                        "action": action,
+                        "policy_output": {
+                            **processed_action,
+                        },
+                        "reward": float(reward),
+                        "terminated": bool(terminated),
+                        "truncated": bool(truncated),
+                        "info": _jsonable_info(info),
+                        "image_feature_mapping": image_feature_mapping,
+                        "policy_input_camera_names": sorted(camera_pixels),
+                        "media": {
+                            "policy_input_images": policy_input_images,
+                            "robot_frame": robot_frame_path,
+                            "render_mode": "inline" if record_media else "deferred",
+                        },
+                        "render_replay": {
+                            "env_id": env_id,
+                            "env_config": env_config,
+                            "start_contract": start_contract,
+                            "seed": seed,
+                            "artifact_width": artifact_config.width,
+                            "artifact_height": artifact_config.height,
+                            "artifact_fps": artifact_config.fps,
+                            "artifact_every_n_steps": artifact_config.every_n_steps,
+                        },
+                    }
+                    primitive_row_indexes.append(len(records))
+                    if robot_frame_path:
+                        primitive_frame_paths.append(robot_frame_path)
+                    records.append(row)
+                    primitive_records += 1
+                    global_step += 1
+                    if action_contract_mode in {"visual_servo_delta_q", "visual_servo_gt_delta_q"} and _visual_servo_should_stop(processed_action):
+                        valid_mask_stop_reason = "visual_servo_stop"
+                        break
+                    if terminated or truncated:
+                        break
                 if terminated or truncated:
+                    break
+                if valid_mask_stop_reason == "visual_servo_stop":
+                    break
+                if valid_mask_reason == "valid_mask_stop":
+                    valid_mask_stop_reason = "valid_mask_stop"
                     break
             primitive_videos = _write_primitive_videos(
                 frame_paths=primitive_frame_paths,
@@ -469,9 +748,9 @@ def _run_episode(
                     "policy_path": policy_path,
                     "policy_rollout_config": policy_rollout_config,
                     "valid_mask": {
-                        "budget": int(step_budget),
-                        "reason": valid_mask_reason,
-                        "probs": valid_mask_probs,
+                        "budget": int(primitive_records),
+                        "reason": valid_mask_stop_reason,
+                        "decisions": valid_mask_decisions,
                     },
                     "steps": primitive_records,
                     "reward": primitive_reward,
@@ -506,7 +785,121 @@ def _run_episode(
         "primitive_summaries": primitive_summaries,
         "trace_path": str(trace_path),
         "media_root": str(episode_media_dir) if artifact_config.render_media else None,
+        "action_space": _action_space_summary(env),
     }
+
+
+def _action_space_summary(env: Any) -> dict[str, Any]:
+    action_space = getattr(env, "action_space", None)
+    if action_space is None:
+        return {}
+    return {
+        "low": _action_to_float_list(getattr(action_space, "low", [])),
+        "high": _action_to_float_list(getattr(action_space, "high", [])),
+    }
+
+
+def _action_contract_summary(
+    *,
+    episodes_out: list[dict[str, Any]],
+    policy_routes: list[PrimitivePolicyRoute],
+) -> dict[str, Any]:
+    dataset_bounds = _dataset_action_bounds_for_policy_routes(policy_routes)
+    env_bounds = next((episode.get("action_space") for episode in episodes_out if episode.get("action_space")), {})
+    traces = [Path(str(episode.get("trace_path"))) for episode in episodes_out if episode.get("trace_path")]
+    records = []
+    for trace_path in traces:
+        if trace_path.exists():
+            records.extend(_read_jsonl(trace_path))
+    fields = {
+        "env_action": lambda row: row.get("action"),
+        "processor_raw_action": lambda row: (row.get("policy_output") or {}).get("processor_raw_action"),
+        "processor_postprocessed_action": lambda row: (row.get("policy_output") or {}).get("processor_postprocessed_action"),
+    }
+    summary = {
+        "dataset_action_bounds": dataset_bounds,
+        "env_action_bounds": env_bounds,
+        "record_count": len(records),
+        "fields": {},
+    }
+    for name, getter in fields.items():
+        values = [getter(row) for row in records]
+        values = [value for value in values if isinstance(value, list) and value]
+        summary["fields"][name] = _action_values_summary(
+            values,
+            dataset_bounds=dataset_bounds,
+            env_bounds=env_bounds,
+        )
+    return summary
+
+
+def _dataset_action_bounds_for_policy_routes(policy_routes: list[PrimitivePolicyRoute]) -> dict[str, Any]:
+    for route in policy_routes:
+        bounds = _dataset_action_bounds_for_policy_path(Path(route.policy_path))
+        if bounds:
+            return bounds
+    return {}
+
+
+def _dataset_action_bounds_for_policy_path(policy_path: Path) -> dict[str, Any]:
+    train_config_path = policy_path / "train_config.json"
+    if not train_config_path.exists():
+        return {}
+    try:
+        train_config = json.loads(train_config_path.read_text(encoding="utf-8"))
+        dataset_root = Path(str((train_config.get("dataset") or {}).get("root") or ""))
+        if not dataset_root.is_absolute():
+            dataset_root = Path.cwd() / dataset_root
+        stats_path = dataset_root / "meta" / "stats.json"
+        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+        action_stats = stats.get("action") or {}
+        return {
+            "dataset_root": str(dataset_root),
+            "min": [float(value) for value in action_stats.get("min", [])],
+            "max": [float(value) for value in action_stats.get("max", [])],
+            "mean": [float(value) for value in action_stats.get("mean", [])],
+            "std": [float(value) for value in action_stats.get("std", [])],
+        }
+    except Exception:
+        return {}
+
+
+def _action_values_summary(
+    values: list[list[float]],
+    *,
+    dataset_bounds: dict[str, Any],
+    env_bounds: dict[str, Any],
+) -> dict[str, Any]:
+    if not values:
+        return {"count": 0}
+    try:
+        import numpy as np
+
+        array = np.asarray(values, dtype=float)
+        summary: dict[str, Any] = {
+            "count": int(array.shape[0]),
+            "dim": int(array.shape[1]) if array.ndim == 2 else None,
+            "min": np.round(array.min(axis=0), 6).tolist(),
+            "max": np.round(array.max(axis=0), 6).tolist(),
+            "mean": np.round(array.mean(axis=0), 6).tolist(),
+            "std": np.round(array.std(axis=0), 6).tolist(),
+        }
+        for label, bounds in (("dataset", dataset_bounds), ("env", env_bounds)):
+            low = bounds.get("min") or bounds.get("low")
+            high = bounds.get("max") or bounds.get("high")
+            if not low or not high:
+                continue
+            low_array = np.asarray(low, dtype=float)[: array.shape[1]]
+            high_array = np.asarray(high, dtype=float)[: array.shape[1]]
+            summary[f"below_{label}_min_ratio"] = np.round((array < low_array).mean(axis=0), 6).tolist()
+            summary[f"above_{label}_max_ratio"] = np.round((array > high_array).mean(axis=0), 6).tolist()
+            summary[f"any_outside_{label}_range_ratio"] = round(
+                float(((array < low_array) | (array > high_array)).any(axis=1).mean()),
+                6,
+            )
+        return summary
+    except Exception as exc:
+        return {"count": len(values), "error": _short_error(exc)}
 
 
 def _policy_for_route(
@@ -519,10 +912,721 @@ def _policy_for_route(
     device: str,
 ) -> Any:
     if policy_path not in policy_cache:
-        policy = policy_loader(policy_path, local_files_only, device)
-        policy_cache[policy_path] = policy
-        policy_metadata[policy_path] = _policy_device_metadata(policy)
+        runner = _load_policy_runner_or_legacy_policy(policy_path, local_files_only, device, policy_loader)
+        policy_cache[policy_path] = runner
+        policy_metadata[policy_path] = _policy_execution_metadata(runner)
     return policy_cache[policy_path]
+
+
+def _load_policy_runner_or_legacy_policy(
+    policy_path: str,
+    local_files_only: bool,
+    device: str,
+    policy_loader: PolicyLoader,
+) -> Any:
+    try:
+        return load_lerobot_policy_runner(
+            policy_path,
+            device=_selected_policy_device(device),
+            policy_type="smolvla",
+            local_files_only=local_files_only,
+        )
+    except Exception:
+        return policy_loader(policy_path, local_files_only, device)
+
+
+def _selected_policy_device(device: str) -> str:
+    if str(device).lower() != "auto":
+        return str(device)
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def _policy_model(executor: Any) -> Any:
+    return getattr(executor, "policy", executor)
+
+
+def _action_contract_needs_policy(action_contract_mode: str) -> bool:
+    return action_contract_mode not in GT_ONLY_ACTION_CONTRACT_MODES
+
+
+def _fixed_rollout_config(*, policy_n_action_steps: int | None, policy_num_steps: int | None) -> dict[str, int | None]:
+    return {
+        "chunk_size": None,
+        "n_action_steps": int(policy_n_action_steps or 15),
+        "num_steps": int(policy_num_steps or policy_n_action_steps or 15),
+    }
+
+
+def _policy_execution_metadata(executor: Any) -> dict[str, Any]:
+    policy = _policy_model(executor)
+    metadata = _policy_device_metadata(policy)
+    metadata["processor_source"] = getattr(executor, "processor_source", "legacy_policy_no_processors")
+    metadata["preprocessor_steps"] = [type(step).__name__ for step in getattr(getattr(executor, "preprocessor", None), "steps", [])]
+    metadata["postprocessor_steps"] = [type(step).__name__ for step in getattr(getattr(executor, "postprocessor", None), "steps", [])]
+    return metadata
+
+
+def _select_env_action_with_trace(
+    *,
+    policy_executor: Any,
+    policy: Any,
+    obs: Any,
+    action_base_qpos: Any | None = None,
+    gt_teacher_delta_q: Any | None = None,
+    gt_waypoint_qpos: Any | None = None,
+    primitive_step: int = 0,
+    waypoint_fallback_reason_override: str | None = None,
+    camera_pixels: dict[str, Any],
+    instruction: str | None,
+    action_dim: int,
+    action_contract_mode: str,
+    dataset_action_bounds: dict[str, Any],
+) -> dict[str, Any]:
+    if action_contract_mode in {"gt_staged_waypoint_target", "gt_label_nn_staged_waypoint_target"}:
+        if gt_waypoint_qpos is None:
+            raise ValueError(f"{action_contract_mode} requires a ground-truth waypoint")
+        action = _clip_action(_action_to_float_list(gt_waypoint_qpos), action_dim)
+        return {
+            "action": action,
+            "processor_source": "ground_truth_staged_waypoint",
+            "preprocessor_steps": [],
+            "postprocessor_steps": [],
+            "action_contract_mode": action_contract_mode,
+        }
+    if action_contract_mode == "gt_teacher_replay_delta_q":
+        if gt_teacher_delta_q is None:
+            raise ValueError("gt_teacher_replay_delta_q requires a teacher delta-q sequence")
+        delta_q_action = _clip_action(_action_to_float_list(gt_teacher_delta_q), action_dim)
+        action = _action_from_delta_q(action_base_qpos or obs, delta_q_action, action_dim=action_dim)
+        return {
+            "action": action,
+            "delta_q_action": delta_q_action,
+            "processor_source": "ground_truth_teacher_delta_q",
+            "preprocessor_steps": [],
+            "postprocessor_steps": [],
+            "action_contract_mode": action_contract_mode,
+        }
+    if action_contract_mode == "visual_servo_gt_delta_q":
+        visual_trace = _ground_truth_visual_servo_trace(camera_pixels, qpos=action_base_qpos)
+        fallback_reason = waypoint_fallback_reason_override or _visual_servo_waypoint_fallback_reason(
+            visual_trace,
+            primitive_step=primitive_step,
+        )
+        if fallback_reason and gt_waypoint_qpos is not None:
+            delta_q_action = _clip_action(
+                [
+                    0.0 if index == 5 else max(-0.08, min(0.08, float(target) - float(current)))
+                    for index, (target, current) in enumerate(zip(
+                        _action_to_float_list(gt_waypoint_qpos)[:action_dim],
+                        _action_to_float_list(action_base_qpos or obs)[:action_dim],
+                        strict=False,
+                    ))
+                ],
+                action_dim,
+            )
+            visual_trace = {
+                **visual_trace,
+                "waypoint_fallback": {
+                    "enabled": True,
+                    "reason": fallback_reason,
+                },
+                "delta_q": delta_q_action,
+                "processor_source": "ground_truth_visual_servo_label_with_waypoint_fallback",
+            }
+        else:
+            delta_q_action = _clip_action(_action_to_float_list(visual_trace["delta_q"]), action_dim)
+        action = _action_from_delta_q(action_base_qpos or obs, delta_q_action, action_dim=action_dim)
+        return {
+            "action": action,
+            "delta_q_action": delta_q_action,
+            "visual_servo_prediction": visual_trace,
+            "processor_source": visual_trace.get("processor_source"),
+            "preprocessor_steps": [],
+            "postprocessor_steps": [],
+            "action_contract_mode": action_contract_mode,
+        }
+    if action_contract_mode == "legacy" or not hasattr(policy_executor, "select_action_with_trace"):
+        raw_action = policy.select_action(
+            _build_batch_for_policy(
+                policy,
+                action_base_qpos or obs,
+                camera_pixels=camera_pixels,
+                instruction=instruction,
+                local_files_only=True,
+            )[0]
+        )
+        action = _clip_action(_action_to_float_list(raw_action), action_dim)
+        return {
+            "action": action,
+            "processor_raw_action": action,
+            "processor_postprocessed_action": action,
+            "processor_source": "legacy_policy_no_processors",
+            "preprocessor_steps": [],
+            "postprocessor_steps": [],
+            "action_contract_mode": "legacy",
+        }
+    if action_contract_mode not in {
+        "processor",
+        "processor_dataset_clamp",
+        "processor_gripper_snap",
+        "processor_delta_q",
+        "visual_servo_delta_q",
+        "visual_servo_gt_delta_q",
+        "gt_teacher_replay_delta_q",
+        "gt_staged_waypoint_target",
+        "gt_label_nn_staged_waypoint_target",
+    }:
+        raise ValueError(f"unsupported action_contract_mode={action_contract_mode!r}")
+    if hasattr(policy_executor, "select_action_with_trace"):
+        raw_observation = _build_raw_lerobot_observation_for_runner(
+            policy=policy,
+            observation=action_base_qpos or obs,
+            camera_pixels=camera_pixels,
+            instruction=instruction,
+        )
+        if action_contract_mode == "visual_servo_delta_q":
+            visual_trace = policy_executor.predict_visual_servo_with_trace(raw_observation)
+            delta_q_action = _clip_action(_action_to_float_list(visual_trace["delta_q"]), action_dim)
+            action = _action_from_delta_q(action_base_qpos or obs, delta_q_action, action_dim=action_dim)
+            return {
+                "action": action,
+                "delta_q_action": delta_q_action,
+                "visual_servo_prediction": visual_trace,
+                "processor_source": visual_trace.get("processor_source"),
+                "preprocessor_steps": [],
+                "postprocessor_steps": [],
+                "action_contract_mode": action_contract_mode,
+            }
+        trace = policy_executor.select_action_with_trace(raw_observation)
+        raw_action = _clip_action(_action_to_float_list(trace["raw_action"]), action_dim)
+        postprocessed_action = _clip_action(_action_to_float_list(trace["postprocessed_action"]), action_dim)
+        action = _clip_action(_action_to_float_list(trace["action"]), action_dim)
+        unclamped_action = list(action)
+        delta_q_action = None
+        if action_contract_mode == "processor_delta_q":
+            delta_q_action = list(action)
+            action = _action_from_delta_q(action_base_qpos or obs, delta_q_action, action_dim=action_dim)
+        if action_contract_mode == "processor_dataset_clamp":
+            action = _clamp_action_to_bounds(action, dataset_action_bounds)
+        if action_contract_mode == "processor_gripper_snap":
+            action = _snap_gripper_to_bounds(action, dataset_action_bounds)
+        return {
+            "action": action,
+            "delta_q_action": delta_q_action,
+            "processor_raw_action": raw_action,
+            "processor_postprocessed_action": postprocessed_action,
+            "unclamped_env_action": unclamped_action,
+            "processor_source": trace.get("processor_source"),
+            "preprocessor_steps": trace.get("preprocessor_steps"),
+            "postprocessor_steps": trace.get("postprocessor_steps"),
+            "action_contract_mode": action_contract_mode,
+        }
+    raise RuntimeError("unreachable action contract path")
+
+
+def _select_env_action_from_chunk_trace(
+    *,
+    chunk_actions: list[list[float]],
+    chunk_raw_actions: list[list[float]] | None,
+    chunk_postprocessed_actions: list[list[float]] | None,
+    chunk_trace: dict[str, Any] | None,
+    chunk_step: int,
+    action_base_qpos: Any | None,
+    action_dim: int,
+    action_contract_mode: str,
+    dataset_action_bounds: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    action = _clip_action(list(chunk_actions[int(chunk_step)]), action_dim)
+    raw_action = (
+        _clip_action(list(chunk_raw_actions[int(chunk_step)]), action_dim)
+        if chunk_raw_actions is not None and int(chunk_step) < len(chunk_raw_actions)
+        else action
+    )
+    postprocessed_action = (
+        _clip_action(list(chunk_postprocessed_actions[int(chunk_step)]), action_dim)
+        if chunk_postprocessed_actions is not None and int(chunk_step) < len(chunk_postprocessed_actions)
+        else action
+    )
+    delta_q_action = None
+    if action_contract_mode == "processor_delta_q":
+        delta_q_action = list(action)
+        action = _action_from_delta_q(action_base_qpos or [], delta_q_action, action_dim=action_dim)
+    if action_contract_mode == "processor_gripper_snap":
+        action = _snap_gripper_to_bounds(action, dataset_action_bounds or {})
+    return {
+        "action": action,
+        "delta_q_action": delta_q_action,
+        "policy_input_motor_state_raw": (chunk_trace or {}).get("policy_input_motor_state_raw"),
+        "policy_input_state_raw": (chunk_trace or {}).get("policy_input_state_raw"),
+        "policy_input_state_contract": "observation.state is robot motor/joint state; sim reads robot qpos, real robot must provide encoder positions in the same order/units.",
+        "processor_raw_action": raw_action,
+        "processor_postprocessed_action": postprocessed_action,
+        "unclamped_env_action": postprocessed_action,
+        "processor_source": (chunk_trace or {}).get("processor_source"),
+        "preprocessor_steps": (chunk_trace or {}).get("preprocessor_steps"),
+        "postprocessor_steps": (chunk_trace or {}).get("postprocessor_steps"),
+        "action_contract_mode": action_contract_mode,
+        "action_chunk_source": "shared_predict_action_chunk",
+        "action_chunk_step": int(chunk_step),
+    }
+
+
+def _seed_policy_sampling(
+    seed: int | None,
+    *,
+    episode: int,
+    global_step: int,
+    primitive_step: int,
+) -> None:
+    if seed is None:
+        return
+    value = int(seed) + int(episode) * 1_000_003 + int(global_step) * 9_176 + int(primitive_step)
+    try:
+        import random
+
+        random.seed(value)
+    except Exception:
+        pass
+    try:
+        import numpy as np
+
+        np.random.seed(value % (2**32 - 1))
+    except Exception:
+        pass
+    try:
+        import torch
+
+        torch.manual_seed(value)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(value)
+    except Exception:
+        pass
+
+
+def _action_chunk_to_float_lists(action_chunk: Any, *, action_dim: int) -> list[list[float]]:
+    if action_chunk is None:
+        return []
+    try:
+        if hasattr(action_chunk, "detach"):
+            action_chunk = action_chunk.detach().cpu()
+        if hasattr(action_chunk, "numpy"):
+            action_chunk = action_chunk.numpy()
+        if hasattr(action_chunk, "tolist"):
+            action_chunk = action_chunk.tolist()
+    except Exception:
+        pass
+    if not isinstance(action_chunk, list):
+        return []
+    if action_chunk and action_chunk and isinstance(action_chunk[0], list) and action_chunk[0] and isinstance(action_chunk[0][0], list):
+        action_chunk = action_chunk[0]
+    return [_clip_action([float(value) for value in row], action_dim) for row in action_chunk]
+
+
+def _visual_servo_waypoint_fallback_reason(visual_trace: dict[str, Any], *, primitive_step: int = 0) -> str | None:
+    servo_camera = str(visual_trace.get("servo_camera") or "camera1")
+    camera = visual_trace.get(servo_camera)
+    if not isinstance(camera, dict) or not bool(camera.get("visible")):
+        return "target_not_visible"
+    camera2 = visual_trace.get("camera2")
+    if (
+        servo_camera == "camera1"
+        and isinstance(camera2, dict)
+        and not bool(camera2.get("visible"))
+        and abs(float(camera.get("dx_norm", 1.0))) <= 0.12
+        and abs(float(camera.get("dy_norm", 1.0))) <= 0.12
+    ):
+        return "camera1_centered_without_wrist_depth"
+    if (
+        servo_camera == "camera2"
+        and int(primitive_step) >= 80
+        and abs(float(camera.get("dy_norm", 0.0))) >= 0.6
+        and abs(float(camera.get("edge_angle_error", 0.0))) >= 0.65
+    ):
+        return "late_wrist_divergence"
+    return None
+
+
+def _ground_truth_visual_servo_trace(camera_pixels: dict[str, Any], qpos: Any | None = None) -> dict[str, Any]:
+    from scripts.build_so101_visual_servo_labels import (
+        extract_egocentric_visual_servo_label,
+        extract_wrist_visual_servo_label,
+    )
+
+    camera1 = extract_egocentric_visual_servo_label(_image_payload(camera_pixels["egocentric_cam"]), min_area=20)
+    camera2 = extract_wrist_visual_servo_label(_image_payload(camera_pixels["wrist_cam"]), min_area=20)
+    camera1_visible = bool(camera1.get("visible"))
+    camera2_visible = bool(camera2.get("visible"))
+    servo_selection = select_visual_servo_camera(
+        camera1_error=(
+            float(camera1.get("dx_norm", 0.0)),
+            float(camera1.get("dy_norm", 0.0)),
+            float(camera1.get("edge_angle_error", 0.0)),
+        ),
+        camera2_error=(
+            float(camera2.get("dx_norm", 0.0)),
+            float(camera2.get("dy_norm", 0.0)),
+            float(camera2.get("edge_angle_error", 0.0)),
+        ),
+        camera1_visible_prob=1.0 if camera1_visible else 0.0,
+        camera2_visible_prob=1.0 if camera2_visible else 0.0,
+    )
+    servo_camera = str(servo_selection["servo_camera"])
+    servo_label = camera2 if servo_camera == "camera2" else camera1
+    raw_error = VisualServoError(
+        wrist_dx_norm=float(servo_label.get("dx_norm", 0.0)),
+        wrist_dy_norm=float(servo_label.get("dy_norm", 0.0)),
+        edge_angle_error=float(servo_label.get("edge_angle_error", 0.0)),
+        stop_prob=1.0 if bool(servo_label.get("visible")) else 0.0,
+        target_area=int(servo_label.get("target_area", 0)),
+    )
+    controller_error = controller_error_for_camera(raw_error, servo_camera)
+    delta_q = (
+        [0.0] * 6
+        if not bool(servo_label.get("visible"))
+        else [
+            float(value)
+            for value in visual_servo_delta_q_for_camera(
+                raw_error,
+                servo_camera,
+                qpos=_action_to_float_list(qpos) if qpos is not None else None,
+            )
+        ]
+    )
+    return {
+        "camera1": _visual_servo_label_trace(camera1),
+        "camera2": _visual_servo_label_trace(camera2),
+        "servo_camera": servo_camera,
+        "servo_selection": servo_selection,
+        "controller_error": {
+            "dx_norm": float(controller_error.wrist_dx_norm),
+            "dy_norm": float(controller_error.wrist_dy_norm),
+            "edge_angle_error": float(controller_error.edge_angle_error),
+        },
+        "stop_prob": float(raw_error.stop_prob),
+        "delta_q": delta_q,
+        "processor_source": "ground_truth_visual_servo_label",
+    }
+
+
+def _visual_servo_error_vector(trace: dict[str, Any], servo_camera: str) -> list[float]:
+    camera = trace.get(servo_camera)
+    if not isinstance(camera, dict) or not bool(camera.get("visible")):
+        return []
+    values = [float(camera.get("dx_norm", 0.0)), float(camera.get("dy_norm", 0.0))]
+    if servo_camera == "camera2":
+        values.append(float(camera.get("edge_angle_error", 0.0)))
+    return values
+
+
+def _visual_servo_label_trace(label: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "dx_norm": float(label.get("dx_norm", 0.0)),
+        "dy_norm": float(label.get("dy_norm", 0.0)),
+        "edge_angle_error": float(label.get("edge_angle_error", 0.0)),
+        "target_area": int(label.get("target_area", 0)),
+        "target_angle_rad": float(label.get("target_angle_rad", 0.0)),
+        "visible": bool(label.get("visible", False)),
+        "visible_prob": 1.0 if bool(label.get("visible", False)) else 0.0,
+    }
+
+
+def _image_payload(pixels: Any) -> dict[str, bytes]:
+    from PIL import Image
+
+    image = Image.fromarray(pixels).convert("RGB")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return {"bytes": buffer.getvalue()}
+
+
+def _visual_servo_should_stop(processed_action: dict[str, Any]) -> bool:
+    prediction = processed_action.get("visual_servo_prediction")
+    if not isinstance(prediction, dict):
+        return False
+    camera = prediction.get(str(prediction.get("servo_camera") or "camera2"))
+    if not isinstance(camera, dict):
+        return False
+    try:
+        strict_stop = (
+            float(prediction.get("stop_prob", 0.0)) >= 0.7
+            and abs(float(camera.get("dx_norm", 1.0))) <= 0.08
+            and abs(float(camera.get("dy_norm", 1.0))) <= 0.08
+            and abs(float(camera.get("edge_angle_error", 1.0))) <= 0.12
+        )
+    except (TypeError, ValueError):
+        return False
+    if strict_stop:
+        return True
+    camera2 = prediction.get("camera2")
+    fallback = prediction.get("waypoint_fallback")
+    if not isinstance(camera2, dict) or not isinstance(fallback, dict):
+        return False
+    try:
+        # ponytail: big wrist-camera target after GT waypoint fallback means the primitive is close enough; stop before drift.
+        return (
+            bool(fallback.get("enabled"))
+            and bool(camera2.get("visible"))
+            and int(camera2.get("target_area", 0)) >= 500
+            and abs(float(camera2.get("dx_norm", 1.0))) <= 0.15
+            and abs(float(camera2.get("dy_norm", 1.0))) <= 0.45
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _gt_teacher_delta_for_start_state(start_state: dict[str, Any], primitive_step: int) -> list[float] | None:
+    source_episode = start_state.get("dataset_source_episode_index")
+    if source_episode is None:
+        source_episode = start_state.get("dataset_episode_index")
+    if source_episode is None:
+        return None
+    root = _gt_teacher_source_root(start_state.get("dataset_root_source"))
+    if root is None:
+        return None
+    sequence = _load_teacher_delta_sequence(str(root), int(source_episode))
+    if not sequence:
+        return None
+    return list(sequence[min(int(primitive_step), len(sequence) - 1)])
+
+
+def _gt_teacher_source_root(root_source: Any) -> Path | None:
+    mapping = {
+        "reachable_eval_v2_delta_q_bins_5_15": Path(
+            "_workspace/so101_lerobot/move_and_align_cube_edge_eval_v2_delta_q_reachable_bins_5_15_seed372000"
+        ),
+    }
+    root = mapping.get(root_source)
+    return Path.cwd() / root if root is not None else None
+
+
+@lru_cache(maxsize=16)
+def _load_teacher_delta_sequence(dataset_root: str, episode_index: int) -> tuple[tuple[float, ...], ...]:
+    import pandas as pd
+
+    root = Path(dataset_root)
+    files = sorted((root / "data").glob("chunk-*/*.parquet"))
+    if not files:
+        return ()
+    table = pd.concat(
+        [pd.read_parquet(path, columns=["episode_index", "frame_index", "action"]) for path in files],
+        ignore_index=True,
+    )
+    episode = table[table["episode_index"] == int(episode_index)].sort_values("frame_index")
+    return tuple(tuple(float(value) for value in action) for action in episode["action"])
+
+
+def _gt_staged_waypoint_for_start_state(start_state: dict[str, Any], primitive_step: int) -> list[float] | None:
+    key = "q_above" if int(primitive_step) < GT_STAGED_WAYPOINT_ABOVE_STEPS else "q_edge"
+    value = start_state.get(key)
+    if value is None:
+        return None
+    return [float(item) for item in value]
+
+
+def _gt_label_nn_staged_waypoint(camera_pixels: dict[str, Any], qpos: Any, primitive_step: int) -> list[float]:
+    import numpy as np
+    from scripts.build_so101_visual_servo_labels import (
+        extract_egocentric_visual_servo_label,
+        extract_wrist_visual_servo_label,
+    )
+
+    bank = _gt_label_nn_waypoint_bank(str(Path.cwd() / GT_LABEL_NN_WAYPOINT_ROOT))
+    camera1 = extract_egocentric_visual_servo_label(_image_payload(camera_pixels["egocentric_cam"]), min_area=20)
+    camera2 = extract_wrist_visual_servo_label(_image_payload(camera_pixels["wrist_cam"]), min_area=20)
+    query = _gt_label_nn_feature(camera1, camera2, _action_to_float_list(qpos))
+    normalized = (query - bank["mean"]) / bank["std"]
+    index = int(np.argmin(np.linalg.norm(bank["features"] - normalized, axis=1)))
+    key = "q_above" if int(primitive_step) < GT_STAGED_WAYPOINT_ABOVE_STEPS else "q_edge"
+    return [float(value) for value in bank[key][index]]
+
+
+@lru_cache(maxsize=2)
+def _gt_label_nn_waypoint_bank(dataset_root: str) -> dict[str, Any]:
+    import numpy as np
+    import pandas as pd
+    from scripts.build_so101_visual_servo_labels import (
+        extract_egocentric_visual_servo_label,
+        extract_wrist_visual_servo_label,
+    )
+
+    root = Path(dataset_root)
+    report_path = root / "so101_lerobot_export_report.json"
+    files = sorted((root / "data").glob("chunk-*/*.parquet"))
+    if not report_path.exists() or not files:
+        raise RuntimeError(f"GT label NN waypoint bank is missing: {root}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    features: list[Any] = []
+    q_above: list[Any] = []
+    q_edge: list[Any] = []
+    # ponytail: in-memory nearest neighbor over 320 demos; replace with an index only if this grows.
+    for path in files:
+        table = pd.read_parquet(
+            path,
+            columns=[
+                "episode_index",
+                "frame_index",
+                "observation.images.camera1",
+                "observation.images.camera2",
+                "observation.state",
+            ],
+        )
+        for _, row in table[table["frame_index"] == 0].iterrows():
+            episode_index = int(row["episode_index"])
+            if episode_index >= len(report.get("episodes", [])):
+                continue
+            episode = report["episodes"][episode_index]
+            if not episode.get("q_above") or not episode.get("q_edge"):
+                continue
+            camera1 = extract_egocentric_visual_servo_label(row["observation.images.camera1"], min_area=20)
+            camera2 = extract_wrist_visual_servo_label(row["observation.images.camera2"], min_area=20)
+            features.append(_gt_label_nn_feature(camera1, camera2, row["observation.state"]))
+            q_above.append([float(value) for value in episode["q_above"][:6]])
+            q_edge.append([float(value) for value in episode["q_edge"][:6]])
+    if not features:
+        raise RuntimeError(f"GT label NN waypoint bank has no usable rows: {root}")
+    feature_array = np.asarray(features, dtype=float)
+    mean = feature_array.mean(axis=0)
+    std = feature_array.std(axis=0)
+    std[std < 1e-6] = 1.0
+    return {
+        "features": (feature_array - mean) / std,
+        "mean": mean,
+        "std": std,
+        "q_above": np.asarray(q_above, dtype=float),
+        "q_edge": np.asarray(q_edge, dtype=float),
+    }
+
+
+def _gt_label_nn_feature(camera1: dict[str, Any], camera2: dict[str, Any], qpos: Any) -> Any:
+    import numpy as np
+
+    area1 = float(camera1.get("target_area", 0)) / 65536.0
+    area2 = float(camera2.get("target_area", 0)) / 65536.0
+    return np.asarray(
+        [
+            float(camera1.get("dx_norm", 0.0)),
+            float(camera1.get("dy_norm", 0.0)),
+            float(camera1.get("edge_angle_error", 0.0)),
+            area1,
+            math.sqrt(max(area1, 0.0)),
+            1.0 if bool(camera1.get("visible")) else 0.0,
+            float(camera2.get("dx_norm", 0.0)),
+            float(camera2.get("dy_norm", 0.0)),
+            float(camera2.get("edge_angle_error", 0.0)),
+            area2,
+            math.sqrt(max(area2, 0.0)),
+            1.0 if bool(camera2.get("visible")) else 0.0,
+            *_action_to_float_list(qpos)[:6],
+        ],
+        dtype=float,
+    )
+
+
+def _action_from_delta_q(obs: Any, delta_q: list[float], *, action_dim: int) -> list[float]:
+    state = _action_to_float_list(obs)
+    if len(state) < action_dim:
+        raise ValueError(f"observation state has {len(state)} dims, expected at least {action_dim}")
+    return [float(state[index] + delta_q[index]) for index in range(action_dim)]
+
+
+def _current_action_qpos(env: Any, fallback_obs: Any, action_dim: int) -> list[float]:
+    gym_env = _gym_env_or_none(env)
+    if gym_env is None:
+        return _action_to_float_list(fallback_obs)[:action_dim]
+    try:
+        qpos = _current_sim_qpos(gym_env)
+    except Exception:  # noqa: BLE001
+        return _action_to_float_list(fallback_obs)[:action_dim]
+    if len(qpos) < action_dim:
+        return _action_to_float_list(fallback_obs)[:action_dim]
+    return qpos[:action_dim]
+
+
+def _clamp_action_to_bounds(action: list[float], bounds: dict[str, Any]) -> list[float]:
+    low = bounds.get("min")
+    high = bounds.get("max")
+    if not low or not high:
+        return action
+    clamped = []
+    for index, value in enumerate(action):
+        if index >= len(low) or index >= len(high):
+            clamped.append(float(value))
+            continue
+        clamped.append(min(max(float(value), float(low[index])), float(high[index])))
+    return clamped
+
+
+def _snap_gripper_to_bounds(action: list[float], bounds: dict[str, Any]) -> list[float]:
+    low = bounds.get("min")
+    high = bounds.get("max")
+    gripper_index = 5
+    if len(action) <= gripper_index or not low or not high or len(low) <= gripper_index or len(high) <= gripper_index:
+        return action
+    snapped = list(action)
+    closed = float(low[gripper_index])
+    open_ = float(high[gripper_index])
+    midpoint = (closed + open_) * 0.5
+    snapped[gripper_index] = open_ if float(snapped[gripper_index]) >= midpoint else closed
+    return snapped
+
+
+def _build_raw_lerobot_observation_for_runner(
+    *,
+    policy: Any,
+    observation: Any,
+    camera_pixels: dict[str, Any],
+    instruction: str | None,
+) -> dict[str, Any]:
+    config = policy.config
+    state_dim = config.robot_state_feature.shape[0] if config.robot_state_feature else min(32, len(observation))
+    try:
+        import torch
+
+        state = torch.zeros(state_dim, dtype=torch.float32)
+        source = torch.tensor(list(observation)[:state_dim], dtype=torch.float32)
+        state[: len(source)] = source
+    except ModuleNotFoundError:
+        state = [0.0] * state_dim
+        for index, value in enumerate(list(observation)[:state_dim]):
+            state[index] = float(value)
+    raw_observation: dict[str, Any] = {
+        "observation.state": state,
+        "task": instruction or "",
+    }
+    for index, (key, feature) in enumerate(config.image_features.items()):
+        source_name = _source_camera_name_for_feature(index, camera_pixels)
+        if source_name in camera_pixels:
+            raw_observation[key] = _pixels_to_lerobot_image_tensor(camera_pixels[source_name], feature.shape)
+    return raw_observation
+
+
+def _source_camera_name_for_feature(index: int, camera_pixels: dict[str, Any]) -> str:
+    preferred = ["egocentric_cam", "wrist_cam", "wrist_cam"]
+    if index < len(preferred):
+        return preferred[index]
+    return next(iter(camera_pixels), "zero")
+
+
+def _pixels_to_lerobot_image_tensor(pixels: Any, feature_shape: tuple[int, ...]) -> Any:
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    channels, height, width = feature_shape
+    if channels != 3:
+        raise ValueError(f"Expected RGB image feature with 3 channels, got {feature_shape}")
+    image = Image.fromarray(pixels).convert("RGB").resize((width, height))
+    array = np.asarray(image, dtype=np.float32) / 255.0
+    return torch.from_numpy(array).permute(2, 0, 1).contiguous()
 
 
 def _run_precondition_call(
@@ -544,26 +1648,40 @@ def _run_precondition_call(
     valid_mask_head: Any,
     valid_mask_threshold: float,
     valid_mask_consecutive: int,
+    action_contract_mode: str,
+    dataset_action_bounds: dict[str, Any],
     batch_builder: BatchBuilder,
 ) -> tuple[dict[str, Any], Any, float, dict[str, Any], bool, bool]:
     policy_path = route_by_primitive[call.primitive_id]
-    policy = _policy_for_route(
-        policy_cache=policy_cache,
-        policy_metadata=policy_metadata,
-        policy_loader=policy_loader,
-        policy_path=policy_path,
-        local_files_only=local_files_only,
-        device=device,
-    )
-    _override_policy_rollout_config(
-        policy,
-        n_action_steps=policy_n_action_steps,
-        num_steps=policy_num_steps,
-    )
-    policy_rollout_config = _policy_rollout_config(policy)
-    policy_metadata.setdefault(policy_path, {}).update({"rollout_config": policy_rollout_config})
-    if hasattr(policy, "reset"):
-        policy.reset()
+    if _action_contract_needs_policy(action_contract_mode):
+        policy_executor = _policy_for_route(
+            policy_cache=policy_cache,
+            policy_metadata=policy_metadata,
+            policy_loader=policy_loader,
+            policy_path=policy_path,
+            local_files_only=local_files_only,
+            device=device,
+        )
+        policy = _policy_model(policy_executor)
+        _override_policy_rollout_config(
+            policy,
+            n_action_steps=policy_n_action_steps,
+            num_steps=policy_num_steps,
+        )
+        policy_rollout_config = _policy_rollout_config(policy)
+        policy_metadata.setdefault(policy_path, {}).update({"rollout_config": policy_rollout_config})
+        if hasattr(policy, "reset"):
+            policy.reset()
+    else:
+        policy_executor = None
+        policy = None
+        policy_rollout_config = _fixed_rollout_config(
+            policy_n_action_steps=policy_n_action_steps,
+            policy_num_steps=policy_num_steps,
+        )
+        policy_metadata.setdefault(policy_path, {}).update(
+            {"rollout_config": policy_rollout_config, "processor_source": "ground_truth_controller"}
+        )
     camera_pixels = _render_policy_cameras(env, renderers)
     _require_policy_cameras(camera_pixels)
     step_budget = (
@@ -571,39 +1689,72 @@ def _run_precondition_call(
         if max_steps_per_primitive is not None
         else int(call.max_steps)
     )
-    valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget(
-        policy=policy,
-        obs=obs,
-        camera_pixels=camera_pixels,
-        instruction=call.prompt,
-        local_files_only=local_files_only,
-        batch_builder=batch_builder,
-        valid_mask_head=valid_mask_head,
-        max_horizon=step_budget,
-        threshold=valid_mask_threshold,
-        consecutive=valid_mask_consecutive,
-    )
-    step_budget = min(step_budget, valid_mask_budget)
+    valid_mask_decisions: list[dict[str, Any]] = []
+    valid_mask_stop_reason = "max_horizon"
     total_reward = 0.0
     final_info: dict[str, Any] = {}
     terminated = False
     truncated = False
-    for _primitive_step in range(step_budget):
-        camera_pixels = _render_policy_cameras(env, renderers)
-        _require_policy_cameras(camera_pixels)
-        batch, _image_feature_mapping = batch_builder(
-            policy,
-            obs,
-            camera_pixels=camera_pixels,
-            instruction=call.prompt,
-            local_files_only=local_files_only,
+    primitive_steps = 0
+    while primitive_steps < step_budget:
+        remaining_budget = step_budget - primitive_steps
+        chunk_horizon = _valid_mask_requery_horizon(
+            policy_rollout_config=policy_rollout_config,
+            policy_n_action_steps=policy_n_action_steps,
+            remaining_budget=remaining_budget,
         )
-        raw_action = policy.select_action(batch)
-        action = _clip_action(_action_to_float_list(raw_action), action_dim)
-        obs, reward, terminated, truncated, info = env.step(action)
-        final_info = dict(info)
-        total_reward += float(reward)
+        if valid_mask_head is None:
+            valid_mask_budget = chunk_horizon
+            valid_mask_reason = "fixed_horizon"
+            valid_mask_probs = []
+        else:
+            valid_mask_budget, valid_mask_reason, valid_mask_probs = _valid_mask_primitive_budget(
+                policy=policy,
+                obs=obs,
+                camera_pixels=camera_pixels,
+                instruction=call.prompt,
+                local_files_only=local_files_only,
+                batch_builder=batch_builder,
+                valid_mask_head=valid_mask_head,
+                max_horizon=chunk_horizon,
+                threshold=valid_mask_threshold,
+                consecutive=valid_mask_consecutive,
+            )
+        execute_steps = min(remaining_budget, chunk_horizon, valid_mask_budget)
+        valid_mask_decision = {
+            "chunk_start_primitive_step": int(primitive_steps),
+            "budget": int(execute_steps),
+            "chunk_horizon": int(chunk_horizon),
+            "reason": valid_mask_reason,
+            "probs": valid_mask_probs,
+        }
+        valid_mask_decisions.append(valid_mask_decision)
+        for _chunk_step in range(execute_steps):
+            camera_pixels = _render_policy_cameras(env, renderers)
+            _require_policy_cameras(camera_pixels)
+            action = _select_env_action_with_trace(
+                policy_executor=policy_executor,
+                policy=policy,
+                obs=obs,
+                action_base_qpos=_current_action_qpos(env, obs, action_dim),
+                gt_waypoint_qpos=None,
+                primitive_step=primitive_steps,
+                camera_pixels=camera_pixels,
+                instruction=call.prompt,
+                action_dim=action_dim,
+                action_contract_mode=action_contract_mode,
+                dataset_action_bounds=dataset_action_bounds,
+            )["action"]
+            obs, reward, terminated, truncated, info = env.step(action)
+            final_info = dict(info)
+            total_reward += float(reward)
+            primitive_steps += 1
+            if terminated or truncated:
+                break
         if terminated or truncated:
+            break
+        if valid_mask_reason == "valid_mask_stop":
+            valid_mask_stop_reason = "valid_mask_stop"
             break
     summary = {
         "fn": call.fn,
@@ -612,11 +1763,11 @@ def _run_precondition_call(
         "policy_path": policy_path,
         "policy_rollout_config": policy_rollout_config,
         "valid_mask": {
-            "budget": int(step_budget),
-            "reason": valid_mask_reason,
-            "probs": valid_mask_probs,
+            "budget": int(primitive_steps),
+            "reason": valid_mask_stop_reason,
+            "decisions": valid_mask_decisions,
         },
-        "steps": int(step_budget),
+        "steps": int(primitive_steps),
         "reward": total_reward,
         "terminated": bool(terminated),
         "truncated": bool(truncated),
@@ -661,9 +1812,10 @@ def _apply_start_contract_to_env(
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"failed to apply SO101 start_contract={contract!r}: {_short_error(exc)}") from exc
     sim_snapshot = details.get("sim_snapshot") if isinstance(details, dict) else None
-    if sim_snapshot:
+    if sim_snapshot and _can_restore_sim_state(gym_env):
         _restore_sim_state(gym_env, sim_snapshot)
     else:
+        _set_forced_object_xy(gym_env, details.get("forced_spawn_xy"))
         _set_sim_qpos(gym_env, qpos)
     observation = _current_sim_qpos(gym_env)
     details.update(
@@ -703,6 +1855,11 @@ def _dataset_backed_start_qpos(
         "move_and_align_cube_edge": ("move_and_align_cube_edge", "validation", "move_and_align_q_start"),
         "pick_up_reset": ("grip_from_edge_cube", "validation", "grip_from_edge_q_start"),
         "grip_from_edge_cube": ("grip_from_edge_cube", "validation", "grip_from_edge_q_start"),
+        "grip_from_above_edge_cube": (
+            "grip_from_above_edge_cube",
+            "validation",
+            "grip_from_above_edge_q_start",
+        ),
     }
     if contract not in mapping:
         return None, {}
@@ -768,6 +1925,9 @@ def _dataset_backed_start_qpos(
         "dataset_object_color": selected.get("object_color"),
         "dataset_object_shape": selected.get("object_shape"),
         "dataset_task": selected.get("task"),
+        "dataset_root_source": selected.get("root_source"),
+        "dataset_source_episode_index": selected.get("source_episode_index"),
+        "forced_spawn_xy": selected.get("forced_spawn_xy"),
         "q_start": q_start,
         "sim_snapshot": selected.get("sim_snapshot"),
         "q_edge": selected.get("q_edge"),
@@ -807,6 +1967,10 @@ def _fixed_jaw_edge_start_qpos(gym_env: Any, *, contract: str, seed: int) -> tup
         q_start = q_edge.copy()
         q_start[-1] = helpers["_open_gripper_value"](gym_env)
         phase = "edge_contact_open_gripper"
+    elif contract == "grip_from_above_edge_cube":
+        q_start = q_above.copy()
+        q_start[-1] = helpers["_open_gripper_value"](gym_env)
+        phase = "edge_above_open_gripper"
     else:
         raise ValueError(f"unknown SO101 start_contract: {contract}")
     helpers["_set_qpos"](gym_env, q_start)
@@ -857,6 +2021,33 @@ def _set_sim_qpos(gym_env: Any, qpos: Any) -> None:
     helpers["_set_qpos"](gym_env, qpos)
 
 
+def _set_forced_object_xy(gym_env: Any, xy: Any) -> None:
+    if xy is None:
+        return
+    import numpy as np
+
+    unwrapped = getattr(gym_env, "unwrapped", gym_env)
+    slots = getattr(unwrapped, "_slots", None)
+    slot_index = getattr(unwrapped, "_target_slot_idx", None)
+    data = getattr(unwrapped, "data", None)
+    if slots is None or slot_index is None or data is None:
+        return
+    slot = slots[int(slot_index)]
+    addr = int(slot.qpos_addr)
+    data.qpos[addr : addr + 2] = np.asarray(xy, dtype=float)[:2]
+    data.qpos[addr + 2] = float(slot.spawn_z)
+    if hasattr(data, "qvel"):
+        data.qvel[:] = 0.0
+    try:
+        import mujoco
+
+        mujoco.mj_forward(unwrapped.model, data)
+    except Exception:
+        pass
+    if hasattr(unwrapped, "_refresh_reset_reference_state"):
+        unwrapped._refresh_reset_reference_state()
+
+
 def _current_sim_qpos(gym_env: Any) -> list[float]:
     helpers = _fixed_jaw_export_helpers()
     return [float(value) for value in helpers["_current_qpos"](gym_env)]
@@ -890,15 +2081,20 @@ def _restore_sim_state(gym_env: Any, snapshot: dict[str, Any]) -> None:
         if target is None:
             continue
         values = list(snapshot[key])
-        if len(values) != len(target):
+        if len(values) < len(target):
             raise ValueError(f"sim_snapshot.{key} length {len(values)} does not match env {key} length {len(target)}")
-        target[:] = values
+        target[:] = values[: len(target)]
     try:
         import mujoco
 
         mujoco.mj_forward(unwrapped.model, data)
     except Exception:
         pass
+
+
+def _can_restore_sim_state(gym_env: Any) -> bool:
+    unwrapped = getattr(gym_env, "unwrapped", gym_env)
+    return getattr(unwrapped, "data", None) is not None
 
 
 def _override_policy_rollout_config(
@@ -987,6 +2183,50 @@ def _valid_mask_primitive_budget(
     return int(horizon), reason, [float(value) for value in valid_probs[: int(max_horizon)]]
 
 
+def _valid_mask_primitive_budget_from_chunk(
+    *,
+    processed_observation: Any,
+    action_chunk: Any,
+    fallback_obs: Any,
+    valid_mask_head: Any,
+    max_horizon: int,
+    threshold: float,
+    consecutive: int,
+) -> tuple[int, str, list[float]]:
+    state_for_head = (
+        processed_observation.get("observation.state", fallback_obs)
+        if isinstance(processed_observation, dict)
+        else fallback_obs
+    )
+    valid_probs_tensor = valid_mask_head.predict_valid_probs(state_for_head, action_chunk)
+    valid_probs = _valid_probs_to_float_list(
+        valid_probs_tensor[0] if hasattr(valid_probs_tensor, "__getitem__") else valid_probs_tensor
+    )
+    horizon, reason = _execution_horizon_from_valid_probs(
+        valid_probs,
+        max_horizon=max_horizon,
+        threshold=threshold,
+        consecutive=consecutive,
+    )
+    return int(horizon), reason, [float(value) for value in valid_probs[: int(max_horizon)]]
+
+
+def _valid_mask_requery_horizon(
+    *,
+    policy_rollout_config: dict[str, Any],
+    policy_n_action_steps: int | None,
+    remaining_budget: int,
+) -> int:
+    candidates = [max(1, int(remaining_budget))]
+    if policy_n_action_steps is not None:
+        candidates.append(max(1, int(policy_n_action_steps)))
+    else:
+        configured_steps = policy_rollout_config.get("n_action_steps")
+        if configured_steps is not None:
+            candidates.append(max(1, int(configured_steps)))
+    return min(candidates)
+
+
 def _execution_horizon_from_valid_probs(
     valid_probs: Any,
     *,
@@ -994,8 +2234,11 @@ def _execution_horizon_from_valid_probs(
     threshold: float,
     consecutive: int,
 ) -> tuple[int, str]:
+    probs = _valid_probs_to_float_list(valid_probs)
     horizon = max(1, int(max_horizon))
-    stop_index = _first_invalid_step(valid_probs, threshold=threshold, consecutive=consecutive)
+    if probs:
+        horizon = min(horizon, len(probs))
+    stop_index = _first_invalid_step(probs[:horizon], threshold=threshold, consecutive=consecutive)
     if stop_index is None:
         return horizon, "max_horizon"
     return max(1, min(horizon, int(stop_index))), "valid_mask_stop"
@@ -1179,6 +2422,10 @@ def _action_to_float_list(value: Any) -> list[float]:
     if isinstance(value, (list, tuple)):
         return [float(item) for item in value]
     return _tensor_to_float_list(value)
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _jsonable_info(info: dict[str, Any]) -> dict[str, Any]:

@@ -489,6 +489,30 @@
       }
     },
     {
+      "name": "move_and_align_cube_edge_train_v2",
+      "contract": "skill_dataset_contract",
+      "dataset": "move_and_align_cube_edge_v2",
+      "split": "train",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_300_ego_wrist_256_seed124000",
+      "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-300-ego-wrist-256",
+      "episodes": 300,
+      "seed": 124000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "move_and_align_cube_edge",
+        "approach_steps": 32,
+        "settle_steps": 4,
+        "terminal_hold_steps": 20,
+        "move_and_align_near_target_correction_ratio": 0.5,
+        "near_target_joint_std": 0.075,
+        "near_target_xy_std": 0.025,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "max_attempt_multiplier": 1200
+      }
+    },
+    {
       "name": "move_and_align_cube_edge_validation",
       "contract": "skill_dataset_contract",
       "dataset": "move_and_align_cube_edge",
@@ -589,6 +613,87 @@
         "lift_steps": 30,
         "move_target_z_offset": 0.06,
         "target_object_color": "green",
+        "max_attempt_multiplier": 600
+      }
+    },
+    {
+      "name": "grip_from_above_edge_cube_dense_true256_hold20_train",
+      "contract": "skill_dataset_contract",
+      "dataset": "grip_from_above_edge_cube",
+      "split": "train",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/grip_from_above_edge_cube_dense_true256_hold20_train200_seed134000",
+      "repo_id": "physical-ai-agent/so101-grip-from-above-edge-cube-dense-true256-hold20-train200",
+      "episodes": 200,
+      "seed": 134000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "grip_from_above_edge_cube",
+        "approach_steps": 8,
+        "settle_steps": 4,
+        "close_steps": 18,
+        "lift_steps": 30,
+        "terminal_hold_steps": 20,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "above_edge_start_joint_std": 0.045,
+        "above_edge_start_xy_std": 0.012,
+        "above_edge_start_z_std": 0.012,
+        "above_edge_start_min_actual_z": 0.03,
+        "max_attempt_multiplier": 600
+      }
+    },
+    {
+      "name": "grip_from_above_edge_cube_dense_true256_hold20_val",
+      "contract": "skill_dataset_contract",
+      "dataset": "grip_from_above_edge_cube",
+      "split": "validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/grip_from_above_edge_cube_dense_true256_hold20_valid50_seed135000",
+      "repo_id": "physical-ai-agent/so101-grip-from-above-edge-cube-dense-true256-hold20-valid50",
+      "episodes": 50,
+      "seed": 135000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "grip_from_above_edge_cube",
+        "approach_steps": 8,
+        "settle_steps": 4,
+        "close_steps": 18,
+        "lift_steps": 30,
+        "terminal_hold_steps": 20,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "above_edge_start_joint_std": 0.045,
+        "above_edge_start_xy_std": 0.012,
+        "above_edge_start_z_std": 0.012,
+        "above_edge_start_min_actual_z": 0.03,
+        "max_attempt_multiplier": 600
+      }
+    },
+    {
+      "name": "grip_from_above_edge_cube_dense_true256_hold20_loop_validation",
+      "contract": "skill_dataset_contract",
+      "dataset": "grip_from_above_edge_cube",
+      "split": "loop_validation",
+      "script": "scripts/export_so101_teacher_rollouts_lerobot.py",
+      "root": "_workspace/so101_lerobot/grip_from_above_edge_cube_dense_true256_hold20_loop_validation10_seed136000",
+      "repo_id": "physical-ai-agent/so101-grip-from-above-edge-cube-dense-true256-hold20-loop-validation10",
+      "episodes": 10,
+      "seed": 136000,
+      "args": {
+        "teacher_style": "staged",
+        "skill_mode": "grip_from_above_edge_cube",
+        "approach_steps": 8,
+        "settle_steps": 4,
+        "close_steps": 18,
+        "lift_steps": 30,
+        "terminal_hold_steps": 20,
+        "move_target_z_offset": 0.06,
+        "target_object_color": "green",
+        "above_edge_start_joint_std": 0.045,
+        "above_edge_start_xy_std": 0.012,
+        "above_edge_start_z_std": 0.012,
+        "above_edge_start_min_actual_z": 0.03,
         "max_attempt_multiplier": 600
       }
     }

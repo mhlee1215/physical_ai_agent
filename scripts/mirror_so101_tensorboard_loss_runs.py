@@ -14,7 +14,7 @@ def main() -> None:
     args = _parse_args()
     run_dir = args.run_dir.resolve()
     log_root = run_dir / "tensorboard"
-    source = log_root / args.source_run
+    source = log_root / args.source_run if args.source_run else log_root
     state_path = args.state_path or run_dir / "metrics" / "important_loss_mirror_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     seen = _load_seen(state_path)
@@ -45,7 +45,7 @@ def _parse_args() -> argparse.Namespace:
         description="Mirror SO101 train/val loss into important/* TensorBoard scalar tags.",
     )
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--source-run", default="so101_smolvla")
+    parser.add_argument("--source-run", default="")
     parser.add_argument("--state-path", type=Path)
     parser.add_argument("--interval-s", type=float, default=60.0)
     parser.add_argument("--until-pid", type=int)

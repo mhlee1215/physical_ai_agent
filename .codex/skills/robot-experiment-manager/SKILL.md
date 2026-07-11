@@ -22,15 +22,22 @@ and future robot platforms.
   explicitly asks for that exact cleanup.
 - Keep raw datasets, checkpoints, rollout media, TensorBoard logs, and other
   artifacts out of PRs.
+- When a loop-test GIF is checked into a PR or research note as review evidence,
+  generate it with the same TensorBoard closed-loop media renderer used for
+  `closed_loop/<test_id>/rollout_camera1_camera2_episode_*`. Do not copy the raw
+  per-episode rollout GIF directly if TensorBoard shows a side-by-side labeled
+  camera view.
 - Prefer config/contract registration for repeatable datasets and tests. Use
   env discovery only for temporary local POC inspection.
 
 ## Quick Start
 
-Run the dashboard:
+Run the dashboard through `launchctl`. Do not use `nohup ... &` for this
+server; Codex command cleanup can reap that child process even when the app did
+not crash.
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/serve_so101_dataset_viewer.py --host 0.0.0.0 --port 8768
+sh scripts/launch_so101_dataset_viewer.sh restart
 ```
 
 Check the current server:
@@ -39,6 +46,18 @@ Check the current server:
 lsof -nP -iTCP:8768 -sTCP:LISTEN || true
 curl -s http://127.0.0.1:8768/api/datasets | python3 -m json.tool >/dev/null
 ```
+
+Lifecycle commands:
+
+```bash
+sh scripts/launch_so101_dataset_viewer.sh status
+sh scripts/launch_so101_dataset_viewer.sh stop
+sh scripts/launch_so101_dataset_viewer.sh restart
+```
+
+The LaunchAgent label is `com.physical-ai-agent.dataset-viewer`; logs are
+written to `_workspace/logs/dataset_viewer_8768.launchd.log` and
+`_workspace/logs/dataset_viewer_8768.launchd.err.log`.
 
 Validate edits before reporting completion:
 
@@ -56,4 +75,3 @@ Read `references/experiment-manager.md` before making non-trivial changes to:
 - training run or checkpoint discovery
 - closed-loop test case configuration or analyzer export wiring
 - interactive simulator presets, prompts, continuation, or media rendering
-

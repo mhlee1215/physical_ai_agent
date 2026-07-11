@@ -119,7 +119,57 @@ def merge_shards(
     report_path = output_root / "so101_lerobot_merge_report.json"
     report["report_path"] = str(report_path)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    export_report = _merged_export_report(
+        output_root=output_root,
+        repo_id=repo_id,
+        shard_reports=shard_reports,
+        merged_episodes=merged_episodes,
+        audit=audit,
+    )
+    export_report_path = output_root / "so101_lerobot_export_report.json"
+    export_report["report_path"] = str(export_report_path)
+    export_report_path.write_text(json.dumps(export_report, indent=2, sort_keys=True), encoding="utf-8")
     return report
+
+
+def _merged_export_report(
+    *,
+    output_root: Path,
+    repo_id: str,
+    shard_reports: list[dict[str, Any]],
+    merged_episodes: int,
+    audit: dict[str, Any],
+) -> dict[str, Any]:
+    first = dict(shard_reports[0])
+    episodes = []
+    skipped = []
+    for shard in shard_reports:
+        episodes.extend(shard.get("episodes") or [])
+        skipped.extend(shard.get("skipped") or [])
+    first.update(
+        {
+            "operation": "merge_so101_lerobot_shards_export_report",
+            "root": str(output_root),
+            "repo_id": repo_id,
+            "requested_episodes": int(merged_episodes),
+            "exported_episodes": int(merged_episodes),
+            "attempted_seeds": sum(int(shard.get("attempted_seeds", 0)) for shard in shard_reports),
+            "episodes": episodes,
+            "skipped": skipped,
+            "audit": audit,
+            "merged_from_shards": [
+                {
+                    "root": shard.get("root"),
+                    "repo_id": shard.get("repo_id"),
+                    "exported_episodes": shard.get("exported_episodes"),
+                    "attempted_seeds": shard.get("attempted_seeds"),
+                    "dataset_generation_augmentation": shard.get("dataset_generation_augmentation"),
+                }
+                for shard in shard_reports
+            ],
+        }
+    )
+    return first
 
 
 def _load_shard_report(root: Path) -> dict[str, Any]:

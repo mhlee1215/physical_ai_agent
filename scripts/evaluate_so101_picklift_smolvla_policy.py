@@ -26,6 +26,7 @@ from train_so101_wrist_ego_visual_servo import (
     WristEgoServoConfig,
     _current_qpos,
     _make_policy_renderers,
+    _restore_sim_state,
     _set_qpos,
     make_teacher_targets,
     make_high_contrast_picklift_env,
@@ -42,6 +43,10 @@ from export_so101_pickplace_teacher_rollouts_lerobot import _make_pickplace_env
 TASK = "Grasp the visible cube and lift it up."
 PICK_FROM_TOP_TASK = "From above the visible cube, grasp it and lift it up."
 PICK_AND_PLACE_TASK = "Pick up the small red cube and place it on the blue circle."
+POLICY_DISPLAY_IMAGE_FEATURE_MAPPING = {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam",
+}
 
 
 def main() -> None:
@@ -63,9 +68,15 @@ def main() -> None:
     parser.add_argument("--policy-n-action-steps", type=int, default=None)
     parser.add_argument("--policy-num-steps", type=int, default=None)
     parser.add_argument("--task-prompt", default=None)
+    parser.add_argument("--env-object-color", default=None)
+    parser.add_argument(
+        "--start-report-path",
+        type=Path,
+        help="LeRobot export report whose episode sim_snapshot entries define closed-loop start states.",
+    )
     parser.add_argument(
         "--eval-skill-mode",
-        choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
+        choices=["picklift", "pick_from_top_cube", "pick_and_place_cube", "grip_the_cube_v1"],
         default="picklift",
     )
     parser.add_argument("--pick-start-min-actual-z", type=float, default=0.05)
@@ -123,6 +134,8 @@ def main() -> None:
         policy_n_action_steps=args.policy_n_action_steps,
         policy_num_steps=args.policy_num_steps,
         task_prompt=args.task_prompt,
+        env_object_color=args.env_object_color,
+        start_report_path=args.start_report_path,
         eval_skill_mode=args.eval_skill_mode,
         pick_start_min_actual_z=args.pick_start_min_actual_z,
         pick_start_min_actual_abs_y=args.pick_start_min_actual_abs_y,
@@ -163,6 +176,8 @@ def evaluate_smolvla_picklift(
     policy_n_action_steps: int | None = None,
     policy_num_steps: int | None = None,
     task_prompt: str | None = None,
+    env_object_color: str | None = None,
+    start_report_path: Path | None = None,
     eval_skill_mode: str = "picklift",
     pick_start_min_actual_z: float = 0.05,
     pick_start_min_actual_abs_y: float = 0.015,
@@ -202,8 +217,11 @@ def evaluate_smolvla_picklift(
             raise ValueError("--valid-mask-checkpoint is required when --subgoal-chain-mode=valid-mask")
         selected_device = str(_policy_device_metadata(policy).get("device_selected") or getattr(policy.config, "device", "cpu"))
         valid_mask_head = load_valid_mask_head(valid_mask_checkpoint, device=selected_device)
+    start_report_episodes = _load_start_report_episodes(start_report_path)
+    start_report_object_color = _start_report_object_color(start_report_episodes)
+    resolved_env_object_color = env_object_color or start_report_object_color
     config = WristEgoServoConfig(width=width, height=height)
-    env = _make_eval_env(eval_skill_mode)
+    env = _make_eval_env(eval_skill_mode, target_object_color=resolved_env_object_color)
     renderers = _make_policy_renderers(env, config)
     rows = []
     resolved_task_prompt = task_prompt or _default_task_prompt(eval_skill_mode)
@@ -216,6 +234,11 @@ def evaluate_smolvla_picklift(
                 episode=episode,
                 seed=seed + episode,
                 eval_skill_mode=eval_skill_mode,
+                start_report_episode=(
+                    start_report_episodes[episode % len(start_report_episodes)]
+                    if start_report_episodes
+                    else None
+                ),
                 pick_start_min_actual_z=pick_start_min_actual_z,
                 pick_start_min_actual_abs_y=pick_start_min_actual_abs_y,
                 pick_start_max_actual_abs_y=pick_start_max_actual_abs_y,
@@ -312,6 +335,12 @@ def evaluate_smolvla_picklift(
         },
         "use_policy_processors": bool(preprocessor is not None and postprocessor is not None),
         "torch_seed": torch_seed,
+        "env_config": {
+            "object_shape": "cube",
+            "object_color": resolved_env_object_color,
+            "source": "start_report_path" if start_report_path is not None else "evaluator_default",
+        },
+        "start_report_path": str(start_report_path) if start_report_path is not None else None,
         "policy_rollout_config": _policy_rollout_config(policy),
         "feature_mapping": {
             "observation.images.camera1": "egocentric_cam",
@@ -339,13 +368,69 @@ def evaluate_smolvla_picklift(
     return report
 
 
-def _make_eval_env(eval_skill_mode: str) -> Any:
+def _load_start_report_episodes(start_report_path: Path | None) -> list[dict[str, Any]]:
+    if start_report_path is None:
+        return []
+    report = json.loads(Path(start_report_path).read_text(encoding="utf-8"))
+    episodes = report.get("episodes")
+    if not isinstance(episodes, list) or not episodes:
+        raise ValueError(f"closed-loop start report has no episodes: {start_report_path}")
+    missing = [
+        index
+        for index, episode in enumerate(episodes)
+        if not isinstance(episode, dict) or not isinstance(episode.get("sim_snapshot"), dict)
+    ]
+    if missing:
+        raise ValueError(f"closed-loop start report episodes missing sim_snapshot: {missing[:8]}")
+    return [dict(episode) for episode in episodes]
+
+
+def _start_report_object_color(start_report_episodes: list[dict[str, Any]]) -> str | None:
+    colors = {
+        str(episode.get("object_color") or "").strip().lower()
+        for episode in start_report_episodes
+        if episode.get("object_color")
+    }
+    colors.discard("")
+    if not colors:
+        return None
+    if len(colors) > 1:
+        raise ValueError(f"closed-loop start report mixes object colors: {sorted(colors)}")
+    return next(iter(colors))
+
+
+def _restore_report_start_state(env: Any, episode: dict[str, Any]) -> dict[str, Any]:
+    snapshot = episode.get("sim_snapshot")
+    if not isinstance(snapshot, dict):
+        raise ValueError("closed-loop start episode missing sim_snapshot")
+    restored = {
+        key: np.asarray(snapshot[key], dtype=float)
+        for key in ("qpos", "qvel", "ctrl")
+        if key in snapshot
+    }
+    missing = {"qpos", "qvel", "ctrl"} - set(restored)
+    if missing:
+        raise ValueError(f"closed-loop start sim_snapshot missing fields: {sorted(missing)}")
+    _restore_sim_state(env, restored)
+    return {
+        "mode": "start_report_snapshot",
+        "source_episode_seed": episode.get("seed"),
+        "source_episode_task": episode.get("task"),
+        "source_episode_object_color": episode.get("object_color"),
+        "source_episode_grid_bin": episode.get("grid_balance_bin", episode.get("desired_grid_bin")),
+        "source_episode_success": episode.get("success"),
+    }
+
+
+def _make_eval_env(eval_skill_mode: str, *, target_object_color: str | None = None) -> Any:
     if eval_skill_mode == "pick_and_place_cube":
         return _make_pickplace_env()
-    return make_high_contrast_picklift_env()
+    return make_high_contrast_picklift_env(target_object_color=target_object_color)
 
 
 def _default_task_prompt(eval_skill_mode: str) -> str:
+    if eval_skill_mode == "grip_the_cube_v1":
+        return "grip the green cube and lift"
     if eval_skill_mode == "pick_from_top_cube":
         return PICK_FROM_TOP_TASK
     if eval_skill_mode == "pick_and_place_cube":
@@ -386,7 +471,9 @@ def _run_episode(
     frames = []
     camera_samples: dict[str, list[np.ndarray]] = {"camera1": [], "camera2": []}
     info = env.unwrapped._get_info()
-    image_feature_mapping = {}
+    image_feature_mapping = dict(POLICY_DISPLAY_IMAGE_FEATURE_MAPPING)
+    trace_path = output_dir / "traces" / f"episode_{episode:03d}_seed_{seed}_policy_inputs.jsonl"
+    trace_rows: list[dict[str, Any]] = []
     sample_every = max(1, max_steps // max(1, int(sample_input_grid_count)))
     active_chain = subgoal_chain_mode != "off" and bool(subgoal_sequence)
     subgoal_index = 0
@@ -432,11 +519,7 @@ def _run_episode(
                 camera_pixels=camera_pixels,
                 task_prompt=current_task_prompt,
             )
-            image_feature_mapping = {
-                "observation.images.camera1": "egocentric_cam",
-                "observation.images.camera2": "wrist_cam",
-                "observation.images.camera3": "wrist_cam",
-            }
+            image_feature_mapping = dict(POLICY_DISPLAY_IMAGE_FEATURE_MAPPING)
         else:
             batch, image_feature_mapping = _build_batch_for_policy(
                 policy,
@@ -445,7 +528,30 @@ def _run_episode(
                 instruction=current_task_prompt,
                 local_files_only=True,
             )
+            image_feature_mapping = {
+                key: value
+                for key, value in image_feature_mapping.items()
+                if key in POLICY_DISPLAY_IMAGE_FEATURE_MAPPING
+            }
             raw_action = policy.select_action(batch)
+        media_paths = _write_policy_trace_images(
+            camera_pixels=camera_pixels,
+            output_dir=output_dir,
+            episode=episode,
+            seed=seed,
+            step=step,
+            enabled=record_rollout_gif,
+        )
+        if media_paths:
+            trace_rows.append(
+                {
+                    "episode": int(episode),
+                    "global_step": int(step),
+                    "prompt": current_task_prompt,
+                    "image_feature_mapping": dict(POLICY_DISPLAY_IMAGE_FEATURE_MAPPING),
+                    "media": {"policy_input_images": media_paths},
+                }
+            )
         action = np.asarray(_tensor_to_float_list(raw_action)[:6], dtype=float)
         if action.shape[0] < 6:
             action = np.pad(action, (0, 6 - action.shape[0]))
@@ -497,6 +603,7 @@ def _run_episode(
         episode=episode,
         seed=seed,
     )
+    written_trace_path = _write_policy_trace(trace_path, trace_rows)
     final_is_grasped = float(info.get("is_grasped", 0.0))
     final_lift_height = float(info.get("lift_height", 0.0))
     final_is_obj_placed = bool(info.get("is_obj_placed", False))
@@ -526,6 +633,7 @@ def _run_episode(
         "final_tcp_to_obj_dist": float(info.get("tcp_to_obj_dist", 0.0)),
         "final_obj_to_target_dist": final_obj_to_target_dist,
         "image_feature_mapping": image_feature_mapping,
+        "trace_path": written_trace_path,
         "rollout_gif": gif_path,
         "rollout_mp4": mp4_path,
         "input_grid_paths": input_grid_paths,
@@ -651,6 +759,7 @@ def _reset_episode(
     episode: int,
     seed: int,
     eval_skill_mode: str,
+    start_report_episode: dict[str, Any] | None,
     pick_start_min_actual_z: float,
     pick_start_min_actual_abs_y: float,
     pick_start_max_actual_abs_y: float,
@@ -658,9 +767,14 @@ def _reset_episode(
     pick_start_joint_std: float,
     pick_start_max_attempts: int,
 ) -> dict[str, Any]:
-    if eval_skill_mode == "picklift":
+    if start_report_episode is not None:
+        env.reset(seed=int(start_report_episode.get("seed") or seed))
+        meta = _restore_report_start_state(env, start_report_episode)
+        meta["reset_seed"] = int(start_report_episode.get("seed") or seed)
+        return meta
+    if eval_skill_mode in {"picklift", "grip_the_cube_v1"}:
         env.reset(seed=seed)
-        return {"mode": "picklift", "reset_seed": seed}
+        return {"mode": eval_skill_mode, "reset_seed": seed}
     if eval_skill_mode == "pick_and_place_cube":
         env.reset(seed=seed)
         return {"mode": "pick_and_place_cube", "reset_seed": seed}
@@ -863,6 +977,41 @@ def _write_policy_input_grids(
         _write_png(path, grid)
         paths[camera_name] = str(path)
     return paths
+
+
+def _write_policy_trace_images(
+    *,
+    camera_pixels: dict[str, np.ndarray],
+    output_dir: Path,
+    episode: int,
+    seed: int,
+    step: int,
+    enabled: bool,
+) -> dict[str, str]:
+    if not enabled:
+        return {}
+    frame_dir = output_dir / "policy_input_frames" / f"episode_{episode:03d}_seed_{seed}"
+    frame_dir.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, str] = {}
+    for camera_name in ("egocentric_cam", "wrist_cam"):
+        image = camera_pixels.get(camera_name)
+        if image is None:
+            continue
+        path = frame_dir / f"step_{step:04d}_{camera_name}.png"
+        _write_png(path, np.asarray(image, dtype=np.uint8))
+        paths[camera_name] = str(path)
+    return paths
+
+
+def _write_policy_trace(trace_path: Path, rows: list[dict[str, Any]]) -> str | None:
+    if not rows:
+        return None
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    return str(trace_path)
 
 
 def _make_hwc_grid(images: list[np.ndarray]) -> np.ndarray:

@@ -127,6 +127,23 @@
         "object_color": "green"
       }
     },
+    "move_and_align_cube_edge_v2": {
+      "task": "move_and_align_cube_edge",
+      "description": "Generated teacher trajectory dataset for move_and_align_cube_edge with terminal hold frames and near-target correction trajectories. This is dataset-generation augmentation, not train-time image/state augmentation.",
+      "start_mode": "mixed_home_closed_and_near_target_correction_to_fixed_jaw_at_cube_edge_open",
+      "generation_augmentation": {
+        "generated_teacher_trajectories": true,
+        "terminal_hold_included": true,
+        "terminal_hold_steps": 20,
+        "near_target_correction_included": true,
+        "near_target_correction_ratio": 0.5
+      },
+      "train": {
+        "repo_id": "physical-ai-agent/so101-move-and-align-cube-edge-train-v2-300-ego-wrist-256",
+        "root": "_workspace/so101_lerobot/move_and_align_cube_edge_train_v2_300_ego_wrist_256_seed124000",
+        "expected_episodes": 300
+      }
+    },
     "grip_from_edge_cube": {
       "task": "grip_from_edge_cube",
       "description": "Start from the align_fixed_jaw_cube_edge final pose, keep the static finger pad at the cube edge, close the gripper, and lift the cube.",
@@ -144,6 +161,31 @@
       "loop_validation": {
         "repo_id": "physical-ai-agent/so101-grip-from-edge-cube-loop-validation10-ego-wrist-256",
         "root": "_workspace/so101_lerobot/grip_from_edge_cube_loop_validation10_ego_wrist_256_seed121000",
+        "expected_episodes": 10,
+        "object_color": "green"
+      }
+    },
+    "grip_from_above_edge_cube": {
+      "task": "grip_from_above_edge_cube",
+      "description": "Start slightly above one visible cube edge, descend/align to the edge, close the gripper, lift the cube, and hold the final grasp pose for terminal stability.",
+      "start_mode": "fixed_jaw_above_cube_edge_open",
+      "generation_augmentation": {
+        "terminal_hold_included": true,
+        "terminal_hold_steps": 20
+      },
+      "train": {
+        "repo_id": "physical-ai-agent/so101-grip-from-above-edge-cube-dense-true256-hold20-train200",
+        "root": "_workspace/so101_lerobot/grip_from_above_edge_cube_dense_true256_hold20_train200_seed134000",
+        "expected_episodes": 200
+      },
+      "validation": {
+        "repo_id": "physical-ai-agent/so101-grip-from-above-edge-cube-dense-true256-hold20-valid50",
+        "root": "_workspace/so101_lerobot/grip_from_above_edge_cube_dense_true256_hold20_valid50_seed135000",
+        "expected_episodes": 50
+      },
+      "loop_validation": {
+        "repo_id": "physical-ai-agent/so101-grip-from-above-edge-cube-dense-true256-hold20-loop-validation10",
+        "root": "_workspace/so101_lerobot/grip_from_above_edge_cube_dense_true256_hold20_loop_validation10_seed136000",
         "expected_episodes": 10,
         "object_color": "green"
       }

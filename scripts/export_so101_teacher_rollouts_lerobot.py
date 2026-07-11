@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from evaluate_so101_picklift_image_policy import detect_colored_object
+from physical_ai_agent.so101_resolution_contract import require_so101_image_resolution
 from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE, _make_camera, postprocess_camera_frame
 from physical_ai_agent.sim.so101_live_viewer import _cartesian_error_controller_action
 from train_so101_wrist_ego_picklift_policy import sweep_until_visible
@@ -27,6 +29,24 @@ from train_so101_wrist_ego_visual_servo import (
 )
 
 
+def _clear_episode_buffer_robust(dataset: Any, *, attempts: int = 5) -> None:
+    last_error: Exception | None = None
+    for index in range(max(1, int(attempts))):
+        try:
+            dataset.clear_episode_buffer()
+            return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.05 * float(index + 1))
+    if last_error is not None:
+        raise last_error
+
+
+def _json_safe_sim_snapshot(env: Any) -> dict[str, list[float]]:
+    snapshot = _snapshot_sim_state(env)
+    return {key: [float(value) for value in values] for key, values in snapshot.items()}
+
+
 TASK = "Grasp the visible cube and lift it up."
 SKILL_TASKS = {
     "pick_cube": TASK,
@@ -36,21 +56,27 @@ SKILL_TASKS = {
     "align_fixed_jaw_cube_edge": "Align the gripper jaws around one visible cube edge.",
     "move_and_align_cube_edge": "Move the gripper above one visible cube edge and align the jaws around it.",
     "grip_from_edge_cube": "Close the gripper on the cube edge and lift.",
+    "grip_from_above_edge_cube": "Move down from above the cube edge, close the gripper, and lift.",
+    "grip_the_cube_v1": "Grip the cube and lift.",
 }
 COLOR_SHAPE_SKILL_TASK_TEMPLATES = {
-    "pick_cube": "Grasp the visible {color} {shape} and lift it up.",
+    "pick_cube": "grip the {color} {shape} and lift",
     "move_over_cube": "Move the gripper over the visible {color} {shape}.",
-    "pick_from_top_cube": "From above the visible {color} {shape}, grasp it and lift it up.",
+    "pick_from_top_cube": "grip the {color} {shape} and lift",
     "move_over_cube_edge": "Move the gripper above one visible {color} {shape} edge.",
     "align_fixed_jaw_cube_edge": "Align the gripper jaws around one visible {color} {shape} edge.",
     "move_and_align_cube_edge": "Move above one visible {color} {shape} edge and align the gripper jaws around it.",
-    "grip_from_edge_cube": "Close the gripper on the {color} {shape} edge and lift.",
+    "grip_from_edge_cube": "grip the {color} {shape} and lift",
+    "grip_from_above_edge_cube": "grip the {color} {shape} and lift",
+    "grip_the_cube_v1": "grip the {color} {shape} and lift",
 }
 FIXED_JAW_SKILL_MODES = {
     "move_over_cube_edge",
     "align_fixed_jaw_cube_edge",
     "move_and_align_cube_edge",
     "grip_from_edge_cube",
+    "grip_from_above_edge_cube",
+    "grip_the_cube_v1",
 }
 STATE_NAMES = [
     "shoulder_pan",
@@ -71,8 +97,9 @@ def main() -> None:
     parser.add_argument("--episodes", type=int, default=16)
     parser.add_argument("--seed", type=int, default=90000)
     parser.add_argument("--fps", type=int, default=12)
-    parser.add_argument("--width", type=int, default=96)
-    parser.add_argument("--height", type=int, default=96)
+    parser.add_argument("--width", type=int, default=256)
+    parser.add_argument("--height", type=int, default=256)
+    parser.add_argument("--data-files-size-in-mb", type=int, default=10000)
     parser.add_argument("--use-videos", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--teacher-style", choices=["legacy", "staged"], default="staged")
@@ -125,6 +152,32 @@ def main() -> None:
         help="Reject move_over_cube episodes whose final TCP/cube world-z offset is smaller than this.",
     )
     parser.add_argument(
+        "--terminal-hold-steps",
+        type=int,
+        default=0,
+        help="Append this many final hold frames for fixed-jaw primitive datasets.",
+    )
+    parser.add_argument(
+        "--move-and-align-near-target-correction-ratio",
+        type=float,
+        default=0.0,
+        help="For move_and_align_cube_edge, export this fraction as near-target correction trajectories.",
+    )
+    parser.add_argument("--edge-contact-xy-success-threshold", type=float, default=0.012)
+    parser.add_argument("--edge-contact-parallel-success-threshold-deg", type=float, default=8.0)
+    parser.add_argument(
+        "--near-target-joint-std",
+        type=float,
+        default=0.075,
+        help="Joint perturbation std for generated near-target correction trajectories.",
+    )
+    parser.add_argument(
+        "--near-target-xy-std",
+        type=float,
+        default=0.025,
+        help="Cartesian XY perturbation std for generated near-target correction trajectories.",
+    )
+    parser.add_argument(
         "--pick-start-joint-std",
         type=float,
         default=0.035,
@@ -161,16 +214,99 @@ def main() -> None:
         help="Reject pick_from_top episodes whose actual start TCP/cube world-z offset is smaller than this.",
     )
     parser.add_argument(
+        "--above-edge-start-joint-std",
+        type=float,
+        default=0.0,
+        help="Joint jitter around q_above for grip_from_above_edge_cube starts.",
+    )
+    parser.add_argument(
+        "--above-edge-start-xy-std",
+        type=float,
+        default=0.0,
+        help="Cartesian XY jitter around q_above for grip_from_above_edge_cube starts.",
+    )
+    parser.add_argument(
+        "--above-edge-start-z-std",
+        type=float,
+        default=0.0,
+        help="Cartesian Z jitter around q_above for grip_from_above_edge_cube starts.",
+    )
+    parser.add_argument(
+        "--above-edge-start-min-actual-z",
+        type=float,
+        default=0.0,
+        help="Reject grip_from_above_edge_cube episodes whose actual start TCP/cube world-z offset is smaller than this.",
+    )
+    parser.add_argument(
+        "--above-edge-trajectory-variants",
+        default="standard",
+        help=(
+            "Comma-separated grip_from_above_edge_cube trajectory variants. "
+            "Supported: standard, two_stage_xy_z, roll_first, near_miss_correction."
+        ),
+    )
+    parser.add_argument(
+        "--above-edge-start-gripper-profile",
+        choices=["open", "balanced"],
+        default="open",
+        help="Start/open-phase gripper profile for grip_from_above_edge_cube.",
+    )
+    parser.add_argument(
+        "--above-edge-terminal-hold-jitter",
+        type=int,
+        default=0,
+        help="If >0, cycle terminal hold length by +/- this many frames for grip_from_above_edge_cube.",
+    )
+    parser.add_argument(
         "--max-attempt-multiplier",
         type=int,
         default=8,
         help="Maximum candidate seeds to try, as episodes * multiplier.",
     )
     parser.add_argument(
+        "--grid-balance-size",
+        type=int,
+        default=0,
+        help="If >0, only save episodes whose start camera centroid falls in a requested grid bin.",
+    )
+    parser.add_argument(
+        "--grid-balance-target-per-bin",
+        type=int,
+        default=0,
+        help="Required saved episodes per requested grid bin. Requires --grid-balance-bins.",
+    )
+    parser.add_argument(
+        "--grid-balance-bins",
+        default="",
+        help="Comma-separated camera1 grid bins to balance, for example '5,6,7,9,10,11'.",
+    )
+    parser.add_argument(
+        "--grid-balance-spawn-lookup",
+        action="store_true",
+        help="Precompute world-XY -> camera1 grid-bin candidates and sample those instead of seed rejection.",
+    )
+    parser.add_argument(
+        "--grid-balance-teacher-feasible-lookup",
+        action="store_true",
+        help="Filter spawn lookup candidates to coordinates that pass the fixed-jaw teacher policy-view filter.",
+    )
+    parser.add_argument("--grid-lookup-max-candidates-per-bin", type=int, default=0)
+    parser.add_argument("--grid-lookup-x-min", type=float, default=-0.10)
+    parser.add_argument("--grid-lookup-x-max", type=float, default=0.55)
+    parser.add_argument("--grid-lookup-y-min", type=float, default=-0.45)
+    parser.add_argument("--grid-lookup-y-max", type=float, default=0.45)
+    parser.add_argument("--grid-lookup-resolution", type=int, default=21)
+    parser.add_argument(
         "--target-object-color",
         choices=["red", "orange", "yellow", "green", "blue", "purple", "black", "white"],
         help="Only export episodes whose target object has this color.",
     )
+    parser.add_argument("--spawn-center-x", type=float, default=0.15)
+    parser.add_argument("--spawn-center-y", type=float, default=0.0)
+    parser.add_argument("--spawn-min-radius", type=float, default=0.10)
+    parser.add_argument("--spawn-max-radius", type=float, default=0.30)
+    parser.add_argument("--spawn-angle-half-range-deg", type=float, default=90.0)
+    parser.add_argument("--object-half-sizes", default="0.0125,0.015,0.0175")
     parser.add_argument("--no-camera3-duplicate", action="store_true")
     args = parser.parse_args()
 
@@ -182,6 +318,7 @@ def main() -> None:
         fps=args.fps,
         width=args.width,
         height=args.height,
+        data_files_size_in_mb=args.data_files_size_in_mb,
         use_videos=args.use_videos,
         overwrite=args.overwrite,
         teacher_style=args.teacher_style,
@@ -198,14 +335,43 @@ def main() -> None:
         closed_gripper_prob=args.closed_gripper_prob,
         move_gripper_profile=args.move_gripper_profile,
         move_min_actual_z=args.move_min_actual_z,
+        terminal_hold_steps=args.terminal_hold_steps,
+        move_and_align_near_target_correction_ratio=args.move_and_align_near_target_correction_ratio,
+        edge_contact_xy_success_threshold=args.edge_contact_xy_success_threshold,
+        edge_contact_parallel_success_threshold_deg=args.edge_contact_parallel_success_threshold_deg,
+        near_target_joint_std=args.near_target_joint_std,
+        near_target_xy_std=args.near_target_xy_std,
         pick_start_joint_std=args.pick_start_joint_std,
         pick_correction_steps=args.pick_correction_steps,
         pick_start_min_abs_y=args.pick_start_min_abs_y,
         pick_start_max_abs_y=args.pick_start_max_abs_y,
         pick_start_min_actual_abs_y=args.pick_start_min_actual_abs_y,
         pick_start_min_actual_z=args.pick_start_min_actual_z,
+        above_edge_start_joint_std=args.above_edge_start_joint_std,
+        above_edge_start_xy_std=args.above_edge_start_xy_std,
+        above_edge_start_z_std=args.above_edge_start_z_std,
+        above_edge_start_min_actual_z=args.above_edge_start_min_actual_z,
+        above_edge_trajectory_variants=args.above_edge_trajectory_variants,
+        above_edge_start_gripper_profile=args.above_edge_start_gripper_profile,
+        above_edge_terminal_hold_jitter=args.above_edge_terminal_hold_jitter,
         max_attempt_multiplier=args.max_attempt_multiplier,
+        grid_balance_size=args.grid_balance_size,
+        grid_balance_target_per_bin=args.grid_balance_target_per_bin,
+        grid_balance_bins=args.grid_balance_bins,
+        grid_balance_spawn_lookup=args.grid_balance_spawn_lookup,
+        grid_balance_teacher_feasible_lookup=args.grid_balance_teacher_feasible_lookup,
+        grid_lookup_max_candidates_per_bin=args.grid_lookup_max_candidates_per_bin,
+        grid_lookup_x_min=args.grid_lookup_x_min,
+        grid_lookup_x_max=args.grid_lookup_x_max,
+        grid_lookup_y_min=args.grid_lookup_y_min,
+        grid_lookup_y_max=args.grid_lookup_y_max,
+        grid_lookup_resolution=args.grid_lookup_resolution,
         target_object_color=args.target_object_color,
+        spawn_center=(args.spawn_center_x, args.spawn_center_y),
+        spawn_min_radius=args.spawn_min_radius,
+        spawn_max_radius=args.spawn_max_radius,
+        spawn_angle_half_range_deg=args.spawn_angle_half_range_deg,
+        object_half_sizes=_parse_float_list(args.object_half_sizes),
         include_camera3_duplicate=not args.no_camera3_duplicate,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
@@ -220,6 +386,7 @@ def export_teacher_rollouts(
     fps: int,
     width: int,
     height: int,
+    data_files_size_in_mb: int,
     use_videos: bool,
     overwrite: bool,
     teacher_style: str = "staged",
@@ -236,20 +403,50 @@ def export_teacher_rollouts(
     closed_gripper_prob: float = 0.45,
     move_gripper_profile: str = "balanced",
     move_min_actual_z: float = 0.0,
+    terminal_hold_steps: int = 0,
+    move_and_align_near_target_correction_ratio: float = 0.0,
+    edge_contact_xy_success_threshold: float = 0.012,
+    edge_contact_parallel_success_threshold_deg: float = 8.0,
+    near_target_joint_std: float = 0.075,
+    near_target_xy_std: float = 0.025,
     pick_start_joint_std: float = 0.035,
     pick_correction_steps: int = 18,
     pick_start_min_abs_y: float = 0.018,
     pick_start_max_abs_y: float = 0.055,
     pick_start_min_actual_abs_y: float = 0.015,
     pick_start_min_actual_z: float = 0.0,
+    above_edge_start_joint_std: float = 0.0,
+    above_edge_start_xy_std: float = 0.0,
+    above_edge_start_z_std: float = 0.0,
+    above_edge_start_min_actual_z: float = 0.0,
+    above_edge_trajectory_variants: str = "standard",
+    above_edge_start_gripper_profile: str = "open",
+    above_edge_terminal_hold_jitter: int = 0,
     max_attempt_multiplier: int = 8,
+    grid_balance_size: int = 0,
+    grid_balance_target_per_bin: int = 0,
+    grid_balance_bins: str = "",
+    grid_balance_spawn_lookup: bool = False,
+    grid_balance_teacher_feasible_lookup: bool = False,
+    grid_lookup_max_candidates_per_bin: int = 0,
+    grid_lookup_x_min: float = -0.10,
+    grid_lookup_x_max: float = 0.55,
+    grid_lookup_y_min: float = -0.45,
+    grid_lookup_y_max: float = 0.45,
+    grid_lookup_resolution: int = 21,
     target_object_color: str | None = None,
+    spawn_center: tuple[float, float] = (0.15, 0.0),
+    spawn_min_radius: float = 0.10,
+    spawn_max_radius: float = 0.30,
+    spawn_angle_half_range_deg: float = 90.0,
+    object_half_sizes: tuple[float, ...] = (0.0125, 0.015, 0.0175),
     include_camera3_duplicate: bool = True,
 ) -> dict[str, Any]:
     import shutil
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
+    require_so101_image_resolution(height=height, width=width, context="SO101 LeRobot teacher export")
     if root.exists():
         if not overwrite:
             raise FileExistsError(f"{root} already exists; pass --overwrite or choose a new --root")
@@ -271,17 +468,85 @@ def export_teacher_rollouts(
         image_writer_processes=0,
         image_writer_threads=0,
     )
+    if hasattr(dataset.meta, "update_chunk_settings"):
+        dataset.meta.update_chunk_settings(data_files_size_in_mb=int(data_files_size_in_mb))
 
     if skill_mode not in SKILL_TASKS:
         raise ValueError(f"unknown skill_mode: {skill_mode}")
     task_template = COLOR_SHAPE_SKILL_TASK_TEMPLATES[skill_mode]
+    balance_bins = _parse_grid_balance_bins(grid_balance_bins)
+    balance_enabled = int(grid_balance_size) > 0 or int(grid_balance_target_per_bin) > 0 or bool(balance_bins)
+    if balance_enabled:
+        if int(grid_balance_size) <= 0:
+            raise ValueError("--grid-balance-size must be >0 when grid balancing is enabled")
+        if int(grid_balance_target_per_bin) <= 0:
+            raise ValueError("--grid-balance-target-per-bin must be >0 when grid balancing is enabled")
+        if not balance_bins:
+            raise ValueError("--grid-balance-bins is required when grid balancing is enabled")
+        episodes = int(grid_balance_target_per_bin) * len(balance_bins)
+    balance_counts = {int(bin_id): 0 for bin_id in balance_bins}
 
     config = WristEgoServoConfig(width=width, height=height)
-    env = make_high_contrast_picklift_env()
+    env = make_high_contrast_picklift_env(
+        target_object_color=target_object_color,
+        object_half_sizes=object_half_sizes,
+        spawn_center=spawn_center,
+        spawn_min_radius=spawn_min_radius,
+        spawn_max_radius=spawn_max_radius,
+        spawn_angle_half_range_deg=spawn_angle_half_range_deg,
+    )
     policy_renderers = _make_policy_renderers(env, config)
     teacher_renderers = _make_teacher_renderers(env, config)
     action_space_low = np.asarray(env.action_space.low, dtype=np.float32).copy()
     action_space_high = np.asarray(env.action_space.high, dtype=np.float32).copy()
+    allow_diagonal_fixed_jaw = skill_mode != "grip_the_cube_v1"
+    spawn_lookup: dict[int, list[list[float]]] = {}
+    spawn_lookup_next = {int(bin_id): 0 for bin_id in balance_bins}
+    if balance_enabled and grid_balance_spawn_lookup:
+        env.reset(seed=seed)
+        print(
+            f"[so101-lerobot] building camera1 spawn lookup "
+            f"resolution={int(grid_lookup_resolution)} bins={balance_bins}",
+            flush=True,
+        )
+        spawn_lookup = _build_camera1_spawn_lookup(
+            env,
+            policy_renderers,
+            grid_size=int(grid_balance_size),
+            x_min=float(grid_lookup_x_min),
+            x_max=float(grid_lookup_x_max),
+            y_min=float(grid_lookup_y_min),
+            y_max=float(grid_lookup_y_max),
+            resolution=int(grid_lookup_resolution),
+        )
+        for candidates_xy in spawn_lookup.values():
+            candidates_xy.sort(
+                key=lambda xy: (float(xy[0]) - float(spawn_center[0])) ** 2
+                + (float(xy[1]) - float(spawn_center[1])) ** 2
+            )
+        spawn_lookup = {int(bin_id): spawn_lookup.get(int(bin_id), []) for bin_id in balance_bins}
+        if grid_balance_teacher_feasible_lookup:
+            print("[so101-lerobot] filtering spawn lookup by teacher feasibility", flush=True)
+            spawn_lookup = _filter_spawn_lookup_for_teacher_feasibility(
+                env,
+                policy_renderers,
+                config=config,
+                spawn_lookup=spawn_lookup,
+                seed=seed,
+                move_target_z_offset=move_target_z_offset,
+                edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
+                edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
+                max_candidates_per_bin=int(grid_lookup_max_candidates_per_bin),
+                allow_diagonal_fixed_jaw=allow_diagonal_fixed_jaw,
+            )
+        missing = [int(bin_id) for bin_id in balance_bins if not spawn_lookup.get(int(bin_id))]
+        if missing:
+            raise RuntimeError(f"camera1 spawn lookup has no candidates for bins: {missing}")
+        print(
+            "[so101-lerobot] camera1 spawn lookup "
+            + json.dumps({str(key): len(value) for key, value in sorted(spawn_lookup.items())}, sort_keys=True),
+            flush=True,
+        )
     exported = 0
     attempted = 0
     skipped = []
@@ -290,15 +555,39 @@ def export_teacher_rollouts(
         candidate_seed = seed
         while exported < episodes and attempted < episodes * max_attempt_multiplier:
             attempted += 1
-            env.reset(seed=candidate_seed)
+            if attempted % 50 == 0:
+                print(
+                    f"[so101-lerobot] attempts={attempted} exported={exported}/{episodes} "
+                    f"grid_counts={json.dumps({str(k): int(v) for k, v in sorted(balance_counts.items())}, sort_keys=True)}",
+                    flush=True,
+                )
+            desired_grid_bin = None
+            forced_spawn_xy = None
+            if spawn_lookup:
+                remaining = [bin_id for bin_id in balance_bins if balance_counts[int(bin_id)] < int(grid_balance_target_per_bin)]
+                if not remaining:
+                    break
+                min_count = min(balance_counts[int(bin_id)] for bin_id in remaining)
+                least_filled = [int(bin_id) for bin_id in remaining if balance_counts[int(bin_id)] == min_count]
+                desired_grid_bin = least_filled[(attempted - 1) % len(least_filled)]
+                candidates_xy = spawn_lookup[desired_grid_bin]
+                next_index = spawn_lookup_next[desired_grid_bin]
+                forced_spawn_xy = candidates_xy[next_index % len(candidates_xy)]
+                spawn_lookup_next[desired_grid_bin] = next_index + 1
+            episode_seed = candidate_seed
+            candidate_seed += 1
+            if forced_spawn_xy is not None and len(forced_spawn_xy) >= 3:
+                episode_seed = int(forced_spawn_xy[2])
+            env.reset(seed=episode_seed)
+            if forced_spawn_xy is not None:
+                _set_target_object_xy(env, forced_spawn_xy)
             reset_home_qpos = _current_qpos(env).astype(np.float32)
             target_object = _target_object_metadata(env)
             episode_task = _format_skill_task(skill_mode, target_object)
-            candidate_seed += 1
             if target_object_color and target_object["color"] != target_object_color:
                 skipped.append(
                     {
-                        "seed": candidate_seed - 1,
+                        "seed": episode_seed,
                         "reason": "target_object_color_mismatch",
                         "object_color": target_object["color"],
                         "required_object_color": target_object_color,
@@ -309,10 +598,48 @@ def export_teacher_rollouts(
             visible, search_steps = sweep_until_visible(env, policy_renderers, max_sweeps=config.max_sweeps)
             teacher_visible = teacher_visible or object_visible_to_teacher(env, teacher_renderers, config=config)
             if not visible:
-                skipped.append({"seed": candidate_seed - 1, "reason": "not_visible_after_sweep"})
+                skipped.append({"seed": episode_seed, "reason": "not_visible_after_sweep"})
                 continue
+            if balance_enabled and not _grid_balance_needs_teacher_candidate_for_start(
+                skill_mode=skill_mode,
+                episode_index=exported,
+                move_and_align_near_target_correction_ratio=move_and_align_near_target_correction_ratio,
+            ):
+                grid_bin = _camera1_grid_bin_at_qpos(
+                    env,
+                    policy_renderers,
+                    qpos=reset_home_qpos,
+                    grid_size=int(grid_balance_size),
+                )
+                if grid_bin not in balance_counts:
+                    skipped.append(
+                        {
+                            "seed": episode_seed,
+                            "reason": "grid_balance_bin_not_requested_pre_teacher",
+                            "grid_bin": grid_bin,
+                            "desired_grid_bin": desired_grid_bin,
+                            "forced_spawn_xy": forced_spawn_xy,
+                            "requested_bins": sorted(balance_counts),
+                        }
+                    )
+                    continue
+                if balance_counts[grid_bin] >= int(grid_balance_target_per_bin):
+                    skipped.append(
+                        {
+                            "seed": episode_seed,
+                            "reason": "grid_balance_bin_full_pre_teacher",
+                            "grid_bin": grid_bin,
+                            "desired_grid_bin": desired_grid_bin,
+                            "forced_spawn_xy": forced_spawn_xy,
+                            "target_per_bin": int(grid_balance_target_per_bin),
+                        }
+                    )
+                    continue
             if skill_mode in FIXED_JAW_SKILL_MODES:
-                candidates = _make_fast_fixed_jaw_teacher_targets(env)
+                candidates = _make_fast_fixed_jaw_teacher_targets(
+                    env,
+                    allow_diagonal=allow_diagonal_fixed_jaw,
+                )
             else:
                 candidates = make_teacher_targets(env)
             if skill_mode in {"move_over_cube", "pick_from_top_cube", *FIXED_JAW_SKILL_MODES}:
@@ -329,7 +656,7 @@ def export_teacher_rollouts(
                     move_target_z_offset=move_target_z_offset,
                 )
             if not candidates:
-                skipped.append({"seed": candidate_seed - 1, "reason": "no_successful_teacher_candidate"})
+                skipped.append({"seed": episode_seed, "reason": "no_successful_teacher_candidate"})
                 continue
             best = max(candidates, key=lambda item: float(item["meta"].get("score", -1e9)))
             summary = _write_teacher_episode(
@@ -338,7 +665,7 @@ def export_teacher_rollouts(
                 renderers=policy_renderers,
                 q_open=np.asarray(best["q_open"], dtype=np.float32),
                 q_lift=np.asarray(best["q_lift"], dtype=np.float32),
-                seed=candidate_seed - 1,
+                seed=episode_seed,
                 search_steps=search_steps,
                 teacher_visible=teacher_visible,
                 best_meta=dict(best["meta"]),
@@ -358,12 +685,25 @@ def export_teacher_rollouts(
                 closed_gripper_prob=closed_gripper_prob,
                 move_gripper_profile=move_gripper_profile,
                 move_min_actual_z=move_min_actual_z,
+                terminal_hold_steps=terminal_hold_steps,
+                move_and_align_near_target_correction_ratio=move_and_align_near_target_correction_ratio,
+                edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
+                edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
+                near_target_joint_std=near_target_joint_std,
+                near_target_xy_std=near_target_xy_std,
                 pick_start_joint_std=pick_start_joint_std,
                 pick_correction_steps=pick_correction_steps,
                 pick_start_min_abs_y=pick_start_min_abs_y,
                 pick_start_max_abs_y=pick_start_max_abs_y,
                 pick_start_min_actual_abs_y=pick_start_min_actual_abs_y,
                 pick_start_min_actual_z=pick_start_min_actual_z,
+                above_edge_start_joint_std=above_edge_start_joint_std,
+                above_edge_start_xy_std=above_edge_start_xy_std,
+                above_edge_start_z_std=above_edge_start_z_std,
+                above_edge_start_min_actual_z=above_edge_start_min_actual_z,
+                above_edge_trajectory_variants=above_edge_trajectory_variants,
+                above_edge_start_gripper_profile=above_edge_start_gripper_profile,
+                above_edge_terminal_hold_jitter=above_edge_terminal_hold_jitter,
                 include_camera3_duplicate=include_camera3_duplicate,
                 reset_home_qpos=reset_home_qpos,
             )
@@ -372,19 +712,49 @@ def export_teacher_rollouts(
             summary["target_object"] = target_object
             summary["object_color"] = target_object["color"]
             summary["object_shape"] = target_object["shape"]
+            if forced_spawn_xy is not None:
+                summary["forced_spawn_xy"] = [float(forced_spawn_xy[0]), float(forced_spawn_xy[1])]
+                summary["desired_grid_bin"] = desired_grid_bin
             if summary["success"]:
+                if balance_enabled:
+                    grid_bin = _summary_start_grid_bin(summary, grid_size=int(grid_balance_size))
+                    summary["grid_balance_bin"] = grid_bin
+                    if grid_bin not in balance_counts:
+                        _clear_episode_buffer_robust(dataset)
+                        skipped.append(
+                            {
+                                "seed": episode_seed,
+                                "reason": "grid_balance_bin_not_requested",
+                                "grid_bin": grid_bin,
+                                "requested_bins": sorted(balance_counts),
+                            }
+                        )
+                        continue
+                    if balance_counts[grid_bin] >= int(grid_balance_target_per_bin):
+                        _clear_episode_buffer_robust(dataset)
+                        skipped.append(
+                            {
+                                "seed": episode_seed,
+                                "reason": "grid_balance_bin_full",
+                                "grid_bin": grid_bin,
+                                "target_per_bin": int(grid_balance_target_per_bin),
+                            }
+                        )
+                        continue
+                    balance_counts[grid_bin] += 1
                 dataset.save_episode()
                 exported += 1
                 episode_summaries.append(summary)
                 print(
                     f"[so101-lerobot] exported {exported}/{episodes} "
                     f"seed={summary['seed']} frames={summary['frames']} "
-                    f"mode={summary['best_meta'].get('mode')}",
+                    f"mode={summary['best_meta'].get('mode')} "
+                    f"grid_bin={summary.get('grid_balance_bin')}",
                     flush=True,
                 )
             else:
-                dataset.clear_episode_buffer()
-                skipped.append({"seed": candidate_seed - 1, "reason": "teacher_replay_failed", **summary})
+                _clear_episode_buffer_robust(dataset)
+                skipped.append({"seed": episode_seed, "reason": "teacher_replay_failed", **summary})
     finally:
         for renderer in [*policy_renderers.values(), *teacher_renderers.values()]:
             renderer.close()
@@ -409,6 +779,22 @@ def export_teacher_rollouts(
         "requested_episodes": episodes,
         "exported_episodes": exported,
         "attempted_seeds": attempted,
+        "grid_balance": {
+            "enabled": bool(balance_enabled),
+            "grid_size": int(grid_balance_size),
+            "target_per_bin": int(grid_balance_target_per_bin),
+            "requested_bins": sorted(balance_counts),
+            "accepted_counts": {str(key): int(value) for key, value in sorted(balance_counts.items())},
+            "spawn_lookup": {
+                "enabled": bool(spawn_lookup),
+                "resolution": int(grid_lookup_resolution),
+                "x_range": [float(grid_lookup_x_min), float(grid_lookup_x_max)],
+                "y_range": [float(grid_lookup_y_min), float(grid_lookup_y_max)],
+                "candidate_counts": {str(key): len(value) for key, value in sorted(spawn_lookup.items())},
+                "teacher_feasible_filter": bool(grid_balance_teacher_feasible_lookup),
+                "max_candidates_per_bin": int(grid_lookup_max_candidates_per_bin),
+            },
+        },
         "fps": fps,
         "use_videos": use_videos,
         "teacher_style": teacher_style,
@@ -425,13 +811,31 @@ def export_teacher_rollouts(
             "closed_gripper_prob": float(closed_gripper_prob),
             "move_gripper_profile": str(move_gripper_profile),
             "move_min_actual_z": float(move_min_actual_z),
+            "terminal_hold_steps": int(terminal_hold_steps),
+            "move_and_align_near_target_correction_ratio": float(move_and_align_near_target_correction_ratio),
+            "edge_contact_xy_success_threshold": float(edge_contact_xy_success_threshold),
+            "edge_contact_parallel_success_threshold_deg": float(edge_contact_parallel_success_threshold_deg),
+            "near_target_joint_std": float(near_target_joint_std),
+            "near_target_xy_std": float(near_target_xy_std),
             "pick_start_joint_std": float(pick_start_joint_std),
             "pick_correction_steps": int(pick_correction_steps),
             "pick_start_min_abs_y": float(pick_start_min_abs_y),
             "pick_start_max_abs_y": float(pick_start_max_abs_y),
             "pick_start_min_actual_abs_y": float(pick_start_min_actual_abs_y),
             "pick_start_min_actual_z": float(pick_start_min_actual_z),
+            "above_edge_start_joint_std": float(above_edge_start_joint_std),
+            "above_edge_start_xy_std": float(above_edge_start_xy_std),
+            "above_edge_start_z_std": float(above_edge_start_z_std),
+            "above_edge_start_min_actual_z": float(above_edge_start_min_actual_z),
+            "above_edge_trajectory_variants": str(above_edge_trajectory_variants),
+            "above_edge_start_gripper_profile": str(above_edge_start_gripper_profile),
+            "above_edge_terminal_hold_jitter": int(above_edge_terminal_hold_jitter),
             "target_object_color": target_object_color,
+            "spawn_center": [float(spawn_center[0]), float(spawn_center[1])],
+            "spawn_min_radius": float(spawn_min_radius),
+            "spawn_max_radius": float(spawn_max_radius),
+            "spawn_angle_half_range_deg": float(spawn_angle_half_range_deg),
+            "object_half_sizes": [float(value) for value in object_half_sizes],
         },
         "camera3_duplicate": {
             "enabled": bool(include_camera3_duplicate),
@@ -460,6 +864,16 @@ def export_teacher_rollouts(
             "producer": "raw SO101 qpos target in simulator action-space units",
             "expected_smolvla_mode": "MEAN_STD from LeRobotDataset stats",
             "manual_scaling_applied": False,
+        },
+        "dataset_generation_augmentation": {
+            "kind": "teacher_trajectory_generation",
+            "terminal_hold_included": int(terminal_hold_steps) > 0,
+            "terminal_hold_steps": int(terminal_hold_steps),
+            "near_target_correction_included": float(move_and_align_near_target_correction_ratio) > 0.0,
+            "near_target_correction_ratio": float(move_and_align_near_target_correction_ratio),
+            "near_target_joint_std": float(near_target_joint_std),
+            "near_target_xy_std": float(near_target_xy_std),
+            "note": "This is dataset generation augmentation, distinct from train-time image/state augmentation.",
         },
         "episodes": episode_summaries,
         "skipped": skipped,
@@ -498,12 +912,25 @@ def _write_teacher_episode(
     closed_gripper_prob: float,
     move_gripper_profile: str,
     move_min_actual_z: float,
+    terminal_hold_steps: int,
+    move_and_align_near_target_correction_ratio: float,
+    edge_contact_xy_success_threshold: float,
+    edge_contact_parallel_success_threshold_deg: float,
+    near_target_joint_std: float,
+    near_target_xy_std: float,
     pick_start_joint_std: float,
     pick_correction_steps: int,
     pick_start_min_abs_y: float,
     pick_start_max_abs_y: float,
     pick_start_min_actual_abs_y: float,
     pick_start_min_actual_z: float,
+    above_edge_start_joint_std: float,
+    above_edge_start_xy_std: float,
+    above_edge_start_z_std: float,
+    above_edge_start_min_actual_z: float,
+    above_edge_trajectory_variants: str,
+    above_edge_start_gripper_profile: str,
+    above_edge_terminal_hold_jitter: int,
     include_camera3_duplicate: bool,
     reset_home_qpos: np.ndarray | None = None,
 ) -> dict[str, Any]:
@@ -588,6 +1015,19 @@ def _write_teacher_episode(
             episode_index=episode_index,
             random_start_joint_std=random_start_joint_std,
             move_target_z_offset=move_target_z_offset,
+            terminal_hold_steps=terminal_hold_steps,
+            move_and_align_near_target_correction_ratio=move_and_align_near_target_correction_ratio,
+            edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
+            edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
+            near_target_joint_std=near_target_joint_std,
+            near_target_xy_std=near_target_xy_std,
+            above_edge_start_joint_std=above_edge_start_joint_std,
+            above_edge_start_xy_std=above_edge_start_xy_std,
+            above_edge_start_z_std=above_edge_start_z_std,
+            above_edge_start_min_actual_z=above_edge_start_min_actual_z,
+            above_edge_trajectory_variants=above_edge_trajectory_variants,
+            above_edge_start_gripper_profile=above_edge_start_gripper_profile,
+            above_edge_terminal_hold_jitter=above_edge_terminal_hold_jitter,
             task=task,
             include_camera3_duplicate=include_camera3_duplicate,
             reset_home_qpos=reset_home_qpos,
@@ -661,12 +1101,199 @@ def _format_skill_task(skill_mode: str, target_object: dict[str, Any]) -> str:
     )
 
 
-def _make_fast_fixed_jaw_teacher_targets(env: Any) -> list[dict[str, Any]]:
+def _parse_grid_balance_bins(raw: str) -> list[int]:
+    if not raw.strip():
+        return []
+    bins = []
+    for part in raw.split(","):
+        text = part.strip()
+        if not text:
+            continue
+        bins.append(int(text))
+    return sorted(set(bins))
+
+
+def _parse_float_list(raw: str) -> tuple[float, ...]:
+    values = tuple(float(part.strip()) for part in raw.split(",") if part.strip())
+    if not values:
+        raise ValueError("expected at least one float")
+    return values
+
+
+def _set_target_object_xy(env: Any, xy: list[float] | tuple[float, float] | np.ndarray) -> None:
+    import mujoco
+
+    unwrapped = env.unwrapped
+    slot = unwrapped._slots[int(unwrapped._target_slot_idx)]
+    addr = int(slot.qpos_addr)
+    unwrapped.data.qpos[addr : addr + 2] = np.asarray(xy, dtype=float)[:2]
+    unwrapped.data.qpos[addr + 2] = float(slot.spawn_z)
+    unwrapped.data.qvel[:] = 0.0
+    mujoco.mj_forward(unwrapped.model, unwrapped.data)
+    if hasattr(unwrapped, "_refresh_reset_reference_state"):
+        unwrapped._refresh_reset_reference_state()
+
+
+def _build_camera1_spawn_lookup(
+    env: Any,
+    renderers: dict[str, Any],
+    *,
+    grid_size: int,
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+    resolution: int,
+) -> dict[int, list[list[float]]]:
+    resolution = max(2, int(resolution))
+    lookup: dict[int, list[list[float]]] = {}
+    snapshot = _snapshot_sim_state(env)
+    try:
+        for x in np.linspace(float(x_min), float(x_max), resolution):
+            for y in np.linspace(float(y_min), float(y_max), resolution):
+                _set_target_object_xy(env, [float(x), float(y)])
+                visibility = _object_visibility_in_camera(env, renderers["egocentric_cam"], "egocentric_cam")
+                centroid = visibility.get("normalized_centroid")
+                if not visibility.get("visible") or centroid is None:
+                    continue
+                bx = min(grid_size - 1, max(0, int(float(centroid[0]) * grid_size)))
+                by = min(grid_size - 1, max(0, int(float(centroid[1]) * grid_size)))
+                lookup.setdefault(int(by * grid_size + bx), []).append([float(x), float(y)])
+    finally:
+        _restore_sim_state(env, snapshot)
+    return lookup
+
+
+def _filter_spawn_lookup_for_teacher_feasibility(
+    env: Any,
+    renderers: dict[str, Any],
+    *,
+    config: WristEgoServoConfig,
+    spawn_lookup: dict[int, list[list[float]]],
+    seed: int,
+    move_target_z_offset: float,
+    edge_contact_xy_success_threshold: float,
+    edge_contact_parallel_success_threshold_deg: float,
+    max_candidates_per_bin: int,
+    allow_diagonal_fixed_jaw: bool,
+) -> dict[int, list[list[float]]]:
+    filtered_lookup: dict[int, list[list[float]]] = {}
+    max_candidates_per_bin = max(0, int(max_candidates_per_bin))
+    for bin_id, candidates_xy in sorted(spawn_lookup.items()):
+        accepted: list[list[float]] = []
+        for index, xy in enumerate(candidates_xy):
+            candidate_seed = int(seed) + int(bin_id) * 1000 + index
+            env.reset(seed=candidate_seed)
+            _set_target_object_xy(env, xy)
+            visible, _search_steps = sweep_until_visible(env, renderers, max_sweeps=config.max_sweeps)
+            if not visible:
+                continue
+            candidates = _filter_fixed_jaw_move_candidates_in_policy_view(
+                env,
+                renderers=renderers,
+                candidates=_make_fast_fixed_jaw_teacher_targets(
+                    env,
+                    allow_diagonal=allow_diagonal_fixed_jaw,
+                ),
+                move_target_z_offset=move_target_z_offset,
+            )
+            if not _has_success_contract_fixed_jaw_candidate(
+                env,
+                candidates,
+                edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
+                edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
+            ):
+                continue
+            accepted.append([float(xy[0]), float(xy[1])])
+            if max_candidates_per_bin and len(accepted) >= max_candidates_per_bin:
+                break
+        filtered_lookup[int(bin_id)] = accepted
+        print(
+            f"[so101-lerobot] teacher-feasible lookup bin={int(bin_id)} "
+            f"{len(accepted)}/{len(candidates_xy)}",
+            flush=True,
+        )
+    return filtered_lookup
+
+
+def _has_success_contract_fixed_jaw_candidate(
+    env: Any,
+    candidates: list[dict[str, Any]],
+    *,
+    edge_contact_xy_success_threshold: float,
+    edge_contact_parallel_success_threshold_deg: float,
+) -> bool:
+    snapshot = _snapshot_sim_state(env)
+    try:
+        for candidate in candidates:
+            meta = dict(candidate.get("meta") or {})
+            if float(meta.get("finger_axis_parallel_angle_deg", 180.0)) > float(edge_contact_parallel_success_threshold_deg):
+                continue
+            q_edge = _make_fixed_jaw_edge_qpos(env, np.asarray(candidate["q_open"], dtype=np.float32), meta)
+            q_edge[-1] = _open_gripper_value(env)
+            _set_qpos(env, q_edge)
+            if float(_static_finger_edge_error(env, meta)["xy_error"]) <= float(edge_contact_xy_success_threshold):
+                return True
+    finally:
+        _restore_sim_state(env, snapshot)
+    return False
+
+
+def _summary_start_grid_bin(summary: dict[str, Any], *, grid_size: int) -> int | None:
+    visibility = (
+        summary.get("start_policy_camera_visibility", {})
+        .get("camera1", {})
+    )
+    centroid = visibility.get("normalized_centroid")
+    if not visibility.get("visible") or centroid is None:
+        return None
+    x = min(grid_size - 1, max(0, int(float(centroid[0]) * grid_size)))
+    y = min(grid_size - 1, max(0, int(float(centroid[1]) * grid_size)))
+    return int(y * grid_size + x)
+
+
+def _grid_balance_needs_teacher_candidate_for_start(
+    *,
+    skill_mode: str,
+    episode_index: int,
+    move_and_align_near_target_correction_ratio: float,
+) -> bool:
+    if skill_mode != "move_and_align_cube_edge":
+        return skill_mode in {"align_fixed_jaw_cube_edge", "grip_from_edge_cube", "grip_the_cube_v1"}
+    ratio = float(np.clip(move_and_align_near_target_correction_ratio, 0.0, 1.0))
+    if ratio <= 0.0:
+        return False
+    return ratio >= 1.0 or (int(episode_index) % max(1, int(round(1.0 / ratio)))) == 0
+
+
+def _camera1_grid_bin_at_qpos(
+    env: Any,
+    renderers: dict[str, Any],
+    *,
+    qpos: np.ndarray,
+    grid_size: int,
+) -> int | None:
+    snapshot = _snapshot_sim_state(env)
+    try:
+        _set_qpos(env, qpos)
+        visibility = _object_visibility_in_camera(env, renderers["egocentric_cam"], "egocentric_cam")
+    finally:
+        _restore_sim_state(env, snapshot)
+    centroid = visibility.get("normalized_centroid")
+    if not visibility.get("visible") or centroid is None:
+        return None
+    x = min(grid_size - 1, max(0, int(float(centroid[0]) * grid_size)))
+    y = min(grid_size - 1, max(0, int(float(centroid[1]) * grid_size)))
+    return int(y * grid_size + x)
+
+
+def _make_fast_fixed_jaw_teacher_targets(env: Any, *, allow_diagonal: bool = True) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     specs = [
         spec
         for spec in _grasp_candidate_specs(env)
         if str(spec.get("grasp_mode")) == "overhead"
+        and (allow_diagonal or not str(spec.get("mode", "")).startswith("diag_"))
     ]
     for spec in specs:
         try:
@@ -968,7 +1595,7 @@ def _write_staged_teacher_episode(
         _obs, _reward, terminated, truncated, info = env.step(np.asarray(action, dtype=float))
         if bool(info.get("success", False)) and success_step is None:
             success_step = frames
-        return bool(info.get("success", False)) or bool(terminated) or bool(truncated)
+        return bool(terminated) or bool(truncated)
 
     approach_steps = max(1, int(approach_steps))
     for index in range(approach_steps):
@@ -1324,6 +1951,19 @@ def _write_fixed_jaw_edge_episode(
     episode_index: int,
     random_start_joint_std: float,
     move_target_z_offset: float,
+    terminal_hold_steps: int,
+    move_and_align_near_target_correction_ratio: float,
+    edge_contact_xy_success_threshold: float,
+    edge_contact_parallel_success_threshold_deg: float,
+    near_target_joint_std: float,
+    near_target_xy_std: float,
+    above_edge_start_joint_std: float,
+    above_edge_start_xy_std: float,
+    above_edge_start_z_std: float,
+    above_edge_start_min_actual_z: float,
+    above_edge_trajectory_variants: str,
+    above_edge_start_gripper_profile: str,
+    above_edge_terminal_hold_jitter: int,
     task: str,
     include_camera3_duplicate: bool,
     reset_home_qpos: np.ndarray | None,
@@ -1348,11 +1988,28 @@ def _write_fixed_jaw_edge_episode(
         phases = [("align", q_start, q_edge, max(1, int(approach_steps))), ("settle", q_edge, q_edge, max(0, int(settle_steps)))]
         success_kind = "edge_contact"
     elif skill_mode == "move_and_align_cube_edge":
-        q_start = _make_home_closed_start_qpos(env, reset_home_qpos)
+        near_target_ratio = float(np.clip(move_and_align_near_target_correction_ratio, 0.0, 1.0))
+        use_near_target = near_target_ratio > 0.0 and (
+            near_target_ratio >= 1.0 or (int(episode_index) % max(1, int(round(1.0 / near_target_ratio)))) == 0
+        )
+        if use_near_target:
+            q_start = _make_near_target_fixed_jaw_correction_qpos(
+                env,
+                q_edge=q_edge,
+                seed=seed,
+                episode_index=episode_index,
+                joint_std=near_target_joint_std,
+                xy_std=near_target_xy_std,
+            )
+            trajectory_variant = "near_target_correction"
+        else:
+            q_start = _make_home_closed_start_qpos(env, reset_home_qpos)
+            trajectory_variant = "generated_teacher"
         q_edge = q_edge.copy()
         q_edge[-1] = _open_gripper_value(env)
+        phase_steps = max(1, int(approach_steps)) if use_near_target else max(1, int(approach_steps)) * 2
         phases = [
-            ("move_align", q_start, q_edge, max(1, int(approach_steps)) * 2),
+            ("move_align", q_start, q_edge, phase_steps),
             ("settle", q_edge, q_edge, max(0, int(settle_steps))),
         ]
         success_kind = "edge_contact_parallel"
@@ -1366,10 +2023,158 @@ def _write_fixed_jaw_edge_episode(
             ("lift", q_close, None, max(1, int(lift_steps))),
         ]
         success_kind = "pick_success"
+    elif skill_mode == "grip_from_above_edge_cube":
+        variants = _parse_above_edge_variants(above_edge_trajectory_variants)
+        selected_variant = variants[int(episode_index) % len(variants)]
+        q_start, above_edge_start_meta = _make_above_edge_perturbed_start_qpos(
+            env,
+            q_above=q_above,
+            seed=seed,
+            episode_index=episode_index,
+            joint_std=above_edge_start_joint_std,
+            xy_std=above_edge_start_xy_std,
+            z_std=above_edge_start_z_std,
+            min_actual_z=above_edge_start_min_actual_z,
+        )
+        open_phase_gripper_value = _above_edge_open_phase_gripper_value(
+            env,
+            episode_index=episode_index,
+            profile=above_edge_start_gripper_profile,
+        )
+        q_start[-1] = open_phase_gripper_value
+        q_edge = q_edge.copy()
+        q_edge[-1] = open_phase_gripper_value
+        q_close = q_edge.copy()
+        q_close[-1] = float(env.action_space.low[-1])
+        if selected_variant == "two_stage_xy_z":
+            q_mid = q_start.copy()
+            q_mid[:2] = q_edge[:2]
+            q_mid[4] = q_edge[4]
+            phases = [
+                ("xy_roll_correct", q_start, q_mid, max(1, int(approach_steps) // 2)),
+                ("descend_align", q_mid, q_edge, max(1, int(approach_steps) - max(1, int(approach_steps) // 2))),
+                ("settle", q_edge, q_edge, max(0, int(settle_steps))),
+                ("close", q_edge, q_close, max(1, int(close_steps))),
+                ("lift", q_close, None, max(1, int(lift_steps))),
+            ]
+        elif selected_variant == "roll_first":
+            q_mid = q_start.copy()
+            q_mid[4] = q_edge[4]
+            phases = [
+                ("roll_correct", q_start, q_mid, max(1, int(approach_steps) // 3)),
+                ("descend_align", q_mid, q_edge, max(1, int(approach_steps) - max(1, int(approach_steps) // 3))),
+                ("settle", q_edge, q_edge, max(0, int(settle_steps))),
+                ("close", q_edge, q_close, max(1, int(close_steps))),
+                ("lift", q_close, None, max(1, int(lift_steps))),
+            ]
+        elif selected_variant == "near_miss_correction":
+            q_start = _make_near_target_fixed_jaw_correction_qpos(
+                env,
+                q_edge=q_edge,
+                seed=seed,
+                episode_index=episode_index,
+                joint_std=near_target_joint_std,
+                xy_std=near_target_xy_std,
+            )
+            q_start = _offset_qpos_by_cartesian(
+                env,
+                q_start,
+                np.asarray([0.0, 0.0, max(0.0, float(above_edge_start_min_actual_z))], dtype=float),
+                steps=8,
+            )
+            q_start[-1] = open_phase_gripper_value
+            phases = [
+                ("near_miss_correct", q_start, q_edge, max(1, int(approach_steps))),
+                ("settle", q_edge, q_edge, max(0, int(settle_steps))),
+                ("close", q_edge, q_close, max(1, int(close_steps))),
+                ("lift", q_close, None, max(1, int(lift_steps))),
+            ]
+        else:
+            phases = [
+                ("descend_align", q_start, q_edge, max(1, int(approach_steps))),
+                ("settle", q_edge, q_edge, max(0, int(settle_steps))),
+                ("close", q_edge, q_close, max(1, int(close_steps))),
+                ("lift", q_close, None, max(1, int(lift_steps))),
+            ]
+        success_kind = "pick_success"
+        trajectory_variant = f"above_edge_{selected_variant}"
+    elif skill_mode == "grip_the_cube_v1":
+        home_start = _current_qpos(env).astype(np.float32) if reset_home_qpos is None else np.asarray(reset_home_qpos, dtype=np.float32).copy()
+        home_start = np.clip(home_start, env.action_space.low, env.action_space.high).astype(np.float32)
+        home_start[-1] = _open_gripper_value(env)
+        q_edge = q_edge.copy()
+        q_edge[-1] = _open_gripper_value(env)
+        q_above = q_above.copy()
+        q_above[-1] = _open_gripper_value(env)
+        q_above_misaligned = _make_roll_misaligned_fixed_jaw_qpos(
+            env,
+            q_edge=q_edge,
+            q_above=q_above,
+            seed=seed,
+            episode_index=episode_index,
+        )
+        q_close = q_edge.copy()
+        q_close[-1] = float(env.action_space.low[-1])
+        if (int(seed) + int(episode_index)) % 2 == 0:
+            q_start = home_start
+            trajectory_variant = "grip_the_cube_v1_home_start"
+            move_steps = max(1, int(approach_steps))
+        else:
+            rng = np.random.default_rng(int(seed) + 61001 + int(episode_index))
+            q_mid = (0.55 * home_start + 0.45 * q_above_misaligned).astype(np.float32)
+            jitter = rng.normal(0.0, max(0.0, float(near_target_joint_std)), size=q_mid.shape).astype(np.float32)
+            jitter[-1] = 0.0
+            q_start = np.clip(q_mid + jitter, env.action_space.low, env.action_space.high).astype(np.float32)
+            q_start[-1] = _open_gripper_value(env)
+            trajectory_variant = "grip_the_cube_v1_mid_start"
+            move_steps = max(1, int(approach_steps))
+        roll_align_steps = max(1, int(approach_steps) // 2)
+        descend_steps = max(1, int(approach_steps) // 2)
+        phases = [
+            ("move_to_cube", q_start, q_above_misaligned, move_steps),
+            ("roll_align_with_cube_edge", q_above_misaligned, q_above, roll_align_steps),
+            ("gripper_descend", q_above, q_edge, descend_steps),
+            ("settle_aligned", q_edge, q_edge, max(0, int(settle_steps))),
+            ("close", q_edge, q_close, max(1, int(close_steps))),
+            ("lift", q_close, None, max(1, int(lift_steps))),
+        ]
+        success_kind = "pick_success"
     else:
         raise ValueError(f"unknown fixed jaw skill mode: {skill_mode}")
+    effective_terminal_hold_steps = int(terminal_hold_steps)
+    if skill_mode == "grip_from_above_edge_cube" and int(above_edge_terminal_hold_jitter) > 0:
+        span = int(above_edge_terminal_hold_jitter)
+        offsets = list(range(-span, span + 1))
+        effective_terminal_hold_steps = max(0, int(terminal_hold_steps) + offsets[int(episode_index) % len(offsets)])
+    if int(effective_terminal_hold_steps) > 0 and skill_mode != "grip_from_edge_cube":
+        hold_target = np.asarray(phases[-1][2] if phases[-1][2] is not None else phases[-1][1], dtype=np.float32)
+        phases.append(("terminal_hold", hold_target, hold_target, int(effective_terminal_hold_steps)))
+    if "trajectory_variant" not in locals():
+        trajectory_variant = "generated_teacher"
 
     _set_qpos(env, q_start)
+    if skill_mode == "grip_from_above_edge_cube" and float(above_edge_start_min_actual_z) > 0.0:
+        start_delta = _tcp_to_object_delta(env)
+        if float(start_delta[2]) < float(above_edge_start_min_actual_z):
+            return {
+                "seed": seed,
+                "success": False,
+                "reason": "above_edge_start_min_actual_z_failed",
+                "frames": 0,
+                "best_meta": dict(best_meta),
+                "q_start": [float(value) for value in q_start],
+                "trajectory_variant": trajectory_variant,
+                "dataset_generation_augmentation": {
+                    "above_edge_start": True,
+                    "above_edge_start_joint_std": float(above_edge_start_joint_std),
+                    "above_edge_start_xy_std": float(above_edge_start_xy_std),
+                    "above_edge_start_z_std": float(above_edge_start_z_std),
+                    "above_edge_start_min_actual_z": float(above_edge_start_min_actual_z),
+                    "above_edge_start_meta": locals().get("above_edge_start_meta"),
+                    "actual_start_tcp_to_obj_delta": [float(value) for value in start_delta],
+                },
+            }
+    start_sim_snapshot = _json_safe_sim_snapshot(env)
     start_static_edge_error = _static_finger_edge_error(env, best_meta)
     start_policy_camera_visibility = _policy_camera_visibility(env, renderers)
     info: dict[str, Any] = env.unwrapped._get_info()
@@ -1378,12 +2183,15 @@ def _write_fixed_jaw_edge_episode(
     phase_counts: dict[str, int] = {phase[0]: 0 for phase in phases}
     action_deltas: list[float] = []
     previous_action: np.ndarray | None = None
+    episode_frames: list[dict[str, Any]] = []
     q_lift = q_start.copy()
+    pre_close_static_edge_error: dict[str, float] | None = None
+    pre_close_policy_camera_visibility: dict[str, Any] | None = None
 
     def add_step(action: np.ndarray, phase: str) -> bool:
         nonlocal frames, info, success_step, previous_action
         action = np.clip(np.asarray(action, dtype=np.float32), env.action_space.low, env.action_space.high)
-        dataset.add_frame(
+        episode_frames.append(
             _make_lerobot_frame(
                 env=env,
                 renderers=renderers,
@@ -1400,28 +2208,65 @@ def _write_fixed_jaw_edge_episode(
         _obs, _reward, terminated, truncated, info = env.step(np.asarray(action, dtype=float))
         if bool(info.get("success", False)) and success_step is None:
             success_step = frames
-        return bool(info.get("success", False)) or bool(terminated) or bool(truncated)
+        return bool(terminated) or bool(truncated)
 
-    for phase, start, target, steps in phases:
+    def add_hold_frame(action: np.ndarray, phase: str) -> None:
+        nonlocal frames, previous_action
+        action = np.clip(np.asarray(action, dtype=np.float32), env.action_space.low, env.action_space.high)
+        episode_frames.append(
+            _make_lerobot_frame(
+                env=env,
+                renderers=renderers,
+                action=action,
+                task=task,
+                include_camera3_duplicate=include_camera3_duplicate,
+            )
+        )
+        frames += 1
+        phase_counts[phase] += 1
+        if previous_action is not None:
+            action_deltas.append(float(np.linalg.norm(action[:5] - previous_action[:5])))
+        previous_action = action.copy()
+
+    stopped = False
+    for phase_index, (phase, start, target, steps) in enumerate(phases):
         for index in range(max(0, int(steps))):
+            if phase == "close" and index == 0 and pre_close_static_edge_error is None:
+                pre_close_static_edge_error = _static_finger_edge_error(env, best_meta)
+                pre_close_policy_camera_visibility = _policy_camera_visibility(env, renderers)
             if target is None:
                 action = np.asarray(_cartesian_error_controller_action(env, np.asarray([0.0, 0.0, 0.12])), dtype=np.float32)
                 action[-1] = float(env.action_space.low[-1])
                 q_lift = np.clip(action, env.action_space.low, env.action_space.high).astype(np.float32)
+            elif phase == "terminal_hold":
+                action = np.asarray(target, dtype=np.float32)
+                add_hold_frame(action, phase)
+                continue
             else:
                 alpha = (index + 1) / float(max(1, int(steps)))
                 alpha = 0.5 - 0.5 * float(np.cos(np.pi * alpha))
                 action = (1.0 - alpha) * start + alpha * target
             if add_step(action, phase):
+                stopped = True
                 break
-        if bool(info.get("success", False)):
-            break
+        if stopped:
+            remaining_phases = [item[0] for item in phases[phase_index + 1 :]]
+            if "terminal_hold" not in remaining_phases:
+                break
 
     final_static_edge_error = _static_finger_edge_error(env, best_meta)
     final_tcp_to_obj_delta = _tcp_to_object_delta(env)
     final_policy_camera_visibility = _policy_camera_visibility(env, renderers)
     if success_kind == "pick_success":
         task_success = bool(info.get("success", False))
+        if skill_mode == "grip_the_cube_v1":
+            pre_close_error = pre_close_static_edge_error or final_static_edge_error
+            task_success = bool(
+                task_success
+                and pre_close_error["xy_error"] <= float(edge_contact_xy_success_threshold)
+                and float(best_meta.get("finger_axis_parallel_angle_deg", 180.0))
+                <= float(edge_contact_parallel_success_threshold_deg)
+            )
     elif success_kind == "edge_above":
         start_camera1 = start_policy_camera_visibility["camera1"]
         wrist = final_policy_camera_visibility["camera2"]
@@ -1435,12 +2280,16 @@ def _write_fixed_jaw_edge_episode(
         )
     elif success_kind == "edge_contact_parallel":
         task_success = bool(
-            final_static_edge_error["xy_error"] <= 0.012
-            and float(best_meta.get("finger_axis_parallel_angle_deg", 180.0)) <= 8.0
+            final_static_edge_error["xy_error"] <= float(edge_contact_xy_success_threshold)
+            and float(best_meta.get("finger_axis_parallel_angle_deg", 180.0))
+            <= float(edge_contact_parallel_success_threshold_deg)
         )
     else:
         task_success = bool(final_static_edge_error["xy_error"] <= 0.015)
     success = task_success
+    if success:
+        for frame in episode_frames:
+            dataset.add_frame(frame)
 
     return {
         "seed": seed,
@@ -1457,12 +2306,16 @@ def _write_fixed_jaw_edge_episode(
             "tcp_to_obj_dist": float(info.get("tcp_to_obj_dist", 0.0)),
         },
         "q_start": [float(value) for value in q_start],
+        "sim_snapshot": start_sim_snapshot,
         "q_edge": [float(value) for value in q_edge],
         "q_above": [float(value) for value in q_above],
+        "q_above_misaligned": [float(value) for value in locals().get("q_above_misaligned", q_above)],
         "q_lift": [float(value) for value in q_lift],
         "start_static_edge_error": start_static_edge_error,
+        "pre_close_static_edge_error": pre_close_static_edge_error,
         "final_static_edge_error": final_static_edge_error,
         "start_policy_camera_visibility": start_policy_camera_visibility,
+        "pre_close_policy_camera_visibility": pre_close_policy_camera_visibility,
         "final_policy_camera_visibility": final_policy_camera_visibility,
         "wrist_roll_start": float(q_start[4]) if len(q_start) > 4 else None,
         "wrist_roll_edge": float(q_edge[4]) if len(q_edge) > 4 else None,
@@ -1470,6 +2323,24 @@ def _write_fixed_jaw_edge_episode(
         "final_tcp_to_obj_delta": [float(value) for value in final_tcp_to_obj_delta],
         "teacher_style": "staged_fixed_jaw_skill",
         "skill_mode": skill_mode,
+        "trajectory_variant": trajectory_variant,
+        "dataset_generation_augmentation": {
+            "terminal_hold_steps": int(effective_terminal_hold_steps),
+            "near_target_correction": trajectory_variant == "near_target_correction",
+            "near_target_joint_std": float(near_target_joint_std),
+            "near_target_xy_std": float(near_target_xy_std),
+            "above_edge_start": skill_mode == "grip_from_above_edge_cube",
+            "above_edge_start_joint_std": float(above_edge_start_joint_std),
+            "above_edge_start_xy_std": float(above_edge_start_xy_std),
+            "above_edge_start_z_std": float(above_edge_start_z_std),
+            "above_edge_start_min_actual_z": float(above_edge_start_min_actual_z),
+            "above_edge_trajectory_variants": _parse_above_edge_variants(above_edge_trajectory_variants),
+            "above_edge_selected_variant": trajectory_variant,
+            "above_edge_start_gripper_profile": str(above_edge_start_gripper_profile),
+            "above_edge_open_phase_gripper_value": float(locals().get("open_phase_gripper_value", _open_gripper_value(env))),
+            "above_edge_terminal_hold_jitter": int(above_edge_terminal_hold_jitter),
+            "above_edge_start_meta": locals().get("above_edge_start_meta"),
+        },
         "fixed_jaw_reference": "static_finger_pad",
         "phase_counts": phase_counts,
         "mean_action_delta": float(np.mean(action_deltas)) if action_deltas else 0.0,
@@ -1585,6 +2456,26 @@ def _sample_move_gripper_value(
     return low if rng.random() < float(np.clip(closed_gripper_prob, 0.0, 1.0)) else high
 
 
+def _parse_above_edge_variants(raw: str) -> list[str]:
+    supported = {"standard", "two_stage_xy_z", "roll_first", "near_miss_correction"}
+    variants = [part.strip() for part in str(raw or "").split(",") if part.strip()]
+    if not variants:
+        return ["standard"]
+    unknown = sorted(set(variants) - supported)
+    if unknown:
+        raise ValueError(f"unknown above-edge trajectory variants: {unknown}; supported={sorted(supported)}")
+    return variants
+
+
+def _above_edge_open_phase_gripper_value(env: Any, *, episode_index: int, profile: str) -> float:
+    low = float(env.action_space.low[-1])
+    high = _open_gripper_value(env)
+    if str(profile) == "balanced":
+        buckets = np.asarray([high, high * 0.75 + low * 0.25, high * 0.5 + low * 0.5], dtype=np.float32)
+        return float(buckets[int(episode_index) % len(buckets)])
+    return high
+
+
 def _balance_pick_start_y_offset(
     env: Any,
     qpos: np.ndarray,
@@ -1656,6 +2547,84 @@ def _make_roll_misaligned_fixed_jaw_qpos(
         target[4] = float(edge[4] + offset)
     target[-1] = _open_gripper_value(env)
     return np.clip(target, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
+def _make_near_target_fixed_jaw_correction_qpos(
+    env: Any,
+    *,
+    q_edge: np.ndarray,
+    seed: int,
+    episode_index: int,
+    joint_std: float,
+    xy_std: float,
+) -> np.ndarray:
+    rng = np.random.default_rng(int(seed) + 73091 + int(episode_index) * 17)
+    target = np.asarray(q_edge, dtype=np.float32).copy()
+    jitter = rng.normal(0.0, max(0.0, float(joint_std)), size=target.shape).astype(np.float32)
+    if jitter.shape[0] >= 6:
+        jitter[-1] = 0.0
+    if jitter.shape[0] > 4:
+        roll_offsets = np.asarray([0.28, -0.28, 0.42, -0.42, 0.18, -0.18], dtype=np.float32)
+        jitter[4] += float(roll_offsets[int(episode_index) % len(roll_offsets)])
+    start = np.clip(target + jitter, env.action_space.low, env.action_space.high).astype(np.float32)
+    if float(xy_std) > 0.0:
+        xy_offset = rng.normal(0.0, float(xy_std), size=2)
+        start = _offset_qpos_by_cartesian(env, start, np.asarray([xy_offset[0], xy_offset[1], 0.0], dtype=float), steps=8)
+    start[-1] = float(env.action_space.low[-1])
+    return np.clip(start, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
+def _make_above_edge_perturbed_start_qpos(
+    env: Any,
+    *,
+    q_above: np.ndarray,
+    seed: int,
+    episode_index: int,
+    joint_std: float,
+    xy_std: float,
+    z_std: float,
+    min_actual_z: float,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    rng = np.random.default_rng(int(seed) + 95101 + int(episode_index) * 31)
+    start = np.asarray(q_above, dtype=np.float32).copy()
+    joint_noise = rng.normal(0.0, max(0.0, float(joint_std)), size=start.shape).astype(np.float32)
+    if joint_noise.shape[0] >= 6:
+        joint_noise[-1] = 0.0
+    start = np.clip(start + joint_noise, env.action_space.low, env.action_space.high).astype(np.float32)
+
+    cartesian_offset = np.asarray(
+        [
+            rng.normal(0.0, max(0.0, float(xy_std))),
+            rng.normal(0.0, max(0.0, float(xy_std))),
+            rng.normal(0.0, max(0.0, float(z_std))),
+        ],
+        dtype=float,
+    )
+    if np.any(np.abs(cartesian_offset) > 0.0):
+        start = _offset_qpos_by_cartesian(env, start, cartesian_offset, steps=8)
+
+    delta = _tcp_to_object_delta_for_qpos(env, start)
+    min_z = max(0.0, float(min_actual_z))
+    z_correction = 0.0
+    for _ in range(3):
+        if float(delta[2]) >= min_z:
+            break
+        correction = float(min_z - float(delta[2]) + 0.004)
+        z_correction += correction
+        start = _offset_qpos_by_cartesian(env, start, np.asarray([0.0, 0.0, correction], dtype=float), steps=12)
+        delta = _tcp_to_object_delta_for_qpos(env, start)
+
+    start[-1] = _open_gripper_value(env)
+    delta = _tcp_to_object_delta_for_qpos(env, start)
+    return np.clip(start, env.action_space.low, env.action_space.high).astype(np.float32), {
+        "joint_std": float(joint_std),
+        "xy_std": float(xy_std),
+        "z_std": float(z_std),
+        "min_actual_z": float(min_actual_z),
+        "cartesian_offset": [float(value) for value in cartesian_offset],
+        "z_correction": float(z_correction),
+        "start_tcp_to_obj_delta": [float(value) for value in delta],
+    }
 
 
 def _make_home_closed_start_qpos(env: Any, reset_home_qpos: np.ndarray | None) -> np.ndarray:
@@ -1740,7 +2709,7 @@ def _object_visibility_in_camera(env: Any, renderer: Any, camera_name: str) -> d
     image = _render_camera(env, renderer, camera_name)
     detection = detect_colored_object(image)
     height, width = image.shape[:2]
-    if detection is None:
+    if detection is None or int(detection.get("area", 0)) < 20:
         return {
             "camera_name": camera_name,
             "visible": False,

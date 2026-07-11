@@ -71,6 +71,12 @@ Default to specialist skills plus a markdown team spec. Add extra role briefs on
 - Keep model-specific retries and recovery logic easy to rip out as models improve.
 - Require YAML frontmatter in every generated `SKILL.md`. Include at least `name` and `description` before the markdown body so native skill discovery can reliably find repo-specific generated skills.
 - Keep names deterministic and repository-friendly.
+- For long-running training or experiment harnesses, separate read-only
+  root-cause inspection from process mutation. Status/log/event reads are fine,
+  but stop/restart/resume, SIGTERM/SIGKILL, TensorBoard deletion/reset,
+  checkpoint/artifact cleanup, and active-run metadata edits require explicit
+  user approval immediately before execution. Never infer liveness from PID
+  only; include metric advancement and log progress in the report.
 
 ## 6-Phase Workflow
 

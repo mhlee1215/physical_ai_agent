@@ -17,10 +17,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from physical_ai_agent.so101_resolution_contract import (
+    require_dataset_config_256,
+    require_so101_image_resolution,
+)
+from physical_ai_agent.so101_hydra_config import SO101HydraTrainingEntry, load_so101_hydra_training_entry
+from physical_ai_agent.so101_training_config_schema import validate_so101_training_config
+
 
 DEFAULT_ROOT = Path("_workspace/so101_training")
 DEFAULT_LOCK = DEFAULT_ROOT / "active_training.json"
-DEFAULT_HF_DATASET_CACHE_ROOT = Path("_workspace/hf_datasets")
+DEFAULT_HYDRA_CONFIG = "training/grip_the_cube_v1"
 LOCAL_TRAINING_STANDARD_DOC = Path("docs/so101_local_training_standard.md")
 LOCAL_TRAINING_STANDARD_NAME = "primitive training with qwen validation v1"
 
@@ -57,13 +64,15 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     _add_common_args(parser)
     parser.add_argument(
         "--preset",
-        choices=["qwen-edge-loopfix-local"],
+        choices=["default", "grip-the-cube-v1-local", "qwen-edge-loopfix-local"],
         help=(
             "Apply a named local SO101 training preset. Presets are shortcuts for "
-            "canonical start_so101_training.py flags; do not add separate wrapper scripts."
+            "canonical start_so101_training.py flags; do not add separate wrapper scripts. "
+            "When neither --preset nor --dataset-config is supplied, the launcher uses "
+            "the default preset."
         ),
     )
-    parser.add_argument("--run-dir", type=Path, default=DEFAULT_ROOT / "runs" / "latest_lightning")
+    parser.add_argument("--run-dir", type=Path)
     parser.add_argument(
         "--training-id",
         help="Stable local ID for this training run. Defaults to the run directory name.",
@@ -73,35 +82,54 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
         type=Path,
         help="JSON file defining train/validation LeRobot datasets and training defaults.",
     )
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--tensorboard-port", type=int, default=6006)
-    parser.add_argument("--dashboard-port", type=int, default=8767)
-    parser.add_argument("--no-tensorboard", action="store_true")
+    parser.add_argument(
+        "--hydra-config",
+        help=(
+            "Hydra config name under configs/so101/hydra, for example "
+            "`training/grip_the_cube_v1`. It resolves to a Pydantic-validated "
+            "configs/so101/training/*.json file."
+        ),
+    )
+    parser.add_argument("--host")
+    parser.add_argument("--tensorboard-port", type=int)
+    parser.add_argument("--dashboard-port", type=int)
+    parser.add_argument("--no-tensorboard", action="store_true", default=None)
+    parser.add_argument(
+        "--no-tensorboard-tunnel",
+        action="store_true",
+        default=None,
+        help="Do not start a cloudflared quick tunnel for external TensorBoard access.",
+    )
     parser.add_argument(
         "--with-dashboard",
         action="store_true",
+        default=None,
         help="Start the legacy local dashboard. Off by default; use only when explicitly requested.",
     )
     parser.add_argument(
         "--with-gpu-monitor",
         action="store_true",
+        default=None,
         help="Start the TensorBoard GPU/system metrics helper. Off by default; use only when explicitly requested.",
     )
     parser.add_argument(
         "--with-progress-monitor",
         action="store_true",
+        default=None,
         help="Start the closed-loop progress monitor. Off by default; use only when explicitly requested.",
     )
-    parser.add_argument("--no-dashboard", action="store_true", help="Deprecated no-op: dashboard is off by default.")
-    parser.add_argument("--no-gpu-monitor", action="store_true", help="Deprecated no-op: GPU monitor is off by default.")
+    parser.add_argument("--no-dashboard", action="store_true", default=None, help="Deprecated no-op: dashboard is off by default.")
+    parser.add_argument("--no-gpu-monitor", action="store_true", default=None, help="Deprecated no-op: GPU monitor is off by default.")
     parser.add_argument(
         "--no-progress-monitor",
         action="store_true",
+        default=None,
         help="Deprecated no-op: progress monitor is off by default.",
     )
     parser.add_argument(
         "--allow-incomplete-monitoring",
         action="store_true",
+        default=None,
         help=(
             "Debug escape hatch: allow dataset-config training to start without "
             "the default TensorBoard, validation, checkpoint, and closed-loop guards."
@@ -110,84 +138,91 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--hf-dataset-cache-root",
         type=Path,
-        default=DEFAULT_HF_DATASET_CACHE_ROOT,
         help="Local root for Hugging Face dataset subfolder downloads.",
     )
     parser.add_argument(
         "--skip-hf-dataset-download",
         action="store_true",
+        default=None,
         help="Resolve configured HF cache roots without downloading. For debugging only.",
     )
     parser.add_argument(
         "--use-local-dataset-roots",
         action="store_true",
+        default=None,
         help="Use dataset root fields from the config directly and ignore configured HF dataset sources.",
     )
     parser.add_argument(
         "--hf-local-files-only",
         action="store_true",
+        default=None,
         help="Require configured HF dataset subfolders to already be present in the local HF cache root.",
     )
-    parser.add_argument("--gpu-monitor-interval-s", type=float, default=5.0)
-    parser.add_argument("--progress-monitor-interval-s", type=int, default=600)
+    parser.add_argument("--gpu-monitor-interval-s", type=float)
+    parser.add_argument("--progress-monitor-interval-s", type=int)
     parser.add_argument(
         "--runtime-platform",
         choices=["auto", "macos", "linux"],
-        default="auto",
         help="Runtime profile for training/eval defaults. auto detects the current OS.",
     )
     parser.add_argument(
         "--training-device",
         choices=["auto", "cpu", "mps", "cuda"],
-        default="auto",
         help="Default policy.device and Lightning accelerator when not explicitly forwarded.",
     )
-    parser.add_argument("--closed-loop-every-epochs", type=int, default=1)
-    parser.add_argument("--closed-loop-episodes", type=int, default=10)
-    parser.add_argument("--closed-loop-steps", type=int, default=120)
+    parser.add_argument("--closed-loop-every-epochs", type=int)
+    parser.add_argument("--closed-loop-episodes", type=int)
+    parser.add_argument("--closed-loop-steps", type=int)
     parser.add_argument("--closed-loop-env-id")
     parser.add_argument(
         "--closed-loop-mujoco-gl",
         choices=["auto", "glfw", "egl", "osmesa"],
-        default="auto",
         help="MuJoCo backend for closed-loop rollouts. auto uses glfw on macOS and egl on Linux.",
     )
     parser.add_argument(
         "--max-monitored-checkpoints",
         type=int,
-        default=20,
         help="Fail fast when --steps/--save_freq would create more monitored checkpoints than this.",
     )
-    parser.add_argument("--closed-loop-policy", choices=["off", "periodic", "best_only", "best_or_periodic"], default="periodic")
-    parser.add_argument("--closed-loop-runner", choices=["auto", "picklift", "qwen_chain"], default="auto")
-    parser.add_argument(
-        "--closed-loop-eval-skill-mode",
-        choices=["picklift", "pick_from_top_cube", "pick_and_place_cube"],
-        default=None,
-    )
+    parser.add_argument("--closed-loop-policy", choices=["off", "periodic", "best_only", "best_or_periodic"])
+    parser.add_argument("--closed-loop-runner", choices=["auto", "picklift", "qwen_chain"])
+    parser.add_argument("--closed-loop-eval-skill-mode")
     parser.add_argument("--closed-loop-task-prompt")
-    parser.add_argument("--closed-loop-record-rollout-gif", action="store_true")
-    parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--loop-artifact-width", type=int, default=128)
-    parser.add_argument("--loop-artifact-height", type=int, default=128)
-    parser.add_argument("--loop-artifact-fps", type=int, default=12)
-    parser.add_argument("--loop-artifact-every-n-steps", type=int, default=1)
-    parser.add_argument("--qwen-model", default="qwen3-vl-8b-instruct-mlx")
+    parser.add_argument(
+        "--closed-loop-action-contract-mode",
+        choices=[
+            "processor",
+            "legacy",
+            "processor_dataset_clamp",
+            "processor_gripper_snap",
+            "processor_delta_q",
+            "visual_servo_delta_q",
+            "visual_servo_gt_delta_q",
+        ],
+        help="Action conversion mode for closed-loop evaluator. Defaults come from the selected Hydra launcher config.",
+    )
+    parser.add_argument("--closed-loop-record-rollout-gif", action="store_true", default=None)
+    parser.add_argument("--record-loop-artifacts", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--render-loop-media", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--loop-artifact-width", type=int)
+    parser.add_argument("--loop-artifact-height", type=int)
+    parser.add_argument("--loop-artifact-fps", type=int)
+    parser.add_argument("--loop-artifact-every-n-steps", type=int)
+    parser.add_argument("--qwen-model")
     parser.add_argument("--qwen-base-url")
     parser.add_argument("--qwen-api-key")
     parser.add_argument("--qwen-response-json", type=Path)
     parser.add_argument("--qwen-plan-json", type=Path)
     parser.add_argument("--qwen-object")
     parser.add_argument("--qwen-env-object-color")
-    parser.add_argument("--closed-loop-subgoal-chain-mode", choices=["off", "fixed", "valid-mask"], default="off")
+    parser.add_argument("--closed-loop-subgoal-chain-mode", choices=["off", "fixed", "valid-mask"])
     parser.add_argument("--closed-loop-subgoal-sequence")
-    parser.add_argument("--closed-loop-fixed-subgoal-chunks", type=int, default=1)
+    parser.add_argument("--closed-loop-fixed-subgoal-chunks", type=int)
     parser.add_argument("--closed-loop-valid-mask-checkpoint", type=Path)
-    parser.add_argument("--closed-loop-valid-mask-threshold", type=float, default=0.5)
-    parser.add_argument("--closed-loop-valid-mask-consecutive", type=int, default=2)
-    parser.add_argument("--closed-loop-policy-n-action-steps", type=int, default=15)
-    parser.add_argument("--closed-loop-policy-num-steps", type=int, default=10)
+    parser.add_argument("--closed-loop-valid-mask-threshold", type=float)
+    parser.add_argument("--closed-loop-valid-mask-consecutive", type=int)
+    parser.add_argument("--closed-loop-policy-n-action-steps", type=int)
+    parser.add_argument("--closed-loop-policy-num-steps", type=int)
     parser.add_argument(
         "--validation-interval-steps",
         type=int,
@@ -196,7 +231,6 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--validation-interval-epochs",
         type=int,
-        default=1,
         help=(
             "Forward validation cadence as epochs. Defaults to 1 so HF/RunPod "
             "training writes val/loss whenever a validation dataset is configured. "
@@ -208,7 +242,6 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--python",
         type=Path,
-        default=Path(sys.executable),
         help="Python executable for SO101 helper scripts.",
     )
     parser.add_argument(
@@ -221,6 +254,17 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
 def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     passthrough = _apply_start_preset(args, passthrough, repo_root=repo_root)
+    hydra_config_name = args.hydra_config or DEFAULT_HYDRA_CONFIG
+    hydra_entry = load_so101_hydra_training_entry(hydra_config_name, repo_root=repo_root)
+    _apply_hydra_launcher_defaults(args, hydra_entry, repo_root=repo_root)
+    use_hydra_training_entry = bool(args.hydra_config) or args.dataset_config is None
+    if use_hydra_training_entry:
+        if args.dataset_config is not None:
+            raise SystemExit("Use either --hydra-config or --dataset-config, not both.")
+        args.dataset_config = hydra_entry.training_config_path(repo_root)
+        if hydra_entry.training_args and not passthrough and not args.training_args:
+            passthrough = ["--", *hydra_entry.training_args]
+        args.hydra_config = hydra_config_name
     active = status(args.lock_file)
     if active.get("active"):
         if not args.replace:
@@ -258,10 +302,19 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
             python=args.python,
             merge=not args.dry_run,
         )
+    if not args.dry_run:
+        require_dataset_config_256(dataset_config, repo_root=repo_root, context="start_so101_training")
+    require_so101_image_resolution(
+        height=int(args.loop_artifact_height),
+        width=int(args.loop_artifact_width),
+        context="start_so101_training loop artifact media",
+    )
+    _ensure_train_grid_bin_sidecars(dataset_config, repo_root=repo_root, build=not args.dry_run)
     training_args = _forwarded_args(args.training_args, passthrough)
     training_args = _with_dataset_config(training_args, dataset_config, runtime_platform=args.runtime_platform)
     training_args = _with_validation_schedule(training_args, args)
     training_args = _with_checkpoint_schedule(training_args, dataset_config, args)
+    training_args = _with_aligned_validation_schedule(training_args, dataset_config, args)
     runtime_contract = _runtime_contract(args, training_args)
     training_args = _with_runtime_contract(training_args, runtime_contract)
     training_args = _with_resume_checkpoint(training_args, train_output_dir)
@@ -277,8 +330,18 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     tensorboard_exe = _tensorboard_executable(args.python, repo_root)
     tensorboard_cmd = tensorboard_exe if tensorboard_exe else [str(args.python), "-m", "tensorboard.main"]
     tensorboard_cmd.extend(
-        ["--logdir", str(tensorboard_dir), "--host", args.host, "--port", str(args.tensorboard_port)]
+        [
+            "--logdir",
+            str(tensorboard_dir),
+            "--host",
+            args.host,
+            "--port",
+            str(args.tensorboard_port),
+            "--reload_multifile",
+            "true",
+        ]
     )
+    tensorboard_tunnel_cmd = _tensorboard_tunnel_command(args.tensorboard_port)
     dashboard_cmd = [
         str(args.python),
         str(repo_root / "scripts" / "serve_so101_training_dashboard.py"),
@@ -322,6 +385,7 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         train_cmd.extend(["--post-checkpoint-loop-command-json", json.dumps(post_checkpoint_loop_cmds)])
     cache_build_cmds = _cache_build_commands(args.python, repo_root, dataset_config)
     enable_tensorboard = not args.no_tensorboard
+    enable_tensorboard_tunnel = enable_tensorboard and not args.no_tensorboard_tunnel and tensorboard_tunnel_cmd is not None
     enable_dashboard = bool(args.with_dashboard) and not args.no_dashboard
     enable_gpu_monitor = bool(args.with_gpu_monitor) and not args.no_gpu_monitor
     enable_progress_monitor = bool(args.with_progress_monitor) and not args.no_progress_monitor
@@ -335,7 +399,11 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "local_training_standard": _local_training_standard(repo_root),
         "train_cmd": train_cmd,
         "dataset_config": dataset_config,
+        "hydra_config": args.hydra_config,
+        "launcher_defaults_config": hydra_config_name,
+        "hydra_entry": hydra_entry.model_dump(mode="json") if hydra_entry is not None else None,
         "tensorboard_cmd": tensorboard_cmd if enable_tensorboard else None,
+        "tensorboard_tunnel_cmd": tensorboard_tunnel_cmd if enable_tensorboard_tunnel else None,
         "dashboard_cmd": dashboard_cmd if enable_dashboard else None,
         "gpu_monitor_cmd": gpu_monitor_cmd if enable_gpu_monitor else None,
         "progress_monitor_cmd": progress_monitor_cmd if enable_progress_monitor else None,
@@ -346,10 +414,18 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "training_run_summary_path": str(training_run_summary_path),
         "tensorboard_url": f"http://127.0.0.1:{args.tensorboard_port}/" if enable_tensorboard else None,
         "mobile_tensorboard_url": _mobile_url(args.tensorboard_port) if enable_tensorboard else None,
+        "external_tensorboard_url": None,
+        "external_tensorboard_note": (
+            "available after start via cloudflared"
+            if enable_tensorboard_tunnel
+            else ("cloudflared unavailable or --no-tensorboard-tunnel" if enable_tensorboard else None)
+        ),
+        "clear_tensorboard_old_data": bool(enable_tensorboard),
         "dashboard_url": f"http://127.0.0.1:{args.dashboard_port}/" if enable_dashboard else None,
         "logs": {
             "train": str(log_dir / "train.log"),
             "tensorboard": str(log_dir / "tensorboard.log") if enable_tensorboard else None,
+            "tensorboard_tunnel": str(log_dir / "tensorboard_tunnel.log") if enable_tensorboard_tunnel else None,
             "dashboard": str(log_dir / "dashboard.log") if enable_dashboard else None,
             "gpu_monitor": str(log_dir / "gpu_monitor.log") if enable_gpu_monitor else None,
             "progress_monitor": str(log_dir / "progress_monitor.log") if enable_progress_monitor else None,
@@ -368,11 +444,23 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         return 0
 
     _run_cache_builds(cache_build_cmds, log_dir=log_dir, cwd=repo_root)
+    if enable_tensorboard:
+        _clear_tensorboard_old_data(tensorboard_dir)
     _write_training_run_summary(training_run_summary_path, launch_plan)
     train = _popen(train_cmd, log_dir / "train.log", cwd=repo_root)
     train_pid_file.write_text(str(train.pid) + "\n", encoding="utf-8")
     tensorboard = (
         _popen(tensorboard_cmd, log_dir / "tensorboard.log", cwd=repo_root) if enable_tensorboard else None
+    )
+    tensorboard_tunnel = (
+        _popen(tensorboard_tunnel_cmd, log_dir / "tensorboard_tunnel.log", cwd=repo_root)
+        if enable_tensorboard_tunnel and tensorboard_tunnel_cmd is not None
+        else None
+    )
+    external_tensorboard_url = (
+        _wait_for_tensorboard_tunnel_url(log_dir / "tensorboard_tunnel.log")
+        if tensorboard_tunnel is not None
+        else None
     )
     dashboard = _popen(dashboard_cmd, log_dir / "dashboard.log", cwd=repo_root) if enable_dashboard else None
     gpu_monitor = (
@@ -388,6 +476,13 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
         "started_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "train_pid": train.pid,
         "tensorboard_pid": tensorboard.pid if tensorboard else None,
+        "tensorboard_tunnel_pid": tensorboard_tunnel.pid if tensorboard_tunnel else None,
+        "external_tensorboard_url": external_tensorboard_url,
+        "external_tensorboard_note": (
+            None
+            if external_tensorboard_url
+            else launch_plan.get("external_tensorboard_note")
+        ),
         "dashboard_pid": dashboard.pid if dashboard else None,
         "gpu_monitor_pid": gpu_monitor.pid if gpu_monitor else None,
         "progress_monitor_pid": progress_monitor.pid if progress_monitor else None,
@@ -399,53 +494,119 @@ def start(args: argparse.Namespace, passthrough: list[str]) -> int:
     return 0
 
 
+def _clear_tensorboard_old_data(tensorboard_dir: Path) -> int:
+    if not tensorboard_dir.exists():
+        return 0
+    removed = 0
+    for pattern in ("events.out.tfevents*", "*.profile-empty"):
+        for path in tensorboard_dir.rglob(pattern):
+            if not path.is_file():
+                continue
+            path.unlink()
+            removed += 1
+    return removed
+
+
+def _apply_hydra_launcher_defaults(
+    args: argparse.Namespace,
+    entry: SO101HydraTrainingEntry,
+    *,
+    repo_root: Path,
+) -> None:
+    defaults = entry.launcher
+
+    path_fields = {
+        "run_dir": defaults.run_dir,
+        "hf_dataset_cache_root": defaults.hf_dataset_cache_root,
+        "closed_loop_valid_mask_checkpoint": defaults.closed_loop_valid_mask_checkpoint,
+        "python": defaults.python,
+    }
+    for name, value in path_fields.items():
+        if getattr(args, name, None) is None and value is not None:
+            path = Path(value)
+            setattr(args, name, path if path.is_absolute() else repo_root / path)
+
+    scalar_fields = {
+        "host": defaults.host,
+        "tensorboard_port": defaults.tensorboard_port,
+        "dashboard_port": defaults.dashboard_port,
+        "allow_incomplete_monitoring": defaults.allow_incomplete_monitoring,
+        "skip_hf_dataset_download": defaults.skip_hf_dataset_download,
+        "use_local_dataset_roots": defaults.use_local_dataset_roots,
+        "hf_local_files_only": defaults.hf_local_files_only,
+        "gpu_monitor_interval_s": defaults.gpu_monitor_interval_s,
+        "progress_monitor_interval_s": defaults.progress_monitor_interval_s,
+        "progress_monitor_batch_size": defaults.progress_monitor_batch_size,
+        "progress_monitor_validation_max_batches": defaults.progress_monitor_validation_max_batches,
+        "runtime_platform": defaults.runtime_platform,
+        "training_device": defaults.training_device,
+        "closed_loop_every_epochs": defaults.closed_loop_every_epochs,
+        "closed_loop_episodes": defaults.closed_loop_episodes,
+        "closed_loop_steps": defaults.closed_loop_steps,
+        "closed_loop_env_id": defaults.closed_loop_env_id,
+        "closed_loop_mujoco_gl": defaults.closed_loop_mujoco_gl,
+        "max_monitored_checkpoints": defaults.max_monitored_checkpoints,
+        "closed_loop_policy": defaults.closed_loop_policy,
+        "closed_loop_runner": defaults.closed_loop_runner,
+        "closed_loop_eval_skill_mode": defaults.closed_loop_eval_skill_mode,
+        "closed_loop_task_prompt": defaults.closed_loop_task_prompt,
+        "closed_loop_action_contract_mode": defaults.closed_loop_action_contract_mode,
+        "closed_loop_record_rollout_gif": defaults.closed_loop_record_rollout_gif,
+        "record_loop_artifacts": defaults.record_loop_artifacts,
+        "render_loop_media": defaults.render_loop_media,
+        "loop_artifact_width": defaults.loop_artifact_width,
+        "loop_artifact_height": defaults.loop_artifact_height,
+        "loop_artifact_fps": defaults.loop_artifact_fps,
+        "loop_artifact_every_n_steps": defaults.loop_artifact_every_n_steps,
+        "qwen_model": defaults.qwen_model,
+        "qwen_base_url": defaults.qwen_base_url,
+        "qwen_api_key": defaults.qwen_api_key,
+        "qwen_object": defaults.qwen_object,
+        "qwen_env_object_color": defaults.qwen_env_object_color,
+        "closed_loop_subgoal_chain_mode": defaults.closed_loop_subgoal_chain_mode,
+        "closed_loop_subgoal_sequence": defaults.closed_loop_subgoal_sequence,
+        "closed_loop_fixed_subgoal_chunks": defaults.closed_loop_fixed_subgoal_chunks,
+        "closed_loop_valid_mask_threshold": defaults.closed_loop_valid_mask_threshold,
+        "closed_loop_valid_mask_consecutive": defaults.closed_loop_valid_mask_consecutive,
+        "closed_loop_policy_n_action_steps": defaults.closed_loop_policy_n_action_steps,
+        "closed_loop_policy_num_steps": defaults.closed_loop_policy_num_steps,
+        "validation_interval_steps": defaults.validation_interval_steps,
+        "validation_interval_epochs": defaults.validation_interval_epochs,
+    }
+    for name, value in scalar_fields.items():
+        if getattr(args, name, None) is None:
+            setattr(args, name, value)
+
+    if args.no_tensorboard is None:
+        args.no_tensorboard = not defaults.tensorboard_enabled
+    if args.no_tensorboard_tunnel is None:
+        args.no_tensorboard_tunnel = not defaults.tensorboard_tunnel_enabled
+    if args.with_dashboard is None:
+        args.with_dashboard = defaults.dashboard_enabled
+    if args.with_gpu_monitor is None:
+        args.with_gpu_monitor = defaults.gpu_monitor_enabled
+    if args.with_progress_monitor is None:
+        args.with_progress_monitor = defaults.progress_monitor_enabled
+    if args.no_dashboard is None:
+        args.no_dashboard = False
+    if args.no_gpu_monitor is None:
+        args.no_gpu_monitor = False
+    if args.no_progress_monitor is None:
+        args.no_progress_monitor = False
+
+
 def _apply_start_preset(args: argparse.Namespace, passthrough: list[str], *, repo_root: Path) -> list[str]:
-    if not getattr(args, "preset", None):
+    preset = getattr(args, "preset", None)
+    if not preset:
         return passthrough
-    if args.preset == "qwen-edge-loopfix-local":
-        args.dataset_config = repo_root / "configs/so101/training_datasets/qwen_edge_primitives.json"
-        args.run_dir = (
-            repo_root
-            / "_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/"
-            "qwen_edge_primitives_resume_009632_loopfix_30000"
-        )
-        args.host = "0.0.0.0"
-        args.tensorboard_port = 6015
-        args.runtime_platform = "macos"
-        args.training_device = "mps"
-        args.closed_loop_every_epochs = 1
-        args.closed_loop_episodes = 10
-        args.closed_loop_steps = 120
-        args.closed_loop_env_id = "MuJoCoPickLift-v1"
-        args.closed_loop_mujoco_gl = "glfw"
-        args.closed_loop_runner = "qwen_chain"
-        args.closed_loop_policy = "best_or_periodic"
-        args.closed_loop_subgoal_chain_mode = "valid-mask"
-        args.closed_loop_valid_mask_checkpoint = (
-            repo_root / "_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt"
-        )
-        args.closed_loop_policy_n_action_steps = 15
-        args.closed_loop_policy_num_steps = 10
-        args.record_loop_artifacts = True
-        args.render_loop_media = True
-        args.loop_artifact_width = 128
-        args.loop_artifact_height = 128
-        args.loop_artifact_fps = 12
-        args.max_monitored_checkpoints = 160
-        args.hf_local_files_only = True
-        args.skip_hf_dataset_download = True
-        args.python = repo_root / ".venv/bin/python"
-        if not passthrough and not args.training_args:
-            passthrough = [
-                "--",
-                "--config_path=_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/"
-                "qwen_edge_primitives_suite3_resume_009408_aug_full_virtual_statsfix_30000/"
-                "model/checkpoints/009632/pretrained_model/train_config.json",
-                "--resume=true",
-                "--so101-resume-checkpoint-path=_workspace/so101_training/runs/primitive_training_with_qwen_validation_v1/"
-                "qwen_edge_primitives_suite3_resume_009408_aug_full_virtual_statsfix_30000/model/checkpoints/009632",
-                "--steps=30000",
-            ]
+    if preset == "default":
+        args.hydra_config = DEFAULT_HYDRA_CONFIG
+        return passthrough
+    if preset == "grip-the-cube-v1-local":
+        args.hydra_config = DEFAULT_HYDRA_CONFIG
+        return passthrough
+    if preset == "qwen-edge-loopfix-local":
+        args.hydra_config = "training/qwen_edge_loopfix_local"
         return passthrough
     raise SystemExit(f"unknown preset: {args.preset}")
 
@@ -455,16 +616,19 @@ def status(lock_file: Path) -> dict[str, Any]:
     record.setdefault("local_training_standard", _local_training_standard(Path(__file__).resolve().parents[1]))
     train = _process_status(record.get("train_pid"))
     tensorboard = _process_status(record.get("tensorboard_pid"))
+    tensorboard_tunnel = _process_status(record.get("tensorboard_tunnel_pid"))
     dashboard = _process_status(record.get("dashboard_pid"))
     gpu_monitor = _process_status(record.get("gpu_monitor_pid"))
     progress_monitor = _process_status(record.get("progress_monitor_pid"))
     record["train"] = train
     record["tensorboard"] = tensorboard
+    record["tensorboard_tunnel"] = tensorboard_tunnel
     record["dashboard"] = dashboard
     record["gpu_monitor"] = gpu_monitor
     record["progress_monitor"] = progress_monitor
     record["active"] = any(
-        bool(process.get("alive")) for process in (train, tensorboard, dashboard, gpu_monitor, progress_monitor)
+        bool(process.get("alive"))
+        for process in (train, tensorboard, tensorboard_tunnel, dashboard, gpu_monitor, progress_monitor)
     )
     if record.get("tensorboard_url") and not record.get("mobile_tensorboard_url"):
         port = _url_port(str(record["tensorboard_url"]))
@@ -487,6 +651,7 @@ def _write_training_run_summary(path: Path, launch_plan: dict[str, Any]) -> None
             "train_cmd",
             "dataset_config",
             "tensorboard_cmd",
+            "tensorboard_tunnel_cmd",
             "dashboard_cmd",
             "gpu_monitor_cmd",
             "progress_monitor_cmd",
@@ -496,6 +661,8 @@ def _write_training_run_summary(path: Path, launch_plan: dict[str, Any]) -> None
             "runtime_contract",
             "tensorboard_url",
             "mobile_tensorboard_url",
+            "external_tensorboard_url",
+            "external_tensorboard_note",
             "dashboard_url",
         )
     }
@@ -531,8 +698,11 @@ def _update_training_registry(repo_root: Path, record: dict[str, Any]) -> None:
         "started_at_utc": record.get("started_at_utc"),
         "tensorboard_url": record.get("tensorboard_url"),
         "mobile_tensorboard_url": record.get("mobile_tensorboard_url"),
+        "external_tensorboard_url": record.get("external_tensorboard_url"),
+        "external_tensorboard_note": record.get("external_tensorboard_note"),
         "train_pid": record.get("train_pid"),
         "tensorboard_pid": record.get("tensorboard_pid"),
+        "tensorboard_tunnel_pid": record.get("tensorboard_tunnel_pid"),
     }
     runs = [row for row in runs if not (isinstance(row, dict) and row.get("training_id") == training_id)]
     runs.append(compact)
@@ -551,6 +721,7 @@ def stop(lock_file: Path, *, timeout_s: float, json_output: bool = False) -> int
         record.get("gpu_monitor_pid"),
         record.get("progress_monitor_pid"),
         record.get("dashboard_pid"),
+        record.get("tensorboard_tunnel_pid"),
         record.get("tensorboard_pid"),
         record.get("train_pid"),
     ]
@@ -577,6 +748,7 @@ def _human_status(record: dict[str, Any]) -> str:
         f"run_dir: {record.get('run_dir', '-')}",
         f"train: {_process_line(record.get('train'))}",
         f"tensorboard: {_process_line(record.get('tensorboard'))}",
+        f"tensorboard_tunnel: {_process_line(record.get('tensorboard_tunnel'))}",
         f"dashboard: {_process_line(record.get('dashboard'))}",
         f"gpu_monitor: {_process_line(record.get('gpu_monitor'))}",
         f"progress_monitor: {_process_line(record.get('progress_monitor'))}",
@@ -585,6 +757,10 @@ def _human_status(record: dict[str, Any]) -> str:
         lines.append(f"tensorboard_url: {record['tensorboard_url']}")
     if record.get("mobile_tensorboard_url"):
         lines.append(f"mobile_tensorboard_url: {record['mobile_tensorboard_url']}")
+    if record.get("external_tensorboard_url"):
+        lines.append(f"external_tensorboard_url: {record['external_tensorboard_url']}")
+    elif record.get("external_tensorboard_note"):
+        lines.append(f"external_tensorboard_url: unavailable ({record['external_tensorboard_note']})")
     if record.get("dashboard_url"):
         lines.append(f"dashboard_url: {record['dashboard_url']}")
     standard = record.get("local_training_standard")
@@ -741,6 +917,10 @@ def _load_dataset_config(path: Path | None, *, repo_root: Path) -> dict[str, Any
     payload = _read_json(resolved)
     if payload is None:
         raise SystemExit(f"Dataset config not found or empty: {resolved}")
+    validation_errors = validate_so101_training_config(payload, path=resolved, repo_root=repo_root, strict=False)
+    if validation_errors:
+        detail = "\n".join(f"- {error}" for error in validation_errors)
+        raise SystemExit(f"SO101 training config schema validation failed:\n{detail}")
     payload["config_path"] = str(resolved)
     return payload
 
@@ -1035,7 +1215,7 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
     for name, cli_name in (
         ("num_workers", "num_workers"),
         ("batch_size", "batch_size"),
-        ("policy_repo_id", "policy.repo_id"),
+        ("policy_repo_id", "policy.path"),
         ("lightning_precision", "lightning-precision"),
         ("checkpoint_retention_policy", "checkpoint-retention-policy"),
     ):
@@ -1046,6 +1226,50 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
             updated = _ensure_arg(updated, cli_name, str(value))
     if "policy_push_to_hub" in training:
         updated = _ensure_arg(updated, "policy.push_to_hub", str(bool(training["policy_push_to_hub"])).lower())
+    visual_servo = config.get("visual_servo") or {}
+    if not isinstance(visual_servo, dict):
+        raise SystemExit("dataset config visual_servo must be an object")
+    if "loss_weight" in visual_servo:
+        updated = _ensure_arg(updated, "so101-visual-servo-loss-weight", str(visual_servo["loss_weight"]))
+    if "hidden_dim" in visual_servo:
+        updated = _ensure_arg(updated, "so101-visual-servo-hidden-dim", str(visual_servo["hidden_dim"]))
+    action_chunk_consistency = config.get("action_chunk_consistency") or {}
+    if not isinstance(action_chunk_consistency, dict):
+        raise SystemExit("dataset config action_chunk_consistency must be an object")
+    if "steps" in action_chunk_consistency:
+        updated = _ensure_arg(
+            updated,
+            "so101-action-chunk-consistency-steps",
+            str(action_chunk_consistency["steps"]),
+        )
+    if "weight" in action_chunk_consistency:
+        updated = _ensure_arg(
+            updated,
+            "so101-action-chunk-consistency-weight",
+            str(action_chunk_consistency["weight"]),
+        )
+    action_smoothness = config.get("action_smoothness") or {}
+    if not isinstance(action_smoothness, dict):
+        raise SystemExit("dataset config action_smoothness must be an object")
+    if "weight" in action_smoothness:
+        updated = _ensure_arg(updated, "so101-action-smoothness-loss-weight", str(action_smoothness["weight"]))
+    if "include_gripper" in action_smoothness:
+        updated = _ensure_boolean_optional_arg(
+            updated,
+            "so101-action-smoothness-include-gripper",
+            value=bool(action_smoothness["include_gripper"]),
+        )
+    action_teacher_importance = config.get("action_teacher_importance") or {}
+    if not isinstance(action_teacher_importance, dict):
+        raise SystemExit("dataset config action_teacher_importance must be an object")
+    for name, cli_name in (
+        ("delta_weight", "so101-action-delta-loss-weight"),
+        ("gripper_transition_weight", "so101-action-gripper-transition-loss-weight"),
+        ("terminal_steps", "so101-action-terminal-loss-steps"),
+        ("terminal_weight", "so101-action-terminal-loss-weight"),
+    ):
+        if name in action_teacher_importance:
+            updated = _ensure_arg(updated, cli_name, str(action_teacher_importance[name]))
     cache = config.get("predecoded_image_cache") or {}
     if not isinstance(cache, dict):
         raise SystemExit("dataset config predecoded_image_cache must be an object")
@@ -1057,6 +1281,8 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
             continue
         if name in cache and cache.get(name) not in (None, False, {}):
             updated = _ensure_arg(updated, cli_name, str(_resolve_cache_dir(cache, name)))
+    if train.get("grid_bin_sidecar"):
+        updated = _ensure_arg(updated, "train-grid-bin-sidecar", str(train["grid_bin_sidecar"]))
     tensorboard = config.get("tensorboard") or {}
     if not isinstance(tensorboard, dict):
         raise SystemExit("dataset config tensorboard must be an object")
@@ -1075,6 +1301,12 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
         ("image_camera_dropout_prob", "so101-image-camera-dropout-prob"),
         ("image_patch_dropout_prob", "so101-image-patch-dropout-prob"),
         ("image_patch_mask_ratio", "so101-image-patch-mask-ratio"),
+        ("image_blur_prob", "so101-image-blur-prob"),
+        ("image_blur_kernel_size", "so101-image-blur-kernel-size"),
+        ("image_motion_blur_prob", "so101-image-motion-blur-prob"),
+        ("image_motion_blur_kernel_size", "so101-image-motion-blur-kernel-size"),
+        ("image_noise_std", "so101-image-noise-std"),
+        ("image_color_jitter_strength", "so101-image-color-jitter-strength"),
         ("image_affine_degrees", "so101-image-affine-degrees"),
         ("image_affine_translate", "so101-image-affine-translate"),
     ):
@@ -1090,6 +1322,61 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
         if name in augmentation:
             updated = _ensure_boolean_optional_arg(updated, cli_name, value=bool(augmentation[name]))
     return updated
+
+
+def _ensure_train_grid_bin_sidecars(config: dict[str, Any] | None, *, repo_root: Path, build: bool) -> None:
+    if not config:
+        return
+    train_datasets = config.get("train_datasets")
+    if isinstance(train_datasets, list) and train_datasets:
+        for index, entry in enumerate(train_datasets):
+            if not isinstance(entry, dict):
+                raise SystemExit(f"dataset config train_datasets[{index}] must be an object")
+            _ensure_train_grid_bin_sidecar(entry, repo_root=repo_root, build=build)
+        return
+    train = config.get("train_dataset")
+    if not isinstance(train, dict):
+        raise SystemExit("dataset config train_dataset must be an object")
+    _ensure_train_grid_bin_sidecar(train, repo_root=repo_root, build=build)
+
+
+def _ensure_train_grid_bin_sidecar(entry: dict[str, Any], *, repo_root: Path, build: bool) -> None:
+    if not entry.get("root"):
+        raise SystemExit("train dataset entry must include root before grid-bin balancing")
+    sidecar = entry.get("grid_bin_sidecar")
+    if sidecar:
+        sidecar_path = _resolve_root_path(repo_root, Path(str(sidecar)))
+    else:
+        root = Path(str(entry["root"]))
+        sidecar_path = (
+            _resolve_root_path(repo_root, root)
+            / "meta"
+            / "camera_grid_bins"
+            / "observation_images_camera1_4x4_frame0.parquet"
+        )
+        entry["grid_bin_sidecar"] = _relative_or_absolute(repo_root, sidecar_path)
+    if sidecar_path.exists():
+        return
+    if not build:
+        return
+    from scripts.build_so101_camera_grid_bins import build_bins
+
+    build_bins(
+        dataset_root=_resolve_root_path(repo_root, Path(str(entry["root"]))),
+        camera_key="observation.images.camera1",
+        grid_size=4,
+        frame_index=0,
+        min_area=20,
+    )
+    if not sidecar_path.exists():
+        raise SystemExit(f"failed to build required grid-bin sidecar: {sidecar_path}")
+
+
+def _relative_or_absolute(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 def _train_dataset_entries(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1200,7 +1487,7 @@ def _with_validation_schedule(args: list[str], namespace: argparse.Namespace) ->
     if namespace.validation_interval_steps is not None:
         return [*args, f"--validation-interval-steps={int(namespace.validation_interval_steps)}"]
     if _closed_loop_policy_name(namespace) != "off":
-        return [*args, f"--validation-interval-epochs={int(namespace.closed_loop_every_epochs)}"]
+        return args
     if namespace.validation_interval_epochs is not None:
         return [*args, f"--validation-interval-epochs={int(namespace.validation_interval_epochs)}"]
     return args
@@ -1220,6 +1507,24 @@ def _with_checkpoint_schedule(
         return args
     checkpoint_interval = steps_per_epoch * max(1, int(namespace.closed_loop_every_epochs))
     return [*args, f"--save_freq={checkpoint_interval}"]
+
+
+def _with_aligned_validation_schedule(
+    args: list[str],
+    config: dict[str, Any] | None,
+    namespace: argparse.Namespace,
+) -> list[str]:
+    if _has_any_arg(args, "validation-interval-steps", "validation-every-n-train-steps"):
+        return args
+    if _closed_loop_policy_name(namespace) == "off":
+        return args
+    save_freq = _positive_int_arg(args, "save_freq") or _positive_int_arg(args, "save-freq")
+    if save_freq is None:
+        steps_per_epoch = _steps_per_epoch(config or {}, args) if config else None
+        if steps_per_epoch is None:
+            return args
+        save_freq = steps_per_epoch * max(1, int(namespace.closed_loop_every_epochs))
+    return [*args, f"--validation-interval-steps={int(save_freq)}"]
 
 
 def _runtime_contract(namespace: argparse.Namespace, training_args: list[str]) -> dict[str, str]:
@@ -1326,7 +1631,9 @@ def _validate_monitoring_contract(
 
     steps_per_epoch = _steps_per_epoch(dataset_config, training_args)
     save_freq = _positive_int_arg(training_args, "save_freq") or _positive_int_arg(training_args, "save-freq")
-    if save_freq is not None:
+    retention_policy = _arg_value(training_args, "checkpoint-retention-policy")
+    strict_checkpoint_retention = retention_policy == "best_val_and_closed_loop"
+    if save_freq is not None and not strict_checkpoint_retention:
         planned_steps = _positive_int_arg(training_args, "steps")
         max_checkpoints = max(1, int(args.max_monitored_checkpoints))
         if planned_steps is not None:
@@ -1377,13 +1684,23 @@ def _validate_monitoring_contract(
 
     closed_loop = dataset_config.get("closed_loop") or {}
     closed_loop_runner = _closed_loop_runner(args, dataset_config)
+    _validate_closed_loop_test_case_commands(
+        dataset_config=dataset_config,
+        post_checkpoint_loop_cmds=post_checkpoint_loop_cmds,
+        errors=errors,
+    )
     if closed_loop_runner != "qwen_chain" and not args.closed_loop_eval_skill_mode and not (
         isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode")
     ):
         errors.append("closed-loop eval skill mode must be set in config closed_loop.eval_skill_mode or CLI.")
     if not _closed_loop_task_prompt(args, dataset_config):
         errors.append("closed-loop task prompt must be set in config closed_loop.task_prompt or CLI.")
-    if closed_loop_runner == "qwen_chain" and _closed_loop_valid_mask_checkpoint(args, dataset_config) is None:
+    action_contract_mode = _closed_loop_action_contract_mode(args, dataset_config)
+    if (
+        closed_loop_runner == "qwen_chain"
+        and action_contract_mode not in {"visual_servo_delta_q", "visual_servo_gt_delta_q"}
+        and _closed_loop_valid_mask_checkpoint(args, dataset_config) is None
+    ):
         errors.append(
             "qwen_chain loop tests require closed_loop.valid_mask_checkpoint or "
             "--closed-loop-valid-mask-checkpoint."
@@ -1410,10 +1727,48 @@ def _validate_monitoring_contract(
                 f"checkpoint save cadence ({save_freq} steps) must match closed-loop cadence "
                 f"({closed_loop_gap} steps) so every validation-loss checkpoint runs closed-loop."
             )
+        planned_steps = _positive_int_arg(training_args, "steps")
+        if planned_steps is not None and planned_steps % save_freq != 0:
+            errors.append(
+                f"training steps ({planned_steps}) must be divisible by checkpoint save cadence "
+                f"({save_freq}) so the final checkpoint also has validation and loop-test results."
+            )
 
     if errors:
         detail = "\n".join(f"- {error}" for error in errors)
         raise SystemExit(f"SO101 monitored training contract failed:\n{detail}")
+
+
+def _validate_closed_loop_test_case_commands(
+    *,
+    dataset_config: dict[str, Any] | None,
+    post_checkpoint_loop_cmds: list[list[str]],
+    errors: list[str],
+) -> None:
+    test_cases = _closed_loop_test_cases(dataset_config)
+    if not test_cases or not post_checkpoint_loop_cmds:
+        return
+    if len(post_checkpoint_loop_cmds) != len(test_cases):
+        errors.append(
+            f"closed-loop command/test-case count mismatch: commands={len(post_checkpoint_loop_cmds)} "
+            f"test_cases={len(test_cases)}"
+        )
+        return
+    for index, (test_case, command) in enumerate(zip(test_cases, post_checkpoint_loop_cmds, strict=True)):
+        expected_id = str(test_case.get("id") or test_case.get("name") or "closed_loop")
+        actual_id = _arg_value(command, "closed-loop-test-id")
+        if actual_id != expected_id:
+            errors.append(
+                f"closed_loop.test_cases[{index}] id mismatch: command has {actual_id!r}, expected {expected_id!r}."
+            )
+        expected_report = _closed_loop_start_report_path(test_case)
+        if expected_report:
+            actual_report = _arg_value(command, "closed-loop-start-report-path")
+            if actual_report != expected_report:
+                errors.append(
+                    f"closed_loop.test_cases[{index}] start report mismatch: command has {actual_report!r}, "
+                    f"expected {expected_report!r}."
+                )
 
 
 def _has_virtual_validation_sources(dataset_config: dict[str, Any] | None) -> bool:
@@ -1468,7 +1823,10 @@ def _positive_int_arg(args: list[str], name: str) -> int | None:
 
 
 def _closed_loop_policy_name(args: argparse.Namespace) -> str:
-    return str(getattr(args, "closed_loop_policy", "periodic") or "periodic")
+    value = getattr(args, "closed_loop_policy", None)
+    if value:
+        return str(value)
+    raise SystemExit("closed_loop_policy must be set by the selected Hydra launcher config or CLI override.")
 
 
 def _monitor_validation_dataset(dataset_config: dict[str, Any]) -> dict[str, str] | None:
@@ -1511,9 +1869,23 @@ def _progress_monitor_command(
     training = dataset_config.get("training") or {}
     if not isinstance(training, dict):
         training = {}
-    batch_size = int(_arg_value(training_args, "batch_size") or training.get("batch_size") or 4)
-    steps_per_epoch = int(training.get("steps_per_epoch") or _arg_value(training_args, "steps_per_epoch") or 1)
-    policy_device = str(_arg_value(training_args, "policy.device") or "auto")
+    batch_size_value = (
+        _arg_value(training_args, "batch_size")
+        or training.get("batch_size")
+        or _required_arg(args, "progress_monitor_batch_size")
+    )
+    steps_per_epoch_value = training.get("steps_per_epoch") or _arg_value(training_args, "steps_per_epoch")
+    if steps_per_epoch_value is None:
+        if getattr(args, "allow_incomplete_monitoring", False):
+            return None
+        raise SystemExit("training.steps_per_epoch or --steps_per_epoch is required for SO101 progress monitor commands.")
+    validation_max_batches = training.get("validation_max_batches") or _required_arg(
+        args,
+        "progress_monitor_validation_max_batches",
+    )
+    batch_size = int(batch_size_value)
+    steps_per_epoch = int(steps_per_epoch_value)
+    policy_device = str(_arg_value(training_args, "policy.device") or _required_arg(args, "training_device"))
     if policy_device not in {"auto", "cpu", "mps", "cuda"}:
         policy_device = "auto"
     closed_loop_runner = _closed_loop_runner(args, dataset_config)
@@ -1539,7 +1911,7 @@ def _progress_monitor_command(
         "--batch-size",
         str(batch_size),
         "--max-batches",
-        str(training.get("validation_max_batches", 16)),
+        str(validation_max_batches),
         "--train-pid-file",
         str(train_pid_file),
         "--closed-loop-every-epochs",
@@ -1557,47 +1929,67 @@ def _progress_monitor_command(
         "--closed-loop-runner",
         closed_loop_runner,
         "--closed-loop-policy",
-        args.closed_loop_policy,
+        _required_arg(args, "closed_loop_policy"),
         "--closed-loop-eval-skill-mode",
         _closed_loop_eval_skill_mode(args, dataset_config),
         "--closed-loop-subgoal-chain-mode",
-        getattr(args, "closed_loop_subgoal_chain_mode", "off"),
+        _required_arg(args, "closed_loop_subgoal_chain_mode"),
         "--closed-loop-fixed-subgoal-chunks",
-        str(getattr(args, "closed_loop_fixed_subgoal_chunks", 1)),
+        str(_required_arg(args, "closed_loop_fixed_subgoal_chunks")),
         "--closed-loop-valid-mask-threshold",
-        str(getattr(args, "closed_loop_valid_mask_threshold", 0.5)),
+        str(_required_arg(args, "closed_loop_valid_mask_threshold")),
         "--closed-loop-valid-mask-consecutive",
-        str(getattr(args, "closed_loop_valid_mask_consecutive", 2)),
+        str(_required_arg(args, "closed_loop_valid_mask_consecutive")),
         "--policy-n-action-steps",
-        str(getattr(args, "closed_loop_policy_n_action_steps", 15)),
+        str(_required_arg(args, "closed_loop_policy_n_action_steps")),
         "--policy-num-steps",
-        str(getattr(args, "closed_loop_policy_num_steps", 10)),
+        str(_required_arg(args, "closed_loop_policy_num_steps")),
+        "--closed-loop-action-contract-mode",
+        _closed_loop_action_contract_mode(args, dataset_config),
         "--local-files-only",
     ]
+    action_rmse_sweep = ((dataset_config.get("closed_loop") or {}).get("action_rmse_sweep") or {}) if dataset_config else {}
+    if isinstance(action_rmse_sweep, dict):
+        if "enabled" in action_rmse_sweep:
+            cmd.append("--closed-loop-action-rmse-sweep" if action_rmse_sweep.get("enabled") else "--no-closed-loop-action-rmse-sweep")
+        n_action_steps = action_rmse_sweep.get("n_action_steps")
+        if isinstance(n_action_steps, list) and n_action_steps:
+            cmd.extend(
+                [
+                    "--closed-loop-action-rmse-sweep-n-action-steps",
+                    ",".join(str(int(value)) for value in n_action_steps),
+                ]
+            )
     closed_loop_subgoal_sequence = getattr(args, "closed_loop_subgoal_sequence", None)
     if closed_loop_subgoal_sequence:
         cmd.extend(["--closed-loop-subgoal-sequence", str(closed_loop_subgoal_sequence)])
     closed_loop_valid_mask_checkpoint = _closed_loop_valid_mask_checkpoint(args, dataset_config)
-    if closed_loop_valid_mask_checkpoint:
+    if closed_loop_valid_mask_checkpoint and _closed_loop_action_contract_mode(args, dataset_config) not in {
+        "visual_servo_delta_q",
+        "visual_servo_gt_delta_q",
+    }:
         cmd.extend(["--closed-loop-valid-mask-checkpoint", str(closed_loop_valid_mask_checkpoint)])
     closed_loop_task_prompt = _closed_loop_task_prompt(args, dataset_config)
     if closed_loop_task_prompt:
         cmd.extend(["--closed-loop-task-prompt", closed_loop_task_prompt])
+    closed_loop_env_object_color = _qwen_env_object_color(args, dataset_config)
+    if closed_loop_env_object_color:
+        cmd.extend(["--closed-loop-env-object-color", closed_loop_env_object_color])
     if args.closed_loop_record_rollout_gif or _closed_loop_record_rollout_gif(dataset_config):
         cmd.append("--closed-loop-record-rollout-gif")
     if args.record_loop_artifacts:
         cmd.extend(
             [
                 "--record-loop-artifacts",
-                "--render-loop-media" if getattr(args, "render_loop_media", True) else "--no-render-loop-media",
+                "--render-loop-media" if _required_arg(args, "render_loop_media") else "--no-render-loop-media",
                 "--loop-artifact-width",
-                str(getattr(args, "loop_artifact_width", 128)),
+                str(_required_arg(args, "loop_artifact_width")),
                 "--loop-artifact-height",
-                str(getattr(args, "loop_artifact_height", 128)),
+                str(_required_arg(args, "loop_artifact_height")),
                 "--loop-artifact-fps",
-                str(getattr(args, "loop_artifact_fps", 12)),
+                str(_required_arg(args, "loop_artifact_fps")),
                 "--loop-artifact-every-n-steps",
-                str(getattr(args, "loop_artifact_every_n_steps", 1)),
+                str(_required_arg(args, "loop_artifact_every_n_steps")),
             ]
         )
     else:
@@ -1606,7 +1998,7 @@ def _progress_monitor_command(
         cmd.extend(
             [
                 "--qwen-model",
-                args.qwen_model,
+                _required_arg(args, "qwen_model"),
                 "--qwen-object",
                 _qwen_object(args, dataset_config),
                 "--qwen-env-object-color",
@@ -1679,6 +2071,9 @@ def _closed_loop_test_cases(dataset_config: dict[str, Any] | None) -> list[dict[
     return result
 
 
+_loop_validation_cases = _closed_loop_test_cases
+
+
 def _apply_closed_loop_test_case(base: list[str], test_case: dict[str, Any]) -> list[str]:
     cmd = [*base]
     test_id = str(test_case.get("id") or test_case.get("name") or "closed_loop")
@@ -1703,6 +2098,7 @@ def _apply_closed_loop_test_case(base: list[str], test_case: dict[str, Any]) -> 
     if test_case.get("qwen_object"):
         cmd = _replace_or_append_arg(cmd, "--qwen-object", str(test_case["qwen_object"]))
     if test_case.get("env_object_color"):
+        cmd = _replace_or_append_arg(cmd, "--closed-loop-env-object-color", str(test_case["env_object_color"]))
         cmd = _replace_or_append_arg(cmd, "--qwen-env-object-color", str(test_case["env_object_color"]))
     if test_case.get("plan_json"):
         cmd = _remove_arg_with_value(cmd, "--qwen-response-json")
@@ -1766,7 +2162,7 @@ def _closed_loop_eval_skill_mode(args: argparse.Namespace, dataset_config: dict[
     closed_loop = dataset_config.get("closed_loop") or {}
     if isinstance(closed_loop, dict) and closed_loop.get("eval_skill_mode"):
         return str(closed_loop["eval_skill_mode"])
-    return "picklift"
+    raise SystemExit("closed_loop.eval_skill_mode or --closed-loop-eval-skill-mode is required.")
 
 
 def _closed_loop_runner(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
@@ -1780,7 +2176,7 @@ def _closed_loop_runner(args: argparse.Namespace, dataset_config: dict[str, Any]
             return "qwen_chain"
     if dataset_config.get("execution_policy") == "qwen_edge_chain":
         return "qwen_chain"
-    return "picklift"
+    raise SystemExit("closed_loop.runner or --closed-loop-runner is required.")
 
 
 def _closed_loop_env_id(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
@@ -1789,9 +2185,7 @@ def _closed_loop_env_id(args: argparse.Namespace, dataset_config: dict[str, Any]
     closed_loop = dataset_config.get("closed_loop") or {}
     if isinstance(closed_loop, dict) and closed_loop.get("env_id"):
         return str(closed_loop["env_id"])
-    if _closed_loop_runner(args, dataset_config) == "qwen_chain":
-        return "MuJoCoPickLift-v1"
-    return "MuJoCoPickLift-v1"
+    raise SystemExit("closed_loop.env_id or --closed-loop-env-id is required.")
 
 
 def _qwen_object(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
@@ -1800,19 +2194,16 @@ def _qwen_object(args: argparse.Namespace, dataset_config: dict[str, Any]) -> st
     closed_loop = dataset_config.get("closed_loop") or {}
     if isinstance(closed_loop, dict) and closed_loop.get("qwen_object"):
         return str(closed_loop["qwen_object"])
-    return "green cube"
+    raise SystemExit("closed_loop.qwen_object or --qwen-object is required for qwen_chain.")
 
 
-def _qwen_env_object_color(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+def _qwen_env_object_color(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str | None:
     if getattr(args, "qwen_env_object_color", None):
         return str(args.qwen_env_object_color)
     closed_loop = dataset_config.get("closed_loop") or {}
     if isinstance(closed_loop, dict) and closed_loop.get("env_object_color"):
         return str(closed_loop["env_object_color"])
-    qwen_object = _qwen_object(args, dataset_config).strip().lower()
-    if qwen_object.endswith(" cube"):
-        return qwen_object[: -len(" cube")]
-    return "green"
+    return None
 
 
 def _closed_loop_valid_mask_checkpoint(args: argparse.Namespace, dataset_config: dict[str, Any]) -> Path | None:
@@ -1825,16 +2216,28 @@ def _closed_loop_valid_mask_checkpoint(args: argparse.Namespace, dataset_config:
     return None
 
 
+def _closed_loop_action_contract_mode(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str:
+    value = getattr(args, "closed_loop_action_contract_mode", None)
+    if value:
+        return str(value)
+    closed_loop = dataset_config.get("closed_loop") or {}
+    if isinstance(closed_loop, dict) and closed_loop.get("action_contract_mode"):
+        return str(closed_loop["action_contract_mode"])
+    raise SystemExit("closed_loop.action_contract_mode or --closed-loop-action-contract-mode is required.")
+
+
 def _qwen_response_json(dataset_config: dict[str, Any]) -> Path | None:
     closed_loop = dataset_config.get("closed_loop") or {}
     if isinstance(closed_loop, dict) and closed_loop.get("qwen_response_json"):
         return Path(str(closed_loop["qwen_response_json"]))
-    if (
-        isinstance(closed_loop, dict)
-        and closed_loop.get("execution_policy") == "qwen_edge_chain"
-    ) or dataset_config.get("execution_policy") == "qwen_edge_chain":
-        return Path("configs/agent/qwen3_so101_tool_planner_mock_response.json")
     return None
+
+
+def _required_arg(args: argparse.Namespace, name: str) -> Any:
+    value = getattr(args, name, None)
+    if value is None:
+        raise SystemExit(f"{name} must be set by the selected Hydra launcher config or CLI override.")
+    return value
 
 
 def _closed_loop_task_prompt(args: argparse.Namespace, dataset_config: dict[str, Any]) -> str | None:
@@ -1886,11 +2289,18 @@ def _cache_build_commands(
                 commands.append(_cache_build_command(python, repo_root, dataset, Path(str(dataset["image_cache_dir"]))))
     else:
         dataset = config.get("train_dataset") or {}
-        if "train" in cache and isinstance(dataset, dict) and "root" in dataset and "repo_id" in dataset:
+        train_cache = cache.get("train")
+        if (
+            train_cache not in (None, False, {})
+            and isinstance(dataset, dict)
+            and "root" in dataset
+            and "repo_id" in dataset
+        ):
             commands.append(_cache_build_command(python, repo_root, dataset, _resolve_cache_dir(cache, "train")))
     for split, dataset_key in (("validation", "validation_dataset"),):
         dataset = config.get(dataset_key) or {}
-        if split not in cache or not isinstance(dataset, dict):
+        split_cache = cache.get(split)
+        if split_cache in (None, False, {}) or not isinstance(dataset, dict):
             continue
         if "root" not in dataset or "repo_id" not in dataset:
             continue
@@ -1955,6 +2365,40 @@ def _tensorboard_executable(python: Path, repo_root: Path) -> list[str] | None:
             return [str(candidate)]
     found = shutil.which("tensorboard")
     return [found] if found else None
+
+
+def _tensorboard_tunnel_command(port: int) -> list[str] | None:
+    cloudflared = shutil.which("cloudflared")
+    if not cloudflared:
+        return None
+    return [
+        cloudflared,
+        "tunnel",
+        "--url",
+        f"http://127.0.0.1:{int(port)}",
+        "--no-autoupdate",
+    ]
+
+
+def _wait_for_tensorboard_tunnel_url(log_path: Path, *, timeout_s: float = 12.0) -> str | None:
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    while time.monotonic() < deadline:
+        url = _tensorboard_tunnel_url_from_log(log_path)
+        if url:
+            return url
+        time.sleep(0.5)
+    return _tensorboard_tunnel_url_from_log(log_path)
+
+
+def _tensorboard_tunnel_url_from_log(log_path: Path) -> str | None:
+    if not log_path.exists():
+        return None
+    text = log_path.read_text(encoding="utf-8", errors="ignore")
+    marker = "Requesting new quick Tunnel on trycloudflare.com"
+    if marker in text:
+        text = text.rsplit(marker, 1)[-1]
+    matches = re.findall(r"https://[A-Za-z0-9.-]+\.trycloudflare\.com", text)
+    return matches[-1] if matches else None
 
 
 def _popen(cmd: list[str], log_path: Path, *, cwd: Path) -> subprocess.Popen[Any]:
