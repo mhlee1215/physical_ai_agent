@@ -50,6 +50,7 @@ def merge_shards(
         shutil.rmtree(output_root)
 
     shard_reports = [_load_shard_report(root) for root in shard_roots]
+    _require_unique_shard_seeds(shard_reports)
     first_report = shard_reports[0]
     include_camera3 = bool(first_report.get("camera3_duplicate", {}).get("enabled", True))
     width, height = _image_size_from_report(first_report)
@@ -98,6 +99,11 @@ def merge_shards(
         )
 
     dataset.finalize()
+    _repair_info_totals(
+        output_root / "meta" / "info.json",
+        total_episodes=merged_episodes,
+        total_frames=merged_frames,
+    )
     action_space_low = np.asarray(first_report["audit"]["action_space_low"], dtype=np.float32)
     action_space_high = np.asarray(first_report["audit"]["action_space_high"], dtype=np.float32)
     audit = audit_lerobot_dataset(
@@ -132,6 +138,14 @@ def merge_shards(
     return report
 
 
+def _repair_info_totals(info_path: Path, *, total_episodes: int, total_frames: int) -> None:
+    """Keep LeRobot info totals aligned with the merged episode metadata."""
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    info["total_episodes"] = int(total_episodes)
+    info["total_frames"] = int(total_frames)
+    info_path.write_text(json.dumps(info, indent=4), encoding="utf-8")
+
+
 def _merged_export_report(
     *,
     output_root: Path,
@@ -146,6 +160,7 @@ def _merged_export_report(
     for shard in shard_reports:
         episodes.extend(shard.get("episodes") or [])
         skipped.extend(shard.get("skipped") or [])
+    unique_seed_count = _require_unique_shard_seeds(shard_reports)
     first.update(
         {
             "operation": "merge_so101_lerobot_shards_export_report",
@@ -157,6 +172,12 @@ def _merged_export_report(
             "episodes": episodes,
             "skipped": skipped,
             "audit": audit,
+            "seed_uniqueness": {
+                "required": True,
+                "exported_unique_seeds": unique_seed_count,
+                "duplicate_exported_seeds": 0,
+                "passed": unique_seed_count == int(merged_episodes),
+            },
             "merged_from_shards": [
                 {
                     "root": shard.get("root"),
@@ -170,6 +191,19 @@ def _merged_export_report(
         }
     )
     return first
+
+
+def _require_unique_shard_seeds(shard_reports: list[dict[str, Any]]) -> int:
+    seen: set[int] = set()
+    for shard in shard_reports:
+        for episode in shard.get("episodes") or []:
+            if episode.get("seed") is None:
+                raise ValueError("every merged episode must contain a seed")
+            seed = int(episode["seed"])
+            if seed in seen:
+                raise ValueError(f"duplicate shard seed is forbidden: seed={seed}")
+            seen.add(seed)
+    return len(seen)
 
 
 def _load_shard_report(root: Path) -> dict[str, Any]:

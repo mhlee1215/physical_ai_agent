@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, PositiveInt
 
 SCHEMA_PATH = Path("configs/so101/schemas/training_config.schema.json")
 TRAINING_CONFIG_DIR = Path("configs/so101/training")
+TRAINING_DEFAULT_CONFIG_DIR = Path("configs/so101/training_defaults")
 
 
 class StrictModel(BaseModel):
@@ -125,6 +126,43 @@ class ActionSmoothnessConfig(ExtensibleModel):
     include_gripper: bool | None = None
 
 
+class TrainingDataLoadingConfig(StrictModel):
+    predecoded_image_cache: PredecodedImageCacheConfig | None = None
+    tensorboard: TensorBoardConfig | None = None
+
+
+class TrainingLossesConfig(ExtensibleModel):
+    action_prefix: WeightedStepsConfig | None = None
+    action_chunk_consistency: WeightedStepsConfig | None = None
+    action_smoothness: ActionSmoothnessConfig | None = None
+    action_teacher_importance: dict[str, Any] | None = None
+
+
+class SO101DatasetSectionConfig(StrictModel):
+    train_dataset: DatasetConfig | None = None
+    train_datasets: list[DatasetConfig] | None = None
+    validation_dataset: DatasetConfig
+    camera_contract: CameraContractConfig
+    prompt_contract: dict[str, Any] | None = None
+    generation: dict[str, Any] | None = None
+    generation_augmentation: dict[str, Any] | None = None
+    reachable_bin_filter: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_train_source(self) -> SO101DatasetSectionConfig:
+        _validate_train_source_choice(self.train_dataset, self.train_datasets)
+        return self
+
+
+class SO101RuntimeTrainingConfig(StrictModel):
+    training: TrainingConfig | None = None
+    data_loading: TrainingDataLoadingConfig | None = None
+    losses: TrainingLossesConfig | None = None
+    augmentation: AugmentationConfig | None = None
+    closed_loop: ClosedLoopConfig | None = None
+    visual_servo: dict[str, Any] | None = None
+
+
 class ActionRmseSweepConfig(ExtensibleModel):
     enabled: bool | None = None
     episodes: PositiveInt | None = None
@@ -201,6 +239,7 @@ class SO101TrainingConfig(StrictModel):
 
     name: str
     description: str
+    default_config: str | None = None
     scenario: str | None = None
     execution_policy: str | None = None
     task: str
@@ -208,6 +247,8 @@ class SO101TrainingConfig(StrictModel):
     action_mode: Literal["absolute_qpos", "delta_q"] | None = None
     delta_action_source: Any | None = None
     debug_notes: Any | None = None
+    dataset: SO101DatasetSectionConfig | None = None
+    training_config: SO101RuntimeTrainingConfig | None = None
     train_dataset: DatasetConfig | None = None
     train_datasets: list[DatasetConfig] | None = None
     validation_dataset: DatasetConfig
@@ -218,6 +259,7 @@ class SO101TrainingConfig(StrictModel):
     tensorboard: TensorBoardConfig
     closed_loop: ClosedLoopConfig | None = None
     augmentation: AugmentationConfig
+    action_prefix: WeightedStepsConfig | None = None
     action_chunk_consistency: WeightedStepsConfig | None = None
     action_smoothness: ActionSmoothnessConfig | None = None
     action_teacher_importance: dict[str, Any] | None = None
@@ -226,17 +268,16 @@ class SO101TrainingConfig(StrictModel):
     reachable_bin_filter: dict[str, Any] | None = None
     visual_servo: dict[str, Any] | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def expand_structured_sections(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return normalize_so101_training_config(value)
+        return value
+
     @model_validator(mode="after")
     def exactly_one_train_source(self) -> SO101TrainingConfig:
-        has_single = self.train_dataset is not None
-        has_multi = self.train_datasets is not None
-        if has_single == has_multi:
-            raise ValueError("define exactly one of train_dataset or train_datasets")
-        if self.train_datasets is not None:
-            names = [dataset.name for dataset in self.train_datasets if dataset.name]
-            duplicates = sorted({name for name in names if names.count(name) > 1})
-            if duplicates:
-                raise ValueError(f"duplicate train_datasets names: {duplicates}")
+        _validate_train_source_choice(self.train_dataset, self.train_datasets)
         return self
 
 
@@ -286,6 +327,10 @@ def validate_so101_training_config(
     label = _display_path(path, root) if path is not None else "<config>"
     if not isinstance(config, dict):
         return [f"{label}: config must be a JSON object"]
+    try:
+        config = resolve_so101_training_config_defaults(config, path=path, repo_root=root)
+    except ValueError as exc:
+        return [f"{label}: {exc}"]
     if strict:
         return _strict_errors(config, label)
     return _relaxed_errors(config, label)
@@ -304,16 +349,169 @@ def validate_so101_training_config_dir(
     ]
 
 
-def parse_so101_training_config(config: dict[str, Any]) -> SO101TrainingConfig:
-    return SO101TrainingConfig.model_validate(config)
+def parse_so101_training_config(
+    config: dict[str, Any],
+    *,
+    path: Path | None = None,
+    repo_root: Path | None = None,
+) -> SO101TrainingConfig:
+    resolved = resolve_so101_training_config_defaults(config, path=path, repo_root=repo_root)
+    return SO101TrainingConfig.model_validate(normalize_so101_training_config(resolved))
+
+
+def resolve_so101_training_config_defaults(
+    config: dict[str, Any],
+    *,
+    path: Path | None = None,
+    repo_root: Path | None = None,
+    _seen: set[Path] | None = None,
+) -> dict[str, Any]:
+    """Merge a dataset-specific training config with its default recipe.
+
+    ``default_config`` is for non-dataset training defaults only. Dataset roots,
+    train/validation splits, camera contract, and dataset generation metadata
+    stay in the concrete config.
+    """
+
+    if not isinstance(config, dict):
+        raise ValueError("config must be a JSON object")
+    default_ref = config.get("default_config")
+    if not default_ref:
+        return json.loads(json.dumps(config))
+    root = repo_root or Path.cwd()
+    default_path = _resolve_default_config_path(str(default_ref), path=path, repo_root=root)
+    seen = set(_seen or set())
+    if default_path in seen:
+        raise ValueError(f"default_config cycle detected at {_display_path(default_path, root)}")
+    seen.add(default_path)
+    try:
+        default_payload = json.loads(default_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"default_config {_display_path(default_path, root)} invalid JSON: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"default_config {_display_path(default_path, root)} cannot be read: {exc}") from exc
+    if not isinstance(default_payload, dict):
+        raise ValueError(f"default_config {_display_path(default_path, root)} must be a JSON object")
+    _reject_dataset_keys_in_default(default_payload, default_path, root)
+    default_payload = resolve_so101_training_config_defaults(
+        default_payload,
+        path=default_path,
+        repo_root=root,
+        _seen=seen,
+    )
+    return _deep_merge(default_payload, config)
+
+
+def _resolve_default_config_path(default_ref: str, *, path: Path | None, repo_root: Path) -> Path:
+    ref_path = Path(default_ref)
+    if ref_path.is_absolute():
+        return ref_path
+    repo_relative = repo_root / ref_path
+    if repo_relative.exists():
+        return repo_relative.resolve()
+    if path is not None:
+        config_dir_relative = ((path if path.is_absolute() else repo_root / path).parent / ref_path).resolve()
+        if config_dir_relative.exists():
+            return config_dir_relative
+    defaults_relative = (repo_root / TRAINING_DEFAULT_CONFIG_DIR / ref_path).resolve()
+    return defaults_relative
+
+
+def _reject_dataset_keys_in_default(default_payload: dict[str, Any], default_path: Path, repo_root: Path) -> None:
+    dataset_keys = {
+        "dataset",
+        "train_dataset",
+        "train_datasets",
+        "validation_dataset",
+        "camera_contract",
+        "prompt_contract",
+        "dataset_generation",
+        "dataset_generation_augmentation",
+        "reachable_bin_filter",
+    }
+    present = sorted(key for key in dataset_keys if key in default_payload)
+    if present:
+        raise ValueError(
+            f"default_config {_display_path(default_path, repo_root)} contains dataset fields: {', '.join(present)}"
+        )
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = json.loads(json.dumps(base))
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = json.loads(json.dumps(value))
+    return merged
+
+
+def normalize_so101_training_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return the flat runtime shape used by existing SO101 launch code.
+
+    New configs may keep dataset facts under ``dataset`` and runtime knobs under
+    ``training_config``. The launcher still consumes the historical flat keys, so
+    this function is the single compatibility bridge.
+    """
+
+    normalized = json.loads(json.dumps(config))
+    dataset_section = normalized.get("dataset")
+    if isinstance(dataset_section, dict):
+        _copy_if_absent(normalized, "train_dataset", dataset_section.get("train_dataset"))
+        _copy_if_absent(normalized, "train_datasets", dataset_section.get("train_datasets"))
+        _copy_if_absent(normalized, "validation_dataset", dataset_section.get("validation_dataset"))
+        _copy_if_absent(normalized, "camera_contract", dataset_section.get("camera_contract"))
+        _copy_if_absent(normalized, "prompt_contract", dataset_section.get("prompt_contract"))
+        _copy_if_absent(normalized, "dataset_generation", dataset_section.get("generation"))
+        _copy_if_absent(normalized, "dataset_generation_augmentation", dataset_section.get("generation_augmentation"))
+        _copy_if_absent(normalized, "reachable_bin_filter", dataset_section.get("reachable_bin_filter"))
+
+    training_section = normalized.get("training_config")
+    if isinstance(training_section, dict):
+        _copy_if_absent(normalized, "training", training_section.get("training"))
+        _copy_if_absent(normalized, "augmentation", training_section.get("augmentation"))
+        _copy_if_absent(normalized, "closed_loop", training_section.get("closed_loop"))
+        _copy_if_absent(normalized, "visual_servo", training_section.get("visual_servo"))
+        data_loading = training_section.get("data_loading")
+        if isinstance(data_loading, dict):
+            _copy_if_absent(normalized, "predecoded_image_cache", data_loading.get("predecoded_image_cache"))
+            _copy_if_absent(normalized, "tensorboard", data_loading.get("tensorboard"))
+        losses = training_section.get("losses")
+        if isinstance(losses, dict):
+            _copy_if_absent(normalized, "action_prefix", losses.get("action_prefix"))
+            _copy_if_absent(normalized, "action_chunk_consistency", losses.get("action_chunk_consistency"))
+            _copy_if_absent(normalized, "action_smoothness", losses.get("action_smoothness"))
+            _copy_if_absent(normalized, "action_teacher_importance", losses.get("action_teacher_importance"))
+    return normalized
+
+
+def _copy_if_absent(target: dict[str, Any], key: str, value: Any) -> None:
+    if value is not None and key not in target:
+        target[key] = value
+
+
+def _validate_train_source_choice(
+    train_dataset: DatasetConfig | None,
+    train_datasets: list[DatasetConfig] | None,
+) -> None:
+    has_single = train_dataset is not None
+    has_multi = train_datasets is not None
+    if has_single == has_multi:
+        raise ValueError("define exactly one of train_dataset or train_datasets")
+    if train_datasets is not None:
+        names = [dataset.name for dataset in train_datasets if dataset.name]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate train_datasets names: {duplicates}")
 
 
 def _strict_errors(config: dict[str, Any], label: str) -> list[str]:
     errors: list[str] = []
-    if ("train_dataset" in config) == ("train_datasets" in config):
+    normalized = normalize_so101_training_config(config)
+    if ("train_dataset" in normalized) == ("train_datasets" in normalized):
         errors.append(f"{label}: define exactly one of train_dataset or train_datasets")
     try:
-        SO101TrainingConfig.model_validate(config)
+        SO101TrainingConfig.model_validate(normalized)
     except ValidationError as exc:
         errors.extend(
             error
@@ -321,24 +519,25 @@ def _strict_errors(config: dict[str, Any], label: str) -> list[str]:
             if "define exactly one of train_dataset or train_datasets" not in error
         )
         return errors
-    errors.extend(_cross_field_errors(config, label, strict=True))
+    errors.extend(_cross_field_errors(normalized, label, strict=True))
     return errors
 
 
 def _relaxed_errors(config: dict[str, Any], label: str) -> list[str]:
     errors: list[str] = []
+    normalized = normalize_so101_training_config(config)
     allowed_top_keys = set(SO101TrainingConfig.model_fields)
     for key in sorted(set(config) - allowed_top_keys):
         errors.append(f"{label}: unknown top-level key {key!r}; add it to the Pydantic model before using it")
 
-    has_single = "train_dataset" in config
-    has_multi = "train_datasets" in config
+    has_single = "train_dataset" in normalized
+    has_multi = "train_datasets" in normalized
     if has_single and has_multi:
         errors.append(f"{label}: define exactly one of train_dataset or train_datasets")
     if has_single:
-        errors.extend(_validate_model(DatasetConfig, config.get("train_dataset"), f"{label}.train_dataset"))
+        errors.extend(_validate_model(DatasetConfig, normalized.get("train_dataset"), f"{label}.train_dataset"))
     if has_multi:
-        value = config.get("train_datasets")
+        value = normalized.get("train_datasets")
         if not isinstance(value, list) or not value:
             errors.append(f"{label}.train_datasets: must be a non-empty list")
         else:
@@ -359,13 +558,14 @@ def _relaxed_errors(config: dict[str, Any], label: str) -> list[str]:
         ("predecoded_image_cache", PredecodedImageCacheConfig),
         ("augmentation", AugmentationConfig),
         ("closed_loop", ClosedLoopConfig),
+        ("action_prefix", WeightedStepsConfig),
         ("action_chunk_consistency", WeightedStepsConfig),
         ("action_smoothness", ActionSmoothnessConfig),
     )
     for key, model in relaxed_models:
-        if key in config:
-            errors.extend(_validate_model(model, config[key], f"{label}.{key}"))
-    errors.extend(_cross_field_errors(config, label, strict=False))
+        if key in normalized:
+            errors.extend(_validate_model(model, normalized[key], f"{label}.{key}"))
+    errors.extend(_cross_field_errors(normalized, label, strict=False))
     return errors
 
 

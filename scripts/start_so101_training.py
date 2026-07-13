@@ -22,12 +22,16 @@ from physical_ai_agent.so101_resolution_contract import (
     require_so101_image_resolution,
 )
 from physical_ai_agent.so101_hydra_config import SO101HydraTrainingEntry, load_so101_hydra_training_entry
-from physical_ai_agent.so101_training_config_schema import validate_so101_training_config
+from physical_ai_agent.so101_training_config_schema import (
+    normalize_so101_training_config,
+    resolve_so101_training_config_defaults,
+    validate_so101_training_config,
+)
 
 
 DEFAULT_ROOT = Path("_workspace/so101_training")
 DEFAULT_LOCK = DEFAULT_ROOT / "active_training.json"
-DEFAULT_HYDRA_CONFIG = "training/grip_the_cube_v1"
+DEFAULT_HYDRA_CONFIG = "training/grip_the_cube_v2"
 LOCAL_TRAINING_STANDARD_DOC = Path("docs/so101_local_training_standard.md")
 LOCAL_TRAINING_STANDARD_NAME = "primitive training with qwen validation v1"
 
@@ -86,7 +90,7 @@ def _add_start_args(parser: argparse.ArgumentParser) -> None:
         "--hydra-config",
         help=(
             "Hydra config name under configs/so101/hydra, for example "
-            "`training/grip_the_cube_v1`. It resolves to a Pydantic-validated "
+            "`training/grip_the_cube_v2`. It resolves to a Pydantic-validated "
             "configs/so101/training/*.json file."
         ),
     )
@@ -921,8 +925,10 @@ def _load_dataset_config(path: Path | None, *, repo_root: Path) -> dict[str, Any
     if validation_errors:
         detail = "\n".join(f"- {error}" for error in validation_errors)
         raise SystemExit(f"SO101 training config schema validation failed:\n{detail}")
-    payload["config_path"] = str(resolved)
-    return payload
+    resolved_payload = resolve_so101_training_config_defaults(payload, path=resolved, repo_root=repo_root)
+    normalized = normalize_so101_training_config(resolved_payload)
+    normalized["config_path"] = str(resolved)
+    return normalized
 
 
 def _resolve_hf_dataset_downloads(
@@ -1233,6 +1239,13 @@ def _with_dataset_config(args: list[str], config: dict[str, Any] | None, *, runt
         updated = _ensure_arg(updated, "so101-visual-servo-loss-weight", str(visual_servo["loss_weight"]))
     if "hidden_dim" in visual_servo:
         updated = _ensure_arg(updated, "so101-visual-servo-hidden-dim", str(visual_servo["hidden_dim"]))
+    action_prefix = config.get("action_prefix") or {}
+    if not isinstance(action_prefix, dict):
+        raise SystemExit("dataset config action_prefix must be an object")
+    if "steps" in action_prefix:
+        updated = _ensure_arg(updated, "so101-action-prefix-loss-steps", str(action_prefix["steps"]))
+    if "weight" in action_prefix:
+        updated = _ensure_arg(updated, "so101-action-prefix-loss-weight", str(action_prefix["weight"]))
     action_chunk_consistency = config.get("action_chunk_consistency") or {}
     if not isinstance(action_chunk_consistency, dict):
         raise SystemExit("dataset config action_chunk_consistency must be an object")

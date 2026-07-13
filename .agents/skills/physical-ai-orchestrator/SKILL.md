@@ -165,6 +165,14 @@ Durable SO101 fine-tuning contract:
   loop-test cases, RMSE sweep, media resolution, augmentation, action contract,
   checkpoint cadence, runner, device, or ports; missing required values should
   fail before training instead of being guessed in code;
+- SO101 training loss, augmentation, and runtime knobs must have an explicit
+  config-to-CLI contract. If a training code path exposes a knob such as action
+  prefix weighting, teacher-importance weighting, smoothness, consistency,
+  visual-servo loss, augmentation, or valid-mask loss, the selected training
+  config/default config must declare the value and the launcher must forward it
+  explicitly. Zero/disabled values should be explicit when they define the
+  experiment contract. Add or update tests when adding a knob so code and
+  config cannot silently drift;
 - SO101 training config edits must pass the Pydantic/Hydra validator
   `PYTHONPATH=src .venv/bin/python scripts/validate_so101_training_configs.py`;
   the launcher also validates the selected config before command construction;

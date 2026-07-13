@@ -7,6 +7,53 @@ augmentation, checkpoint cadence, TensorBoard media, and closed-loop evaluation
 settings. Dataset-only contracts, export recipes, checksum manifests, and raw
 dataset registration stay under `configs/so101/training_datasets/`.
 
+New configs should separate intrinsic dataset facts from runtime training
+behavior:
+
+```json
+{
+  "default_config": "configs/so101/training_defaults/<recipe>.json",
+  "dataset": {
+    "train_dataset": {},
+    "validation_dataset": {},
+    "camera_contract": {},
+    "prompt_contract": {},
+    "generation": {}
+  },
+  "training_config": {
+    "data_loading": {
+      "predecoded_image_cache": {},
+      "tensorboard": {}
+    },
+    "training": {},
+    "losses": {},
+    "augmentation": {},
+    "closed_loop": {}
+  }
+}
+```
+
+Use `dataset.train_datasets` instead of `dataset.train_dataset` when a run uses
+multiple train datasets. The launcher normalizes this structured form to the
+historical flat runtime shape before command construction; do not reintroduce
+ad hoc flat runtime knobs unless they are compatibility fields for older
+configs.
+
+Default configs live under:
+
+```text
+configs/so101/training_defaults/
+```
+
+They must not define dataset facts such as `dataset`, `train_dataset`,
+`train_datasets`, `validation_dataset`, `camera_contract`, `prompt_contract`,
+`dataset_generation`, or `reachable_bin_filter`. Keep only reusable training
+recipe defaults there: optimizer/runtime settings, losses, train-time
+augmentation, common loop-test behavior, and generic TensorBoard logging.
+Dataset-specific files may override any default, but should normally contain
+only dataset facts plus dataset-specific data loading such as cache names and
+closed-loop `test_cases.start_dataset`.
+
 For monitored SO101 training, checkpoint creation, supervised validation, and
 closed-loop evaluation must resolve to the same training step. In practice:
 
@@ -22,7 +69,7 @@ Launch a training config through the canonical launcher with a Hydra entrypoint:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
-  --hydra-config training/grip_the_cube_v1
+  --hydra-config training/grip_the_cube_v2
 ```
 
 Do not move a run config back into `training_datasets/`; keep runtime behavior
@@ -76,6 +123,8 @@ PYTHONPATH=src .venv/bin/python scripts/validate_so101_training_configs.py
 The validator checks both `configs/so101/training/*.json` and Hydra
 entrypoints. The launcher also validates the selected config before building the
 training command. In particular, a config must define exactly one of
-`train_dataset` or `train_datasets`, must keep `camera1=egocentric_cam` and
-`camera2=wrist_cam`, and must keep TensorBoard, augmentation, validation, and
-closed-loop settings in the documented shape.
+`dataset.train_dataset` or `dataset.train_datasets` in the structured form
+(legacy configs may still use top-level `train_dataset` or `train_datasets`),
+must keep `camera1=egocentric_cam` and `camera2=wrist_cam`, and must keep
+TensorBoard, augmentation, validation, and closed-loop settings in the
+documented shape.

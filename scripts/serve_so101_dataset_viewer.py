@@ -27,8 +27,9 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 DATASET_CONTRACT = Path("configs/so101/training_datasets/dataset_contract.json")
 SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_contract.json")
 TRAINING_CONFIGS = [
+    Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
     Path("configs/so101/training/qwen_edge_primitives.json"),
-    Path("configs/so101/training/grip_the_cube_v1.json"),
+    Path("configs/so101/training/grip_the_cube_v2.json"),
 ]
 INTERACTIVE_RUN_ROOT = Path("_workspace/so101_interactive_sim/runs")
 DEFAULT_VALID_MASK_CHECKPOINT = Path("_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt")
@@ -654,9 +655,10 @@ def _training_config_dataset_roots(repo_root: Path) -> dict[str, Path]:
             continue
         config = json.loads(path.read_text(encoding="utf-8"))
         name = _slug(str(config.get("name") or path.stem))
-        train = config.get("train_dataset")
-        train_datasets = config.get("train_datasets")
-        validation = config.get("validation_dataset")
+        dataset_config = config.get("dataset") if isinstance(config.get("dataset"), dict) else config
+        train = dataset_config.get("train_dataset")
+        train_datasets = dataset_config.get("train_datasets")
+        validation = dataset_config.get("validation_dataset")
         if isinstance(train, dict) and train.get("root"):
             roots[f"{name}_train"] = Path(train["root"])
         if isinstance(train_datasets, list):
@@ -987,7 +989,7 @@ def _loop_tests_payload(repo_root: Path) -> dict[str, Any]:
                 "status": "available",
                 "summary": {
                     "loop_tests": len(loop_tests),
-                    "source_config": str(repo_root / TRAINING_CONFIGS[0]),
+                    "source_configs": [str(repo_root / path) for path in TRAINING_CONFIGS if (repo_root / path).exists()],
                 },
                 "loop_tests": loop_tests,
             }
@@ -997,17 +999,24 @@ def _loop_tests_payload(repo_root: Path) -> dict[str, Any]:
 
 
 def _official_closed_loop_test_cases(repo_root: Path) -> list[dict[str, Any]]:
-    config_path = repo_root / TRAINING_CONFIGS[0]
-    if not config_path.exists():
-        return []
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    closed_loop = config.get("closed_loop") if isinstance(config, dict) else None
-    test_cases = closed_loop.get("test_cases") if isinstance(closed_loop, dict) else None
-    if not isinstance(test_cases, list) and isinstance(closed_loop, dict):
-        test_cases = closed_loop.get("suites")
-    if not isinstance(test_cases, list):
-        return []
-    return [test_case for test_case in test_cases if isinstance(test_case, dict) and test_case.get("id")]
+    merged: dict[str, dict[str, Any]] = {}
+    for relative_path in TRAINING_CONFIGS:
+        config_path = repo_root / relative_path
+        if not config_path.exists():
+            continue
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        closed_loop = config.get("training_config", {}).get("closed_loop") if isinstance(config, dict) else None
+        if not isinstance(closed_loop, dict):
+            closed_loop = config.get("closed_loop") if isinstance(config, dict) else None
+        test_cases = closed_loop.get("test_cases") if isinstance(closed_loop, dict) else None
+        if not isinstance(test_cases, list) and isinstance(closed_loop, dict):
+            test_cases = closed_loop.get("suites")
+        if not isinstance(test_cases, list):
+            continue
+        for test_case in test_cases:
+            if isinstance(test_case, dict) and test_case.get("id"):
+                merged[str(test_case["id"])] = test_case
+    return list(merged.values())
 
 
 def _latest_test_case_report(repo_root: Path, test_case: dict[str, Any]) -> Path | None:
@@ -2154,13 +2163,13 @@ def _index_html() -> str:
         if (!orderedNames.includes(name)) orderedNames.push(name);
       }
 	      datasetNamesByKind = {
-	        train: orderedNames.filter(name => name.endsWith("_train")),
+	        train: orderedNames.filter(name => isTrainDataset(name)),
 	        valid: orderedNames.filter(name => name.endsWith("_val") || name.endsWith("_valid") || name.includes("_validation")),
 	        preview: orderedNames.filter(name => isPreviewDataset(name)),
 	      };
 	      if (!datasetNamesByKind.train.length) datasetNamesByKind.train = orderedNames;
-	      if (!datasetNamesByKind.valid.length) datasetNamesByKind.valid = orderedNames.filter(name => !name.endsWith("_train"));
-	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !name.endsWith("_train") && !name.endsWith("_val") && !name.endsWith("_valid"));
+	      if (!datasetNamesByKind.valid.length) datasetNamesByKind.valid = orderedNames.filter(name => !isTrainDataset(name));
+	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !isTrainDataset(name) && !name.endsWith("_val") && !name.endsWith("_valid"));
 	      syncViewKind();
 	    }
 
@@ -2226,6 +2235,10 @@ def _index_html() -> str:
 
 	    function namesForKindAndPlatform(kind, platform) {
 	      return (datasetNamesByKind[kind] || []).filter(name => (datasetPlatformByName[name] || "so101") === platform);
+	    }
+
+	    function isTrainDataset(name) {
+	      return /_train[0-9]*$/.test(name);
 	    }
 
 	    function isPreviewDataset(name) {

@@ -23,7 +23,7 @@ def main() -> int:
         "--hydra-config",
         action="append",
         default=[],
-        help="Hydra config name under configs/so101/hydra, e.g. training/grip_the_cube_v1.",
+        help="Hydra config name under configs/so101/hydra, e.g. training/grip_the_cube_v2.",
     )
     parser.add_argument(
         "--skip-hydra",

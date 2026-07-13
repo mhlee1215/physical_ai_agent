@@ -305,6 +305,13 @@ policy is:
   loop-test cases, RMSE sweep, media resolution, augmentation, action contract,
   checkpoint cadence, runner, device, or ports. Missing required values should
   fail before training instead of being guessed in Python.
+- SO101 training loss, augmentation, and runtime knobs must be one-to-one with
+  config/default-config fields and launcher CLI forwarding. If a code path adds
+  a knob such as action prefix weighting, teacher-importance weighting,
+  smoothness, consistency, visual-servo loss, augmentation, or valid-mask loss,
+  the experiment config must declare it and launcher tests must prove it appears
+  in the generated command. Use explicit zero/disabled values when they are part
+  of the experiment contract instead of relying on hidden argparse defaults.
 - Every SO101 training config change must pass the repo-local Pydantic/Hydra
   validator before launch:
   `PYTHONPATH=src .venv/bin/python scripts/validate_so101_training_configs.py`.
