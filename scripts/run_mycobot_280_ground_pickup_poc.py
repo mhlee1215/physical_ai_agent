@@ -51,6 +51,7 @@ APPROACH_STEPS = 20
 CLOSE_STEPS = 100
 HOLD_STEPS = 30
 LIFT_STEPS = 80
+POST_LIFT_HOLD_STEPS = 300
 
 PICKUP_QPOS = np.asarray(
     [
@@ -67,9 +68,9 @@ APPROACH_QPOS = PICKUP_QPOS.copy()
 LIFT_QPOS = np.asarray(
     [
         1.70167784060151,
-        2.3834,
-        -0.32610176735565194,
-        -2.3979,
+        2.3534,
+        -0.26610176735565194,
+        -2.3079,
         -0.5535680335745943,
         0.40248603599109317,
     ],
@@ -92,7 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--close-steps", type=int, default=CLOSE_STEPS)
     parser.add_argument("--hold-steps", type=int, default=HOLD_STEPS)
     parser.add_argument("--lift-steps", type=int, default=LIFT_STEPS)
-    parser.add_argument("--zero-gravity-close", dest="zero_gravity_close", action="store_true", default=True, help="Disable gravity during approach/close only. Gravity is restored for hold/lift.")
+    parser.add_argument("--post-lift-hold-steps", type=int, default=POST_LIFT_HOLD_STEPS)
+    parser.add_argument("--zero-gravity-close", dest="zero_gravity_close", action="store_true", default=True, help="Disable gravity during approach/close only. Gravity is restored for hold/lift/post-lift hold.")
     parser.add_argument("--gravity-close", dest="zero_gravity_close", action="store_false", help="Keep normal gravity during approach/close for a stricter exploratory run.")
     parser.add_argument("--post-step-snap", dest="post_step_snap", action="store_true", default=False, help="Legacy debug mode: qpos-snap/forward the arm and gripper after env.step.")
     parser.add_argument("--no-post-step-snap", dest="post_step_snap", action="store_false", help="Preserve MuJoCo contact dynamics after env.step. This is the default.")
@@ -121,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    global CUBE_HALF_SIZE, CUBE_MASS, CONTACT_COMMAND, PAD_FRICTION, PAD_SIZE_OVERRIDE, PAD_SOLREF_OVERRIDE, PAD_SOLIMP_OVERRIDE, CUBE_SOLREF_OVERRIDE, CUBE_SOLIMP_OVERRIDE, CUBE_AXIS_OFFSET, CUBE_SIDE_OFFSET, PICKUP_QPOS, APPROACH_QPOS, LIFT_QPOS, WORK_MAT_CENTER, WORK_MAT_TOP_Z, APPROACH_STEPS, CLOSE_STEPS, HOLD_STEPS, LIFT_STEPS, MAX_PAD_CUBE_PENETRATION_M
+    global CUBE_HALF_SIZE, CUBE_MASS, CONTACT_COMMAND, PAD_FRICTION, PAD_SIZE_OVERRIDE, PAD_SOLREF_OVERRIDE, PAD_SOLIMP_OVERRIDE, CUBE_SOLREF_OVERRIDE, CUBE_SOLIMP_OVERRIDE, CUBE_AXIS_OFFSET, CUBE_SIDE_OFFSET, PICKUP_QPOS, APPROACH_QPOS, LIFT_QPOS, WORK_MAT_CENTER, WORK_MAT_TOP_Z, APPROACH_STEPS, CLOSE_STEPS, HOLD_STEPS, LIFT_STEPS, POST_LIFT_HOLD_STEPS, MAX_PAD_CUBE_PENETRATION_M
     CUBE_HALF_SIZE = float(args.cube_half_size)
     CUBE_MASS = float(args.cube_mass)
     if args.mat_top_z is not None:
@@ -143,6 +145,7 @@ def main() -> None:
     CLOSE_STEPS = int(args.close_steps)
     HOLD_STEPS = int(args.hold_steps)
     LIFT_STEPS = int(args.lift_steps)
+    POST_LIFT_HOLD_STEPS = int(args.post_lift_hold_steps)
     if args.pickup_qpos:
         PICKUP_QPOS = _parse_qpos(args.pickup_qpos)
     if args.approach_qpos:
@@ -190,13 +193,13 @@ def main() -> None:
         writer = _open_video_writer(video_path, args.width, args.height, args.video_fps)
         records: list[dict[str, Any]] = []
         frame_paths: list[Path] = []
-        total_steps = APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS
-        key_steps = {0, 1, 2, APPROACH_STEPS + CLOSE_STEPS - 1, APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS - 1, total_steps - 1}
+        total_steps = APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS + POST_LIFT_HOLD_STEPS
+        key_steps = {0, 1, 2, APPROACH_STEPS + CLOSE_STEPS - 1, APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS - 1, APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS - 1, total_steps - 1}
         camera = _camera(env, initial_cube)
         contact_stop_command: float | None = None
         for step in range(total_steps):
             arm, command, phase = _scripted_state(step)
-            if args.contact_stop_on_two_pad and contact_stop_command is not None and phase in {"close_on_cube_on_mat", "hold_before_lift", "lift_from_mat"}:
+            if args.contact_stop_on_two_pad and contact_stop_command is not None and phase in {"close_on_cube_on_mat", "hold_before_lift", "lift_from_mat", "post_lift_hold"}:
                 command = contact_stop_command
             if args.zero_gravity_close and phase in {"approach_down_to_cube_on_mat", "close_on_cube_on_mat"}:
                 env.model.opt.gravity[:] = [0.0, 0.0, 0.0]
@@ -227,15 +230,16 @@ def main() -> None:
         trace_path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in records), encoding="utf-8")
         sheet_path = _write_sheet(args.output_dir, frame_paths, cols=3, tile_size=(640, 480), name="ground_pickup_sheet.png")
         lift_records = [r for r in records if r["phase"] == "lift_from_mat"]
+        post_lift_hold_records = [r for r in records if r["phase"] == "post_lift_hold"]
         final = records[-1]
-        status = "passed" if _passes(records, lift_records, final) else "failed"
-        completion = _completion_standard(records, lift_records, final, status=status)
+        status = "passed" if _passes(records, lift_records, post_lift_hold_records, final) else "failed"
+        completion = _completion_standard(records, lift_records, post_lift_hold_records, final, status=status)
         report = {
             "status": status,
             "completion_standard": completion,
             "completion_standard_status": completion["status"],
-            "scenario": "280 raw-contact cube-from-mat approach-close-lift POC",
-            "modeling_boundary": "Fingertip pads, cube, mat, and floor use MuJoCo contact. Visible gripper geoms are guarded against mat-plane overlap; broader arm/table collision remains visual-only. By default gravity is disabled during approach/close only, then restored for hold/lift.",
+            "scenario": "280 raw-contact cube-from-mat approach-close-lift-hold POC",
+            "modeling_boundary": "Fingertip pads, cube, mat, and floor use MuJoCo contact. Visible gripper geoms are guarded against mat-plane overlap; broader arm/table collision remains visual-only. By default gravity is disabled during approach/close only, then restored for hold/lift/post-lift hold.",
             "teacher_attachment_enabled": False,
             "object_teleport_during_pickup_lift": False,
             "zero_gravity_close": bool(args.zero_gravity_close),
@@ -261,6 +265,7 @@ def main() -> None:
             "close_steps": CLOSE_STEPS,
             "hold_steps": HOLD_STEPS,
             "lift_steps": LIFT_STEPS,
+            "post_lift_hold_steps": POST_LIFT_HOLD_STEPS,
             "pickup_qpos": [float(x) for x in PICKUP_QPOS],
             "approach_qpos": [float(x) for x in APPROACH_QPOS],
             "final_lift_qpos": [float(x) for x in LIFT_QPOS],
@@ -278,6 +283,8 @@ def main() -> None:
             "final_cube_lift_m": final["cube_lift_m"],
             "final_pad_cube_contacted_pads": final["pad_cube_contacted_pads"],
             "lift_best_sustained_two_pad_steps": _best_sustained_two_pad(lift_records),
+            "post_lift_hold_best_sustained_two_pad_steps": _best_sustained_two_pad(post_lift_hold_records),
+            "post_lift_hold_min_cube_lift_m": min((float(r["cube_lift_m"]) for r in post_lift_hold_records), default=0.0),
             "first_lift_contact_loss_step": _first_contact_loss(lift_records),
             "trace_path": str(trace_path),
             "video_path": str(video_path),
@@ -361,20 +368,24 @@ def _scripted_state(step: int) -> tuple[np.ndarray, float, str]:
         return PICKUP_QPOS.copy(), START_COMMAND + alpha * (CONTACT_COMMAND - START_COMMAND), "close_on_cube_on_mat"
     if step < APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS:
         return PICKUP_QPOS.copy(), CONTACT_COMMAND, "hold_before_lift"
-    alpha = nexus._smoothstep((step - APPROACH_STEPS - CLOSE_STEPS - HOLD_STEPS) / max(LIFT_STEPS - 1, 1))
-    return PICKUP_QPOS + (LIFT_QPOS - PICKUP_QPOS) * alpha, CONTACT_COMMAND, "lift_from_mat"
+    if step < APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS:
+        alpha = nexus._smoothstep((step - APPROACH_STEPS - CLOSE_STEPS - HOLD_STEPS) / max(LIFT_STEPS - 1, 1))
+        return PICKUP_QPOS + (LIFT_QPOS - PICKUP_QPOS) * alpha, CONTACT_COMMAND, "lift_from_mat"
+    return LIFT_QPOS.copy(), CONTACT_COMMAND, "post_lift_hold"
 
 
-def _passes(records: list[dict[str, Any]], lift_records: list[dict[str, Any]], final: dict[str, Any]) -> bool:
+def _passes(records: list[dict[str, Any]], lift_records: list[dict[str, Any]], post_lift_hold_records: list[dict[str, Any]], final: dict[str, Any]) -> bool:
     return (
         bool(records[0]["mat_guard"]["passed"])
         and all(bool(record["mat_guard"]["bottom_on_or_above_mat"]) for record in records)
         and all(bool(record["pad_mat_guard"]["passed"]) for record in records)
         and all(bool(record["gripper_visual_mat_guard"]["passed"]) for record in records)
         and records[0]["pad_cube_contacted_pads"] == 0
-        and final["cube_lift_m"] >= 0.025
+        and final["cube_lift_m"] >= 0.05
         and final["pad_cube_contacted_pads"] >= 2
         and _best_sustained_two_pad(lift_records) >= 60
+        and _best_sustained_two_pad(post_lift_hold_records) >= 300
+        and all(float(record["cube_lift_m"]) >= 0.045 for record in post_lift_hold_records)
     )
 
 
@@ -566,7 +577,7 @@ def _pad_cube_contact_depth(env: nexus.MyCobotNexusEnv) -> dict[str, Any]:
     }
 
 
-def _completion_standard(records: list[dict[str, Any]], lift_records: list[dict[str, Any]], final: dict[str, Any], *, status: str) -> dict[str, Any]:
+def _completion_standard(records: list[dict[str, Any]], lift_records: list[dict[str, Any]], post_lift_hold_records: list[dict[str, Any]], final: dict[str, Any], *, status: str) -> dict[str, Any]:
     max_penetration = max(float(r["pad_cube_contact_depth"]["max_penetration_m"]) for r in records)
     max_lift_penetration = max((float(r["pad_cube_contact_depth"]["max_penetration_m"]) for r in lift_records), default=0.0)
     checks = {
@@ -579,16 +590,20 @@ def _completion_standard(records: list[dict[str, Any]], lift_records: list[dict[
         "pad_mat_guard_all_steps": all(bool(r["pad_mat_guard"]["passed"]) for r in records),
         "gripper_visual_mat_guard_all_steps": all(bool(r["gripper_visual_mat_guard"]["passed"]) for r in records),
         "final_two_pad_contact": int(final["pad_cube_contacted_pads"]) >= 2,
-        "final_lift_at_least_25mm": float(final["cube_lift_m"]) >= 0.025,
+        "final_lift_at_least_50mm": float(final["cube_lift_m"]) >= 0.05,
         "lift_sustained_two_pad_steps_at_least_60": _best_sustained_two_pad(lift_records) >= 60,
+        "post_lift_hold_two_pad_steps_at_least_300": _best_sustained_two_pad(post_lift_hold_records) >= 300,
+        "post_lift_hold_height_at_least_45mm": bool(post_lift_hold_records) and all(float(record["cube_lift_m"]) >= 0.045 for record in post_lift_hold_records),
         "max_pad_cube_penetration_within_threshold": max_penetration <= MAX_PAD_CUBE_PENETRATION_M,
     }
     return {
         "name": "mycobot_280_base_aligned_surface_pickup_v0",
         "status": "passed" if all(checks.values()) else "failed",
         "thresholds": {
-            "required_final_lift_m": 0.025,
+            "required_final_lift_m": 0.05,
+            "required_post_lift_hold_min_lift_m": 0.045,
             "required_lift_sustained_two_pad_steps": 60,
+            "required_post_lift_hold_two_pad_steps": 300,
             "max_pad_cube_penetration_m": MAX_PAD_CUBE_PENETRATION_M,
             "mat_alignment": "work_mat_top_z equals robot base support plane for this scene",
         },
