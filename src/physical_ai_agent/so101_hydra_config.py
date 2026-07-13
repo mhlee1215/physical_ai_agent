@@ -144,4 +144,4 @@ def load_so101_hydra_training_config(
     payload: Any = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"{path}: training config must be a JSON object")
-    return entry, parse_so101_training_config(payload)
+    return entry, parse_so101_training_config(payload, path=path, repo_root=root)

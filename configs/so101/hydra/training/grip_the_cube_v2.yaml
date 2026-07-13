@@ -1,13 +1,13 @@
 # @package _global_
 
-training_config: configs/so101/training/grip_the_cube_v1.json
-description: Canonical SO101 grip-the-cube action-chunk training entrypoint.
+training_config: configs/so101/training/grip_the_cube_v2.json
+description: Canonical SO101 grip-the-cube v2 action-chunk training entrypoint.
 tags:
   - so101
   - smolvla
-  - grip_the_cube_v1
+  - grip_the_cube_v2
 launcher:
-  run_dir: _workspace/so101_training/runs/grip_the_cube_v1_default
+  run_dir: _workspace/so101_training/runs/grip_the_cube_v2
   host: 0.0.0.0
   tensorboard_port: 6006
   dashboard_port: 8767
@@ -19,7 +19,7 @@ launcher:
   allow_incomplete_monitoring: false
   hf_dataset_cache_root: _workspace/hf_datasets
   skip_hf_dataset_download: true
-  use_local_dataset_roots: false
+  use_local_dataset_roots: true
   hf_local_files_only: true
   gpu_monitor_interval_s: 5.0
   progress_monitor_interval_s: 600
@@ -63,5 +63,6 @@ launcher:
   python: .venv/bin/python
 training_args:
   - --policy.type=smolvla
+  - --policy.path=lerobot/smolvla_base
   - --checkpoint-retention-policy=best_val_and_closed_loop
-  - --steps=30096
+  - --steps=31032

@@ -13,7 +13,7 @@ Example:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
-  --dataset-config configs/so101/training/grip_the_cube_v1.json \
+  --dataset-config configs/so101/training/grip_the_cube_v2.json \
   --validation-interval-steps 300 \
   -- \
   --config_path=_workspace/so101_smolvla_pure/official_1ep_smoke_local/checkpoints/000020/pretrained_model/train_config.json \
@@ -174,7 +174,7 @@ PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
 ```
 
 The current default preset is `grip-the-cube-v1-local`, which uses
-`configs/so101/training/grip_the_cube_v1.json`, one TensorBoard
+`configs/so101/training/grip_the_cube_v2.json`, one TensorBoard
 logdir, validation every epoch, 10 closed-loop episodes, 256x256 loop media,
 `policy_n_action_steps=15`, and the canonical loop-test visualization contract.
 

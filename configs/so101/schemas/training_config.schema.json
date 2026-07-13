@@ -1153,6 +1153,176 @@
       "title": "PredecodedImageCacheConfig",
       "type": "object"
     },
+    "SO101DatasetSectionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "camera_contract": {
+          "$ref": "#/$defs/CameraContractConfig"
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generation"
+        },
+        "generation_augmentation": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generation Augmentation"
+        },
+        "prompt_contract": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Contract"
+        },
+        "reachable_bin_filter": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reachable Bin Filter"
+        },
+        "train_dataset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatasetConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "train_datasets": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/DatasetConfig"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Train Datasets"
+        },
+        "validation_dataset": {
+          "$ref": "#/$defs/DatasetConfig"
+        }
+      },
+      "required": [
+        "validation_dataset",
+        "camera_contract"
+      ],
+      "title": "SO101DatasetSectionConfig",
+      "type": "object"
+    },
+    "SO101RuntimeTrainingConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "augmentation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AugmentationConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "closed_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClosedLoopConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "data_loading": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrainingDataLoadingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "losses": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrainingLossesConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "training": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrainingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "visual_servo": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visual Servo"
+        }
+      },
+      "title": "SO101RuntimeTrainingConfig",
+      "type": "object"
+    },
     "TensorBoardConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1286,6 +1456,88 @@
       "title": "TrainingConfig",
       "type": "object"
     },
+    "TrainingDataLoadingConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "predecoded_image_cache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PredecodedImageCacheConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tensorboard": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TensorBoardConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "TrainingDataLoadingConfig",
+      "type": "object"
+    },
+    "TrainingLossesConfig": {
+      "additionalProperties": true,
+      "properties": {
+        "action_chunk_consistency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WeightedStepsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "action_prefix": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WeightedStepsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "action_smoothness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionSmoothnessConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "action_teacher_importance": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Teacher Importance"
+        }
+      },
+      "title": "TrainingLossesConfig",
+      "type": "object"
+    },
     "WeightedStepsConfig": {
       "additionalProperties": true,
       "properties": {
@@ -1351,6 +1603,17 @@
       "default": null,
       "title": "Action Mode"
     },
+    "action_prefix": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WeightedStepsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "action_smoothness": {
       "anyOf": [
         {
@@ -1385,6 +1648,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/ClosedLoopConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "dataset": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SO101DatasetSectionConfig"
         },
         {
           "type": "null"
@@ -1427,6 +1701,18 @@
       ],
       "default": null,
       "title": "Debug Notes"
+    },
+    "default_config": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Default Config"
     },
     "delta_action_source": {
       "anyOf": [
@@ -1556,6 +1842,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/TrainingConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "training_config": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SO101RuntimeTrainingConfig"
         },
         {
           "type": "null"

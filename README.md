@@ -88,15 +88,7 @@ The canonical launcher is:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
-  --hydra-config training/grip_the_cube_v1
-```
-
-Resume the current grip-the-cube lane from the retained best closed-loop
-checkpoint:
-
-```bash
-PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
-  --hydra-config training/grip_the_cube_v1_resume_best_closed_loop
+  --hydra-config training/grip_the_cube_v2
 ```
 
 Inspect the active run:
