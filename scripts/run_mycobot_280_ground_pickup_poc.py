@@ -27,7 +27,7 @@ from scripts.render_mycobot_280_cube_contact_sequence import (  # noqa: E402
 )
 
 WORLD_GRAVITY = (0.0, 0.0, -9.81)
-WORK_MAT_CENTER = (-0.12, -0.12, 0.004)
+WORK_MAT_CENTER = (-0.12, -0.12, -0.03433)
 WORK_MAT_HALF_SIZE = (0.46, 0.26, 0.004)
 WORK_MAT_TOP_Z = WORK_MAT_CENTER[2] + WORK_MAT_HALF_SIZE[2]
 MAT_GUARD_TOLERANCE_M = 0.001
@@ -35,14 +35,18 @@ PAD_MAT_GUARD_TOLERANCE_M = 0.001
 GRIPPER_VISUAL_MAT_GUARD_TOLERANCE_M = 0.001
 MAX_PAD_CUBE_PENETRATION_M = 0.003
 START_COMMAND = 1.0
-CONTACT_COMMAND = 0.75
+CONTACT_COMMAND = 0.62
 CUBE_HALF_SIZE = 0.015
 CUBE_MASS = 0.032
 MAT_FRICTION = 4.0
 PAD_FRICTION = 640.0
 PAD_SIZE_OVERRIDE: tuple[float, float, float] | None = None
+PAD_SOLREF_OVERRIDE: tuple[float, float] | None = None
+PAD_SOLIMP_OVERRIDE: tuple[float, float, float, float, float] | None = None
+CUBE_SOLREF_OVERRIDE: tuple[float, float] | None = None
+CUBE_SOLIMP_OVERRIDE: tuple[float, float, float, float, float] | None = None
 CUBE_AXIS_OFFSET = 0.0015
-CUBE_SIDE_OFFSET = 0.008
+CUBE_SIDE_OFFSET = 0.005
 APPROACH_STEPS = 20
 CLOSE_STEPS = 100
 HOLD_STEPS = 30
@@ -50,24 +54,24 @@ LIFT_STEPS = 80
 
 PICKUP_QPOS = np.asarray(
     [
-        1.6920851246689788,
-        2.3802245106776354,
-        0.2643304707557536,
-        -2.7574344941163096,
-        -0.9716523084214069,
-        -0.2085629983144582,
+        1.70167784060151,
+        2.4434,
+        -0.44610176735565193,
+        -2.5779,
+        -0.5535680335745943,
+        0.40248603599109317,
     ],
     dtype=float,
 )
 APPROACH_QPOS = PICKUP_QPOS.copy()
 LIFT_QPOS = np.asarray(
     [
-        1.6920851246689788,
-        2.3002245106776353,
-        0.41433047075575357,
-        -2.5074344941163096,
-        -0.9716523084214069,
-        -0.2085629983144582,
+        1.70167784060151,
+        2.3834,
+        -0.32610176735565194,
+        -2.3979,
+        -0.5535680335745943,
+        0.40248603599109317,
     ],
     dtype=float,
 )
@@ -96,9 +100,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cube-mass", type=float, default=CUBE_MASS)
     parser.add_argument("--mat-top-z", type=float, default=None)
     parser.add_argument("--contact-command", type=float, default=CONTACT_COMMAND)
+    parser.add_argument("--contact-stop-on-two-pad", dest="contact_stop_on_two_pad", action="store_true", default=True, help="Stop gripper closing once both terminal pads contact the cube. This is the default guarded pickup mode.")
+    parser.add_argument("--no-contact-stop-on-two-pad", dest="contact_stop_on_two_pad", action="store_false", help="Continue closing to --contact-command even after two-pad contact.")
+    parser.add_argument("--contact-extra-close", type=float, default=0.0, help="Additional close command delta after two-pad contact; lower command means tighter close.")
     parser.add_argument("--pad-friction", type=float, default=PAD_FRICTION)
     parser.add_argument("--max-pad-cube-penetration", type=float, default=MAX_PAD_CUBE_PENETRATION_M)
     parser.add_argument("--pad-size", type=str, default=None, help="Experimental contact half-size override as x,y,z meters.")
+    parser.add_argument("--pad-solref", type=str, default=None, help="Experimental pad contact solref override as timeconst,dampratio.")
+    parser.add_argument("--pad-solimp", type=str, default=None, help="Experimental pad contact solimp override as five comma-separated values.")
+    parser.add_argument("--cube-solref", type=str, default=None, help="Experimental cube contact solref override as timeconst,dampratio.")
+    parser.add_argument("--cube-solimp", type=str, default=None, help="Experimental cube contact solimp override as five comma-separated values.")
     parser.add_argument("--cube-axis-offset", type=float, default=CUBE_AXIS_OFFSET)
     parser.add_argument("--cube-side-offset", type=float, default=CUBE_SIDE_OFFSET)
     parser.add_argument("--cube-pos-xy", type=str, default=None, help="Experimental absolute cube x,y placement on the work mat.")
@@ -110,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    global CUBE_HALF_SIZE, CUBE_MASS, CONTACT_COMMAND, PAD_FRICTION, PAD_SIZE_OVERRIDE, CUBE_AXIS_OFFSET, CUBE_SIDE_OFFSET, PICKUP_QPOS, APPROACH_QPOS, LIFT_QPOS, WORK_MAT_CENTER, WORK_MAT_TOP_Z, APPROACH_STEPS, CLOSE_STEPS, HOLD_STEPS, LIFT_STEPS, MAX_PAD_CUBE_PENETRATION_M
+    global CUBE_HALF_SIZE, CUBE_MASS, CONTACT_COMMAND, PAD_FRICTION, PAD_SIZE_OVERRIDE, PAD_SOLREF_OVERRIDE, PAD_SOLIMP_OVERRIDE, CUBE_SOLREF_OVERRIDE, CUBE_SOLIMP_OVERRIDE, CUBE_AXIS_OFFSET, CUBE_SIDE_OFFSET, PICKUP_QPOS, APPROACH_QPOS, LIFT_QPOS, WORK_MAT_CENTER, WORK_MAT_TOP_Z, APPROACH_STEPS, CLOSE_STEPS, HOLD_STEPS, LIFT_STEPS, MAX_PAD_CUBE_PENETRATION_M
     CUBE_HALF_SIZE = float(args.cube_half_size)
     CUBE_MASS = float(args.cube_mass)
     if args.mat_top_z is not None:
@@ -122,6 +133,10 @@ def main() -> None:
     PAD_SIZE_OVERRIDE = tuple(float(value.strip()) for value in args.pad_size.split(",")) if args.pad_size else None
     if PAD_SIZE_OVERRIDE is not None and len(PAD_SIZE_OVERRIDE) != 3:
         raise ValueError("--pad-size must have exactly three comma-separated values")
+    PAD_SOLREF_OVERRIDE = _parse_tuple(args.pad_solref, 2, "--pad-solref") if args.pad_solref else None
+    PAD_SOLIMP_OVERRIDE = _parse_tuple(args.pad_solimp, 5, "--pad-solimp") if args.pad_solimp else None
+    CUBE_SOLREF_OVERRIDE = _parse_tuple(args.cube_solref, 2, "--cube-solref") if args.cube_solref else None
+    CUBE_SOLIMP_OVERRIDE = _parse_tuple(args.cube_solimp, 5, "--cube-solimp") if args.cube_solimp else None
     CUBE_AXIS_OFFSET = float(args.cube_axis_offset)
     CUBE_SIDE_OFFSET = float(args.cube_side_offset)
     APPROACH_STEPS = int(args.approach_steps)
@@ -178,8 +193,11 @@ def main() -> None:
         total_steps = APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS
         key_steps = {0, 1, 2, APPROACH_STEPS + CLOSE_STEPS - 1, APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS - 1, total_steps - 1}
         camera = _camera(env, initial_cube)
+        contact_stop_command: float | None = None
         for step in range(total_steps):
             arm, command, phase = _scripted_state(step)
+            if args.contact_stop_on_two_pad and contact_stop_command is not None and phase in {"close_on_cube_on_mat", "hold_before_lift", "lift_from_mat"}:
+                command = contact_stop_command
             if args.zero_gravity_close and phase in {"approach_down_to_cube_on_mat", "close_on_cube_on_mat"}:
                 env.model.opt.gravity[:] = [0.0, 0.0, 0.0]
             else:
@@ -190,6 +208,13 @@ def main() -> None:
                 env._set_gripper(command=float(command))
                 env._mujoco.mj_forward(env.model, env.data)
             record = _record(env, step=step, phase=phase, command=float(command), initial_cube=initial_cube)
+            if (
+                args.contact_stop_on_two_pad
+                and contact_stop_command is None
+                and phase == "close_on_cube_on_mat"
+                and int(record["pad_cube_contacted_pads"]) >= 2
+            ):
+                contact_stop_command = max(-1.0, min(1.0, float(command) - float(args.contact_extra_close)))
             records.append(record)
             if args.video_every > 0 and step % args.video_every == 0:
                 writer.write(_render_bgr(env, renderer, record, camera))
@@ -230,6 +255,8 @@ def main() -> None:
             "cube_pos_xy_override": args.cube_pos_xy,
             "start_command": START_COMMAND,
             "contact_command": CONTACT_COMMAND,
+            "contact_stop_on_two_pad": bool(args.contact_stop_on_two_pad),
+            "contact_extra_close": float(args.contact_extra_close),
             "approach_steps": APPROACH_STEPS,
             "close_steps": CLOSE_STEPS,
             "hold_steps": HOLD_STEPS,
@@ -301,6 +328,14 @@ def _parse_qpos(raw: str) -> np.ndarray:
         raise ValueError(f"expected 6 comma-separated qpos values, got {len(values)}: {raw!r}")
     return np.asarray(values, dtype=float)
 
+
+def _parse_tuple(raw: str, expected: int, flag: str) -> tuple[float, ...]:
+    values = tuple(float(value.strip()) for value in raw.split(",") if value.strip())
+    if len(values) != expected:
+        raise ValueError(f"{flag} must have exactly {expected} comma-separated values, got {len(values)}: {raw!r}")
+    return values
+
+
 def _initial_cube_pose(env: nexus.MyCobotNexusEnv) -> tuple[np.ndarray, list[float]]:
     nexus._set_adaptive_gate_arm_pose(env, tuple(float(x) for x in PICKUP_QPOS))
     env._set_gripper(command=START_COMMAND)
@@ -356,6 +391,10 @@ def _apply_physics_overrides(env: nexus.MyCobotNexusEnv) -> None:
         env.model.geom_condim[cube_geom] = 6
         env.model.geom_contype[cube_geom] = 1
         env.model.geom_conaffinity[cube_geom] = 3
+        if CUBE_SOLREF_OVERRIDE is not None:
+            env.model.geom_solref[cube_geom, :2] = [float(x) for x in CUBE_SOLREF_OVERRIDE]
+        if CUBE_SOLIMP_OVERRIDE is not None:
+            env.model.geom_solimp[cube_geom, :5] = [float(x) for x in CUBE_SOLIMP_OVERRIDE]
     mat_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_GEOM, "nexus_work_mat")
     if mat_id >= 0:
         env.model.geom_pos[mat_id, :3] = [float(x) for x in WORK_MAT_CENTER]
@@ -375,6 +414,10 @@ def _apply_physics_overrides(env: nexus.MyCobotNexusEnv) -> None:
             env.model.geom_friction[geom_id, :3] = [PAD_FRICTION, PAD_FRICTION * 0.1, PAD_FRICTION * 0.1]
             env.model.geom_contype[geom_id] = 2
             env.model.geom_conaffinity[geom_id] = 2
+            if PAD_SOLREF_OVERRIDE is not None:
+                env.model.geom_solref[geom_id, :2] = [float(x) for x in PAD_SOLREF_OVERRIDE]
+            if PAD_SOLIMP_OVERRIDE is not None:
+                env.model.geom_solimp[geom_id, :5] = [float(x) for x in PAD_SOLIMP_OVERRIDE]
 
 
 def _record(env: nexus.MyCobotNexusEnv, *, step: int, phase: str, command: float, initial_cube: np.ndarray) -> dict[str, Any]:
@@ -627,3 +670,4 @@ def _geom_pos(env: nexus.MyCobotNexusEnv, name: str) -> np.ndarray:
 
 if __name__ == "__main__":
     main()
+
