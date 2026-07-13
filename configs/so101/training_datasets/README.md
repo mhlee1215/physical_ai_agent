@@ -257,6 +257,22 @@ Dataset checksums:
   records the pre-export trajectory generation material for every current
   split. Commit recipes, contracts, tests, and checksum manifests; keep raw
   LeRobot datasets under `_workspace/` out of PRs.
+- The canonical `grip_the_cube_v2` train/validation/closed-loop material is a
+  multi-shard workflow recorded separately in
+  `configs/so101/dataset_generation/grip_the_cube_v2.json`. Reproduce the
+  complete workflow, including merge, camera-bin sidecars, validation-derived
+  closed-loop starts, and split-overlap audit, with:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python \
+  scripts/generate_so101_dataset_recipe.py \
+  --recipe configs/so101/dataset_generation/grip_the_cube_v2.json \
+  --split all --workers 3 --overwrite
+```
+
+  Use `--dry-run` first to inspect every generated command without writing any
+  dataset artifact. The recipe, not conversation history, is authoritative for
+  bin counts, seed bases, lookup offsets, teacher timing, and alignment gates.
 - Do not change dataset roots, camera mapping, task semantics, split names, or
   start-mode semantics without explicit user approval. If a change is needed,
   ask first and record the approval in the PR summary.

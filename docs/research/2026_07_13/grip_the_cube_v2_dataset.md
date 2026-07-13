@@ -67,3 +67,31 @@ grip_the_cube_v2_validation_start10.json
 Generated datasets, caches, sidecars, and reports remain under `_workspace/`
 and are excluded from Git. Source code, configs, tests, and this audit note are
 the PR payload.
+
+## Context-Independent Reproduction
+
+The complete generation contract now lives in
+`configs/so101/dataset_generation/grip_the_cube_v2.json`. It records the exact
+teacher phase lengths, 256x256 camera contract, geometry thresholds, terminal
+hold, reachable bins, per-bin counts, seed bases, validation lookup offsets,
+and output paths. No chat context is required.
+
+Preview the full command graph:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python \
+  scripts/generate_so101_dataset_recipe.py --dry-run
+```
+
+Regenerate train and validation artifacts:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python \
+  scripts/generate_so101_dataset_recipe.py \
+  --split all --workers 3 --overwrite
+```
+
+The launcher creates one root per camera bin, merges the shards, builds each
+camera1 grid-bin sidecar, derives ten loop-test starts directly from validation
+episode-zero states, and fails if train/validation seeds, spawn coordinates, or
+action/state trajectory hashes overlap.
