@@ -26,6 +26,8 @@ from scripts.run_mycobot_280_ground_pickup_poc import (  # noqa: E402
     START_COMMAND,
     WORK_MAT_TOP_Z,
     WORLD_GRAVITY,
+    _cube_mat_guard,
+    _patch_nexus_work_mat_scene_nodes,
     _apply_physics_overrides,
     _best_sustained_two_pad,
     _initial_cube_pose,
@@ -97,6 +99,7 @@ def export_dataset(
     fps: int,
     render_every: int,
 ) -> dict[str, Any]:
+    _patch_nexus_work_mat_scene_nodes()
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(output_dir / "episodes", ignore_errors=True)
     shutil.rmtree(output_dir / "frames", ignore_errors=True)
@@ -133,6 +136,8 @@ def export_dataset(
         "trajectory": "true_cube_from_work_mat_open_align_close_grasp_lift",
         "teacher_attachment_enabled": False,
         "object_teleport_during_pickup_lift": False,
+        "zero_gravity_close": True,
+        "post_step_snap_enabled": False,
         "cube_starts_on_work_mat": True,
         "cube_half_size_m": CUBE_HALF_SIZE,
         "cube_mass_kg": CUBE_MASS,
@@ -161,7 +166,10 @@ def export_dataset(
         "notes": (
             "Cube-from-mat teacher POC. The cube is placed on the work mat only at episode "
             "initialization; pickup and lift use raw MuJoCo gripper/cube contact with no "
-            "teacher attachment or object teleporting during pickup/lift."
+            "teacher attachment or object teleporting during pickup/lift. Fingertip pads, "
+            "cube, mat, and floor use MuJoCo contact; visible gripper geoms are guarded "
+            "against mat-plane overlap, while broader arm/table collision remains visual-only. "
+            "Gravity is disabled during approach/close only and restored for hold/lift."
         ),
     }
     manifest_path = output_dir / "manifest.json"
@@ -207,14 +215,18 @@ def _export_episode(
         _set_cube_pose(env, cube_pos, cube_quat)
         env._mujoco.mj_forward(env.model, env.data)
         initial_cube = env._cube_position()
+        placement_guard = _cube_mat_guard(initial_cube)
+        if not placement_guard["passed"]:
+            raise RuntimeError(f"cube does not start fully on the work mat: {placement_guard}")
         rows: list[dict[str, Any]] = []
         total_steps = APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS
         for step_index in range(total_steps):
             arm, command, phase = _scripted_state(step_index)
+            if phase in {"approach_down_to_cube_on_mat", "close_on_cube_on_mat"}:
+                env.model.opt.gravity[:] = [0.0, 0.0, 0.0]
+            else:
+                env.model.opt.gravity[:] = WORLD_GRAVITY
             obs, reward, terminated, truncated, info = env.step([*tuple(float(x) for x in arm), float(command)])
-            nexus._set_adaptive_gate_arm_pose(env, tuple(float(x) for x in arm))
-            env._set_gripper(command=float(command))
-            env._mujoco.mj_forward(env.model, env.data)
             record = _record(env, step=step_index, phase=phase, command=float(command), initial_cube=initial_cube)
             image = ""
             if step_index % max(1, render_every) == 0:
@@ -252,6 +264,13 @@ def _export_episode(
         "success": success,
         "first_frame_pad_cube_contacted_pads": records[0]["pad_cube_contacted_pads"],
         "first_contact_step": next((record["step"] for record in records if record["pad_cube_contacted_pads"] > 0), None),
+        "initial_cube_mat_guard": records[0]["mat_guard"],
+        "cube_bottom_on_or_above_mat_all_steps": all(bool(record["mat_guard"]["bottom_on_or_above_mat"]) for record in records),
+        "worst_cube_bottom_minus_mat_top_m": min(float(record["mat_guard"]["cube_bottom_minus_mat_top_m"]) for record in records),
+        "pad_mat_guard_passed_all_steps": all(bool(record["pad_mat_guard"]["passed"]) for record in records),
+        "worst_pad_mat_penetration_m": min(float(record["pad_mat_guard"]["min_pad_bottom_minus_mat_top_m"]) for record in records),
+        "gripper_visual_mat_guard_passed_all_steps": all(bool(record["gripper_visual_mat_guard"]["passed"]) for record in records),
+        "worst_gripper_visual_penetration_m": min(float(record["gripper_visual_mat_guard"]["min_gripper_visual_bottom_minus_mat_top_m"]) for record in records),
         "final_cube_lift_m": final["cube_lift_m"],
         "final_gripper_cube_contact_pads": final["pad_cube_contacted_pads"],
         "lift_best_sustained_two_pad_steps": _best_sustained_two_pad(lift_records),
