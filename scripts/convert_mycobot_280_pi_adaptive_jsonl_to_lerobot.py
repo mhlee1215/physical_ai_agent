@@ -68,8 +68,14 @@ def convert_mycobot_280_pi_adaptive_jsonl_to_lerobot(
         raise ValueError("source dataset has no episodes")
 
     resolved_fps = int(fps if fps is not None else info.get("fps", 12))
-    image_shape = _first_image_shape(source_root, frames[0])
-    features = _lerobot_features(height=image_shape[0], width=image_shape[1], use_videos=use_videos)
+    source_schema = _detect_source_schema(frames[0])
+    image_shape = _first_image_shape(source_root, frames[0], schema=source_schema)
+    features = _lerobot_features(
+        height=image_shape[0],
+        width=image_shape[1],
+        use_videos=use_videos,
+        schema=source_schema,
+    )
 
     if lerobot_dataset_cls is None:
         try:
@@ -81,6 +87,7 @@ def convert_mycobot_280_pi_adaptive_jsonl_to_lerobot(
                 repo_id=repo_id,
                 fps=resolved_fps,
                 features=features,
+                source_schema=source_schema,
                 reason=f"lerobot import failed: {exc}",
             )
             _write_report(output_root, report, overwrite=overwrite)
@@ -117,7 +124,7 @@ def convert_mycobot_280_pi_adaptive_jsonl_to_lerobot(
         if not episode_frames:
             raise ValueError(f"episode {episode_index} has no frames")
         for frame in episode_frames:
-            dataset.add_frame(_native_frame(source_root, frame))
+            dataset.add_frame(_native_frame(source_root, frame, schema=source_schema))
             exported_frames += 1
         dataset.save_episode()
         exported_episodes += 1
@@ -136,6 +143,7 @@ def convert_mycobot_280_pi_adaptive_jsonl_to_lerobot(
         "exported_episodes": exported_episodes,
         "exported_frames": exported_frames,
         "features": features,
+        "source_schema": source_schema,
         "source_episodes": episodes,
         "claim_boundary": (
             "This proves conversion through the native LeRobotDataset API. It does not prove "
@@ -153,6 +161,7 @@ def _blocked_report(
     repo_id: str,
     fps: int,
     features: dict[str, dict[str, Any]],
+    source_schema: str,
     reason: str,
 ) -> dict[str, Any]:
     return {
@@ -164,8 +173,11 @@ def _blocked_report(
         "robot_type": ROBOT_TYPE,
         "fps": fps,
         "features": features,
+        "source_schema": source_schema,
         "blocker": reason,
-        "next_step": "Install LeRobot in the execution environment, then rerun with --require-lerobot.",
+        "install_command": "sh scripts/install/local_install.sh --checkpoint 05-06",
+        "approval_required": True,
+        "next_step": "After approval, install the LeRobot/SmolVLA runtime, then rerun with --require-lerobot.",
         "claim_boundary": "No native LeRobotDataset was written because the LeRobot runtime is unavailable.",
     }
 
@@ -178,29 +190,51 @@ def _write_report(output_root: Path, report: dict[str, Any], *, overwrite: bool)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _native_frame(source_root: Path, frame: dict[str, Any]) -> dict[str, Any]:
-    object_position = frame.get("object_position") or [0.0, 0.0, 0.0]
-    return {
-        "observation.images.camera1": _read_image_hwc_uint8(source_root / str(frame["top_image"])),
-        "observation.images.camera2": _read_image_hwc_uint8(source_root / str(frame["wrist_image"])),
-        "observation.state": _array(frame["observation_state"], dtype="float32"),
-        "action": _array(frame["action"], dtype="float32"),
-        "object_position": _array(object_position, dtype="float32"),
-        "contact_count": _array([int(frame.get("contact_count", 0))], dtype="int64"),
-        "task": str(frame.get("task", "")),
-    }
+def _detect_source_schema(frame: dict[str, Any]) -> str:
+    if "observation.images.camera1" in frame:
+        return "ground_pickup_intermediate_v1"
+    if "top_image" in frame and "wrist_image" in frame:
+        return "adaptive_dual_camera_v1"
+    raise ValueError("unsupported myCobot intermediate frame schema")
 
 
-def _lerobot_features(*, height: int, width: int, use_videos: bool) -> dict[str, dict[str, Any]]:
+def _native_frame(source_root: Path, frame: dict[str, Any], *, schema: str) -> dict[str, Any]:
+    if schema == "ground_pickup_intermediate_v1":
+        metadata = frame.get("metadata") if isinstance(frame.get("metadata"), dict) else {}
+        return {
+            "observation.images.camera1": _read_image_hwc_uint8(_frame_image_path(source_root, frame, schema=schema)),
+            "observation.state": _array(_require_vector(frame, "observation.state", len(JOINT_NAMES)), dtype="float32"),
+            "action": _array(_require_vector(frame, "action", len(JOINT_NAMES)), dtype="float32"),
+            "cube_position": _array(_metadata_vector(metadata, "cube_position_m", 3), dtype="float32"),
+            "contact_count": _array([int(metadata.get("pad_cube_contacted_pads") or 0)], dtype="int64"),
+            "max_pad_cube_penetration_m": _array([float(metadata.get("max_pad_cube_penetration_m") or 0.0)], dtype="float32"),
+            "task": str(frame.get("task", "")),
+        }
+
+    if schema == "adaptive_dual_camera_v1":
+        object_position = frame.get("object_position") or [0.0, 0.0, 0.0]
+        return {
+            "observation.images.camera1": _read_image_hwc_uint8(source_root / str(frame["top_image"])),
+            "observation.images.camera2": _read_image_hwc_uint8(source_root / str(frame["wrist_image"])),
+            "observation.state": _array(frame["observation_state"], dtype="float32"),
+            "action": _array(frame["action"], dtype="float32"),
+            "object_position": _array(object_position, dtype="float32"),
+            "contact_count": _array([int(frame.get("contact_count", 0))], dtype="int64"),
+            "task": str(frame.get("task", "")),
+        }
+
+    raise ValueError(f"unsupported myCobot intermediate frame schema: {schema}")
+
+
+def _lerobot_features(*, height: int, width: int, use_videos: bool, schema: str) -> dict[str, dict[str, Any]]:
     image_dtype = "video" if use_videos else "image"
     image_feature = {
         "dtype": image_dtype,
         "shape": (height, width, 3),
         "names": ["height", "width", "channels"],
     }
-    return {
+    base = {
         "observation.images.camera1": dict(image_feature),
-        "observation.images.camera2": dict(image_feature),
         "observation.state": {
             "dtype": "float32",
             "shape": (len(JOINT_NAMES),),
@@ -211,17 +245,51 @@ def _lerobot_features(*, height: int, width: int, use_videos: bool) -> dict[str,
             "shape": (len(JOINT_NAMES),),
             "names": JOINT_NAMES,
         },
-        "object_position": {"dtype": "float32", "shape": (3,), "names": ["x", "y", "z"]},
+        "cube_position": {"dtype": "float32", "shape": (3,), "names": ["x", "y", "z"]},
         "contact_count": {"dtype": "int64", "shape": (1,), "names": ["count"]},
     }
+    if schema == "ground_pickup_intermediate_v1":
+        base["max_pad_cube_penetration_m"] = {"dtype": "float32", "shape": (1,), "names": ["meters"]}
+        return base
+    if schema == "adaptive_dual_camera_v1":
+        base["observation.images.camera2"] = dict(image_feature)
+        base["object_position"] = base.pop("cube_position")
+        return base
+    raise ValueError(f"unsupported myCobot intermediate frame schema: {schema}")
 
 
-def _first_image_shape(source_root: Path, frame: dict[str, Any]) -> tuple[int, int]:
-    image = _read_image_hwc_uint8(source_root / str(frame["top_image"]))
+def _first_image_shape(source_root: Path, frame: dict[str, Any], *, schema: str) -> tuple[int, int]:
+    image = _read_image_hwc_uint8(_frame_image_path(source_root, frame, schema=schema))
     shape = _shape_of(image)
     if len(shape) != 3:
         raise ValueError("decoded image must have HWC shape")
     return int(shape[0]), int(shape[1])
+
+
+def _frame_image_path(source_root: Path, frame: dict[str, Any], *, schema: str) -> Path:
+    if schema == "ground_pickup_intermediate_v1":
+        return source_root / str(frame["observation.images.camera1"])
+    if schema == "adaptive_dual_camera_v1":
+        return source_root / str(frame["top_image"])
+    raise ValueError(f"unsupported myCobot intermediate frame schema: {schema}")
+
+
+def _require_vector(frame: dict[str, Any], key: str, length: int) -> list[float]:
+    value = frame.get(key)
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list")
+    if len(value) != length:
+        raise ValueError(f"{key} length {len(value)} != {length}")
+    return [float(item) for item in value]
+
+
+def _metadata_vector(metadata: dict[str, Any], key: str, length: int) -> list[float]:
+    value = metadata.get(key)
+    if not isinstance(value, list):
+        return [0.0] * length
+    if len(value) != length:
+        raise ValueError(f"metadata.{key} length {len(value)} != {length}")
+    return [float(item) for item in value]
 
 
 def _read_image_hwc_uint8(path: Path) -> Any:
@@ -234,7 +302,17 @@ def _read_image_hwc_uint8(path: Path) -> Any:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"Pillow is required to decode non-PPM image {path}") from exc
     with Image.open(path) as image:
-        return _array(image.convert("RGB"), dtype="uint8")
+        rgb = image.convert("RGB")
+        try:
+            import numpy as np
+        except Exception:  # noqa: BLE001
+            width, height = rgb.size
+            pixels = list(rgb.getdata())
+            return [
+                [list(pixels[row * width + col]) for col in range(width)]
+                for row in range(height)
+            ]
+        return np.asarray(rgb, dtype=np.uint8)
 
 
 def _read_ppm(path: Path) -> Any:

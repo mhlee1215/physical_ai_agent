@@ -87,6 +87,40 @@ class MyCobot280PiLeRobotNativeConverterTest(unittest.TestCase):
             self.assertTrue((output_root / "mycobot_280_pi_lerobot_convert_report.json").exists())
 
 
+    def test_fake_lerobot_dataset_receives_ground_pickup_intermediate_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_root = _write_ground_pickup_intermediate(tmp_path)
+            output_root = tmp_path / "native_ground"
+
+            FakeLeRobotDataset.instances.clear()
+            report = convert_mycobot_280_pi_adaptive_jsonl_to_lerobot(
+                source_root=source_root,
+                output_root=output_root,
+                repo_id="physical-ai-agent/mycobot-280-ground-pickup-test",
+                fps=None,
+                use_videos=False,
+                overwrite=False,
+                lerobot_dataset_cls=FakeLeRobotDataset,
+            )
+
+            self.assertEqual(report["status"], "passed")
+            self.assertEqual(report["source_schema"], "ground_pickup_intermediate_v1")
+            self.assertEqual(report["exported_frames"], 2)
+            instance = FakeLeRobotDataset.instances[-1]
+            self.assertIn("observation.images.camera1", instance.features)
+            self.assertNotIn("observation.images.camera2", instance.features)
+            self.assertIn("max_pad_cube_penetration_m", instance.features)
+            first = instance.frames[0]
+            self.assertEqual(_shape_of(first["observation.images.camera1"]), (2, 2, 3))
+            self.assertEqual(_shape_of(first["observation.state"]), (7,))
+            self.assertEqual(_shape_of(first["action"]), (7,))
+            self.assertEqual(_shape_of(first["cube_position"]), (3,))
+            self.assertEqual(_shape_of(first["contact_count"]), (1,))
+            self.assertEqual(_shape_of(first["max_pad_cube_penetration_m"]), (1,))
+            self.assertEqual(first["task"], "pick up the cube from the work mat")
+
+
 class FakeLeRobotDataset:
     instances: list["FakeLeRobotDataset"] = []
 
@@ -187,6 +221,43 @@ def _write_jsonl_export(tmp_path: Path) -> Path:
         task="Pick up the test cube.",
         overwrite=False,
     )
+    return source_root
+
+
+def _write_ground_pickup_intermediate(tmp_path: Path) -> Path:
+    source_root = tmp_path / "ground_intermediate"
+    (source_root / "data").mkdir(parents=True)
+    (source_root / "meta").mkdir(parents=True)
+    (source_root / "images" / "camera1").mkdir(parents=True)
+    frames = []
+    for index in range(2):
+        image_path = source_root / "images" / "camera1" / f"frame_{index:06d}.ppm"
+        _write_tiny_ppm(image_path, tint=40 + index)
+        frames.append(
+            {
+                "episode_index": 0,
+                "frame_index": index,
+                "timestamp": index / 30.0,
+                "task": "pick up the cube from the work mat",
+                "observation.state": [0.01 * (index + offset) for offset in range(7)],
+                "observation.images.camera1": str(image_path.relative_to(source_root)),
+                "action": [0.02 * (index + offset) for offset in range(7)],
+                "metadata": {
+                    "cube_position_m": [0.1, 0.2, 0.03 + index * 0.01],
+                    "pad_cube_contacted_pads": 2,
+                    "max_pad_cube_penetration_m": 0.001,
+                },
+            }
+        )
+    (source_root / "data" / "frames.jsonl").write_text(
+        "".join(json.dumps(frame, sort_keys=True) + "\n" for frame in frames),
+        encoding="utf-8",
+    )
+    (source_root / "data" / "episodes.jsonl").write_text(
+        json.dumps({"episode_index": 0, "from_frame": 0, "to_frame": 1, "length": 2}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (source_root / "meta" / "info.json").write_text(json.dumps({"fps": 30}), encoding="utf-8")
     return source_root
 
 

@@ -201,10 +201,18 @@ def _blocked_report(
         "output_path": str(output_path),
         "blocker": blocker,
         "dataset_audit": dataset_audit,
+        "install_command": "sh scripts/install/local_install.sh --checkpoint 05-06",
+        "approval_required": True,
+        "native_conversion_command": (
+            "PYTHONPATH=src:. python3 scripts/convert_mycobot_280_pi_adaptive_jsonl_to_lerobot.py "
+            "--source-root _workspace/mycobot280_lerobot/ground_pickup_tiny_smoke "
+            "--output-root _workspace/mycobot280_lerobot/ground_pickup_tiny_smoke_native "
+            "--repo-id physical-ai-agent/mycobot-280-ground-pickup-tiny-smoke "
+            "--require-lerobot"
+        ),
         "next_step": (
-            "Create the native 280 LeRobotDataset with "
-            "scripts/convert_mycobot_280_pi_adaptive_jsonl_to_lerobot.py in a LeRobot "
-            "runtime, then rerun this script with --require-runtime."
+            "After approval, install the LeRobot/SmolVLA runtime, create the native 280 "
+            "LeRobotDataset, then rerun this script with --require-runtime."
         ),
         "claim_boundary": "No SmolVLA smoke was completed.",
     }

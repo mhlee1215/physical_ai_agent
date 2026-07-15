@@ -21,6 +21,7 @@ from scripts.run_mycobot_280_ground_pickup_poc import (  # noqa: E402
     CUBE_MASS,
     HOLD_STEPS,
     LIFT_STEPS,
+    POST_LIFT_HOLD_STEPS,
     MAT_FRICTION,
     PAD_FRICTION,
     START_COMMAND,
@@ -127,13 +128,27 @@ def export_dataset(
         if not summary["success"]:
             failed_episodes.append(episode_index)
 
+    passed_episodes = [summary for summary in episode_summaries if summary["success"]]
+    aggregate_metrics = {
+        "passed_episodes": len(passed_episodes),
+        "failed_episodes": len(failed_episodes),
+        "min_final_cube_lift_m": min((float(summary["final_cube_lift_m"]) for summary in passed_episodes), default=0.0),
+        "min_lift_best_sustained_two_pad_steps": min((int(summary["lift_best_sustained_two_pad_steps"]) for summary in passed_episodes), default=0),
+        "min_post_lift_hold_sustained_two_pad_steps": min((int(summary["post_lift_hold_best_sustained_two_pad_steps"]) for summary in passed_episodes), default=0),
+        "min_post_lift_hold_cube_lift_m": min((float(summary["post_lift_hold_min_cube_lift_m"]) for summary in passed_episodes), default=0.0),
+        "max_pad_cube_penetration_m": max((float(summary["max_pad_cube_penetration_m"]) for summary in passed_episodes), default=0.0),
+        "max_lift_pad_cube_penetration_m": max((float(summary["max_lift_pad_cube_penetration_m"]) for summary in passed_episodes), default=0.0),
+    }
+
     manifest = {
         "format": "mycobot_jsonl_v1",
         "dataset_id": output_dir.name,
         "robot": "myCobot 280 Pi + adaptive gripper",
         "model_profile": nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
         "task": TASK,
-        "trajectory": "true_cube_from_work_mat_open_align_close_grasp_lift",
+        "generation_mode": "deterministic_fixed_task",
+        "randomization_enabled": False,
+        "trajectory": "true_cube_from_work_mat_open_align_close_grasp_lift_post_lift_hold",
         "teacher_attachment_enabled": False,
         "object_teleport_during_pickup_lift": False,
         "zero_gravity_close": True,
@@ -145,12 +160,17 @@ def export_dataset(
         "mat_friction": MAT_FRICTION,
         "pad_friction": PAD_FRICTION,
         "success_criteria": {
-            "final_cube_lift_m": 0.025,
+            "final_cube_lift_m": 0.05,
             "final_gripper_cube_contact_pads": 2,
             "lift_best_sustained_two_pad_steps": 60,
+            "post_lift_hold_best_sustained_two_pad_steps": 300,
+            "post_lift_hold_min_cube_lift_m": 0.045,
+            "max_pad_cube_penetration_m": 0.003,
         },
         "episodes": episodes,
+        "passed_episodes": len(passed_episodes),
         "frames": total_rows,
+        "aggregate_metrics": aggregate_metrics,
         "fps": fps,
         "render_every": render_every,
         "image_mime_type": "image/bmp",
@@ -169,7 +189,7 @@ def export_dataset(
             "teacher attachment or object teleporting during pickup/lift. Fingertip pads, "
             "cube, mat, and floor use MuJoCo contact; visible gripper geoms are guarded "
             "against mat-plane overlap, while broader arm/table collision remains visual-only. "
-            "Gravity is disabled during approach/close only and restored for hold/lift."
+            "Gravity is disabled during approach/close only and restored for hold/lift/post-lift hold."
         ),
     }
     manifest_path = output_dir / "manifest.json"
@@ -219,15 +239,20 @@ def _export_episode(
         if not placement_guard["passed"]:
             raise RuntimeError(f"cube does not start fully on the work mat: {placement_guard}")
         rows: list[dict[str, Any]] = []
-        total_steps = APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS
+        total_steps = APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS + POST_LIFT_HOLD_STEPS
+        contact_stop_command: float | None = None
         for step_index in range(total_steps):
             arm, command, phase = _scripted_state(step_index)
+            if contact_stop_command is not None and phase in {"close_on_cube_on_mat", "hold_before_lift", "lift_from_mat", "post_lift_hold"}:
+                command = contact_stop_command
             if phase in {"approach_down_to_cube_on_mat", "close_on_cube_on_mat"}:
                 env.model.opt.gravity[:] = [0.0, 0.0, 0.0]
             else:
                 env.model.opt.gravity[:] = WORLD_GRAVITY
             obs, reward, terminated, truncated, info = env.step([*tuple(float(x) for x in arm), float(command)])
             record = _record(env, step=step_index, phase=phase, command=float(command), initial_cube=initial_cube)
+            if contact_stop_command is None and phase == "close_on_cube_on_mat" and int(record["pad_cube_contacted_pads"]) >= 2:
+                contact_stop_command = max(-1.0, min(1.0, float(command)))
             image = ""
             if step_index % max(1, render_every) == 0:
                 image_path = frame_dir / f"frame_{step_index:04d}.bmp"
@@ -254,8 +279,9 @@ def _export_episode(
     episode_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
     records = [row["info"]["ground_pickup"] for row in rows]
     lift_records = [record for record in records if record["phase"] == "lift_from_mat"]
+    post_lift_hold_records = [record for record in records if record["phase"] == "post_lift_hold"]
     final = records[-1]
-    success = _passes(records, lift_records, final)
+    success = _passes(records, lift_records, post_lift_hold_records, final)
     return {
         "episode_index": episode_index,
         "path": str(episode_path.relative_to(output_dir)),
@@ -274,6 +300,11 @@ def _export_episode(
         "final_cube_lift_m": final["cube_lift_m"],
         "final_gripper_cube_contact_pads": final["pad_cube_contacted_pads"],
         "lift_best_sustained_two_pad_steps": _best_sustained_two_pad(lift_records),
+        "post_lift_hold_steps": POST_LIFT_HOLD_STEPS,
+        "post_lift_hold_best_sustained_two_pad_steps": _best_sustained_two_pad(post_lift_hold_records),
+        "post_lift_hold_min_cube_lift_m": min((float(record["cube_lift_m"]) for record in post_lift_hold_records), default=0.0),
+        "max_pad_cube_penetration_m": max(float(record["pad_cube_contact_depth"]["max_penetration_m"]) for record in records),
+        "max_lift_pad_cube_penetration_m": max((float(record["pad_cube_contact_depth"]["max_penetration_m"]) for record in lift_records), default=0.0),
     }
 
 
