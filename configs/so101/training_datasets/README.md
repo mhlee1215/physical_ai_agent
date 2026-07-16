@@ -13,7 +13,7 @@ Example:
 
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
-  --dataset-config configs/so101/training/grip_the_cube_v1.json \
+  --dataset-config configs/so101/training/grip_the_cube_v2.json \
   --validation-interval-steps 300 \
   -- \
   --config_path=_workspace/so101_smolvla_pure/official_1ep_smoke_local/checkpoints/000020/pretrained_model/train_config.json \
@@ -174,7 +174,7 @@ PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
 ```
 
 The current default preset is `grip-the-cube-v1-local`, which uses
-`configs/so101/training/grip_the_cube_v1.json`, one TensorBoard
+`configs/so101/training/grip_the_cube_v2.json`, one TensorBoard
 logdir, validation every epoch, 10 closed-loop episodes, 256x256 loop media,
 `policy_n_action_steps=15`, and the canonical loop-test visualization contract.
 
@@ -257,6 +257,22 @@ Dataset checksums:
   records the pre-export trajectory generation material for every current
   split. Commit recipes, contracts, tests, and checksum manifests; keep raw
   LeRobot datasets under `_workspace/` out of PRs.
+- The canonical `grip_the_cube_v2` train/validation/closed-loop material is a
+  multi-shard workflow recorded separately in
+  `configs/so101/dataset_generation/grip_the_cube_v2.json`. Reproduce the
+  complete workflow, including merge, camera-bin sidecars, validation-derived
+  closed-loop starts, and split-overlap audit, with:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python \
+  scripts/generate_so101_dataset_recipe.py \
+  --recipe configs/so101/dataset_generation/grip_the_cube_v2.json \
+  --split all --workers 3 --overwrite
+```
+
+  Use `--dry-run` first to inspect every generated command without writing any
+  dataset artifact. The recipe, not conversation history, is authoritative for
+  bin counts, seed bases, lookup offsets, teacher timing, and alignment gates.
 - Do not change dataset roots, camera mapping, task semantics, split names, or
   start-mode semantics without explicit user approval. If a change is needed,
   ask first and record the approval in the PR summary.

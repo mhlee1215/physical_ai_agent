@@ -1467,7 +1467,8 @@ def write_so101_training_loop_test_results(run_dir: Path, row: dict[str, Any], r
     references. Do not add ad hoc loop-test TensorBoard writers elsewhere.
     """
 
-    _write_closed_loop_tensorboard(run_dir, row, report)
+    write_summary = _write_closed_loop_tensorboard(run_dir, row, report)
+    _append_jsonl(run_dir / "metrics" / "closed_loop_tensorboard_writes.jsonl", write_summary)
 
 
 def _write_validation_tensorboard(run_dir: Path, row: dict[str, Any]) -> None:
@@ -1512,66 +1513,97 @@ def _smolvla_tensorboard_log_dir(run_dir: Path) -> Path:
     return run_dir / "tensorboard"
 
 
-def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: dict[str, Any]) -> None:
+def _write_closed_loop_tensorboard(run_dir: Path, row: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    step = int(row.get("step") or 0)
+    test_id = _safe_id(str(row.get("test_id") or "default"))
+    summary: dict[str, Any] = {
+        "step": step,
+        "checkpoint": row.get("checkpoint"),
+        "test_id": test_id,
+        "scalars": [],
+        "images": [],
+        "videos": [],
+        "status": "started",
+    }
     try:
         from torch.utils.tensorboard import SummaryWriter
-    except Exception:
-        return
+    except Exception as exc:
+        summary["status"] = "skipped"
+        summary["error"] = f"tensorboard_import_failed: {exc}"
+        return summary
 
     log_dir = _smolvla_tensorboard_log_dir(run_dir)
-    step = int(row.get("step") or 0)
     side_by_side_videos = _closed_loop_policy_camera_side_by_side_videos(report)
     raw_rollout_videos = _closed_loop_rollout_gif_videos(report)
     rollout_videos = _canonical_closed_loop_rollout_videos(
         side_by_side_videos=side_by_side_videos,
         raw_rollout_videos=raw_rollout_videos,
     )
-    with SummaryWriter(log_dir=str(log_dir)) as writer:
-        test_id = _safe_id(str(row.get("test_id") or "default"))
-        for key in ("success_rate", "grasp_rate", "episodes", "duration_s"):
-            value = row.get(key)
-            if isinstance(value, (int, float)):
-                writer.add_scalar(f"closed_loop/{test_id}/{key}", float(value), global_step=step)
-                if key == "success_rate":
-                    writer.add_scalar(f"{IMPORTANT_CLOSED_LOOP_SUCCESS_RATE_TAG}/{test_id}", float(value), global_step=step)
-        rmse_plot = _closed_loop_action_rmse_sweep_plot_path(report)
-        if rmse_plot is not None:
-            image = _read_hwc_image(rmse_plot)
-            if image is not None:
-                writer.add_image(
-                    f"closed_loop/{test_id}/action_rmse_sweep",
-                    image,
+    try:
+        with SummaryWriter(log_dir=str(log_dir)) as writer:
+            for key in ("success_rate", "grasp_rate", "episodes", "duration_s"):
+                value = row.get(key)
+                if isinstance(value, (int, float)):
+                    tag = f"closed_loop/{test_id}/{key}"
+                    writer.add_scalar(tag, float(value), global_step=step)
+                    summary["scalars"].append(tag)
+                    if key == "success_rate":
+                        important_tag = f"{IMPORTANT_CLOSED_LOOP_SUCCESS_RATE_TAG}/{test_id}"
+                        writer.add_scalar(important_tag, float(value), global_step=step)
+                        summary["scalars"].append(important_tag)
+            rmse_plot = _closed_loop_action_rmse_sweep_plot_path(report)
+            if rmse_plot is not None:
+                image = _read_hwc_image(rmse_plot)
+                if image is not None:
+                    tag = f"closed_loop/{test_id}/action_rmse_sweep"
+                    writer.add_image(
+                        tag,
+                        image,
+                        global_step=step,
+                        dataformats="HWC",
+                    )
+                    summary["images"].append(tag)
+            for video_name, video in rollout_videos.items():
+                tag = f"closed_loop/{test_id}/rollout_{video_name}"
+                writer.add_video(
+                    tag,
+                    video,
                     global_step=step,
-                    dataformats="HWC",
+                    fps=12,
                 )
-        for video_name, video in rollout_videos.items():
-            writer.add_video(
-                f"closed_loop/{test_id}/rollout_{video_name}",
-                video,
-                global_step=step,
-                fps=12,
-            )
-        for camera_name, video in side_by_side_videos.items():
-            writer.add_video(
-                f"extra/closed_loop/{test_id}/rollout_camera_trace_{camera_name}",
-                video,
-                global_step=step,
-                fps=12,
-            )
-        for video_name, video in raw_rollout_videos.items():
-            writer.add_video(
-                f"extra/closed_loop/{test_id}/raw_rollout_gif_{video_name}",
-                video,
-                global_step=step,
-                fps=12,
-            )
-        for camera_name, video in _training_reference_camera_side_by_side_videos(run_dir).items():
-            writer.add_video(
-                f"closed_loop/{test_id}/train_reference_{camera_name}",
-                video,
-                global_step=step,
-                fps=12,
-            )
+                summary["videos"].append(tag)
+            for camera_name, video in side_by_side_videos.items():
+                tag = f"extra/closed_loop/{test_id}/rollout_camera_trace_{camera_name}"
+                writer.add_video(
+                    tag,
+                    video,
+                    global_step=step,
+                    fps=12,
+                )
+                summary["videos"].append(tag)
+            for video_name, video in raw_rollout_videos.items():
+                tag = f"extra/closed_loop/{test_id}/raw_rollout_gif_{video_name}"
+                writer.add_video(
+                    tag,
+                    video,
+                    global_step=step,
+                    fps=12,
+                )
+                summary["videos"].append(tag)
+            for camera_name, video in _training_reference_camera_side_by_side_videos(run_dir).items():
+                tag = f"closed_loop/{test_id}/train_reference_{camera_name}"
+                writer.add_video(
+                    tag,
+                    video,
+                    global_step=step,
+                    fps=12,
+                )
+                summary["videos"].append(tag)
+        summary["status"] = "ok"
+    except Exception as exc:
+        summary["status"] = "failed"
+        summary["error"] = repr(exc)
+    return summary
 def _closed_loop_action_rmse_sweep_plot_path(report: dict[str, Any]) -> Path | None:
     sweep = report.get("action_rmse_sweep")
     if not isinstance(sweep, dict):

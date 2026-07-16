@@ -7,6 +7,7 @@ import sys
 import tempfile
 import ast
 import argparse
+import importlib.util
 from pathlib import Path
 from unittest import TestCase, mock
 
@@ -28,6 +29,8 @@ from physical_ai_agent.so101_resolution_contract import (
 from physical_ai_agent.so101_hydra_config import load_so101_hydra_training_config
 from physical_ai_agent.so101_training_config_schema import (
     load_so101_training_schema,
+    normalize_so101_training_config,
+    resolve_so101_training_config_defaults,
     validate_so101_training_config,
     validate_so101_training_config_dir,
 )
@@ -120,6 +123,8 @@ class SO101SmolVLAPipelineTest(TestCase):
     def test_so101_training_configs_validate_against_schema_contract(self) -> None:
         schema = load_so101_training_schema(Path.cwd())
         self.assertEqual(schema["title"], "SO101 training run config")
+        self.assertIn("dataset", schema["properties"])
+        self.assertIn("training_config", schema["properties"])
         self.assertIn("train_dataset", schema["properties"])
         self.assertIn("train_datasets", schema["properties"])
         self.assertEqual(
@@ -135,11 +140,82 @@ class SO101SmolVLAPipelineTest(TestCase):
         errors = [error for result in results for error in result.errors]
         self.assertEqual(errors, [])
 
-    def test_so101_hydra_training_entry_resolves_to_pydantic_training_config(self) -> None:
-        entry, config = load_so101_hydra_training_config("training/grip_the_cube_v1", repo_root=Path.cwd())
+    def test_structured_so101_training_config_normalizes_to_runtime_shape(self) -> None:
+        raw = json.loads(Path("configs/so101/training/grip_the_cube_v2.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(entry.training_config, "configs/so101/training/grip_the_cube_v1.json")
-        self.assertEqual(config.name, "grip_the_cube_v1")
+        self.assertIn("dataset", raw)
+        self.assertIn("training_config", raw)
+        self.assertIn("default_config", raw)
+        self.assertIn("data_loading", raw["training_config"])
+        self.assertNotIn("dataset", raw["training_config"])
+        self.assertNotIn("train_dataset", raw)
+        self.assertNotIn("training", raw)
+        self.assertNotIn("training", raw["training_config"])
+        self.assertNotIn("losses", raw["training_config"])
+        self.assertNotIn("augmentation", raw["training_config"])
+
+        resolved = resolve_so101_training_config_defaults(
+            raw,
+            path=Path("configs/so101/training/grip_the_cube_v2.json"),
+            repo_root=Path.cwd(),
+        )
+        normalized = normalize_so101_training_config(resolved)
+
+        self.assertEqual(
+            normalized["train_dataset"]["repo_id"],
+            "physical-ai-agent/so101-grip-the-cube-v2",
+        )
+        self.assertEqual(
+            normalized["validation_dataset"]["repo_id"],
+            "physical-ai-agent/so101-grip-the-cube-v2-validation",
+        )
+        self.assertEqual(normalized["training"]["batch_size"], 32)
+        self.assertEqual(
+            normalized["predecoded_image_cache"]["train"],
+            "grip_the_cube_v2",
+        )
+        self.assertEqual(normalized["tensorboard"]["log_input_images_every_n_steps"], 50)
+        self.assertEqual(normalized["action_prefix"], {"steps": 15, "weight": 1.5})
+        self.assertEqual(normalized["action_chunk_consistency"], {"steps": 15, "weight": 0.05})
+        self.assertEqual(normalized["action_smoothness"], {"weight": 0.015, "include_gripper": False})
+        self.assertEqual(
+            normalized["action_teacher_importance"],
+            {
+                "delta_weight": 0.0,
+                "gripper_transition_weight": 0.0,
+                "terminal_steps": 0,
+                "terminal_weight": 1.0,
+            },
+        )
+        self.assertEqual(normalized["closed_loop"]["test_cases"][0]["id"], "grip_the_cube_v2")
+
+    def test_so101_training_default_config_excludes_dataset_fields(self) -> None:
+        default_path = Path("configs/so101/training_defaults/grip_the_cube_v2_default.json")
+        default_config = json.loads(default_path.read_text(encoding="utf-8"))
+
+        forbidden = {
+            "dataset",
+            "train_dataset",
+            "train_datasets",
+            "validation_dataset",
+            "camera_contract",
+            "prompt_contract",
+            "dataset_generation",
+            "dataset_generation_augmentation",
+            "reachable_bin_filter",
+        }
+        self.assertEqual(sorted(forbidden & set(default_config)), [])
+        self.assertIn("training", default_config["training_config"])
+        self.assertIn("losses", default_config["training_config"])
+        self.assertIn("augmentation", default_config["training_config"])
+        self.assertIn("closed_loop", default_config["training_config"])
+        self.assertNotIn("test_cases", default_config["training_config"]["closed_loop"])
+
+    def test_so101_hydra_training_entry_resolves_to_pydantic_training_config(self) -> None:
+        entry, config = load_so101_hydra_training_config("training/grip_the_cube_v2", repo_root=Path.cwd())
+
+        self.assertEqual(entry.training_config, "configs/so101/training/grip_the_cube_v2.json")
+        self.assertEqual(config.name, "grip_the_cube_v2")
         self.assertEqual(config.camera_contract.camera1, "egocentric_cam")
         self.assertEqual(config.camera_contract.camera2, "wrist_cam")
         self.assertIn("--policy.type=smolvla", entry.training_args)
@@ -718,7 +794,9 @@ class SO101SmolVLAPipelineTest(TestCase):
         _ensure_scripts_on_path()
         import start_so101_training
 
-        config = json.loads(Path("configs/so101/training/grip_the_cube_v1.json").read_text(encoding="utf-8"))
+        config = normalize_so101_training_config(
+            json.loads(Path("configs/so101/training/grip_the_cube_v2.json").read_text(encoding="utf-8"))
+        )
         test_case = config["closed_loop"]["test_cases"][0]
         base = [
             sys.executable,
@@ -735,7 +813,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             progress_monitor_cmd=base,
             dataset_config=config,
         )[0]
-        expected_report = str(Path(test_case["start_dataset"]["root"]) / "so101_lerobot_export_report.json")
+        expected_report = test_case["start_report_path"]
         self.assertEqual(command[command.index("--closed-loop-start-report-path") + 1], expected_report)
         self.assertEqual(command[command.index("--closed-loop-env-object-color") + 1], "green")
 
@@ -1331,7 +1409,7 @@ class SO101SmolVLAPipelineTest(TestCase):
             train_cmd = payload["train_cmd"]
             self.assertEqual(sum("lerobot_train_so101_lightning.py" in part for part in train_cmd), 1)
             self.assertIn("--dataset.repo_id=physical-ai-agent/test", train_cmd)
-            self.assertIn("--validation-interval-steps=684", train_cmd)
+            self.assertIn("--validation-interval-steps=1293", train_cmd)
             self.assertTrue(any(str(part).startswith("--output_dir=") for part in train_cmd))
             self.assertIn("tensorboard_cmd", payload)
             self.assertIn("--reload_multifile", payload["tensorboard_cmd"])
@@ -1351,7 +1429,7 @@ class SO101SmolVLAPipelineTest(TestCase):
                     "scripts/start_so101_training.py",
                     "start",
                     "--hydra-config",
-                    "training/grip_the_cube_v1",
+                    "training/grip_the_cube_v2",
                     "--dry-run",
                     "--skip-hf-dataset-download",
                     "--hf-local-files-only",
@@ -1371,14 +1449,14 @@ class SO101SmolVLAPipelineTest(TestCase):
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
-            self.assertEqual(payload["hydra_config"], "training/grip_the_cube_v1")
+            self.assertEqual(payload["hydra_config"], "training/grip_the_cube_v2")
             self.assertEqual(
                 payload["hydra_entry"]["training_config"],
-                "configs/so101/training/grip_the_cube_v1.json",
+                "configs/so101/training/grip_the_cube_v2.json",
             )
-            self.assertEqual(payload["dataset_config"]["name"], "grip_the_cube_v1")
+            self.assertEqual(payload["dataset_config"]["name"], "grip_the_cube_v2")
             self.assertIn("--policy.type=smolvla", payload["train_cmd"])
-            self.assertIn("--steps=30096", payload["train_cmd"])
+            self.assertIn("--steps=31032", payload["train_cmd"])
 
     def test_single_training_launcher_defaults_validation_to_closed_loop_cadence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1401,7 +1479,7 @@ class SO101SmolVLAPipelineTest(TestCase):
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
-            self.assertIn("--validation-interval-steps=684", payload["train_cmd"])
+            self.assertIn("--validation-interval-steps=1293", payload["train_cmd"])
 
     def test_single_training_launcher_resumes_from_current_run_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1438,7 +1516,7 @@ class SO101SmolVLAPipelineTest(TestCase):
         monitor_source = Path("scripts/monitor_so101_training_dashboard.py").read_text(encoding="utf-8")
         standard = Path("docs/so101_local_training_standard.md").read_text(encoding="utf-8")
         hydra_entry, hydra_config = load_so101_hydra_training_config(
-            "training/grip_the_cube_v1",
+            "training/grip_the_cube_v2",
             repo_root=Path.cwd(),
         )
 
@@ -1451,7 +1529,7 @@ class SO101SmolVLAPipelineTest(TestCase):
     def test_so101_launcher_defaults_live_in_hydra_entry_not_code_fallbacks(self) -> None:
         source = Path("scripts/start_so101_training.py").read_text(encoding="utf-8")
         hydra_entry, _ = load_so101_hydra_training_config(
-            "training/grip_the_cube_v1",
+            "training/grip_the_cube_v2",
             repo_root=Path.cwd(),
         )
 
@@ -1556,9 +1634,9 @@ class SO101SmolVLAPipelineTest(TestCase):
         for template in COLOR_SHAPE_SKILL_TASK_TEMPLATES.values():
             self.assertNotIn("static finger pad", template)
 
-    def test_grip_the_cube_v1_requires_explicit_roll_alignment_phase(self) -> None:
-        config_path = Path("configs/so101/training/grip_the_cube_v1.json")
-        config = json.loads(config_path.read_text(encoding="utf-8"))
+    def test_grip_the_cube_v2_requires_explicit_roll_alignment_phase(self) -> None:
+        config_path = Path("configs/so101/training/grip_the_cube_v2.json")
+        config = normalize_so101_training_config(json.loads(config_path.read_text(encoding="utf-8")))
         generation = config["dataset_generation"]
 
         self.assertEqual(
@@ -1577,10 +1655,303 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertEqual(alignment["roll_alignment_phase"], "roll_align_with_cube_edge")
         self.assertEqual(alignment["descend_phase"], "gripper_descend")
         self.assertTrue(alignment["pre_close_required"])
-        self.assertLessEqual(alignment["pre_close_edge_parallel_threshold_deg"], 2.0)
+        self.assertLessEqual(alignment["pre_close_edge_parallel_threshold_deg"], 3.0)
         self.assertLessEqual(alignment["pre_close_static_finger_xy_threshold"], 0.012)
         self.assertFalse(alignment["diagonal_edge_candidates_allowed"])
         self.assertNotIn("pre_close_wrist_camera_centered", alignment)
+
+    def test_v1_5_close_gate_uses_early_camera_trace_and_keeps_late_value_diagnostic(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.export_so101_teacher_rollouts_lerobot import _grip_the_cube_v1_close_trace_gate
+
+        pre = {"image_alignment_error_deg": 4.0}
+        trace = [
+            {"checkpoint_fraction": 0.25, "actual_after_step": {"image_alignment_error_deg": 4.5}},
+            {"checkpoint_fraction": 0.50, "actual_after_step": {"image_alignment_error_deg": 5.0}},
+            {"checkpoint_fraction": 0.75, "actual_after_step": {"image_alignment_error_deg": 40.0}},
+        ]
+        v1_5_gate = _grip_the_cube_v1_close_trace_gate(
+            pre,
+            trace,
+            mode="preclose_and_early_trace",
+        )
+        strict_gate = _grip_the_cube_v1_close_trace_gate(pre, trace, mode="strict_image_trace")
+        geometry_gate = _grip_the_cube_v1_close_trace_gate(pre, trace, mode="geometry_only")
+
+        self.assertTrue(v1_5_gate["passed"])
+        self.assertFalse(strict_gate["passed"])
+        self.assertTrue(geometry_gate["passed"])
+        self.assertEqual(geometry_gate["reason"], "camera2_diagnostic_only")
+        self.assertNotIn("close_75_image_alignment_error_deg", v1_5_gate["limits"])
+        self.assertIn("close_75_image_alignment_error_deg", strict_gate["limits"])
+
+    def test_v1_5_training_quality_uses_strict_close_trace_and_roll_delta_gate(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.export_so101_teacher_rollouts_lerobot import (
+            GRIP_THE_CUBE_V1_MAX_WRIST_ROLL_STEP_RAD,
+            _grip_the_cube_v1_close_trace_gate,
+        )
+
+        pre = {"image_alignment_error_deg": 1.0}
+        bad_late_trace = [
+            {"checkpoint_fraction": 0.25, "actual_after_step": {"image_alignment_error_deg": 1.0}},
+            {"checkpoint_fraction": 0.50, "actual_after_step": {"image_alignment_error_deg": 1.0}},
+            {"checkpoint_fraction": 0.75, "actual_after_step": {"image_alignment_error_deg": 31.0}},
+        ]
+        strict_gate = _grip_the_cube_v1_close_trace_gate(
+            pre,
+            bad_late_trace,
+            mode="strict_image_trace",
+        )
+
+        self.assertFalse(strict_gate["passed"])
+        self.assertEqual(
+            strict_gate["failures"]["close_75_image_alignment_error_deg"],
+            {"value": 31.0, "limit": 25.0},
+        )
+        self.assertLessEqual(GRIP_THE_CUBE_V1_MAX_WRIST_ROLL_STEP_RAD, 0.12)
+
+    def test_fixed_jaw_parallel_contract_uses_cube_face_normal_through_center(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.export_so101_teacher_rollouts_lerobot import (
+            _candidate_cube_normal_parallel_error_deg,
+            _cube_local_axis_to_world_xy,
+            _jaw_line_cube_face_normal_error_deg,
+        )
+
+        # The two vectors describe lines, not directed rays: opposite signs
+        # are parallel and must have zero error.
+        self.assertAlmostEqual(
+            _jaw_line_cube_face_normal_error_deg([1.0, 0.0], [-1.0, 0.0]),
+            0.0,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            _jaw_line_cube_face_normal_error_deg(
+                [1.0, 0.0],
+                [np.cos(np.deg2rad(3.0)), np.sin(np.deg2rad(3.0))],
+            ),
+            3.0,
+            places=5,
+        )
+        self.assertAlmostEqual(
+            _jaw_line_cube_face_normal_error_deg([1.0, 0.0], [0.0, 1.0]),
+            90.0,
+            places=6,
+        )
+        self.assertEqual(
+            _candidate_cube_normal_parallel_error_deg(
+                {
+                    "cube_face_normal_parallel_error_deg": 1.5,
+                    "finger_axis_parallel_angle_deg": 40.0,
+                }
+            ),
+            1.5,
+        )
+        self.assertEqual(
+            _candidate_cube_normal_parallel_error_deg({"finger_axis_parallel_angle_deg": 2.5}),
+            2.5,
+        )
+        angle = np.deg2rad(30.0)
+        rotation = np.asarray(
+            [
+                [np.cos(angle), -np.sin(angle), 0.0],
+                [np.sin(angle), np.cos(angle), 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        world_normal = _cube_local_axis_to_world_xy([1.0, 0.0, 0.0], rotation)
+        np.testing.assert_allclose(world_normal, [np.cos(angle), np.sin(angle), 0.0], atol=1e-7)
+        self.assertAlmostEqual(
+            _jaw_line_cube_face_normal_error_deg(world_normal, [1.0, 0.0]),
+            30.0,
+            places=6,
+        )
+
+    def test_fixed_jaw_export_records_authoritative_centerline_geometry_contract(self) -> None:
+        source = Path("scripts/export_so101_teacher_rollouts_lerobot.py").read_text(encoding="utf-8")
+        self.assertIn("cube_face_normal_parallel_error_deg", source)
+        self.assertIn("parallel_geometry_contract", source)
+        self.assertIn("jaw_line_vs_contact_face_normal_through_cube_center", source)
+        self.assertIn("_candidate_cube_normal_parallel_error_deg(best_meta)", source)
+        self.assertIn("_spec_with_rotated_cube_face_normal(env, raw_spec)", source)
+        self.assertIn("pre_close_cube_face_normal_parallel_error_deg", source)
+
+    def test_visual_alignment_filter_prefers_exported_close_trace_for_stable_gate(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.filter_so101_lerobot_visual_alignment import _episode_stable_close_scores_from_trace
+
+        scores = _episode_stable_close_scores_from_trace(
+            {
+                "camera2_top_contact_close_alignment_trace": [
+                    {
+                        "checkpoint_fraction": 0.25,
+                        "close_index": 7,
+                        "actual_after_step": {"reason": "ok", "image_alignment_error_deg": 2.0},
+                    },
+                    {
+                        "checkpoint_fraction": 0.50,
+                        "close_index": 16,
+                        "actual_after_step": {"reason": "ok", "image_alignment_error_deg": 3.0},
+                    },
+                    {
+                        "checkpoint_fraction": 0.75,
+                        "close_index": 24,
+                        "actual_after_step": {"reason": "ok", "image_alignment_error_deg": 31.7},
+                    },
+                ]
+            }
+        )
+
+        self.assertEqual(scores["close_75_source"], "camera2_top_contact_close_alignment_trace")
+        self.assertEqual(scores["close_75_image_alignment_error_deg"], 31.7)
+
+    def test_empty_teacher_export_audit_does_not_query_hub(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.export_so101_teacher_rollouts_lerobot import audit_lerobot_dataset
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            features = {
+                "observation.images.camera1": {"dtype": "image", "shape": (256, 256, 3)},
+                "observation.images.camera2": {"dtype": "image", "shape": (256, 256, 3)},
+                "observation.state": {"dtype": "float32", "shape": (6,)},
+                "action": {"dtype": "float32", "shape": (6,)},
+            }
+            audit = audit_lerobot_dataset(
+                root=root,
+                repo_id="missing/empty-teacher-export",
+                features=features,
+                action_space_low=np.zeros(6, dtype=np.float32),
+                action_space_high=np.ones(6, dtype=np.float32),
+            )
+
+        self.assertEqual(audit["status"], "no_episodes")
+        self.assertEqual(audit["dataset_len"], 0)
+
+    def test_camera1_spawn_lookup_cache_is_versioned_and_reproducible(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.export_so101_teacher_rollouts_lerobot import (
+            _camera1_spawn_lookup_cache_payload,
+            _validate_camera1_spawn_lookup_cache,
+        )
+
+        lookup = {5: [[0.10, -0.20], [0.20, 0.10]], 6: [[0.30, 0.00]]}
+        payload = _camera1_spawn_lookup_cache_payload(
+            lookup,
+            grid_size=4,
+            resolution=21,
+            x_range=(-0.1, 0.55),
+            y_range=(-0.45, 0.45),
+        )
+        _validate_camera1_spawn_lookup_cache(
+            payload,
+            grid_size=4,
+            resolution=21,
+            x_range=(-0.1, 0.55),
+            y_range=(-0.45, 0.45),
+        )
+        self.assertEqual(payload["format"], "so101_camera1_spawn_lookup_v1")
+        self.assertEqual(payload["lookup"]["5"][0], [0.1, -0.2])
+        with self.assertRaises(ValueError):
+            _validate_camera1_spawn_lookup_cache(
+                payload,
+                grid_size=8,
+                resolution=21,
+                x_range=(-0.1, 0.55),
+                y_range=(-0.45, 0.45),
+            )
+
+    def test_trajectory_feasible_lookup_cache_keeps_calibrated_seed(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "build_so101_trajectory_cache",
+            Path("scripts/build_so101_trajectory_feasible_lookup_cache.py"),
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        payload = module.build_cache(
+            {
+                "report_path": "calibration.json",
+                "episodes": [
+                    {"grid_balance_bin": 5, "forced_spawn_xy": [0.2, 0.1], "seed": 1234},
+                    {"grid_balance_bin": 5, "forced_spawn_xy": [0.3, 0.0], "seed": 1235},
+                ],
+            },
+            grid_size=4,
+            resolution=21,
+            x_range=(-0.1, 0.55),
+            y_range=(-0.45, 0.45),
+        )
+        self.assertEqual(payload["candidate_kind"], "trajectory_feasible")
+        self.assertEqual(payload["lookup"]["5"][0], [0.2, 0.1, 1234])
+        self.assertEqual(payload["seed_uniqueness"]["unique_seed_count"], 2)
+        self.assertEqual(payload["seed_uniqueness"]["duplicate_seed_count"], 0)
+
+    def test_trajectory_feasible_lookup_cache_rejects_duplicate_seed(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "build_so101_trajectory_cache_duplicate",
+            Path("scripts/build_so101_trajectory_feasible_lookup_cache.py"),
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with self.assertRaisesRegex(ValueError, "duplicate calibration seed is forbidden"):
+            module.build_cache(
+                {
+                    "episodes": [
+                        {"grid_balance_bin": 5, "forced_spawn_xy": [0.2, 0.1], "seed": 1234},
+                        {"grid_balance_bin": 6, "forced_spawn_xy": [0.3, 0.0], "seed": 1234},
+                    ],
+                },
+                grid_size=4,
+                resolution=21,
+                x_range=(-0.1, 0.55),
+                y_range=(-0.45, 0.45),
+            )
+
+    def test_spawn_lookup_candidate_exhaustion_never_wraps_or_reuses_seed(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.export_so101_teacher_rollouts_lerobot import _take_unique_spawn_candidate
+
+        candidates = [[0.2, 0.1, 1234], [0.3, 0.0, 1235]]
+        self.assertEqual(
+            _take_unique_spawn_candidate(candidates, next_index=1, bin_id=5, accepted=1, target=3),
+            candidates[1],
+        )
+        with self.assertRaisesRegex(RuntimeError, "Seed reuse is forbidden"):
+            _take_unique_spawn_candidate(candidates, next_index=2, bin_id=5, accepted=1, target=3)
+
+    def test_validation_lookup_offset_is_exposed_and_recorded(self) -> None:
+        source = Path("scripts/export_so101_teacher_rollouts_lerobot.py").read_text(encoding="utf-8")
+
+        self.assertIn('"--grid-lookup-start-index"', source)
+        self.assertIn('"start_index": int(grid_lookup_start_index)', source)
+        self.assertIn(
+            "spawn_lookup_next = {int(bin_id): int(grid_lookup_start_index) for bin_id in balance_bins}",
+            source,
+        )
+
+    def test_closed_loop_start_report_balances_validation_bins(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.build_so101_closed_loop_start_report import build_report
+
+        episodes = [
+            {"seed": bin_id * 100 + index, "grid_balance_bin": bin_id, "sim_snapshot": {"qpos": []}}
+            for bin_id in (5, 6, 9, 10)
+            for index in range(4)
+        ]
+        report = build_report(
+            {"episodes": episodes},
+            count=10,
+            bins=[5, 6, 9, 10],
+            source_path=Path("validation/so101_lerobot_export_report.json"),
+        )
+
+        self.assertEqual(report["grid_bin_counts"], {"5": 3, "6": 3, "9": 2, "10": 2})
+        self.assertEqual(len(report["episodes"]), 10)
+        self.assertTrue(all("source_validation_episode_index" in row for row in report["episodes"]))
 
     def test_qwen_edge_merge_preserves_dataset_prompt_without_rewrite(self) -> None:
         _ensure_scripts_on_path()
@@ -1599,6 +1970,38 @@ class SO101SmolVLAPipelineTest(TestCase):
 
         self.assertEqual(frame["task"], sample["task"])
 
+    def test_lerobot_shard_merge_repairs_info_episode_and_frame_totals(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.merge_so101_lerobot_shards import _repair_info_totals
+
+        with tempfile.TemporaryDirectory() as tmp:
+            info_path = Path(tmp) / "info.json"
+            info_path.write_text(
+                json.dumps({"total_episodes": 29, "total_frames": 3997, "fps": 12}),
+                encoding="utf-8",
+            )
+            _repair_info_totals(info_path, total_episodes=30, total_frames=4136)
+            info = json.loads(info_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(info["total_episodes"], 30)
+        self.assertEqual(info["total_frames"], 4136)
+        self.assertEqual(info["fps"], 12)
+
+    def test_lerobot_shard_merge_rejects_seed_reuse_across_shards(self) -> None:
+        _ensure_scripts_on_path()
+        from scripts.merge_so101_lerobot_shards import _require_unique_shard_seeds
+
+        self.assertEqual(
+            _require_unique_shard_seeds(
+                [{"episodes": [{"seed": 1}]}, {"episodes": [{"seed": 2}]}]
+            ),
+            2,
+        )
+        with self.assertRaisesRegex(ValueError, "duplicate shard seed is forbidden"):
+            _require_unique_shard_seeds(
+                [{"episodes": [{"seed": 1}]}, {"episodes": [{"seed": 1}]}]
+            )
+
     def test_dataset_viewer_uses_training_config_group_order_for_default_dataset(self) -> None:
         source = Path("scripts/serve_so101_dataset_viewer.py").read_text(encoding="utf-8")
 
@@ -1606,6 +2009,13 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("const orderedNames = []", source)
         self.assertIn("for (const group of payload.dataset_groups || [])", source)
         self.assertNotIn("Object.keys(datasets).map(name => `<option", source)
+
+    def test_dataset_viewer_classifies_train_splits_with_numeric_suffixes(self) -> None:
+        source = Path("scripts/serve_so101_dataset_viewer.py").read_text(encoding="utf-8")
+
+        self.assertIn("function isTrainDataset(name)", source)
+        self.assertIn("/_train[0-9]*$/.test(name)", source)
+        self.assertIn("train: orderedNames.filter(name => isTrainDataset(name))", source)
 
     def test_single_training_launcher_dataset_config_injects_dataset_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1840,20 +2250,36 @@ class SO101SmolVLAPipelineTest(TestCase):
             train_cmd = payload["train_cmd"]
             loop_cmd = payload["post_checkpoint_loop_cmds"][0]
 
-            self.assertEqual(payload["dataset_config"]["name"], "grip_the_cube_v1")
-            self.assertEqual(payload["run_dir"], str(Path("_workspace/so101_training/runs/grip_the_cube_v1_default").resolve()))
+            self.assertEqual(payload["dataset_config"]["name"], "grip_the_cube_v2")
+            self.assertEqual(payload["run_dir"], str(Path("_workspace/so101_training/runs/grip_the_cube_v2").resolve()))
+            self.assertEqual(payload["dataset_config"]["action_prefix"], {"steps": 15, "weight": 1.5})
             self.assertEqual(payload["dataset_config"]["action_chunk_consistency"], {"steps": 15, "weight": 0.05})
-            self.assertEqual(payload["dataset_config"]["action_smoothness"], {"weight": 0.01, "include_gripper": False})
+            self.assertEqual(payload["dataset_config"]["action_smoothness"], {"weight": 0.015, "include_gripper": False})
+            self.assertEqual(
+                payload["dataset_config"]["action_teacher_importance"],
+                {
+                    "delta_weight": 0.0,
+                    "gripper_transition_weight": 0.0,
+                    "terminal_steps": 0,
+                    "terminal_weight": 1.0,
+                },
+            )
             self.assertIn("--policy.type=smolvla", train_cmd)
             self.assertIn("--checkpoint-retention-policy=best_val_and_closed_loop", train_cmd)
+            self.assertIn("--so101-action-prefix-loss-steps=15", train_cmd)
+            self.assertIn("--so101-action-prefix-loss-weight=1.5", train_cmd)
             self.assertIn("--so101-action-chunk-consistency-steps=15", train_cmd)
             self.assertIn("--so101-action-chunk-consistency-weight=0.05", train_cmd)
-            self.assertIn("--so101-action-smoothness-loss-weight=0.01", train_cmd)
+            self.assertIn("--so101-action-smoothness-loss-weight=0.015", train_cmd)
             self.assertIn("--no-so101-action-smoothness-include-gripper", train_cmd)
+            self.assertIn("--so101-action-delta-loss-weight=0.0", train_cmd)
+            self.assertIn("--so101-action-gripper-transition-loss-weight=0.0", train_cmd)
+            self.assertIn("--so101-action-terminal-loss-steps=0", train_cmd)
+            self.assertIn("--so101-action-terminal-loss-weight=1.0", train_cmd)
             self.assertIn("--closed-loop-runner", loop_cmd)
             self.assertEqual(loop_cmd[loop_cmd.index("--closed-loop-runner") + 1], "picklift")
             self.assertIn("--closed-loop-test-id", loop_cmd)
-            self.assertEqual(loop_cmd[loop_cmd.index("--closed-loop-test-id") + 1], "grip_the_cube_v1")
+            self.assertEqual(loop_cmd[loop_cmd.index("--closed-loop-test-id") + 1], "grip_the_cube_v2")
             self.assertIn("--closed-loop-episodes", loop_cmd)
             self.assertEqual(loop_cmd[loop_cmd.index("--closed-loop-episodes") + 1], "10")
             self.assertIn("--record-loop-artifacts", loop_cmd)
@@ -3006,6 +3432,40 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertIn("valid_mask_checkpoint", closed_loop)
         self.assertTrue(str(closed_loop["valid_mask_checkpoint"]).endswith("valid_mask_head.pt"))
 
+    def test_grip_the_cube_v2_has_balanced_camera1_grid_bin_sidecar(self) -> None:
+        import pandas as pd
+
+        config = json.loads(Path("configs/so101/training/grip_the_cube_v2.json").read_text(encoding="utf-8"))
+        train = config["dataset"]["train_dataset"]
+        root = Path(train["root"])
+        sidecar = Path(train["grid_bin_sidecar"])
+
+        self.assertEqual(root.name, "grip_the_cube_v2")
+        self.assertTrue((root / "meta/info.json").exists())
+        self.assertTrue(sidecar.exists())
+        rows = pd.read_parquet(sidecar)
+        self.assertEqual(len(rows), 300)
+        self.assertEqual(rows["episode_index"].astype(int).nunique(), 300)
+        self.assertEqual(
+            rows["grid_bin"].astype(int).value_counts().sort_index().to_dict(),
+            {5: 75, 6: 75, 9: 75, 10: 75},
+        )
+
+        validation = config["dataset"]["validation_dataset"]
+        validation_sidecar = Path(validation["grid_bin_sidecar"])
+        validation_rows = pd.read_parquet(validation_sidecar)
+        self.assertEqual(len(validation_rows), 50)
+        self.assertEqual(
+            validation_rows["grid_bin"].astype(int).value_counts().sort_index().to_dict(),
+            {5: 13, 6: 13, 9: 12, 10: 12},
+        )
+
+        test_case = config["training_config"]["closed_loop"]["test_cases"][0]
+        start_report = json.loads(Path(test_case["start_report_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(len(start_report["episodes"]), 10)
+        self.assertEqual(start_report["grid_bin_counts"], {"5": 3, "6": 3, "9": 2, "10": 2})
+        self.assertTrue(all("source_validation_episode_index" in row for row in start_report["episodes"]))
+
     def test_move_and_align_reachable_bins_loop_test_excludes_top_row_bins(self) -> None:
         import pandas as pd
 
@@ -3328,6 +3788,8 @@ class SO101SmolVLAPipelineTest(TestCase):
         self.assertNotIn('getattr(args, "closed_loop_runner", "") != "qwen_chain"', monitor_source)
         self.assertIn("def write_so101_training_loop_test_results", monitor_source)
         self.assertIn("write_so101_training_loop_test_results(run_dir, row, report)", monitor_source)
+        self.assertIn("closed_loop_tensorboard_writes.jsonl", monitor_source)
+        self.assertIn('summary["status"] = "ok"', monitor_source)
 
     def test_closed_loop_rmse_sweep_command_dispatches_for_all_supported_runners(self) -> None:
         _ensure_scripts_on_path()
