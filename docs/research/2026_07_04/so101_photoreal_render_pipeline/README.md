@@ -185,11 +185,11 @@ PYTHONPATH=src:.:scripts .venv/bin/python scripts/render_so101_dataset_blender_p
 ![Black workbench with deterministic visual props](./black_table_clutter_sample.png)
 
 Robot part colors are editable without changing Python. The JSON profile stores
-the black matte arm, green fixed jaw, and white moving jaw material values plus
-their MuJoCo body/mesh selectors. The renderer records the selected profile name
-and path in its report.
+the black matte arm, white perforated wrist strap, green fixed jaw, and white
+moving jaw material values plus their MuJoCo body/mesh selectors. The renderer
+records the selected profile name and path in its report.
 
-![Black arm with green and white gripper jaws](./black_arm_green_white_gripper_sample.png)
+![Black arm with white perforated wrist strap and green-white gripper jaws](./black_arm_white_wrist_strap_green_white_gripper_sample.png)
 
 Object/contact dynamics are also replay-based. The renderer resets each source
 episode once with the seed recorded in `so101_lerobot_export_report.json`,

@@ -10,6 +10,13 @@
       "noise_scale": 95.0,
       "bump_strength": 0.018
     },
+    "wrist_strap": {
+      "base_color": [0.82, 0.84, 0.80],
+      "roughness": 0.76,
+      "metallic": 0.0,
+      "noise_scale": 120.0,
+      "bump_strength": 0.014
+    },
     "static_gripper": {
       "base_color": [0.035, 0.52, 0.11],
       "roughness": 0.72,
@@ -26,6 +33,9 @@
     }
   },
   "selectors": {
+    "wrist_strap": {
+      "mesh_names": ["under_arm_so101_v1"]
+    },
     "static_gripper": {
       "mesh_names": ["wrist_roll_follower_so101_v1"],
       "primitive_names": ["static_finger_pad"]

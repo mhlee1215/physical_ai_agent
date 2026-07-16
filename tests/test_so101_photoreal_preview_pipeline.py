@@ -106,6 +106,11 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         config = module._load_robot_material_config(path)
         self.assertEqual(config["default_part"], "arm")
         self.assertEqual(config["parts"]["arm"]["base_color"], [0.025, 0.03, 0.035])
+        self.assertEqual(config["parts"]["wrist_strap"]["base_color"], [0.82, 0.84, 0.80])
+        self.assertEqual(
+            config["selectors"]["wrist_strap"]["mesh_names"],
+            ["under_arm_so101_v1"],
+        )
         self.assertEqual(config["selectors"]["static_gripper"]["primitive_names"], ["static_finger_pad"])
         self.assertEqual(config["selectors"]["moving_gripper"]["primitive_names"], ["moving_finger_pad"])
 
