@@ -135,7 +135,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--grip-the-cube-start-profile",
-        choices=["mixed", "home", "mid"],
+        choices=["mixed", "home", "mid", "correction"],
         default="mixed",
         help="Start profile for grip_the_cube_v1; home is the stable constructive-generation mode.",
     )
@@ -146,6 +146,18 @@ def main() -> None:
         help="Gate close alignment by camera2, early camera2 trace, or authoritative simulator geometry.",
     )
     parser.add_argument("--lift-steps", type=int, default=58)
+    parser.add_argument(
+        "--lift-target-height",
+        type=float,
+        default=0.05,
+        help="Stop the lift phase after the grasped object reaches this height in meters.",
+    )
+    parser.add_argument(
+        "--lift-controller-z-error",
+        type=float,
+        default=0.12,
+        help="Per-step Cartesian z error passed to the lift controller in meters.",
+    )
     parser.add_argument("--start-mode", choices=["home", "near-gripper"], default="home")
     parser.add_argument("--near-gripper-joint-std", type=float, default=0.025)
     parser.add_argument(
@@ -350,6 +362,11 @@ def main() -> None:
         help="JSON cache for the deterministic camera1 world-XY -> grid-bin lookup.",
     )
     parser.add_argument(
+        "--grid-lookup-preserve-order",
+        action="store_true",
+        help="Keep cached spawn candidates in manifest order instead of sorting by center distance.",
+    )
+    parser.add_argument(
         "--deterministic-camera-bin-lookup",
         action="store_true",
         help=(
@@ -390,6 +407,8 @@ def main() -> None:
         grip_the_cube_start_profile=args.grip_the_cube_start_profile,
         close_alignment_gate_mode=args.close_alignment_gate_mode,
         lift_steps=args.lift_steps,
+        lift_target_height=args.lift_target_height,
+        lift_controller_z_error=args.lift_controller_z_error,
         start_mode=args.start_mode,
         near_gripper_joint_std=args.near_gripper_joint_std,
         skill_mode=args.skill_mode,
@@ -432,6 +451,7 @@ def main() -> None:
         grid_lookup_resolution=args.grid_lookup_resolution,
         grid_lookup_start_index=args.grid_lookup_start_index,
         grid_lookup_cache=args.grid_lookup_cache,
+        grid_lookup_preserve_order=args.grid_lookup_preserve_order,
         deterministic_camera_bin_lookup=args.deterministic_camera_bin_lookup,
         target_object_color=args.target_object_color,
         spawn_center=(args.spawn_center_x, args.spawn_center_y),
@@ -464,6 +484,8 @@ def export_teacher_rollouts(
     grip_the_cube_start_profile: str = "mixed",
     close_alignment_gate_mode: str = "strict_image_trace",
     lift_steps: int = 58,
+    lift_target_height: float = 0.05,
+    lift_controller_z_error: float = 0.12,
     start_mode: str = "home",
     near_gripper_joint_std: float = 0.025,
     skill_mode: str = "pick_cube",
@@ -506,6 +528,7 @@ def export_teacher_rollouts(
     grid_lookup_resolution: int = 21,
     grid_lookup_start_index: int = 0,
     grid_lookup_cache: Path | None = None,
+    grid_lookup_preserve_order: bool = False,
     deterministic_camera_bin_lookup: bool = False,
     target_object_color: str | None = None,
     spawn_center: tuple[float, float] = (0.15, 0.0),
@@ -635,11 +658,12 @@ def export_teacher_rollouts(
                     encoding="utf-8",
                 )
         lookup_build_seconds = time.perf_counter() - lookup_started
-        for candidates_xy in spawn_lookup.values():
-            candidates_xy.sort(
-                key=lambda xy: (float(xy[0]) - float(spawn_center[0])) ** 2
-                + (float(xy[1]) - float(spawn_center[1])) ** 2
-            )
+        if not grid_lookup_preserve_order:
+            for candidates_xy in spawn_lookup.values():
+                candidates_xy.sort(
+                    key=lambda xy: (float(xy[0]) - float(spawn_center[0])) ** 2
+                    + (float(xy[1]) - float(spawn_center[1])) ** 2
+                )
         spawn_lookup = {int(bin_id): spawn_lookup.get(int(bin_id), []) for bin_id in balance_bins}
         if grid_balance_teacher_feasible_lookup and lookup_cache_kind != "trajectory_feasible":
             print("[so101-lerobot] filtering spawn lookup by teacher feasibility", flush=True)
@@ -819,6 +843,8 @@ def export_teacher_rollouts(
                     grip_the_cube_start_profile=grip_the_cube_start_profile,
                     close_alignment_gate_mode=close_alignment_gate_mode,
                     lift_steps=lift_steps,
+                    lift_target_height=lift_target_height,
+                    lift_controller_z_error=lift_controller_z_error,
                     start_mode=start_mode,
                     near_gripper_joint_std=near_gripper_joint_std,
                     skill_mode=skill_mode,
@@ -881,8 +907,22 @@ def export_teacher_rollouts(
                 summary["desired_grid_bin"] = desired_grid_bin
             if summary["success"]:
                 if balance_enabled:
-                    grid_bin = _summary_start_grid_bin(summary, grid_size=int(grid_balance_size))
+                    use_source_manifest_bin = bool(
+                        str(grip_the_cube_start_profile) == "correction"
+                        and lookup_cache_kind == "source_episode_manifest"
+                        and desired_grid_bin is not None
+                        and forced_spawn_xy is not None
+                        and len(forced_spawn_xy) >= 3
+                    )
+                    grid_bin = (
+                        int(desired_grid_bin)
+                        if use_source_manifest_bin
+                        else _summary_start_grid_bin(summary, grid_size=int(grid_balance_size))
+                    )
                     summary["grid_balance_bin"] = grid_bin
+                    summary["grid_balance_bin_source"] = (
+                        "source_episode_manifest" if use_source_manifest_bin else "start_camera1_centroid"
+                    )
                     if grid_bin not in balance_counts:
                         _clear_episode_buffer_robust(dataset)
                         skipped.append(
@@ -1064,8 +1104,14 @@ def export_teacher_rollouts(
             "kind": "teacher_trajectory_generation",
             "terminal_hold_included": int(terminal_hold_steps) > 0,
             "terminal_hold_steps": int(terminal_hold_steps),
-            "near_target_correction_included": float(move_and_align_near_target_correction_ratio) > 0.0,
+            "lift_target_height": float(lift_target_height),
+            "lift_controller_z_error": float(lift_controller_z_error),
+            "near_target_correction_included": bool(
+                float(move_and_align_near_target_correction_ratio) > 0.0
+                or str(grip_the_cube_start_profile) == "correction"
+            ),
             "near_target_correction_ratio": float(move_and_align_near_target_correction_ratio),
+            "grip_the_cube_start_profile": str(grip_the_cube_start_profile),
             "near_target_joint_std": float(near_target_joint_std),
             "near_target_xy_std": float(near_target_xy_std),
             "note": "This is dataset generation augmentation, distinct from train-time image/state augmentation.",
@@ -1099,6 +1145,8 @@ def _write_teacher_episode(
     grip_the_cube_start_profile: str,
     close_alignment_gate_mode: str,
     lift_steps: int,
+    lift_target_height: float,
+    lift_controller_z_error: float,
     start_mode: str,
     near_gripper_joint_std: float,
     skill_mode: str,
@@ -1213,6 +1261,8 @@ def _write_teacher_episode(
             trajectory_variant=trajectory_variant,
             grip_the_cube_start_profile=grip_the_cube_start_profile,
             lift_steps=lift_steps,
+            lift_target_height=lift_target_height,
+            lift_controller_z_error=lift_controller_z_error,
             episode_index=episode_index,
             random_start_joint_std=random_start_joint_std,
             move_target_z_offset=move_target_z_offset,
@@ -2349,6 +2399,78 @@ def _write_pick_from_top_cube_episode(
     }
 
 
+def _fixed_jaw_lift_target_reached(info: dict[str, Any], *, target_height: float) -> bool:
+    return bool(
+        info.get("is_grasped", False)
+        and float(info.get("lift_height", 0.0)) >= float(target_height)
+    )
+
+
+def _fixed_jaw_terminal_event_stops_episode(
+    phase: str,
+    *,
+    terminated: bool,
+    truncated: bool,
+) -> bool:
+    if truncated:
+        return True
+    return bool(terminated) and phase not in {"lift", "terminal_hold"}
+
+
+def _grip_the_cube_correction_phases(
+    *,
+    q_start: np.ndarray,
+    q_above: np.ndarray,
+    q_edge: np.ndarray,
+    q_close: np.ndarray,
+    approach_steps: int,
+    settle_steps: int,
+    close_steps: int,
+    lift_steps: int,
+) -> list[tuple[str, np.ndarray, np.ndarray | None, int]]:
+    """Build a local correction path around the executable grasp prepose."""
+    return [
+        ("near_target_correct", q_start, q_above, max(1, int(approach_steps))),
+        ("gripper_descend", q_above, q_edge, max(1, int(approach_steps))),
+        ("settle_aligned", q_edge, q_edge, max(0, int(settle_steps))),
+        ("close", q_edge, q_close, max(1, int(close_steps))),
+        ("lift", q_close, None, max(1, int(lift_steps))),
+    ]
+
+
+def _retain_visible_correction_start(
+    env: Any,
+    renderers: dict[str, Any],
+    *,
+    q_start: np.ndarray,
+    q_reference: np.ndarray,
+) -> tuple[np.ndarray, float]:
+    """Keep the largest deterministic perturbation visible to either policy camera."""
+    snapshot = _snapshot_sim_state(env)
+    try:
+        start = np.asarray(q_start, dtype=np.float32)
+        reference = np.asarray(q_reference, dtype=np.float32)
+        for scale in _correction_visibility_scales():
+            candidate = np.clip(
+                reference + float(scale) * (start - reference),
+                env.action_space.low,
+                env.action_space.high,
+            ).astype(np.float32)
+            candidate[-1] = _open_gripper_value(env)
+            _set_qpos(env, candidate)
+            visibility = _policy_camera_visibility(env, renderers)
+            if bool(visibility["camera1"]["visible"] or visibility["camera2"]["visible"]):
+                return candidate, float(scale)
+        return reference.copy(), 0.0
+    finally:
+        _restore_sim_state(env, snapshot)
+
+
+def _correction_visibility_scales() -> tuple[float, ...]:
+    """Try the mirrored local correction before reducing its magnitude."""
+    return (1.0, -1.0, 0.75, -0.75, 0.5, -0.5, 0.25, -0.25, 0.0)
+
+
 def _write_fixed_jaw_edge_episode(
     *,
     dataset: Any,
@@ -2367,6 +2489,8 @@ def _write_fixed_jaw_edge_episode(
     trajectory_variant: str,
     grip_the_cube_start_profile: str,
     lift_steps: int,
+    lift_target_height: float,
+    lift_controller_z_error: float,
     episode_index: int,
     random_start_joint_std: float,
     move_target_z_offset: float,
@@ -2565,10 +2689,29 @@ def _write_fixed_jaw_edge_episode(
             "replacement": "per_close_step_camera2_top_contact_wrist_roll_refine",
             "initial_wrist_roll": float(q_close[4]),
         }
+        use_correction_start = grip_the_cube_start_profile == "correction"
         use_home_start = grip_the_cube_start_profile == "home" or (
             grip_the_cube_start_profile == "mixed" and int(seed) % 2 == 0
         )
-        if use_home_start:
+        if use_correction_start:
+            q_start = _make_near_target_fixed_jaw_correction_qpos(
+                env,
+                q_edge=q_above,
+                seed=seed,
+                episode_index=episode_index,
+                joint_std=near_target_joint_std,
+                xy_std=near_target_xy_std,
+            )
+            q_start[-1] = _open_gripper_value(env)
+            q_start, correction_visibility_scale = _retain_visible_correction_start(
+                env,
+                renderers,
+                q_start=q_start,
+                q_reference=q_above,
+            )
+            start_variant = "near_target_correction"
+            move_steps = max(1, int(approach_steps))
+        elif use_home_start:
             q_start = home_start
             start_variant = "home_start"
             move_steps = max(1, int(approach_steps))
@@ -2583,7 +2726,18 @@ def _write_fixed_jaw_edge_episode(
             move_steps = max(1, int(approach_steps))
         roll_align_steps = max(1, int(approach_steps) // 2)
         descend_steps = max(1, int(approach_steps) // 2)
-        if requested_path_variant == "roll_first":
+        if use_correction_start:
+            phases = _grip_the_cube_correction_phases(
+                q_start=q_start,
+                q_above=q_above,
+                q_edge=q_edge,
+                q_close=q_close,
+                approach_steps=move_steps,
+                settle_steps=settle_steps,
+                close_steps=close_steps,
+                lift_steps=lift_steps,
+            )
+        elif requested_path_variant == "roll_first":
             q_roll_first = q_start.copy()
             q_roll_first[4] = q_above[4]
             q_roll_first[-1] = _open_gripper_value(env)
@@ -2622,8 +2776,7 @@ def _write_fixed_jaw_edge_episode(
         offsets = list(range(-span, span + 1))
         effective_terminal_hold_steps = max(0, int(terminal_hold_steps) + offsets[int(episode_index) % len(offsets)])
     if int(effective_terminal_hold_steps) > 0 and skill_mode != "grip_from_edge_cube":
-        hold_target = np.asarray(phases[-1][2] if phases[-1][2] is not None else phases[-1][1], dtype=np.float32)
-        phases.append(("terminal_hold", hold_target, hold_target, int(effective_terminal_hold_steps)))
+        phases.append(("terminal_hold", None, None, int(effective_terminal_hold_steps)))
     if "trajectory_variant" not in locals():
         trajectory_variant = "generated_teacher"
 
@@ -2661,6 +2814,7 @@ def _write_fixed_jaw_edge_episode(
     previous_action: np.ndarray | None = None
     episode_frames: list[dict[str, Any]] = []
     q_lift = q_start.copy()
+    lift_target_reached = False
     pre_close_static_edge_error: dict[str, float] | None = None
     pre_close_cube_face_normal_parallel_error_deg: float | None = None
     pre_close_policy_camera_visibility: dict[str, Any] | None = None
@@ -2672,7 +2826,7 @@ def _write_fixed_jaw_edge_episode(
     }
     previous_close_wrist_roll: float | None = None
 
-    def add_step(action: np.ndarray, phase: str) -> bool:
+    def add_step(action: np.ndarray, phase: str) -> tuple[bool, bool]:
         nonlocal frames, info, success_step, previous_action
         action = np.clip(np.asarray(action, dtype=np.float32), env.action_space.low, env.action_space.high)
         episode_frames.append(
@@ -2693,26 +2847,7 @@ def _write_fixed_jaw_edge_episode(
         _obs, _reward, terminated, truncated, info = env.step(np.asarray(action, dtype=float))
         if bool(info.get("success", False)) and success_step is None:
             success_step = frames
-        return bool(terminated) or bool(truncated)
-
-    def add_hold_frame(action: np.ndarray, phase: str) -> None:
-        nonlocal frames, previous_action
-        action = np.clip(np.asarray(action, dtype=np.float32), env.action_space.low, env.action_space.high)
-        episode_frames.append(
-            _make_lerobot_frame(
-                env=env,
-                renderers=renderers,
-                action=action,
-                task=task,
-                include_camera3_duplicate=include_camera3_duplicate,
-            )
-        )
-        frames += 1
-        phase_counts[phase] += 1
-        if previous_action is not None:
-            action_deltas.append(float(np.linalg.norm(action[:5] - previous_action[:5])))
-            wrist_roll_deltas.append(float(abs(float(action[4]) - float(previous_action[4]))))
-        previous_action = action.copy()
+        return bool(terminated), bool(truncated)
 
     stopped = False
     for phase_index, (phase, start, target, steps) in enumerate(phases):
@@ -2725,19 +2860,23 @@ def _write_fixed_jaw_edge_episode(
                 pre_close_policy_camera_visibility = _policy_camera_visibility(env, renderers)
                 if skill_mode == "grip_the_cube_v1":
                     pre_close_camera2_top_contact_alignment = _camera2_top_contact_alignment(env, renderers)
-            if target is None:
-                action = np.asarray(_cartesian_error_controller_action(env, np.asarray([0.0, 0.0, 0.12])), dtype=np.float32)
+            if phase == "lift":
+                action = np.asarray(
+                    _cartesian_error_controller_action(
+                        env,
+                        np.asarray([0.0, 0.0, float(lift_controller_z_error)]),
+                    ),
+                    dtype=np.float32,
+                )
                 action[-1] = float(env.action_space.low[-1])
                 if skill_mode == "grip_the_cube_v1" and previous_close_wrist_roll is not None:
                     action[4] = float(previous_close_wrist_roll)
                 q_lift = np.clip(action, env.action_space.low, env.action_space.high).astype(np.float32)
             elif phase == "terminal_hold":
-                action = np.asarray(target, dtype=np.float32)
+                action = np.asarray(q_lift, dtype=np.float32)
                 if skill_mode == "grip_the_cube_v1" and previous_close_wrist_roll is not None:
                     action = action.copy()
                     action[4] = float(previous_close_wrist_roll)
-                add_hold_frame(action, phase)
-                continue
             else:
                 alpha = (index + 1) / float(max(1, int(steps)))
                 alpha = 0.5 - 0.5 * float(np.cos(np.pi * alpha))
@@ -2763,7 +2902,18 @@ def _write_fixed_jaw_edge_episode(
                 if index in close_trace_targets:
                     close_trace_entry["checkpoint_fraction"] = float(close_trace_targets[index])
                 close_visual_alignment_trace.append(close_trace_entry)
-            if add_step(action, phase):
+            terminated, truncated = add_step(action, phase)
+            if phase == "lift" and _fixed_jaw_lift_target_reached(
+                info,
+                target_height=float(lift_target_height),
+            ):
+                lift_target_reached = True
+                break
+            if _fixed_jaw_terminal_event_stops_episode(
+                phase,
+                terminated=terminated,
+                truncated=truncated,
+            ):
                 stopped = True
                 break
             if skill_mode == "grip_the_cube_v1" and phase == "close":
@@ -2816,7 +2966,11 @@ def _write_fixed_jaw_edge_episode(
             "passed": bool((max(wrist_roll_deltas) if wrist_roll_deltas else 0.0) <= GRIP_THE_CUBE_V1_MAX_WRIST_ROLL_STEP_RAD),
         }
     if success_kind == "pick_success":
-        task_success = bool(info.get("success", False))
+        task_success = bool(
+            info.get("is_grasped", False)
+            and float(info.get("lift_height", 0.0)) >= float(lift_target_height)
+            and lift_target_reached
+        )
         if skill_mode == "grip_the_cube_v1":
             pre_close_error = pre_close_static_edge_error or final_static_edge_error
             task_success = bool(
@@ -2882,6 +3036,9 @@ def _write_fixed_jaw_edge_episode(
         "q_above": [float(value) for value in q_above],
         "q_above_misaligned": [float(value) for value in locals().get("q_above_misaligned", q_above)],
         "q_lift": [float(value) for value in q_lift],
+        "lift_target_height": float(lift_target_height),
+        "lift_controller_z_error": float(lift_controller_z_error),
+        "lift_target_reached": bool(lift_target_reached),
         "start_static_edge_error": start_static_edge_error,
         "pre_close_static_edge_error": pre_close_static_edge_error,
         "pre_close_cube_face_normal_parallel_error_deg": (
@@ -2905,9 +3062,10 @@ def _write_fixed_jaw_edge_episode(
         "trajectory_variant": trajectory_variant,
         "dataset_generation_augmentation": {
             "terminal_hold_steps": int(effective_terminal_hold_steps),
-            "near_target_correction": trajectory_variant == "near_target_correction",
+            "near_target_correction": "near_target_correction" in trajectory_variant,
             "near_target_joint_std": float(near_target_joint_std),
             "near_target_xy_std": float(near_target_xy_std),
+            "correction_visibility_scale": locals().get("correction_visibility_scale"),
             "above_edge_start": skill_mode == "grip_from_above_edge_cube",
             "above_edge_start_joint_std": float(above_edge_start_joint_std),
             "above_edge_start_xy_std": float(above_edge_start_xy_std),

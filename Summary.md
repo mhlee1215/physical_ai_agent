@@ -258,6 +258,23 @@ paper-facing concepts:
   `scripts/export_so101_training_datasets.py`. Raw datasets remain local
   `_workspace` artifacts; regenerate them from the recipe and refresh
   `configs/so101/training_datasets/checksums.json` before RunPod upload.
+- SO101 dataset lifecycle is append-only by default. Unless the user explicitly
+  requests replacement or cleanup in the current turn, every changed dataset
+  gets a new versioned recipe, local root, and HF path; existing datasets are
+  never overwritten, renamed, repointed, or deleted. Completed datasets are
+  registered through `configs/so101/dataset_generation/*.json`
+  `splits.<name>.output_root`, not through per-dataset edits to the viewer's
+  static training-config list. Sign-off requires export/merge/audit evidence,
+  required sidecars/loop starts, presence in `/api/datasets`, and a successful
+  sample `/api/frame` response for every intended split.
+- SO101 dataset inventory and training readiness now use the shared registry
+  `src/physical_ai_agent/so101_dataset_registry.py` through
+  `scripts/so101_dataset_registry.py`. The recipe directory is the only
+  registry, the generator and viewer share its resolver, and generation is
+  complete only when `validate --require-training-ready` passes. Use
+  `training-manifest --dataset-id <id>` to retrieve validated train/validation
+  roots, episode/frame counts, camera-grid sidecar, and validation loop-start
+  before selecting the dataset in a training experiment config.
 
 ### What We Have Learned
 

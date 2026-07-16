@@ -20,6 +20,7 @@ def main() -> None:
     parser.add_argument("--grid-size", type=int, default=4)
     parser.add_argument("--frame-index", type=int, default=0)
     parser.add_argument("--min-area", type=int, default=20)
+    parser.add_argument("--bin-source", choices=("image", "report"), default="image")
     args = parser.parse_args()
 
     report = build_bins(
@@ -28,6 +29,7 @@ def main() -> None:
         grid_size=args.grid_size,
         frame_index=args.frame_index,
         min_area=args.min_area,
+        bin_source=args.bin_source,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 
@@ -39,6 +41,7 @@ def build_bins(
     grid_size: int,
     frame_index: int,
     min_area: int,
+    bin_source: str = "image",
 ) -> dict:
     rows = []
     data_files = sorted((dataset_root / "data").glob("chunk-*/*.parquet"))
@@ -49,13 +52,23 @@ def build_bins(
         rows.append(frame[frame["frame_index"] == frame_index])
     first = pd.concat(rows, ignore_index=True).sort_values("episode_index")
 
+    report_bins: dict[int, int] = {}
+    if bin_source == "report":
+        report = json.loads((dataset_root / "so101_lerobot_export_report.json").read_text(encoding="utf-8"))
+        report_bins = {
+            index: int(episode["grid_balance_bin"])
+            for index, episode in enumerate(report.get("episodes", []))
+            if episode.get("grid_balance_bin") is not None
+        }
     records = []
     counts = np.zeros((grid_size, grid_size), dtype=np.int64)
     invisible = 0
     for _, row in first.iterrows():
         centroid = _green_centroid(row[camera_key], min_area=min_area)
+        report_bin = report_bins.get(int(row["episode_index"]))
         if centroid is None:
             invisible += 1
+        if centroid is None and report_bin is None:
             records.append(
                 {
                     "episode_index": int(row["episode_index"]),
@@ -71,23 +84,33 @@ def build_bins(
                 }
             )
             continue
-        x, y, area = centroid
-        grid_x = min(grid_size - 1, max(0, int(x * grid_size)))
-        grid_y = min(grid_size - 1, max(0, int(y * grid_size)))
-        grid_bin = grid_y * grid_size + grid_x
+        if centroid is None:
+            x, y, area = None, None, 0
+        else:
+            x, y, area = centroid
+        if report_bin is not None:
+            grid_bin = int(report_bin)
+            grid_x = grid_bin % grid_size
+            grid_y = grid_bin // grid_size
+        else:
+            assert x is not None and y is not None
+            grid_x = min(grid_size - 1, max(0, int(x * grid_size)))
+            grid_y = min(grid_size - 1, max(0, int(y * grid_size)))
+            grid_bin = grid_y * grid_size + grid_x
         counts[grid_y, grid_x] += 1
         records.append(
             {
                 "episode_index": int(row["episode_index"]),
                 "frame_index": int(frame_index),
                 "camera_key": camera_key,
-                "visible": True,
-                "centroid_x": float(x),
-                "centroid_y": float(y),
+                "visible": centroid is not None,
+                "centroid_x": None if x is None else float(x),
+                "centroid_y": None if y is None else float(y),
                 "area": int(area),
                 "grid_x": int(grid_x),
                 "grid_y": int(grid_y),
                 "grid_bin": int(grid_bin),
+                "grid_bin_source": "report" if report_bin is not None else "image",
             }
         )
 
@@ -106,6 +129,7 @@ def build_bins(
         "grid_size": grid_size,
         "frame_index": frame_index,
         "min_area": min_area,
+        "bin_source": bin_source,
         "episodes": int(len(records)),
         "visible_episodes": int(len(records) - invisible),
         "invisible_episodes": int(invisible),

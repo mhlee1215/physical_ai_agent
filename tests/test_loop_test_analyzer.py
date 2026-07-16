@@ -5,6 +5,7 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 
@@ -23,6 +24,156 @@ VALID_1X1_PNG = (
 
 
 class LoopTestAnalyzerTest(unittest.TestCase):
+    def test_dataset_contract_falls_back_to_preserved_hf_upload_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            contract_path = repo_root / dataset_viewer.DATASET_CONTRACT
+            contract_path.parent.mkdir(parents=True)
+            contract_path.write_text(
+                json.dumps(
+                    {
+                        "datasets": {
+                            "pick_cube": {
+                                "train": {
+                                    "root": "_workspace/so101_lerobot/deleted_original_train"
+                                },
+                                "validation": {
+                                    "root": "_workspace/so101_lerobot/deleted_original_val"
+                                },
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            preserved_train = (
+                repo_root
+                / "_workspace/hf_upload/so101-nexus-sim-dataset/datasets/pick_cube/train"
+            )
+            preserved_val = preserved_train.parent / "validation"
+            preserved_train.mkdir(parents=True)
+            preserved_val.mkdir(parents=True)
+
+            roots = dataset_viewer._contract_dataset_roots(repo_root)
+
+        self.assertEqual(roots["pick_cube_train"], preserved_train.resolve())
+        self.assertEqual(roots["pick_cube_val"], preserved_val.resolve())
+
+    def test_dataset_contract_prefers_configured_root_when_it_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            contract_path = repo_root / dataset_viewer.DATASET_CONTRACT
+            contract_path.parent.mkdir(parents=True)
+            configured = repo_root / "_workspace/so101_lerobot/pick_cube_train"
+            configured.mkdir(parents=True)
+            fallback = (
+                repo_root
+                / "_workspace/hf_upload/so101-nexus-sim-dataset/datasets/pick_cube/train"
+            )
+            fallback.mkdir(parents=True)
+            contract_path.write_text(
+                json.dumps(
+                    {
+                        "datasets": {
+                            "pick_cube": {
+                                "train": {
+                                    "root": "_workspace/so101_lerobot/pick_cube_train"
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            roots = dataset_viewer._contract_dataset_roots(repo_root)
+
+        self.assertEqual(roots["pick_cube_train"], configured.resolve())
+
+    def test_dataset_generation_recipes_register_completed_split_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            config_dir = repo_root / dataset_viewer.DATASET_GENERATION_CONFIG_DIR
+            config_dir.mkdir(parents=True)
+            train_root = repo_root / "_workspace/so101_lerobot/grip_the_cube_v2_5"
+            val_root = repo_root / "_workspace/so101_lerobot/grip_the_cube_v2_5_validation"
+            train_root.mkdir(parents=True)
+            val_root.mkdir(parents=True)
+            config_dir.joinpath("grip_the_cube_v2_5.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "name": "grip_the_cube_v2_5",
+                        "splits": {
+                            "train": {"output_root": str(train_root.relative_to(repo_root))},
+                            "validation": {"output_root": str(val_root.relative_to(repo_root))},
+                            "missing": {
+                                "output_root": "_workspace/so101_lerobot/grip_the_cube_v2_5_missing"
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            roots = dataset_viewer._generation_recipe_dataset_roots(repo_root)
+
+        self.assertEqual(
+            roots,
+            {
+                "grip_the_cube_v2_5": train_root.resolve(),
+                "grip_the_cube_v2_5_validation": val_root.resolve(),
+            },
+        )
+
+    def test_dataset_catalog_uses_metadata_without_loading_full_frame_table(self) -> None:
+        dataset = {
+            "root": Path("/tmp/cube"),
+            "info": {
+                "total_episodes": 2,
+                "total_frames": 20,
+                "fps": 12,
+                "features": {"observation.images.camera1": {"shape": [256, 256, 3]}},
+            },
+            "camera_keys": ["observation.images.camera1"],
+            "episode_lengths": [10, 10],
+            "size_bytes": 100,
+            "data_bytes": 60,
+            "image_bytes": 40,
+        }
+        with (
+            patch.object(dataset_viewer, "_dataset_metadata", return_value=dataset),
+            patch.object(dataset_viewer, "_dataset", side_effect=AssertionError("full dataset load")),
+        ):
+            item = dataset_viewer._dataset_catalog_item(
+                Path("/tmp"), "cube", Path("/tmp/cube"), category="generated"
+            )
+
+        self.assertEqual(item["status"], "available")
+        self.assertEqual(item["frames"], 20)
+
+    def test_recipe_catalog_name_replaces_legacy_alias_for_same_root(self) -> None:
+        root = Path("/tmp/canonical")
+
+        def catalog_item(_repo_root: Path, split: str, _root: Path, *, category: str):
+            summary = {"name": split, "root": str(root), "episodes": 1, "frames": 1}
+            return {"name": split, "status": "available", "category": category, "summary": summary}
+
+        with (
+            patch.object(dataset_viewer, "_official_dataset_roots", return_value={"legacy_alias": root}),
+            patch.object(dataset_viewer, "_skill_dataset_roots", return_value={}),
+            patch.object(dataset_viewer, "_generation_recipe_dataset_roots", return_value={"canonical": root}),
+            patch.object(dataset_viewer, "_dataset_catalog_item", side_effect=catalog_item),
+            patch.object(dataset_viewer, "_discover_temporary_datasets", return_value={}),
+            patch.object(dataset_viewer, "_discover_mycobot_datasets", return_value={}),
+            patch.object(dataset_viewer, "ARCHIVED_DATASET_SPLITS", []),
+        ):
+            payload = dataset_viewer._build_datasets_payload(Path("/tmp"))
+
+        self.assertIn("canonical", payload["datasets"])
+        self.assertNotIn("legacy_alias", payload["datasets"])
+        self.assertEqual(payload["dataset_groups"][0]["items"][0]["name"], "canonical")
+
     def test_qwen_chain_loop_test_id_keeps_nact15_variant_distinct(self) -> None:
         self.assertEqual(
             exporter._loop_test_id_from_report_path(
