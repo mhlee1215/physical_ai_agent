@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import shutil
 import subprocess
@@ -68,6 +69,12 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=192)
     parser.add_argument("--denoise", action="store_true")
     parser.add_argument("--robot-material", choices=("plastic", "matte_pla", "metal"), default="matte_pla")
+    parser.add_argument(
+        "--scene-profile",
+        choices=("neutral", "black_table_clutter"),
+        default="neutral",
+        help="Blender-only tabletop and visual-prop profile. It never changes MuJoCo collisions.",
+    )
     parser.add_argument("--camera-lens", type=float, default=48.0)
     parser.add_argument("--asset-root", type=Path, default=Path("_workspace/photoreal_assets"))
     parser.add_argument("--blender-bin", default="blender")
@@ -109,6 +116,7 @@ def main() -> None:
         samples=args.samples,
         denoise=args.denoise,
         robot_material=args.robot_material,
+        scene_profile=args.scene_profile,
         camera_lens=args.camera_lens,
         asset_root=args.asset_root,
         blender_bin=blender_bin,
@@ -136,6 +144,7 @@ def render_dataset_preview(
     samples: int,
     denoise: bool,
     robot_material: str,
+    scene_profile: str,
     camera_lens: float,
     asset_root: Path,
     blender_bin: str,
@@ -153,6 +162,12 @@ def render_dataset_preview(
     output_dir.mkdir(parents=True, exist_ok=True)
     episode_summaries = _episode_summaries(dataset_root)
     episode_frames = _resolve_episode_frames(
+        dataset_root,
+        episodes=episodes,
+        frame_tokens=frame_tokens,
+        episode_summaries=episode_summaries,
+    )
+    episode_frame_labels = _resolve_episode_frame_labels(
         dataset_root,
         episodes=episodes,
         frame_tokens=frame_tokens,
@@ -222,7 +237,7 @@ def render_dataset_preview(
                                 "episode": episode,
                                 "seed": seed,
                                 "frame": frame_index,
-                                "frame_label": _frame_label(episode_frames, episode=episode, frame=frame_index),
+                                "frame_label": _frame_label(episode_frame_labels, episode=episode, frame=frame_index),
                                 "timestamp": float(row["timestamp"]),
                                 "state": state,
                                 "action": action,
@@ -270,6 +285,8 @@ def render_dataset_preview(
                         "sample_clamp_indirect": 0.85,
                         "background_wall": False,
                         "stable_tabletop": True,
+                        "scene_profile": scene_profile,
+                        "visual_props": _visual_props_for_episode(seed) if scene_profile == "black_table_clutter" else [],
                         "robot_material": robot_material,
                         "camera_lens": camera_lens,
                         "texture_path": str(texture_path.resolve()),
@@ -295,7 +312,7 @@ def render_dataset_preview(
                                 "episode": episode,
                                 "seed": seed,
                                 "frame": frame_index,
-                                "frame_label": _frame_label(episode_frames, episode=episode, frame=frame_index),
+                                "frame_label": _frame_label(episode_frame_labels, episode=episode, frame=frame_index),
                                 "timestamp": float(row["timestamp"]),
                                 "state": state,
                                 "action": action,
@@ -357,6 +374,20 @@ def render_dataset_preview(
         "seed_base": seed_base if seed_base is not None else _seed_from_name(dataset_root),
         "renderer": "blender_cycles",
         "robot_material": robot_material,
+        "scene_profile": scene_profile,
+        "visual_props_by_episode": {
+            str(episode): _visual_props_for_episode(
+                _seed_for_episode(
+                    episode,
+                    seed_base=seed_base,
+                    dataset_root=dataset_root,
+                    episode_summaries=episode_summaries,
+                )
+            )
+            for episode in episodes
+        }
+        if scene_profile == "black_table_clutter"
+        else {},
         "camera_lens": camera_lens,
         "samples": samples,
         "denoise": denoise,
@@ -544,6 +575,29 @@ def _seed_from_name(path: Path) -> int:
     return int(match.group(1))
 
 
+def _visual_props_for_episode(seed: int) -> list[dict[str, Any]]:
+    rng = random.Random(int(seed) ^ 0x5A17)
+    anchors = [
+        ("workshop_mug", "mug", (0.035, 0.315), (0.13, 0.22, 0.29), 0.58),
+        ("steel_bottle", "bottle", (0.535, 0.300), (0.34, 0.37, 0.40), 0.26),
+        ("masking_tape", "tape", (0.035, -0.105), (0.68, 0.56, 0.24), 0.72),
+        ("bench_screwdriver", "screwdriver", (0.535, -0.085), (0.16, 0.20, 0.24), 0.52),
+    ]
+    props = []
+    for name, kind, (x, y), color, roughness in anchors:
+        props.append(
+            {
+                "name": name,
+                "kind": kind,
+                "position": [x + rng.uniform(-0.008, 0.008), y + rng.uniform(-0.008, 0.008)],
+                "yaw_degrees": rng.uniform(-22.0, 22.0),
+                "color": list(color),
+                "roughness": roughness,
+            }
+        )
+    return props
+
+
 def _rows(columns: dict[str, list[Any]]) -> list[dict[str, Any]]:
     count = len(next(iter(columns.values()))) if columns else 0
     return [{key: value[index] for key, value in columns.items()} for index in range(count)]
@@ -596,6 +650,30 @@ def _resolve_episode_frames(
     return episode_frames
 
 
+def _resolve_episode_frame_labels(
+    dataset_root: Path,
+    *,
+    episodes: list[int],
+    frame_tokens: list[str],
+    episode_summaries: dict[int, dict[str, Any]],
+) -> dict[int, dict[int, str]]:
+    ranges = _episode_frame_ranges(dataset_root)
+    labels: dict[int, dict[int, str]] = {}
+    for episode in episodes:
+        first_frame, last_frame = ranges[episode]
+        summary = episode_summaries.get(episode, {})
+        labels[episode] = {}
+        for token in frame_tokens:
+            if token.lower() == "all":
+                labels[episode].update({frame: str(frame) for frame in range(first_frame, last_frame + 1)})
+                labels[episode][first_frame] = "start"
+                labels[episode][last_frame] = "final"
+                continue
+            frame = _resolve_frame_token(token, first_frame=first_frame, last_frame=last_frame, summary=summary)
+            labels[episode][frame] = "final" if token.lower() == "last" else token.lower()
+    return labels
+
+
 def _episode_frame_ranges(dataset_root: Path) -> dict[int, tuple[int, int]]:
     import pyarrow.parquet as pq
 
@@ -634,15 +712,8 @@ def _resolve_frame_token(token: str, *, first_frame: int, last_frame: int, summa
     return int(token)
 
 
-def _frame_label(episode_frames: dict[int, list[int]], *, episode: int, frame: int) -> str:
-    frames = episode_frames.get(int(episode), [])
-    if len(frames) == 1:
-        return "selected"
-    if frame == frames[0]:
-        return "start"
-    if frame == frames[-1]:
-        return "grip"
-    return str(frame)
+def _frame_label(episode_frame_labels: dict[int, dict[int, str]], *, episode: int, frame: int) -> str:
+    return episode_frame_labels.get(int(episode), {}).get(int(frame), str(frame))
 
 
 def _camera_specs_from_mujoco_scene(

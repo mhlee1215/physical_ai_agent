@@ -89,6 +89,26 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertIn("--env-source", completed.stdout)
         self.assertIn("--frames", completed.stdout)
         self.assertIn("--camera-lens", completed.stdout)
+        self.assertIn("--scene-profile", completed.stdout)
+
+    def test_black_table_props_are_deterministic_and_outside_manipulation_zone(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        props = module._visual_props_for_episode(492500)
+        self.assertEqual(props, module._visual_props_for_episode(492500))
+        self.assertNotEqual(props, module._visual_props_for_episode(492501))
+        self.assertEqual({item["kind"] for item in props}, {"mug", "bottle", "tape", "screwdriver"})
+        for item in props:
+            x, y = item["position"]
+            self.assertFalse(0.10 <= x <= 0.46 and -0.05 <= y <= 0.34)
+        self.assertEqual(module._frame_label({0: {113: "final"}}, episode=0, frame=113), "final")
 
     def test_dataset_viewer_photoreal_preview_helpers(self) -> None:
         spec = importlib.util.spec_from_file_location("serve_so101_dataset_viewer", "scripts/serve_so101_dataset_viewer.py")

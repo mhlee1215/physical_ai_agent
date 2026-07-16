@@ -65,11 +65,23 @@ def main():
             metal_devices.append(device.name)
     scene.cycles.device = "GPU" if metal_devices else "CPU"
 
-    floor_mat = make_stable_tabletop_material() if spec.get("stable_tabletop") else make_tabletop_material(spec["table_pbr"])
-    bpy.ops.mesh.primitive_plane_add(size=2.5, location=(0.0, 0.0, -0.002))
+    scene_profile = spec.get("scene_profile", "neutral")
+    floor_mat = (
+        make_black_tabletop_material()
+        if scene_profile == "black_table_clutter"
+        else make_stable_tabletop_material() if spec.get("stable_tabletop") else make_tabletop_material(spec["table_pbr"])
+    )
+    if scene_profile == "black_table_clutter":
+        bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.28, 0.10, -0.018))
+        bpy.context.object.scale = (0.72, 0.62, 0.018)
+    else:
+        bpy.ops.mesh.primitive_plane_add(size=2.5, location=(0.0, 0.0, -0.002))
     floor = bpy.context.object
     floor.name = "tabletop"
     floor.data.materials.append(floor_mat)
+
+    for item in spec.get("visual_props", []):
+        add_visual_prop(item)
 
     if spec.get("background_wall", True):
         wall_mat = make_wall_material()
@@ -347,6 +359,104 @@ def make_stable_tabletop_material():
     bsdf.inputs["Base Color"].default_value = (0.52, 0.52, 0.49, 1.0)
     bsdf.inputs["Roughness"].default_value = 0.82
     bsdf.inputs["Metallic"].default_value = 0.0
+    return mat
+
+
+def make_black_tabletop_material():
+    mat = bpy.data.materials.new("black_workbench")
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    bsdf = nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (0.025, 0.028, 0.032, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.72
+    bsdf.inputs["Metallic"].default_value = 0.0
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 115.0
+    noise.inputs["Detail"].default_value = 4.0
+    bump = nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.025
+    bump.inputs["Distance"].default_value = 0.0008
+    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    return mat
+
+
+def add_visual_prop(item):
+    kind = item["kind"]
+    x, y = item["position"]
+    yaw = math.radians(float(item.get("yaw_degrees", 0.0)))
+    color = item["color"]
+    material = make_simple_material(f"{item['name']}_material", color, float(item.get("roughness", 0.48)))
+
+    def finish(obj, name, mat=material):
+        obj.name = name
+        obj.data.materials.append(mat)
+        bpy.ops.object.shade_smooth()
+        return obj
+
+    if kind == "mug":
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=0.034, depth=0.070, location=(x, y, 0.035))
+        finish(bpy.context.object, item["name"])
+        dark = make_simple_material(f"{item['name']}_inside", (0.008, 0.009, 0.010), 0.82)
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=0.027, depth=0.002, location=(x, y, 0.071))
+        finish(bpy.context.object, f"{item['name']}_inside", dark)
+        handle_x, handle_y = x + 0.038 * math.cos(yaw), y + 0.038 * math.sin(yaw)
+        bpy.ops.mesh.primitive_torus_add(
+            major_radius=0.022,
+            minor_radius=0.006,
+            major_segments=48,
+            minor_segments=16,
+            location=(handle_x, handle_y, 0.040),
+            rotation=(math.radians(90.0), 0.0, yaw),
+        )
+        finish(bpy.context.object, f"{item['name']}_handle")
+    elif kind == "bottle":
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=0.028, depth=0.095, location=(x, y, 0.0475))
+        finish(bpy.context.object, item["name"])
+        bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=0.016, depth=0.024, location=(x, y, 0.107))
+        finish(bpy.context.object, f"{item['name']}_neck")
+        cap = make_simple_material(f"{item['name']}_cap_material", (0.06, 0.065, 0.07), 0.62)
+        bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=0.017, depth=0.012, location=(x, y, 0.125))
+        finish(bpy.context.object, f"{item['name']}_cap", cap)
+    elif kind == "tape":
+        bpy.ops.mesh.primitive_torus_add(
+            major_radius=0.030,
+            minor_radius=0.010,
+            major_segments=64,
+            minor_segments=20,
+            location=(x, y, 0.011),
+            rotation=(0.0, 0.0, yaw),
+        )
+        finish(bpy.context.object, item["name"])
+    elif kind == "screwdriver":
+        direction = Vector((math.cos(yaw), math.sin(yaw), 0.0))
+        bpy.ops.mesh.primitive_cylinder_add(
+            vertices=32,
+            radius=0.012,
+            depth=0.075,
+            location=Vector((x, y, 0.016)) - direction * 0.040,
+            rotation=(0.0, math.radians(90.0), yaw),
+        )
+        finish(bpy.context.object, f"{item['name']}_handle")
+        steel = make_simple_material(f"{item['name']}_steel", (0.30, 0.32, 0.34), 0.28, metallic=0.85)
+        bpy.ops.mesh.primitive_cylinder_add(
+            vertices=24,
+            radius=0.004,
+            depth=0.105,
+            location=Vector((x, y, 0.016)) + direction * 0.050,
+            rotation=(0.0, math.radians(90.0), yaw),
+        )
+        finish(bpy.context.object, f"{item['name']}_shaft", steel)
+
+
+def make_simple_material(name, color, roughness, metallic=0.0):
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (*color, 1.0)
+    bsdf.inputs["Roughness"].default_value = roughness
+    bsdf.inputs["Metallic"].default_value = metallic
     return mat
 
 

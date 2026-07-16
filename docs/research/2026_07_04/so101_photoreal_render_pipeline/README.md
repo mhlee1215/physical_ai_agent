@@ -163,6 +163,26 @@ runs with denoising disabled for temporal consistency, clamps indirect samples,
 removes the background wall, and uses a neutral matte tabletop. That avoids the
 frame-to-frame shimmer seen in the earlier low-sample wood/PBR preview.
 
+The optional `black_table_clutter` scene profile replaces only the Blender
+tabletop and adds procedural workshop props outside the protected manipulation
+zone. The mug, bottle, masking tape, and screwdriver never enter MuJoCo, so they
+cannot change collisions, source actions, or grasp dynamics. Their small pose
+variation is derived from the recorded episode seed and stays fixed across all
+frames and cameras in that episode:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python scripts/render_so101_dataset_blender_preview.py \
+  --dataset-root _workspace/so101_lerobot/grip_the_cube_v1_2_train_shard00_seed492500 \
+  --output-dir _workspace/so101_photoreal_renders/black_table_clutter_sample_ep0000 \
+  --env-source high_contrast_picklift \
+  --episode 0 --frames start,grip,final \
+  --width 256 --height 256 --samples 256 \
+  --robot-material matte_pla \
+  --scene-profile black_table_clutter
+```
+
+![Black workbench with deterministic visual props](./black_table_clutter_sample.png)
+
 Object/contact dynamics are also replay-based. The renderer resets each source
 episode once with the seed recorded in `so101_lerobot_export_report.json`,
 renders the pre-action frame, then steps the source `action` before the next
