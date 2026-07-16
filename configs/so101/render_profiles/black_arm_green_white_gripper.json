@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "name": "black_arm_green_white_gripper",
+  "default_part": "arm",
+  "parts": {
+    "arm": {
+      "base_color": [0.025, 0.03, 0.035],
+      "roughness": 0.82,
+      "metallic": 0.0,
+      "noise_scale": 95.0,
+      "bump_strength": 0.018
+    },
+    "static_gripper": {
+      "base_color": [0.035, 0.52, 0.11],
+      "roughness": 0.72,
+      "metallic": 0.0,
+      "noise_scale": 110.0,
+      "bump_strength": 0.016
+    },
+    "moving_gripper": {
+      "base_color": [0.82, 0.84, 0.80],
+      "roughness": 0.76,
+      "metallic": 0.0,
+      "noise_scale": 120.0,
+      "bump_strength": 0.014
+    }
+  },
+  "selectors": {
+    "static_gripper": {
+      "mesh_names": ["wrist_roll_follower_so101_v1"],
+      "primitive_names": ["static_finger_pad"]
+    },
+    "moving_gripper": {
+      "body_names": ["moving_jaw_so101_v1"],
+      "mesh_names": ["moving_jaw_so101_v1"],
+      "primitive_names": ["moving_finger_pad"]
+    }
+  }
+}

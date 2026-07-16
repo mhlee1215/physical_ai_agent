@@ -90,6 +90,24 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertIn("--frames", completed.stdout)
         self.assertIn("--camera-lens", completed.stdout)
         self.assertIn("--scene-profile", completed.stdout)
+        self.assertIn("--robot-material-config", completed.stdout)
+
+    def test_robot_material_config_is_editable_and_valid(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        path = Path("configs/so101/render_profiles/black_arm_green_white_gripper.json")
+        config = module._load_robot_material_config(path)
+        self.assertEqual(config["default_part"], "arm")
+        self.assertEqual(config["parts"]["arm"]["base_color"], [0.025, 0.03, 0.035])
+        self.assertEqual(config["selectors"]["static_gripper"]["primitive_names"], ["static_finger_pad"])
+        self.assertEqual(config["selectors"]["moving_gripper"]["primitive_names"], ["moving_finger_pad"])
 
     def test_black_table_props_are_deterministic_and_outside_manipulation_zone(self) -> None:
         spec = importlib.util.spec_from_file_location(

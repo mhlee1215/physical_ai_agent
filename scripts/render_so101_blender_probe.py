@@ -98,13 +98,20 @@ def main():
         bpy.ops.wm.ply_import(filepath=item["path"])
         obj = bpy.context.object
         obj.name = item["name"] or f"mesh_{item['geom_id']:03d}"
-        obj.data.materials.append(make_robot_material(item["rgba"], spec["plastic_pbr"], spec.get("robot_material", "plastic")))
+        obj.data.materials.append(
+            make_robot_material(
+                item,
+                spec["plastic_pbr"],
+                spec.get("robot_material", "plastic"),
+                spec.get("robot_material_config"),
+            )
+        )
         bpy.ops.object.shade_smooth()
         weighted = obj.modifiers.new("weighted_normals", "WEIGHTED_NORMAL")
         weighted.keep_sharp = True
 
     for item in spec.get("primitives", []):
-        add_primitive(item)
+        add_primitive(item, spec.get("robot_material_config"))
 
     target = spec.get("target_site")
     if target:
@@ -155,13 +162,29 @@ def main():
     Path(spec["blender_report_path"]).write_text(json.dumps(report, indent=2, sort_keys=True))
 
 
-def make_robot_material(rgba, plastic_pbr, robot_material):
+def make_robot_material(item, plastic_pbr, robot_material, robot_material_config):
+    rgba = item["rgba"]
     rgb = material_color(rgba)
     mat = bpy.data.materials.new("robot_material")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
     bsdf = nodes.get("Principled BSDF")
+    configured = configured_material_spec(item, robot_material_config, allow_default=True)
+    if configured:
+        color = configured["base_color"]
+        bsdf.inputs["Base Color"].default_value = (*color, 1.0)
+        bsdf.inputs["Roughness"].default_value = float(configured["roughness"])
+        bsdf.inputs["Metallic"].default_value = float(configured["metallic"])
+        noise = nodes.new("ShaderNodeTexNoise")
+        noise.inputs["Scale"].default_value = float(configured.get("noise_scale", 100.0))
+        noise.inputs["Detail"].default_value = 8.0
+        bump = nodes.new("ShaderNodeBump")
+        bump.inputs["Strength"].default_value = float(configured.get("bump_strength", 0.015))
+        bump.inputs["Distance"].default_value = 0.0012
+        links.new(noise.outputs["Fac"], bump.inputs["Height"])
+        links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+        return mat
     is_yellow_body = rgb[0] > 0.5 and rgb[1] > 0.25
     if robot_material == "metal" and is_yellow_body:
         rgb = [0.86, 0.70, 0.38]
@@ -252,7 +275,7 @@ def make_target_material():
     return mat
 
 
-def add_primitive(item):
+def add_primitive(item, robot_material_config):
     if len(item.get("rgba", [])) >= 4 and float(item["rgba"][3]) <= 0.01:
         return
     kind = item["type"]
@@ -273,7 +296,7 @@ def add_primitive(item):
     else:
         return
     obj.name = name
-    obj.data.materials.append(make_primitive_material(name, item["rgba"], item.get("semantic_color")))
+    obj.data.materials.append(make_primitive_material(item, robot_material_config))
     bpy.ops.object.shade_smooth()
 
 
@@ -282,13 +305,20 @@ def matrix_to_euler(values):
     return Matrix(rows).to_euler()
 
 
-def make_primitive_material(name, rgba, semantic_color):
+def make_primitive_material(item, robot_material_config):
+    name = item["name"]
+    rgba = item["rgba"]
+    semantic_color = item.get("semantic_color")
     mat = bpy.data.materials.new(f"{name}_material")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
     bsdf = nodes.get("Principled BSDF")
-    if semantic_color == "red_cube" or "cube" in name or "pick_slot" in name:
+    configured = configured_material_spec(item, robot_material_config, allow_default=False)
+    if configured:
+        rgb = configured["base_color"]
+        roughness = float(configured["roughness"])
+    elif semantic_color == "red_cube" or "cube" in name or "pick_slot" in name:
         rgb = (0.90, 0.04, 0.02)
         roughness = 0.58
     elif "pad" in name:
@@ -299,7 +329,7 @@ def make_primitive_material(name, rgba, semantic_color):
         rgb = (color[0], color[1], color[2])
         roughness = 0.66
     bsdf.inputs["Base Color"].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
-    bsdf.inputs["Metallic"].default_value = 0.0
+    bsdf.inputs["Metallic"].default_value = float(configured["metallic"]) if configured else 0.0
     bsdf.inputs["Roughness"].default_value = roughness
     noise = nodes.new("ShaderNodeTexNoise")
     noise.inputs["Scale"].default_value = 84.0
@@ -310,6 +340,22 @@ def make_primitive_material(name, rgba, semantic_color):
     links.new(noise.outputs["Fac"], bump.inputs["Height"])
     links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
     return mat
+
+
+def configured_material_spec(item, config, allow_default):
+    if not config:
+        return None
+    selector_fields = {
+        "body_names": "body_name",
+        "mesh_names": "mesh_name",
+        "primitive_names": "name",
+    }
+    for part_name, selector in config.get("selectors", {}).items():
+        if any(item.get(item_key) in selector.get(selector_key, []) for selector_key, item_key in selector_fields.items()):
+            return config["parts"][part_name]
+    if allow_default:
+        return config["parts"][config["default_part"]]
+    return None
 
 
 def make_tabletop_material(table_pbr):

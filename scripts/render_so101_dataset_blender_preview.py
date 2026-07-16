@@ -70,6 +70,11 @@ def main() -> None:
     parser.add_argument("--denoise", action="store_true")
     parser.add_argument("--robot-material", choices=("plastic", "matte_pla", "metal"), default="matte_pla")
     parser.add_argument(
+        "--robot-material-config",
+        type=Path,
+        help="JSON material profile. When set, its part selectors and colors override --robot-material.",
+    )
+    parser.add_argument(
         "--scene-profile",
         choices=("neutral", "black_table_clutter"),
         default="neutral",
@@ -116,6 +121,7 @@ def main() -> None:
         samples=args.samples,
         denoise=args.denoise,
         robot_material=args.robot_material,
+        robot_material_config_path=args.robot_material_config,
         scene_profile=args.scene_profile,
         camera_lens=args.camera_lens,
         asset_root=args.asset_root,
@@ -144,6 +150,7 @@ def render_dataset_preview(
     samples: int,
     denoise: bool,
     robot_material: str,
+    robot_material_config_path: Path | None,
     scene_profile: str,
     camera_lens: float,
     asset_root: Path,
@@ -160,6 +167,7 @@ def render_dataset_preview(
     import so101_nexus_mujoco  # noqa: F401 - registers Gymnasium env ids.
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    robot_material_config = _load_robot_material_config(robot_material_config_path)
     episode_summaries = _episode_summaries(dataset_root)
     episode_frames = _resolve_episode_frames(
         dataset_root,
@@ -288,6 +296,7 @@ def render_dataset_preview(
                         "scene_profile": scene_profile,
                         "visual_props": _visual_props_for_episode(seed) if scene_profile == "black_table_clutter" else [],
                         "robot_material": robot_material,
+                        "robot_material_config": robot_material_config,
                         "camera_lens": camera_lens,
                         "texture_path": str(texture_path.resolve()),
                         "hdri_path": str(hdri_path.resolve()) if hdri_path.exists() else None,
@@ -374,6 +383,12 @@ def render_dataset_preview(
         "seed_base": seed_base if seed_base is not None else _seed_from_name(dataset_root),
         "renderer": "blender_cycles",
         "robot_material": robot_material,
+        "robot_material_config": {
+            "path": str(robot_material_config_path),
+            "name": robot_material_config["name"],
+        }
+        if robot_material_config is not None
+        else None,
         "scene_profile": scene_profile,
         "visual_props_by_episode": {
             str(episode): _visual_props_for_episode(
@@ -511,6 +526,7 @@ def _export_primitive_geoms(model: Any, data: Any) -> list[dict[str, Any]]:
             {
                 "geom_id": geom_id,
                 "name": name,
+                "body_name": model.body(int(model.geom_bodyid[geom_id])).name,
                 "type": kind,
                 "position": [float(value) for value in data.geom_xpos[geom_id]],
                 "xmat": [float(value) for value in data.geom_xmat[geom_id]],
@@ -596,6 +612,24 @@ def _visual_props_for_episode(seed: int) -> list[dict[str, Any]]:
             }
         )
     return props
+
+
+def _load_robot_material_config(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    config = json.loads(path.read_text(encoding="utf-8"))
+    parts = config.get("parts")
+    default_part = config.get("default_part")
+    if config.get("schema_version") != 1 or not isinstance(parts, dict) or default_part not in parts:
+        raise ValueError(f"invalid robot material config: {path}")
+    for name, material in parts.items():
+        color = material.get("base_color")
+        if not isinstance(color, list) or len(color) != 3 or not all(0.0 <= float(value) <= 1.0 for value in color):
+            raise ValueError(f"invalid base_color for material part {name}: {path}")
+        for key in ("roughness", "metallic"):
+            if not 0.0 <= float(material.get(key, -1.0)) <= 1.0:
+                raise ValueError(f"invalid {key} for material part {name}: {path}")
+    return config
 
 
 def _rows(columns: dict[str, list[Any]]) -> list[dict[str, Any]]:
