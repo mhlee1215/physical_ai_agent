@@ -191,6 +191,36 @@ records the selected profile name and path in its report.
 
 ![Black arm with white perforated wrist strap and green-white gripper jaws](./black_arm_white_wrist_strap_green_white_gripper_sample.png)
 
+### Independent part material interface
+
+Material profile schema v2 separates reusable material presets from robot part
+assignments:
+
+```json
+{
+  "materials": {
+    "white_matte_pla": {"base_color": [0.82, 0.84, 0.80], "roughness": 0.76, "metallic": 0.0}
+  },
+  "parts": {
+    "wrist_motor_holder": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["lower_arm"], "mesh_names": ["motor_holder_so101_wrist_v1"]}
+      ]
+    }
+  }
+}
+```
+
+Selector rules in one part are OR alternatives. Fields inside one rule are AND
+conditions, so a shared servo mesh can be configured independently for the
+base, shoulder, upper arm, lower arm, wrist, and gripper bodies. The current
+profile exposes 19 independent entries: three base parts plus its servo, three
+shoulder parts, the upper-arm link and servos, the forearm link and servos, the
+wrist motor holder, wrist servo, wrist-roll bracket, gripper servo, fixed jaw,
+fixed finger pad, moving jaw, and moving finger pad. To recolor one component,
+add or reuse a material preset and change only that part's `material` value.
+
 Object/contact dynamics are also replay-based. The renderer resets each source
 episode once with the seed recorded in `so101_lerobot_export_report.json`,
 renders the pre-action frame, then steps the source `action` before the next

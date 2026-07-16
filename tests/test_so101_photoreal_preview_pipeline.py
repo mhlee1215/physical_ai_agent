@@ -104,15 +104,81 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
 
         path = Path("configs/so101/render_profiles/black_arm_green_white_gripper.json")
         config = module._load_robot_material_config(path)
-        self.assertEqual(config["default_part"], "arm")
-        self.assertEqual(config["parts"]["arm"]["base_color"], [0.025, 0.03, 0.035])
-        self.assertEqual(config["parts"]["wrist_strap"]["base_color"], [0.82, 0.84, 0.80])
+        self.assertEqual(config["schema_version"], 2)
+        self.assertEqual(config["default_material"], "black_matte_pla")
+        self.assertEqual(config["materials"]["black_matte_pla"]["base_color"], [0.025, 0.03, 0.035])
+        self.assertEqual(config["materials"]["white_matte_pla"]["base_color"], [0.82, 0.84, 0.80])
+        self.assertEqual(len(config["parts"]), 19)
         self.assertEqual(
-            config["selectors"]["wrist_strap"]["mesh_names"],
-            ["motor_holder_so101_wrist_v1"],
+            config["parts"]["wrist_motor_holder"],
+            {
+                "material": "white_matte_pla",
+                "selectors": [
+                    {
+                        "body_names": ["lower_arm"],
+                        "mesh_names": ["motor_holder_so101_wrist_v1"],
+                    }
+                ],
+            },
         )
-        self.assertEqual(config["selectors"]["static_gripper"]["primitive_names"], ["static_finger_pad"])
-        self.assertEqual(config["selectors"]["moving_gripper"]["primitive_names"], ["moving_finger_pad"])
+        self.assertEqual(config["parts"]["fixed_jaw"]["material"], "green_matte_pla")
+        self.assertEqual(config["parts"]["moving_jaw"]["material"], "white_matte_pla")
+
+    def test_legacy_robot_material_config_remains_supported(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "legacy.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "name": "legacy",
+                        "default_part": "arm",
+                        "parts": {
+                            "arm": {"base_color": [0.1, 0.1, 0.1], "roughness": 0.8, "metallic": 0.0}
+                        },
+                        "selectors": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = module._load_robot_material_config(path)
+        self.assertEqual(config["schema_version"], 1)
+
+    def test_robot_material_config_rejects_unknown_selector_fields(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "invalid.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "name": "invalid",
+                        "default_material": "black",
+                        "materials": {
+                            "black": {"base_color": [0.1, 0.1, 0.1], "roughness": 0.8, "metallic": 0.0}
+                        },
+                        "parts": {"arm": {"material": "black", "selectors": [{"geom_ids": [1]}]}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "invalid selector for part arm"):
+                module._load_robot_material_config(path)
 
     def test_black_table_props_are_deterministic_and_outside_manipulation_zone(self) -> None:
         spec = importlib.util.spec_from_file_location(

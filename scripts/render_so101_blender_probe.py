@@ -345,6 +345,13 @@ def make_primitive_material(item, robot_material_config):
 def configured_material_spec(item, config, allow_default):
     if not config:
         return None
+    if config.get("schema_version") == 2:
+        for part in config.get("parts", {}).values():
+            if any(selector_rule_matches(item, rule) for rule in part.get("selectors", [])):
+                return config["materials"][part["material"]]
+        if allow_default:
+            return config["materials"][config["default_material"]]
+        return None
     selector_fields = {
         "body_names": "body_name",
         "mesh_names": "mesh_name",
@@ -356,6 +363,22 @@ def configured_material_spec(item, config, allow_default):
     if allow_default:
         return config["parts"][config["default_part"]]
     return None
+
+
+def selector_rule_matches(item, rule):
+    selector_fields = {
+        "body_names": "body_name",
+        "mesh_names": "mesh_name",
+        "primitive_names": "name",
+    }
+    populated = False
+    for selector_key, item_key in selector_fields.items():
+        if selector_key not in rule:
+            continue
+        populated = True
+        if item.get(item_key) not in rule[selector_key]:
+            return False
+    return populated
 
 
 def make_tabletop_material(table_pbr):

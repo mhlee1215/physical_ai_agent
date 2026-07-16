@@ -72,7 +72,7 @@ def main() -> None:
     parser.add_argument(
         "--robot-material-config",
         type=Path,
-        help="JSON material profile. When set, its part selectors and colors override --robot-material.",
+        help="JSON material profile. Schema v2 maps independent robot parts to reusable materials.",
     )
     parser.add_argument(
         "--scene-profile",
@@ -386,6 +386,8 @@ def render_dataset_preview(
         "robot_material_config": {
             "path": str(robot_material_config_path),
             "name": robot_material_config["name"],
+            "schema_version": robot_material_config["schema_version"],
+            "parts": list(robot_material_config["parts"]),
         }
         if robot_material_config is not None
         else None,
@@ -618,18 +620,56 @@ def _load_robot_material_config(path: Path | None) -> dict[str, Any] | None:
     if path is None:
         return None
     config = json.loads(path.read_text(encoding="utf-8"))
+    if config.get("schema_version") == 2:
+        _validate_robot_material_config_v2(config, path)
+        return config
     parts = config.get("parts")
     default_part = config.get("default_part")
     if config.get("schema_version") != 1 or not isinstance(parts, dict) or default_part not in parts:
         raise ValueError(f"invalid robot material config: {path}")
     for name, material in parts.items():
-        color = material.get("base_color")
-        if not isinstance(color, list) or len(color) != 3 or not all(0.0 <= float(value) <= 1.0 for value in color):
-            raise ValueError(f"invalid base_color for material part {name}: {path}")
-        for key in ("roughness", "metallic"):
-            if not 0.0 <= float(material.get(key, -1.0)) <= 1.0:
-                raise ValueError(f"invalid {key} for material part {name}: {path}")
+        _validate_material_spec(material, label=f"part {name}", path=path)
     return config
+
+
+def _validate_robot_material_config_v2(config: dict[str, Any], path: Path) -> None:
+    materials = config.get("materials")
+    parts = config.get("parts")
+    default_material = config.get("default_material")
+    if not isinstance(materials, dict) or not materials or default_material not in materials:
+        raise ValueError(f"invalid robot material presets: {path}")
+    if not isinstance(parts, dict) or not parts:
+        raise ValueError(f"invalid robot material parts: {path}")
+    for name, material in materials.items():
+        _validate_material_spec(material, label=f"material {name}", path=path)
+    allowed_selector_keys = {"body_names", "mesh_names", "primitive_names"}
+    for name, part in parts.items():
+        if not isinstance(part, dict) or part.get("material") not in materials:
+            raise ValueError(f"invalid material assignment for part {name}: {path}")
+        selectors = part.get("selectors")
+        if not isinstance(selectors, list) or not selectors:
+            raise ValueError(f"missing selectors for part {name}: {path}")
+        for rule in selectors:
+            if not isinstance(rule, dict) or not rule or not set(rule).issubset(allowed_selector_keys):
+                raise ValueError(f"invalid selector for part {name}: {path}")
+            if any(
+                not isinstance(values, list)
+                or not values
+                or not all(isinstance(value, str) and value for value in values)
+                for values in rule.values()
+            ):
+                raise ValueError(f"invalid selector values for part {name}: {path}")
+
+
+def _validate_material_spec(material: Any, *, label: str, path: Path) -> None:
+    if not isinstance(material, dict):
+        raise ValueError(f"invalid {label}: {path}")
+    color = material.get("base_color")
+    if not isinstance(color, list) or len(color) != 3 or not all(0.0 <= float(value) <= 1.0 for value in color):
+        raise ValueError(f"invalid base_color for {label}: {path}")
+    for key in ("roughness", "metallic"):
+        if not 0.0 <= float(material.get(key, -1.0)) <= 1.0:
+            raise ValueError(f"invalid {key} for {label}: {path}")
 
 
 def _rows(columns: dict[str, list[Any]]) -> list[dict[str, Any]]:
