@@ -109,7 +109,7 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertEqual(config["parts"]["wrist_strap"]["base_color"], [0.82, 0.84, 0.80])
         self.assertEqual(
             config["selectors"]["wrist_strap"]["mesh_names"],
-            ["under_arm_so101_v1"],
+            ["motor_holder_so101_wrist_v1"],
         )
         self.assertEqual(config["selectors"]["static_gripper"]["primitive_names"], ["static_finger_pad"])
         self.assertEqual(config["selectors"]["moving_gripper"]["primitive_names"], ["moving_finger_pad"])

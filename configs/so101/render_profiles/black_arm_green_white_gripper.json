@@ -34,7 +34,7 @@
   },
   "selectors": {
     "wrist_strap": {
-      "mesh_names": ["under_arm_so101_v1"]
+      "mesh_names": ["motor_holder_so101_wrist_v1"]
     },
     "static_gripper": {
       "mesh_names": ["wrist_roll_follower_so101_v1"],
