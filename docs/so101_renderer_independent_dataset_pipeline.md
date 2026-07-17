@@ -66,6 +66,7 @@ The following values are immutable across render derivatives:
 
 The `splits.<name>.render` object is the mutable render profile. It controls:
 
+- renderer mode and output location
 - material and scene profiles
 - Cycles samples, seed, and denoising
 - lighting profile, key/fill power, world strength, and HDRI rotation
@@ -83,9 +84,12 @@ Required checks are automated:
 - exact sidecar frame count equals the source parquet frame count
 - state and camera rows are both complete
 - source data and scene asset checksums are recorded
+- the same canary frame is rendered twice and stays within the declared pixel tolerance
 - derivative cameras remain 256x256
 - final recipe dataset passes registry training-readiness validation
 
-For release candidates, render the same frame twice with the same render profile
-and compare image hashes. Blender, macOS, GPU, and driver versions should also be
-fixed when byte-identical output is required.
+When `determinism_probe` is enabled, the generator rerenders episode 0/frame 0
+before building the derivative and writes `render_determinism_report.json`. The
+build fails when `determinism_max_channel_diff` or
+`determinism_max_changed_pixels` is exceeded. Blender, macOS, GPU, and driver
+versions must also be fixed when byte-identical output is required.

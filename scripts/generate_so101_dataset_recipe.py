@@ -12,13 +12,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from physical_ai_agent.so101_dataset_generation_schema import load_dataset_generation_recipe
 from physical_ai_agent.so101_dataset_registry import (
     DatasetRegistryError,
     require_recipe_training_ready,
     validate_registered_recipe,
 )
-from physical_ai_agent.so101_dataset_generation_schema import load_dataset_generation_recipe
-
 
 DEFAULT_RECIPE = Path("configs/so101/dataset_generation/grip_the_cube_v2.json")
 
@@ -33,7 +32,10 @@ def main() -> None:
     parser.add_argument(
         "--confirm-destructive-overwrite",
         action="store_true",
-        help="Required with --overwrite for a real run; confirms explicit destructive replacement approval.",
+        help=(
+            "Required with --overwrite for a real run; confirms explicit destructive "
+            "replacement approval."
+        ),
     )
     parser.add_argument(
         "--reuse-complete-shards",
@@ -79,7 +81,9 @@ def main() -> None:
             splits=selected_splits,
         )
     except DatasetRegistryError as exc:
-        raise SystemExit(f"dataset generation finished but training-readiness validation failed:\n{exc}") from exc
+        raise SystemExit(
+            f"dataset generation finished but training-readiness validation failed:\n{exc}"
+        ) from exc
     print(
         json.dumps(
             {
@@ -128,7 +132,9 @@ def build_stages(
 ) -> list[dict[str, Any]]:
     selected = _selected_split_names(recipe, split)
     stages: list[dict[str, Any]] = []
-    generated_selected = [name for name in selected if recipe["splits"][name].get("kind", "generated") == "generated"]
+    generated_selected = [
+        name for name in selected if recipe["splits"][name].get("kind", "generated") == "generated"
+    ]
     for lookup in recipe.get("lookup_builders", []) if generated_selected else []:
         stages.append(
             {
@@ -152,6 +158,30 @@ def build_stages(
                     ),
                 }
             )
+            render = split_spec["render"]
+            if render.get("determinism_probe", True):
+                stages.append(
+                    {
+                        "name": f"render-determinism:{split_name}",
+                        "command": _render_command(
+                            recipe,
+                            split_spec=split_spec,
+                            source_spec=source_spec,
+                            python=python,
+                            determinism_probe=True,
+                        ),
+                    }
+                )
+                stages.append(
+                    {
+                        "name": f"verify-render-determinism:{split_name}",
+                        "command": _render_determinism_command(
+                            recipe,
+                            split_spec=split_spec,
+                            python=python,
+                        ),
+                    }
+                )
             stages.append(
                 {
                     "name": f"build-derivative:{split_name}",
@@ -232,7 +262,9 @@ def build_stages(
                 }
             )
     if split == "all" and {"train", "validation"}.issubset(recipe["splits"]):
-        stages.append({"name": "audit:train-vs-validation", "command": _audit_command(recipe, python=python)})
+        stages.append(
+            {"name": "audit:train-vs-validation", "command": _audit_command(recipe, python=python)}
+        )
     if "train" in selected:
         for reference in recipe.get("overlap_audits", []):
             stages.append(
@@ -262,22 +294,24 @@ def _render_command(
     split_spec: dict[str, Any],
     source_spec: dict[str, Any],
     python: str,
+    determinism_probe: bool = False,
 ) -> list[str]:
     render = split_spec["render"]
     replay = recipe["render_replay"]
     source_root = Path(source_spec["output_root"])
     episodes = int(split_spec.get("expected_episodes") or _expected_split_episodes(source_spec))
+    output_dir = _determinism_output_dir(render) if determinism_probe else render["output_dir"]
     command = [
         python,
         "scripts/render_so101_dataset_blender_preview.py",
         "--dataset-root",
         str(source_root),
         "--output-dir",
-        render["output_dir"],
+        output_dir,
         "--episodes",
-        ",".join(str(index) for index in range(episodes)),
+        "0" if determinism_probe else ",".join(str(index) for index in range(episodes)),
         "--frames",
-        "all",
+        "0" if determinism_probe else "all",
         "--camera-keys",
         ",".join(render["camera_keys"]),
         "--render-replay-sidecar",
@@ -319,7 +353,7 @@ def _render_command(
         "--blender-bin",
         render["blender_bin"],
         "--blender-batch-size",
-        str(render["blender_batch_size"]),
+        "1" if determinism_probe else str(render["blender_batch_size"]),
     ]
     if render.get("denoise"):
         command.append("--denoise")
@@ -328,6 +362,32 @@ def _render_command(
     if not render.get("duplicate_camera3_from_camera2", True):
         command.append("--no-duplicate-camera3-from-camera2")
     return command
+
+
+def _determinism_output_dir(render: dict[str, Any]) -> str:
+    return str(
+        Path(render["output_dir"]).with_name(Path(render["output_dir"]).name + "_determinism_check")
+    )
+
+
+def _render_determinism_command(
+    recipe: dict[str, Any], *, split_spec: dict[str, Any], python: str
+) -> list[str]:
+    render = split_spec["render"]
+    return [
+        python,
+        recipe["render_determinism_script"],
+        "--reference-dir",
+        render["output_dir"],
+        "--candidate-dir",
+        _determinism_output_dir(render),
+        "--max-channel-diff",
+        str(render["determinism_max_channel_diff"]),
+        "--max-changed-pixels",
+        str(render["determinism_max_changed_pixels"]),
+        "--output",
+        str(Path(render["output_dir"]) / "render_determinism_report.json"),
+    ]
 
 
 def _photoreal_builder_command(
@@ -460,7 +520,9 @@ def _merge_command(
     return command
 
 
-def _sidecar_command(recipe: dict[str, Any], *, split_spec: dict[str, Any], python: str) -> list[str]:
+def _sidecar_command(
+    recipe: dict[str, Any], *, split_spec: dict[str, Any], python: str
+) -> list[str]:
     sidecar = recipe["sidecar"]
     command = [
         python,
@@ -481,7 +543,9 @@ def _sidecar_command(recipe: dict[str, Any], *, split_spec: dict[str, Any], pyth
     return command
 
 
-def _closed_loop_command(recipe: dict[str, Any], *, split_spec: dict[str, Any], python: str) -> list[str]:
+def _closed_loop_command(
+    recipe: dict[str, Any], *, split_spec: dict[str, Any], python: str
+) -> list[str]:
     loop = split_spec["closed_loop"]
     root = Path(split_spec["output_root"])
     command = [
@@ -643,7 +707,9 @@ def _run_stages(
             lookup_cache = Path(command[command.index("--grid-lookup-cache") + 1])
         if lookup_cache is not None and not lookup_cache.exists() and exports:
             _run_stage(exports.pop(0), env)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(exports) or 1)) as pool:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(workers, len(exports) or 1)
+        ) as pool:
             futures = [pool.submit(_run_stage, stage, env) for stage in exports]
             for future in futures:
                 future.result()

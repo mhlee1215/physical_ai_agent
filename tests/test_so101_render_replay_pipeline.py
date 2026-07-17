@@ -115,11 +115,31 @@ class SO101RenderReplayPipelineTests(unittest.TestCase):
         names = [stage["name"] for stage in stages]
         self.assertLess(names.index("merge:source"), names.index("render-replay:source"))
         self.assertLess(names.index("render-replay:source"), names.index("render:train"))
+        self.assertLess(names.index("render:train"), names.index("render-determinism:train"))
+        self.assertLess(
+            names.index("render-determinism:train"),
+            names.index("verify-render-determinism:train"),
+        )
+        self.assertLess(
+            names.index("verify-render-determinism:train"),
+            names.index("build-derivative:train"),
+        )
         self.assertLess(names.index("render:train"), names.index("build-derivative:train"))
         export = next(
             stage["command"] for stage in stages if stage["name"].startswith("export:source:")
         )
         render = next(stage["command"] for stage in stages if stage["name"] == "render:train")
+        render_probe = next(
+            stage["command"] for stage in stages if stage["name"] == "render-determinism:train"
+        )
+        verify_render = next(
+            stage["command"]
+            for stage in stages
+            if stage["name"] == "verify-render-determinism:train"
+        )
+        derivative_sidecar = next(
+            stage["command"] for stage in stages if stage["name"] == "sidecar:train"
+        )
         self.assertIn("--capture-render-replay", export)
         self.assertIn("--render-replay-sidecar", render)
         self.assertEqual(render[render.index("--width") + 1], "256")
@@ -127,6 +147,58 @@ class SO101RenderReplayPipelineTests(unittest.TestCase):
         self.assertEqual(render[render.index("--output-format") + 1], "PNG")
         self.assertEqual(render[render.index("--lighting-profile") + 1], "studio_small_08")
         self.assertEqual(render[render.index("--exposure") + 1], "-1.3")
+        self.assertEqual(render_probe[render_probe.index("--episodes") + 1], "0")
+        self.assertEqual(render_probe[render_probe.index("--frames") + 1], "0")
+        self.assertEqual(render_probe[render_probe.index("--blender-batch-size") + 1], "1")
+        self.assertEqual(verify_render[verify_render.index("--max-channel-diff") + 1], "1")
+        self.assertEqual(verify_render[verify_render.index("--max-changed-pixels") + 1], "16")
+        self.assertEqual(derivative_sidecar[derivative_sidecar.index("--bin-source") + 1], "report")
+
+    def test_render_determinism_verifier_uses_pixel_tolerance(self) -> None:
+        import sys
+
+        import numpy as np
+        from PIL import Image
+
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from verify_so101_render_determinism import verify_render_determinism
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for name in ("reference", "candidate"):
+                (root / name / "episode_0000_frame_0000").mkdir(parents=True)
+            reference = np.zeros((4, 4, 3), dtype=np.uint8)
+            candidate = reference.copy()
+            candidate[0, 0, 0] = 1
+            for camera in ("camera1", "camera2"):
+                Image.fromarray(reference).save(
+                    root
+                    / "reference"
+                    / "episode_0000_frame_0000"
+                    / f"episode_0000_frame_0000_{camera}.png"
+                )
+                Image.fromarray(candidate).save(
+                    root
+                    / "candidate"
+                    / "episode_0000_frame_0000"
+                    / f"episode_0000_frame_0000_{camera}.png"
+                )
+
+            accepted = verify_render_determinism(
+                reference_dir=root / "reference",
+                candidate_dir=root / "candidate",
+                max_channel_diff=1,
+                max_changed_pixels=1,
+            )
+            rejected = verify_render_determinism(
+                reference_dir=root / "reference",
+                candidate_dir=root / "candidate",
+                max_channel_diff=0,
+                max_changed_pixels=0,
+            )
+
+        self.assertTrue(accepted["passed"])
+        self.assertFalse(rejected["passed"])
 
     def test_sidecar_scene_uses_frame_transform_and_visibility(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

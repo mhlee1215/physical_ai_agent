@@ -11,6 +11,7 @@
   "audit_script": "scripts/audit_so101_dataset_splits.py",
   "render_replay_script": "scripts/build_so101_render_replay_sidecar.py",
   "photoreal_builder_script": "scripts/build_so101_photoreal_lerobot_dataset.py",
+  "render_determinism_script": "scripts/verify_so101_render_determinism.py",
   "lookup_cache": "_workspace/cache/so101_grip_the_cube_v2_5_photoreal_preview_lookup_161.json",
   "common": {
     "fps": 12,
@@ -55,7 +56,8 @@
     "camera_key": "observation.images.camera1",
     "grid_size": 4,
     "frame_index": 0,
-    "min_area": 20
+    "min_area": 20,
+    "bin_source": "report"
   },
   "render_replay": {
     "enabled": true,
@@ -123,7 +125,10 @@
         "color_management": "Filmic",
         "color_look": "Medium High Contrast",
         "gamma": 1.0,
-        "output_format": "PNG"
+        "output_format": "PNG",
+        "determinism_probe": true,
+        "determinism_max_channel_diff": 1,
+        "determinism_max_changed_pixels": 16
       }
     }
   },

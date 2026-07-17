@@ -987,6 +987,24 @@
           ],
           "title": "Output Format",
           "type": "string"
+        },
+        "determinism_probe": {
+          "default": true,
+          "title": "Determinism Probe",
+          "type": "boolean"
+        },
+        "determinism_max_channel_diff": {
+          "default": 1,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Determinism Max Channel Diff",
+          "type": "integer"
+        },
+        "determinism_max_changed_pixels": {
+          "default": 16,
+          "minimum": 0,
+          "title": "Determinism Max Changed Pixels",
+          "type": "integer"
         }
       },
       "required": [
@@ -1256,6 +1274,11 @@
     "photoreal_builder_script": {
       "default": "scripts/build_so101_photoreal_lerobot_dataset.py",
       "title": "Photoreal Builder Script",
+      "type": "string"
+    },
+    "render_determinism_script": {
+      "default": "scripts/verify_so101_render_determinism.py",
+      "title": "Render Determinism Script",
       "type": "string"
     },
     "lookup_cache": {

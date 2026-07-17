@@ -157,6 +157,9 @@ class RenderProfileSpec(StrictModel):
     color_look: str = "Medium High Contrast"
     gamma: float = Field(default=1.0, gt=0)
     output_format: Literal["PNG", "JPEG"] = "PNG"
+    determinism_probe: bool = True
+    determinism_max_channel_diff: int = Field(default=1, ge=0, le=255)
+    determinism_max_changed_pixels: int = Field(default=16, ge=0)
 
     @model_validator(mode="after")
     def enforce_policy_resolution(self) -> RenderProfileSpec:
@@ -238,6 +241,7 @@ class DatasetGenerationRecipe(StrictModel):
     audit_script: str
     render_replay_script: str = "scripts/build_so101_render_replay_sidecar.py"
     photoreal_builder_script: str = "scripts/build_so101_photoreal_lerobot_dataset.py"
+    render_determinism_script: str = "scripts/verify_so101_render_determinism.py"
     lookup_cache: str
     lookup_builders: list[LookupBuilderSpec] = Field(default_factory=list)
     common: ExporterCommonSpec
