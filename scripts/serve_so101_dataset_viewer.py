@@ -19,6 +19,11 @@ from urllib.parse import parse_qs, urlparse
 
 import pyarrow.parquet as pq
 
+from physical_ai_agent.so101_dataset_registry import (
+    DATASET_RECIPE_DIR,
+    registered_dataset_roots,
+)
+
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
@@ -31,11 +36,15 @@ TRAINING_CONFIGS = [
     Path("configs/so101/training/qwen_edge_primitives.json"),
     Path("configs/so101/training/grip_the_cube_v2.json"),
 ]
+DATASET_GENERATION_CONFIG_DIR = DATASET_RECIPE_DIR
 INTERACTIVE_RUN_ROOT = Path("_workspace/so101_interactive_sim/runs")
 DEFAULT_VALID_MASK_CHECKPOINT = Path("_workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt")
 LOOP_ANALYZER_ROUTE = "/loop-analyzer"
 LOOP_ANALYZER_MEDIA_JOBS: dict[str, dict[str, Any]] = {}
 LOOP_ANALYZER_MEDIA_JOB_LOCK = threading.Lock()
+DATASETS_PAYLOAD_CACHE_SECONDS = 5.0
+DATASETS_PAYLOAD_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+DATASETS_PAYLOAD_LOCK = threading.Lock()
 DATASETS: dict[str, Path] = {}
 OFFICIAL_DATASET_SPLITS: list[str] = []
 ARCHIVED_DATASET_SPLITS: list[str] = []
@@ -73,7 +82,12 @@ def _contract_dataset_roots(repo_root: Path) -> dict[str, Path]:
             if not isinstance(split, dict):
                 continue
             suffix = "val" if split_name == "validation" else "train"
-            roots[f"{dataset_name}_{suffix}"] = Path(split["root"])
+            roots[f"{dataset_name}_{suffix}"] = _resolve_contract_dataset_root(
+                repo_root,
+                dataset_name=str(dataset_name),
+                split_name=split_name,
+                configured_root=Path(split["root"]),
+            )
     return roots
 
 
@@ -96,8 +110,38 @@ def _skill_dataset_roots(repo_root: Path) -> dict[str, Path]:
                 "validation": "val",
                 "loop_validation": "loop_val",
             }[split_name]
-            roots[f"{dataset_name}_{suffix}"] = Path(split["root"])
+            roots[f"{dataset_name}_{suffix}"] = _resolve_contract_dataset_root(
+                repo_root,
+                dataset_name=str(dataset_name),
+                split_name=split_name,
+                configured_root=Path(split["root"]),
+            )
     return roots
+
+
+def _resolve_contract_dataset_root(
+    repo_root: Path,
+    *,
+    dataset_name: str,
+    split_name: str,
+    configured_root: Path,
+) -> Path:
+    configured = _resolve_dataset_path(repo_root, configured_root)
+    if configured.exists():
+        return configured
+
+    # Older official datasets were moved into the durable Hugging Face upload
+    # staging tree. Keep the contract name/split authoritative when locating
+    # that preserved copy instead of silently dropping it from the catalog.
+    fallback_roots = (
+        repo_root / "_workspace" / "hf_upload" / "so101-nexus-sim-dataset" / "datasets",
+        repo_root / "_workspace" / "hf_datasets" / "mhlee1215__so101-nexus-sim-dataset" / "datasets",
+    )
+    for fallback_root in fallback_roots:
+        candidate = fallback_root / dataset_name / split_name
+        if candidate.exists():
+            return candidate.resolve()
+    return configured
 
 
 def main() -> None:
@@ -252,17 +296,50 @@ def _query_str(query: dict[str, list[str]], key: str, default: str) -> str:
 
 
 def _datasets_payload(repo_root: Path) -> dict[str, Any]:
+    cache_key = str(repo_root.resolve())
+    now = time.monotonic()
+    cached = DATASETS_PAYLOAD_CACHE.get(cache_key)
+    if cached is not None and now - cached[0] < DATASETS_PAYLOAD_CACHE_SECONDS:
+        return cached[1]
+    with DATASETS_PAYLOAD_LOCK:
+        now = time.monotonic()
+        cached = DATASETS_PAYLOAD_CACHE.get(cache_key)
+        if cached is not None and now - cached[0] < DATASETS_PAYLOAD_CACHE_SECONDS:
+            return cached[1]
+        payload = _build_datasets_payload(repo_root)
+        DATASETS_PAYLOAD_CACHE[cache_key] = (now, payload)
+        return payload
+
+
+def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     official_roots = _official_dataset_roots(repo_root)
+    skill_roots = _skill_dataset_roots(repo_root)
+    recipe_roots = _generation_recipe_dataset_roots(repo_root)
+    recipe_paths = {_resolve_dataset_path(repo_root, root) for root in recipe_roots.values()}
     official_items = [
         _dataset_catalog_item(repo_root, split, root, category="official")
         for split, root in official_roots.items()
+        if _resolve_dataset_path(repo_root, root) not in recipe_paths
     ]
-    skill_roots = _skill_dataset_roots(repo_root)
     skill_items = [
         _dataset_catalog_item(repo_root, split, root, category="skill")
         for split, root in skill_roots.items()
+        if _resolve_dataset_path(repo_root, root) not in recipe_paths
     ]
+    generated_items: list[dict[str, Any]] = []
+    official_paths = {_resolve_dataset_path(repo_root, root) for root in official_roots.values()}
+    skill_paths = {_resolve_dataset_path(repo_root, root) for root in skill_roots.values()}
+    for split, root in recipe_roots.items():
+        resolved = _resolve_dataset_path(repo_root, root)
+        category = "official" if resolved in official_paths else "skill" if resolved in skill_paths else "generated"
+        item = _dataset_catalog_item(repo_root, split, root, category=category)
+        if category == "official":
+            official_items.append(item)
+        elif category == "skill":
+            skill_items.append(item)
+        else:
+            generated_items.append(item)
     archived_items = [_dataset_catalog_item(repo_root, split, DATASETS[split], category="archived") for split in ARCHIVED_DATASET_SPLITS]
     archived_visible_items = [item for item in archived_items if item["status"] == "available"]
     temporary_items = [
@@ -273,7 +350,7 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
         _mycobot_dataset_catalog_item(repo_root, split, path)
         for split, path in _discover_mycobot_datasets(repo_root).items()
     ]
-    for item in [*official_items, *skill_items, *archived_items, *temporary_items, *mycobot_items]:
+    for item in [*official_items, *skill_items, *generated_items, *archived_items, *temporary_items, *mycobot_items]:
         if item["status"] == "available":
             payload[item["name"]] = item["summary"]
     return {
@@ -290,6 +367,12 @@ def _datasets_payload(repo_root: Path) -> dict[str, Any]:
                 "title": "Skill primitives / additive",
                 "description": "Agentic primitive datasets generated without replacing the official full-task datasets.",
                 "items": skill_items,
+            },
+            {
+                "id": "generated",
+                "title": "Generated / recipe-backed",
+                "description": "Completed datasets declared by reproducible dataset-generation recipes.",
+                "items": generated_items,
             },
             {
                 "id": "temporary",
@@ -488,7 +571,7 @@ def _dataset_catalog_item(repo_root: Path, split: str, root: Path, *, category: 
         "platform_label": _platform_label(platform),
     }
     try:
-        dataset = _dataset(repo_root, split)
+        dataset = _dataset_metadata(repo_root, split)
     except Exception as exc:  # noqa: BLE001 - dashboard should show incomplete datasets instead of failing.
         return {
             **base,
@@ -584,6 +667,10 @@ def _discover_temporary_datasets(repo_root: Path) -> dict[str, Path]:
                 discovered[split] = path
                 seen_paths.add(resolved)
     return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
+
+
+def _generation_recipe_dataset_roots(repo_root: Path) -> dict[str, Path]:
+    return registered_dataset_roots(repo_root, existing_only=True)
 
 
 def _discover_mycobot_datasets(repo_root: Path) -> dict[str, Path]:
@@ -881,8 +968,8 @@ def _named_values(names: list[str], values: list[float]) -> dict[str, float]:
     return rows
 
 
-@lru_cache(maxsize=4)
-def _dataset(repo_root: Path, split: str) -> dict[str, Any]:
+@lru_cache(maxsize=64)
+def _dataset_metadata(repo_root: Path, split: str) -> dict[str, Any]:
     roots = _dataset_roots(repo_root)
     if split not in roots:
         raise ValueError(f"unknown split: {split}")
@@ -891,18 +978,14 @@ def _dataset(repo_root: Path, split: str) -> dict[str, Any]:
     camera_keys = [key for key in CAMERA_KEYS if key in info["features"]]
     data_files = sorted((root / "data").glob("chunk-*/file-*.parquet"))
     episode_files = sorted((root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
-    tasks_file = root / "meta" / "tasks.parquet"
-    table = pq.read_table([str(path) for path in data_files])
     episodes_table = pq.read_table([str(path) for path in episode_files])
     episodes = _rows(episodes_table.to_pydict())
-    tasks = _tasks_by_index(tasks_file) if tasks_file.exists() else {}
     return {
         "root": root,
         "info": info,
         "camera_keys": camera_keys,
-        "table": table,
+        "data_files": data_files,
         "episodes": episodes,
-        "tasks": tasks,
         "episode_lengths": [int(row["length"]) for row in episodes],
         "size_bytes": _dir_size(root),
         "data_bytes": sum(path.stat().st_size for path in data_files),
@@ -910,10 +993,23 @@ def _dataset(repo_root: Path, split: str) -> dict[str, Any]:
     }
 
 
+@lru_cache(maxsize=2)
+def _dataset(repo_root: Path, split: str) -> dict[str, Any]:
+    metadata = _dataset_metadata(repo_root, split)
+    root = metadata["root"]
+    tasks_file = root / "meta" / "tasks.parquet"
+    return {
+        **metadata,
+        "table": pq.read_table([str(path) for path in metadata["data_files"]]),
+        "tasks": _tasks_by_index(tasks_file) if tasks_file.exists() else {},
+    }
+
+
 def _dataset_roots(repo_root: Path) -> dict[str, Path]:
     roots = {split: _resolve_dataset_path(repo_root, root) for split, root in DATASETS.items()}
     roots.update(_official_dataset_roots(repo_root))
     roots.update({split: _resolve_dataset_path(repo_root, root) for split, root in _skill_dataset_roots(repo_root).items()})
+    roots.update({split: _resolve_dataset_path(repo_root, root) for split, root in _generation_recipe_dataset_roots(repo_root).items()})
     roots.update({split: path.resolve() for split, path in _discover_temporary_datasets(repo_root).items()})
     return roots
 
@@ -2238,7 +2334,9 @@ def _index_html() -> str:
 	    }
 
 	    function isTrainDataset(name) {
-	      return /_train[0-9]*$/.test(name);
+	      if (name.endsWith("_val") || name.endsWith("_valid") || name.includes("_validation") || name.includes("_loop_")) return false;
+	      const category = datasetCategoryByName[name] || "";
+	      return /_train[0-9]*$/.test(name) || category === "official" || category === "skill" || category === "generated";
 	    }
 
 	    function isPreviewDataset(name) {

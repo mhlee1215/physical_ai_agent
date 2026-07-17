@@ -267,12 +267,40 @@ Dataset checksums:
 PYTHONPATH=src:.:scripts .venv/bin/python \
   scripts/generate_so101_dataset_recipe.py \
   --recipe configs/so101/dataset_generation/grip_the_cube_v2.json \
-  --split all --workers 3 --overwrite
+  --split all --workers 3
 ```
 
   Use `--dry-run` first to inspect every generated command without writing any
   dataset artifact. The recipe, not conversation history, is authoritative for
   bin counts, seed bases, lookup offsets, teacher timing, and alignment gates.
+- Dataset roots are append-only by default. If a recipe or teacher behavior
+  changes, create a new versioned recipe and new `output_root` values. Do not
+  use `--overwrite`, delete or rename an existing local root, replace an HF
+  split, or repoint an established dataset name unless the user explicitly
+  requests that destructive operation in the current turn.
+- `configs/so101/dataset_generation/*.json` is also the canonical Robot
+  Experiment Manager registration source. The viewer automatically discovers
+  every existing `splits.<name>.output_root`; do not add completed datasets to
+  a separate hard-coded viewer list. Before sign-off, verify every intended
+  split appears in `/api/datasets` and that `/api/frame` returns episode 0,
+  frame 0 successfully.
+- Dataset inventory and completion gate:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/so101_dataset_registry.py list
+PYTHONPATH=src .venv/bin/python scripts/so101_dataset_registry.py \
+  validate --require-training-ready
+PYTHONPATH=src .venv/bin/python scripts/so101_dataset_registry.py \
+  training-manifest --dataset-id grip_the_cube_v2_5
+```
+
+  The registry is shared by the generator and Robot Experiment Manager. A
+  dataset is not complete merely because its root exists: `training_ready`
+  requires complete LeRobot data/meta, 256x256 camera1/camera2, 6D state and
+  action, tasks/stats, export/merge reports, passed audit, train grid sidecar,
+  and any validation loop-start declared by the recipe. The generated training
+  manifest supplies exact dataset inputs; model, augmentation, optimizer, and
+  schedule remain explicit experiment-config choices.
 - Do not change dataset roots, camera mapping, task semantics, split names, or
   start-mode semantics without explicit user approval. If a change is needed,
   ask first and record the approval in the PR summary.
@@ -287,8 +315,11 @@ PYTHONPATH=src:.:scripts .venv/bin/python \
   and episode summaries should include `object_color`, `object_shape`, and
   `target_object`. Do not simplify those prompts without explicit user
   approval.
-- Re-export all current full-task and skill-primitive datasets after changing
-  the approved camera pose:
+- Do not re-export existing full-task or skill-primitive roots in place after a
+  camera, prompt, trajectory, or quality-contract change. Create a new
+  versioned recipe and new roots instead. The legacy destructive command below
+  is documented only for an explicitly user-approved replacement operation; it
+  is never the default dataset-generation path:
 
 ```bash
 PYTHONPATH=src:.:scripts .venv/bin/python scripts/export_so101_training_datasets.py --overwrite

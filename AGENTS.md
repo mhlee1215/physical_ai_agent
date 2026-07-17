@@ -10,6 +10,9 @@
 - Any user-requested orchestration policy change must be persisted to repo docs in the same turn. Update `Summary.md` for current state and `docs/harness/physical-ai/team-spec.md` for durable role/routing rules; thread messages alone are not enough.
 - Top paper-result priority: produce experiment data for manuscript tables as quickly and efficiently as possible. Prioritize actual table-ready rows, metrics, and artifacts over repeated smoke diagnostics. Use only the minimal gates needed to unblock data-producing runs.
 - RunPod experiment-data lifecycle: past remote results are not needed. For every new RunPod experiment, download completed datasets/results/checkpoints locally, verify the local copy, then delete the remote artifact directory.
+- SO101 datasets are append-only by default. Unless the user explicitly requests destructive replacement or cleanup in the current turn, create a new versioned dataset root/HF path and never overwrite, rename, or delete an existing dataset.
+- Every new SO101 dataset must be declared in `configs/so101/dataset_generation/*.json`. Dataset generation is not complete until the recipe-backed split appears in the Robot Experiment Manager dataset viewer and both `/api/datasets` and one `/api/frame` request succeed.
+- Use `PYTHONPATH=src .venv/bin/python scripts/so101_dataset_registry.py validate --require-training-ready` as the dataset completion gate. `training_ready` requires LeRobot metadata/data, 256x256 camera1/2, 6D state/action, prompt/stats, passed audit, train grid sidecar, and any declared validation loop-start.
 - Use `docs/agentic_physical_ai_plan.md` for the full checkpoint plan and `docs/harness/physical-ai/team-spec.md` for checkpoint orchestration.
 
 ## Why
