@@ -17,12 +17,21 @@ def main() -> None:
     parser.add_argument("--recipe", type=Path, required=True)
     parser.add_argument("--split", required=True)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--allow-verified-reconstruction",
+        action="store_true",
+        help=(
+            "Reconstruct exact frame state from the recorded frame-0 snapshot and "
+            "actions, rejecting any observation-state or final-outcome mismatch."
+        ),
+    )
     args = parser.parse_args()
     result = build_render_replay_sidecar(
         args.dataset_root,
         recipe=load_dataset_generation_recipe(args.recipe),
         split_name=args.split,
         output_dir=args.output_dir,
+        allow_verified_reconstruction=args.allow_verified_reconstruction,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

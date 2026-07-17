@@ -145,8 +145,21 @@ def build_stages(
     for split_name in selected:
         split_spec = recipe["splits"][split_name]
         if split_spec.get("kind", "generated") == "render_derivative":
-            source_name = str(split_spec["source_split"])
-            source_spec = recipe["splits"][source_name]
+            source_spec = _render_source_spec(recipe, split_spec)
+            if split_spec.get("source_dataset_root"):
+                stages.append(
+                    {
+                        "name": f"render-replay:{split_name}",
+                        "command": _render_replay_command(
+                            recipe,
+                            split_name=split_name,
+                            split_spec=split_spec,
+                            source_spec=source_spec,
+                            python=python,
+                            recipe_path=recipe_path,
+                        ),
+                    }
+                )
             stages.append(
                 {
                     "name": f"render:{split_name}",
@@ -200,6 +213,15 @@ def build_stages(
                     "command": _sidecar_command(recipe, split_spec=split_spec, python=python),
                 }
             )
+            if split_spec.get("closed_loop"):
+                stages.append(
+                    {
+                        "name": f"closed-loop-starts:{split_name}",
+                        "command": _closed_loop_command(
+                            recipe, split_spec=split_spec, python=python
+                        ),
+                    }
+                )
             continue
         shard_roots = []
         for bin_spec in split_spec["bins"]:
@@ -254,10 +276,10 @@ def build_stages(
                 "command": _sidecar_command(recipe, split_spec=split_spec, python=python),
             }
         )
-        if split_name == "validation":
+        if split_spec.get("closed_loop"):
             stages.append(
                 {
-                    "name": "closed-loop-starts:validation",
+                    "name": f"closed-loop-starts:{split_name}",
                     "command": _closed_loop_command(recipe, split_spec=split_spec, python=python),
                 }
             )
@@ -283,9 +305,50 @@ def _selected_split_names(recipe: dict[str, Any], split: str) -> list[str]:
         raise ValueError(f"recipe does not define split: {split}")
     required = {split}
     selected_spec = recipe["splits"][split]
-    if selected_spec.get("kind") == "render_derivative":
+    if selected_spec.get("kind") == "render_derivative" and selected_spec.get("source_split"):
         required.add(str(selected_spec["source_split"]))
     return [name for name in recipe["splits"] if name in required]
+
+
+def _render_source_spec(recipe: dict[str, Any], split_spec: dict[str, Any]) -> dict[str, Any]:
+    if split_spec.get("source_split"):
+        return recipe["splits"][str(split_spec["source_split"])]
+    return {
+        "output_root": split_spec["source_dataset_root"],
+        "expected_episodes": split_spec["expected_episodes"],
+        "expected_bins": split_spec.get("expected_bins", {}),
+        "render_replay_sidecar": split_spec["render_replay_sidecar"],
+    }
+
+
+def _render_replay_path(source_spec: dict[str, Any], replay: dict[str, Any]) -> Path:
+    if source_spec.get("render_replay_sidecar"):
+        return Path(str(source_spec["render_replay_sidecar"]))
+    return Path(str(source_spec["output_root"])) / replay.get("output_dir", "render_replay")
+
+
+def _render_replay_command(
+    recipe: dict[str, Any],
+    *,
+    split_name: str,
+    split_spec: dict[str, Any],
+    source_spec: dict[str, Any],
+    python: str,
+    recipe_path: Path,
+) -> list[str]:
+    return [
+        python,
+        recipe["render_replay_script"],
+        "--dataset-root",
+        str(source_spec["output_root"]),
+        "--recipe",
+        str(recipe_path),
+        "--split",
+        split_name,
+        "--output-dir",
+        str(_render_replay_path(source_spec, recipe["render_replay"])),
+        "--allow-verified-reconstruction",
+    ]
 
 
 def _render_command(
@@ -315,7 +378,7 @@ def _render_command(
         "--camera-keys",
         ",".join(render["camera_keys"]),
         "--render-replay-sidecar",
-        str(source_root / replay.get("output_dir", "render_replay")),
+        str(_render_replay_path(source_spec, replay)),
         "--width",
         str(render["width"]),
         "--height",
@@ -357,6 +420,8 @@ def _render_command(
     ]
     if render.get("denoise"):
         command.append("--denoise")
+    if render.get("skip_existing", True) and not determinism_probe:
+        command.append("--skip-existing")
     if render.get("material_profile"):
         command.extend(["--robot-material-config", render["material_profile"]])
     if not render.get("duplicate_camera3_from_camera2", True):
@@ -399,6 +464,12 @@ def _photoreal_builder_command(
     overwrite: bool,
 ) -> list[str]:
     render = split_spec["render"]
+    builder_camera_keys = list(render["camera_keys"])
+    if (
+        render.get("duplicate_camera3_from_camera2", True)
+        and "observation.images.camera3" not in builder_camera_keys
+    ):
+        builder_camera_keys.append("observation.images.camera3")
     command = [
         python,
         recipe["photoreal_builder_script"],
@@ -411,7 +482,7 @@ def _photoreal_builder_command(
         "--repo-id",
         split_spec["repo_id"],
         "--camera-keys",
-        ",".join(render["camera_keys"]),
+        ",".join(builder_camera_keys),
     ]
     if not render.get("duplicate_camera3_from_camera2", True):
         command.append("--no-duplicate-camera3-from-camera2")
@@ -574,6 +645,8 @@ def _closed_loop_command(
 def _audit_command(recipe: dict[str, Any], *, python: str) -> list[str]:
     train_spec = recipe["splits"]["train"]
     validation_spec = recipe["splits"]["validation"]
+    train_bin_spec = _source_split_spec(recipe, train_spec)
+    validation_bin_spec = _source_split_spec(recipe, validation_spec)
     train = train_spec["output_root"]
     validation = validation_spec["output_root"]
     audit = recipe["audit"]
@@ -589,9 +662,9 @@ def _audit_command(recipe: dict[str, Any], *, python: str) -> list[str]:
         "--expected-resolution",
         "x".join(str(value) for value in audit["expected_resolution"]),
         "--expected-train-bins",
-        _bin_counts_arg(train_spec),
+        _bin_counts_arg(train_bin_spec),
         "--expected-validation-bins",
-        _bin_counts_arg(validation_spec),
+        _bin_counts_arg(validation_bin_spec),
         "--expected-terminal-hold-steps",
         str(recipe["common"]["terminal_hold_steps"]),
         "--max-pre-close-alignment-deg",
@@ -602,7 +675,16 @@ def _audit_command(recipe: dict[str, Any], *, python: str) -> list[str]:
     return _append_lift_audit_args(command, audit)
 
 
+def _source_split_spec(recipe: dict[str, Any], split_spec: dict[str, Any]) -> dict[str, Any]:
+    if split_spec.get("kind") != "render_derivative":
+        return split_spec
+    return _render_source_spec(recipe, split_spec)
+
+
 def _bin_counts_arg(split_spec: dict[str, Any]) -> str:
+    if split_spec.get("expected_bins"):
+        counts = {int(bin_id): int(count) for bin_id, count in split_spec["expected_bins"].items()}
+        return ",".join(f"{bin_id}:{counts[bin_id]}" for bin_id in sorted(counts))
     counts: dict[int, int] = {}
     for row in split_spec["bins"]:
         bin_id = int(row["id"])

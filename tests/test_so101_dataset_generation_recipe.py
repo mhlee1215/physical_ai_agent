@@ -18,6 +18,13 @@ V25_RECIPE_PATH = Path("configs/so101/dataset_generation/grip_the_cube_v2_5.json
 ALIGN_RECIPE_PATH = Path(
     "configs/so101/dataset_generation/grip_the_cube_v2_5_align_trajectory.json"
 )
+FULL_PHOTOREAL_RECIPE_PATHS = (
+    Path("configs/so101/dataset_generation/grip_the_cube_v2_5_photoreal.json"),
+    Path(
+        "configs/so101/dataset_generation/"
+        "grip_the_cube_v2_5_align_trajectory_photoreal.json"
+    ),
+)
 
 
 class SO101DatasetGenerationRecipeTests(unittest.TestCase):
@@ -202,6 +209,84 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
             loop = stages["closed-loop-starts:validation"]
             self.assertEqual(_value_after(loop, "--success-metric"), "env_success")
             self.assertEqual(_value_after(loop, "--lift-success-height"), "0.05")
+
+    def test_full_photoreal_recipes_cover_all_train_and_validation_frames(self) -> None:
+        expected_counts = ((300, 50), (220, 100))
+        for path, (train_episodes, validation_episodes) in zip(
+            FULL_PHOTOREAL_RECIPE_PATHS, expected_counts, strict=True
+        ):
+            recipe = json.loads(path.read_text(encoding="utf-8"))
+            self.assertFalse(recipe["common"]["capture_render_replay"])
+            self.assertEqual(
+                recipe["render_replay"]["capture_mode"],
+                "verified_action_replay",
+            )
+            self.assertEqual(recipe["splits"]["train"]["kind"], "render_derivative")
+            self.assertEqual(recipe["splits"]["validation"]["kind"], "render_derivative")
+            self.assertEqual(recipe["splits"]["train"]["expected_episodes"], train_episodes)
+            self.assertEqual(
+                recipe["splits"]["validation"]["expected_episodes"],
+                validation_episodes,
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/generate_so101_dataset_recipe.py",
+                    "--recipe",
+                    str(path),
+                    "--dry-run",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            stages = {
+                row["name"]: row["command"] for row in json.loads(completed.stdout)["stages"]
+            }
+            self.assertIn("render-replay:train", stages)
+            self.assertIn("render-replay:validation", stages)
+            self.assertIn("closed-loop-starts:validation", stages)
+            for split in ("train", "validation"):
+                replay = stages[f"render-replay:{split}"]
+                self.assertIn("--allow-verified-reconstruction", replay)
+                self.assertEqual(
+                    _value_after(replay, "--dataset-root"),
+                    recipe["splits"][split]["source_dataset_root"],
+                )
+                self.assertEqual(
+                    _value_after(stages[f"render:{split}"], "--render-replay-sidecar"),
+                    recipe["splits"][split]["render_replay_sidecar"],
+                )
+            self.assertEqual(_value_after(stages["render:train"], "--frames"), "all")
+            self.assertEqual(_value_after(stages["render:validation"], "--frames"), "all")
+            self.assertIn("--skip-existing", stages["render:train"])
+            self.assertIn("--skip-existing", stages["render:validation"])
+            self.assertNotIn("--skip-existing", stages["render-determinism:train"])
+            for split in ("train", "validation"):
+                builder_cameras = _value_after(
+                    stages[f"build-derivative:{split}"], "--camera-keys"
+                ).split(",")
+                self.assertEqual(
+                    builder_cameras,
+                    [
+                        "observation.images.camera1",
+                        "observation.images.camera2",
+                        "observation.images.camera3",
+                    ],
+                )
+            self.assertEqual(
+                len(_value_after(stages["render:train"], "--episodes").split(",")),
+                train_episodes,
+            )
+            self.assertEqual(
+                len(_value_after(stages["render:validation"], "--episodes").split(",")),
+                validation_episodes,
+            )
+            audit = stages["audit:train-vs-validation"]
+            self.assertNotEqual(_value_after(audit, "--expected-train-bins"), "")
+            self.assertNotEqual(_value_after(audit, "--expected-validation-bins"), "")
 
     def test_v25_closed_loop_excludes_both_training_reports(self) -> None:
         recipe = json.loads(V25_RECIPE_PATH.read_text(encoding="utf-8"))

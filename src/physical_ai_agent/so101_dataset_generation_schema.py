@@ -122,6 +122,7 @@ class RenderEnvironmentSpec(StrictModel):
 class RenderReplaySpec(StrictModel):
     enabled: bool = True
     output_dir: str = "render_replay"
+    capture_mode: Literal["teacher_time_exact", "verified_action_replay"] = "teacher_time_exact"
     state_spec: Literal["mjSTATE_INTEGRATION"] = "mjSTATE_INTEGRATION"
     store_geom_world_transforms: bool = True
     store_camera_world_transforms: bool = True
@@ -145,6 +146,7 @@ class RenderProfileSpec(StrictModel):
         min_length=1,
     )
     duplicate_camera3_from_camera2: bool = True
+    skip_existing: bool = True
     blender_batch_size: int = Field(default=4, gt=0)
     robot_material: Literal["plastic", "matte_pla", "metal"] = "matte_pla"
     lighting_profile: Literal["studio_small_08", "flat"] = "studio_small_08"
@@ -176,6 +178,9 @@ class SplitSpec(StrictModel):
     lookup_cache: str | None = None
     closed_loop: ClosedLoopSpec | None = None
     source_split: str | None = None
+    source_dataset_root: str | None = None
+    render_replay_sidecar: str | None = None
+    expected_bins: dict[int, int] = Field(default_factory=dict)
     render: RenderProfileSpec | None = None
     expected_episodes: int | None = Field(default=None, gt=0)
 
@@ -184,10 +189,21 @@ class SplitSpec(StrictModel):
         if self.kind == "generated" and not self.bins:
             raise ValueError("generated split requires bins")
         if self.kind == "render_derivative":
-            if not self.source_split or self.render is None:
-                raise ValueError("render_derivative split requires source_split and render")
+            sources = [bool(self.source_split), bool(self.source_dataset_root)]
+            if sum(sources) != 1 or self.render is None:
+                raise ValueError(
+                    "render_derivative split requires exactly one of source_split or "
+                    "source_dataset_root, plus render"
+                )
             if self.bins:
                 raise ValueError("render_derivative split must not declare bins")
+            if self.source_dataset_root:
+                if self.expected_episodes is None:
+                    raise ValueError("external render source requires expected_episodes")
+                if not self.render_replay_sidecar:
+                    raise ValueError("external render source requires render_replay_sidecar")
+                if not self.expected_bins:
+                    raise ValueError("external render source requires expected_bins")
         return self
 
 
@@ -257,16 +273,25 @@ class DatasetGenerationRecipe(StrictModel):
             raise ValueError("recipe must define at least one split")
         for name, split in self.splits.items():
             if split.kind == "render_derivative":
-                source = self.splits.get(split.source_split or "")
-                if source is None or source.kind != "generated":
-                    raise ValueError(f"{name}.source_split must reference a generated split")
-                expected = sum(item.episodes for item in source.bins)
-                if split.expected_episodes not in (None, expected):
-                    raise ValueError(
-                        f"{name}.expected_episodes must match source split ({expected})"
-                    )
+                if split.source_split:
+                    source = self.splits.get(split.source_split)
+                    if source is None or source.kind != "generated":
+                        raise ValueError(f"{name}.source_split must reference a generated split")
+                    expected = sum(item.episodes for item in source.bins)
+                    if split.expected_episodes not in (None, expected):
+                        raise ValueError(
+                            f"{name}.expected_episodes must match source split ({expected})"
+                        )
                 if self.render_replay is None or not self.render_replay.enabled:
                     raise ValueError("render_derivative requires enabled render_replay")
+                if (
+                    split.source_dataset_root
+                    and self.render_replay.capture_mode != "verified_action_replay"
+                ):
+                    raise ValueError(
+                        "external render sources require "
+                        "render_replay.capture_mode=verified_action_replay"
+                    )
         environment = self.render_replay.environment if self.render_replay else None
         if environment is not None:
             color = self.common.target_object_color
@@ -295,9 +320,14 @@ class DatasetGenerationRecipe(StrictModel):
                 float(value) for value in center
             ] != list(environment.spawn_center):
                 raise ValueError("common spawn center must match render_replay.environment")
-        if any(split.kind == "render_derivative" for split in self.splits.values()):
+        if any(
+            split.kind == "render_derivative" and split.source_split
+            for split in self.splits.values()
+        ):
             if not self.common.capture_render_replay:
-                raise ValueError("render_derivative requires common.capture_render_replay=true")
+                raise ValueError(
+                    "generated render derivatives require common.capture_render_replay=true"
+                )
         return self
 
     def as_dict(self) -> dict[str, Any]:

@@ -201,14 +201,18 @@ def write_captured_render_replay_sidecar(
 
 
 def validate_captured_render_replay_sidecar(
-    dataset_root: Path, *, recipe: DatasetGenerationRecipe, split_name: str
+    dataset_root: Path,
+    *,
+    recipe: DatasetGenerationRecipe,
+    split_name: str,
+    output_dir: Path | None = None,
 ) -> dict[str, Any]:
     import pyarrow.parquet as pq
 
     replay = recipe.render_replay
     if replay is None:
         raise ValueError("recipe does not define render_replay")
-    output_dir = dataset_root / replay.output_dir
+    output_dir = (output_dir or dataset_root / replay.output_dir).resolve()
     manifest_path = output_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     data_rows = len(_dataset_rows(dataset_root))
@@ -226,7 +230,8 @@ def validate_captured_render_replay_sidecar(
             f"captured={manifest.get('environment')} recipe={expected_environment}"
         )
     snapshots = pq.read_table(output_dir / manifest["files"]["episode_snapshots"]).to_pylist()
-    expected_episodes = sum(item.episodes for item in recipe.splits[split_name].bins)
+    split = recipe.splits[split_name]
+    expected_episodes = split.expected_episodes or sum(item.episodes for item in split.bins)
     if len(snapshots) != expected_episodes:
         raise ValueError(
             "render replay episode mismatch: "
@@ -364,6 +369,7 @@ def build_render_replay_sidecar(
     recipe: DatasetGenerationRecipe,
     split_name: str,
     output_dir: Path | None = None,
+    allow_verified_reconstruction: bool = False,
 ) -> dict[str, Any]:
     import mujoco
     import pyarrow as pa
@@ -376,27 +382,36 @@ def build_render_replay_sidecar(
     except ModuleNotFoundError:
         from scripts.render_so101_dataset_blender_preview import _camera_specs_from_mujoco_scene
         from scripts.render_so101_mitsuba_probe import _write_ply
-    from train_so101_wrist_ego_visual_servo import make_high_contrast_picklift_env
+    from train_so101_wrist_ego_visual_servo import (
+        _current_qpos,
+        make_high_contrast_picklift_env,
+    )
 
     replay = recipe.render_replay
     if replay is None or not replay.enabled:
         raise ValueError("recipe does not enable render_replay")
     split = recipe.splits[split_name]
-    if split.kind != "generated":
-        raise ValueError("render replay can only be built from a generated split")
-
-    captured_manifest = dataset_root.resolve() / replay.output_dir / "manifest.json"
-    if captured_manifest.exists():
-        return validate_captured_render_replay_sidecar(
-            dataset_root.resolve(), recipe=recipe, split_name=split_name
-        )
-    raise FileNotFoundError(
-        "renderer-independent replay requires teacher-time exact capture; "
-        "regenerate this split with common.capture_render_replay=true"
-    )
+    if split.kind not in {"generated", "render_derivative"}:
+        raise ValueError("unsupported render replay source split")
+    if split.kind == "render_derivative" and not split.source_dataset_root:
+        raise ValueError("render derivative replay reconstruction requires source_dataset_root")
 
     dataset_root = dataset_root.resolve()
     output_dir = (output_dir or dataset_root / replay.output_dir).resolve()
+    captured_manifest = output_dir / "manifest.json"
+    if captured_manifest.exists():
+        return validate_captured_render_replay_sidecar(
+            dataset_root,
+            recipe=recipe,
+            split_name=split_name,
+            output_dir=output_dir,
+        )
+    if replay.capture_mode != "verified_action_replay" or not allow_verified_reconstruction:
+        raise FileNotFoundError(
+            "renderer-independent replay requires teacher-time exact capture; "
+            "for a legacy source, declare capture_mode=verified_action_replay and pass "
+            "--allow-verified-reconstruction"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     assets_dir = output_dir / "assets" / "meshes"
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -456,6 +471,7 @@ def build_render_replay_sidecar(
             _restore_sim_state(env, snapshot)
             integration_state = np.empty(state_size, dtype=np.float64)
             mujoco.mj_getState(model, data, integration_state, state_spec)
+            collision_state = _collision_state(model)
             episode_snapshots.append(
                 {
                     "episode_index": episode_index,
@@ -473,20 +489,17 @@ def build_render_replay_sidecar(
                     "mocap_quat": np.asarray(data.mocap_quat, dtype=np.float64)
                     .reshape(-1)
                     .tolist(),
-                    "collision_state_json": json.dumps(_collision_state(model), sort_keys=True),
+                    "rng_state_json": json.dumps(_rng_state(env), sort_keys=True),
+                    "active_object_slots": _active_object_slots(collision_state),
+                    "collision_state_json": json.dumps(collision_state, sort_keys=True),
                 }
             )
             info: dict[str, Any] = {}
             for row in episode_rows:
                 frame_index = int(row["frame_index"])
                 observed_state = np.asarray(row["observation.state"], dtype=np.float64)
-                actuator_ids = getattr(env.unwrapped, "_actuator_ids", None)
-                replay_state = (
-                    data.ctrl[actuator_ids]
-                    if actuator_ids is not None
-                    else data.ctrl[: len(observed_state)]
-                )
-                state_error = float(np.linalg.norm(np.asarray(replay_state) - observed_state))
+                replay_state = _current_qpos(env).astype(np.float64)
+                state_error = float(np.max(np.abs(np.asarray(replay_state) - observed_state)))
                 max_state_error = max(max_state_error, state_error)
                 if state_error > 1e-4:
                     raise ValueError(
@@ -511,6 +524,7 @@ def build_render_replay_sidecar(
                         "geom_positions": positions.reshape(-1).tolist(),
                         "geom_quaternions_wxyz": quaternions.reshape(-1).tolist(),
                         "geom_rgba": rgba.reshape(-1).tolist(),
+                        "geom_visible": (rgba[:, 3] > 0.0).tolist(),
                     }
                 )
                 frame_cameras.append(
@@ -564,6 +578,7 @@ def build_render_replay_sidecar(
         )
         manifest = {
             "schema_version": 1,
+            "capture_mode": "verified_action_replay",
             "dataset_root": str(dataset_root),
             "recipe_name": recipe.name,
             "recipe_split": split_name,
@@ -606,6 +621,7 @@ def build_render_replay_sidecar(
                 "frame_count_matches": len(frame_states) == len(rows) == len(frame_cameras),
                 "max_state_error": max_state_error,
                 "final_outcome_mismatches": final_outcome_mismatches,
+                "reconstructed_from_recorded_snapshot_and_actions": True,
                 "passed": max_state_error <= 1e-4 and not final_outcome_mismatches,
             },
         }

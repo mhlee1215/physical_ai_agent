@@ -905,6 +905,11 @@
           "title": "Duplicate Camera3 From Camera2",
           "type": "boolean"
         },
+        "skip_existing": {
+          "default": true,
+          "title": "Skip Existing",
+          "type": "boolean"
+        },
         "blender_batch_size": {
           "default": 4,
           "exclusiveMinimum": 0,
@@ -1024,6 +1029,15 @@
         "output_dir": {
           "default": "render_replay",
           "title": "Output Dir",
+          "type": "string"
+        },
+        "capture_mode": {
+          "default": "teacher_time_exact",
+          "enum": [
+            "teacher_time_exact",
+            "verified_action_replay"
+          ],
+          "title": "Capture Mode",
           "type": "string"
         },
         "state_spec": {
@@ -1154,6 +1168,37 @@
           ],
           "default": null,
           "title": "Source Split"
+        },
+        "source_dataset_root": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Dataset Root"
+        },
+        "render_replay_sidecar": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Render Replay Sidecar"
+        },
+        "expected_bins": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Expected Bins",
+          "type": "object"
         },
         "render": {
           "anyOf": [
