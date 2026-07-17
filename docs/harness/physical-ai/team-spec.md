@@ -549,6 +549,53 @@ policy is:
   `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`.
   `top_down` remains teacher/debug evidence only and must not be exported as a
   SmolVLA student input.
+- SO101 Dataset Append-Only and Registration Contract:
+  - Existing local dataset roots, HF dataset paths, split identities, and
+    recipe files are protected by default. Without an explicit user request in
+    the current turn, agents may only add a new versioned recipe and new
+    versioned dataset roots. They must not pass `--overwrite`, call destructive
+    cleanup on an existing root, rename a dataset, replace an HF split, or
+    silently repoint an established dataset name.
+  - A semantics or quality change creates a new dataset version. It does not
+    mutate the prior version. Cleanup, consolidation, replacement, and HF
+    deletion are separate destructive operations that require an inventory and
+    explicit user approval immediately before execution.
+  - Every durable generated split must be declared under
+    `configs/so101/dataset_generation/<dataset>.json` as
+    `splits.<split>.output_root`. This recipe directory is the canonical viewer
+    registration source. `dataset_contract.json` and
+    `skill_dataset_contract.json` retain semantic contracts; files under
+    `configs/so101/training/` select active training inputs. Do not maintain a
+    fourth manual viewer-only registry or add each dataset to the viewer's
+    static `TRAINING_CONFIGS` list.
+  - The Robot Experiment Manager must auto-discover completed recipe-backed
+    roots and classify recipe train/validation splits into the corresponding
+    viewer tabs even when their names do not end in `_train` or `_val`.
+  - Dataset completion requires executable evidence: export/merge/audit report,
+    required camera-grid sidecar, requested overlap audit and loop-test starts,
+    `/api/datasets` visibility, and a successful `/api/frame` request for at
+    least episode 0/frame 0 of every intended split. Report episode/frame count,
+    disk size, prompt/camera contract, sidecar status, and viewer URL.
+  - The shared registry module is
+    `src/physical_ai_agent/so101_dataset_registry.py`; its operator CLI is
+    `scripts/so101_dataset_registry.py`. Generator and viewer must import this
+    module rather than reimplementing recipe discovery. The mandatory final
+    gate is:
+    `PYTHONPATH=src .venv/bin/python scripts/so101_dataset_registry.py validate --require-training-ready`.
+  - `training_ready=true` means the split has complete LeRobot parquet and
+    metadata, 256x256 RGB camera1/camera2, 6D observation.state/action,
+    prompt/tasks and normalization stats, export/merge reports, a passed audit,
+    a camera1 grid-bin sidecar for train, and the declared loop-start report for
+    validation. Dataset generation is not complete before this gate passes.
+  - Before starting a training experiment, obtain the machine-readable dataset
+    selection with
+    `scripts/so101_dataset_registry.py training-manifest --dataset-id <id>`.
+    Model, augmentation, schedule, and optimizer remain experiment-config
+    choices; the registry manifest supplies the validated dataset inputs and
+    must not guess those training settings.
+  - Temporary smoke roots may be exposed through `SO101_TEMP_DATASETS`, but
+    temporary discovery is not registration and must not be used to sign off a
+    durable dataset.
 - SO101 export materials are source-controlled through
   `configs/so101/training_datasets/export_recipes.json` and
   `scripts/export_so101_training_datasets.py`. Raw `_workspace/so101_lerobot`

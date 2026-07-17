@@ -146,6 +146,38 @@ docs/harness/physical-ai/team-spec.md
 
 Durable SO101 fine-tuning contract:
 
+- SO101 dataset creation is append-only unless the user explicitly authorizes
+  overwrite, replacement, rename, or deletion in the current turn. A changed
+  teacher, filter, camera contract, prompt, split composition, or quality gate
+  must produce a new versioned recipe and a new local/HF dataset path. Never
+  pass `--overwrite`, remove an existing root, rewrite an existing HF split, or
+  repoint an established dataset name as an inferred convenience;
+- the single durable registration path for newly generated SO101 datasets is a
+  versioned JSON recipe under `configs/so101/dataset_generation/` with every
+  generated split declared as `splits.<name>.output_root`. The Robot Experiment
+  Manager discovers completed recipe-backed roots automatically. Dataset
+  contracts continue to define stable semantics, and training configs select
+  active train/validation inputs; neither should be used as an ad hoc viewer-
+  only registry;
+- a dataset-generation request is complete only after: the versioned recipe
+  exists; unique output roots are generated; export/merge/audit reports pass;
+  required camera-grid sidecars and loop starts are produced; overlap checks
+  against protected datasets pass when requested; `/api/datasets` lists every
+  intended split; and `/api/frame` succeeds for at least episode 0/frame 0 of
+  each split. Report the root, episode/frame count, size, sidecar status, and
+  viewer URL. A raw directory alone is not a completed handoff;
+- the shared registry implementation is
+  `src/physical_ai_agent/so101_dataset_registry.py`, and the only operator CLI
+  is `scripts/so101_dataset_registry.py`. Run `list` for inventory,
+  `validate --require-training-ready` as the generation completion gate, and
+  `training-manifest --dataset-id <id>` to obtain the exact train/validation
+  roots, counts, grid sidecar, and closed-loop start that a training config can
+  consume. The generator must run the same readiness gate after its pipeline;
+- do not add each generated dataset to the viewer's static `TRAINING_CONFIGS`
+  list. Active training datasets belong in `configs/so101/training/*.json`;
+  durable generated datasets belong in generation recipes. Temporary smoke
+  roots may use `SO101_TEMP_DATASETS`, but that mechanism is never the canonical
+  registration path for a completed dataset;
 - training configs use moderate train-time augmentation by default:
   `state_jitter_std=0.003`, `state_dropout_prob=0.02`,
   `image_patch_mask_ratio=0.15`, `gpu_image_augmentation=true`;
