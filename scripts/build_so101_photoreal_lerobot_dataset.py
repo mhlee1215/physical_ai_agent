@@ -103,7 +103,11 @@ def build_photoreal_lerobot_dataset(
     replaced_frames = 0
     replaced_images = 0
 
-    shutil.copytree(source_dataset_root, output_root, ignore=shutil.ignore_patterns("photoreal_preview"))
+    shutil.copytree(
+        source_dataset_root,
+        output_root,
+        ignore=shutil.ignore_patterns("photoreal_preview", "render_replay"),
+    )
     data_files = sorted((output_root / "data").glob("chunk-*/file-*.parquet"))
     if not data_files:
         raise FileNotFoundError(f"missing parquet files under {output_root / 'data'}")
@@ -177,10 +181,15 @@ def build_photoreal_lerobot_dataset(
 def _rendered_index(rendered_dir: Path) -> dict[tuple[int, int, str], Path]:
     index: dict[tuple[int, int, str], Path] = {}
     patterns = (
-        re.compile(r"episode_(\d+)_frame_(\d+)_(camera\d)\.png$"),
-        re.compile(r"episode_(\d+)_frame_(\d+)_(observation_images_camera\d)\.png$"),
+        re.compile(r"episode_(\d+)_frame_(\d+)_(camera\d)\.(?:png|jpe?g)$", re.IGNORECASE),
+        re.compile(
+            r"episode_(\d+)_frame_(\d+)_(observation_images_camera\d)\.(?:png|jpe?g)$",
+            re.IGNORECASE,
+        ),
     )
-    for path in sorted(rendered_dir.rglob("*.png")):
+    for path in sorted(rendered_dir.rglob("*")):
+        if path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+            continue
         for pattern in patterns:
             match = pattern.fullmatch(path.name)
             if match is None:

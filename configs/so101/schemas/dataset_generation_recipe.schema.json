@@ -1,0 +1,1324 @@
+{
+  "$defs": {
+    "AuditSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_prompt": {
+          "title": "Expected Prompt",
+          "type": "string"
+        },
+        "expected_resolution": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Expected Resolution",
+          "type": "array"
+        },
+        "expected_min_lift_height": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Min Lift Height"
+        },
+        "expected_min_lift_steps": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Min Lift Steps"
+        },
+        "terminal_hold_action_tolerance": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Hold Action Tolerance"
+        }
+      },
+      "required": [
+        "expected_prompt",
+        "expected_resolution"
+      ],
+      "title": "AuditSpec",
+      "type": "object"
+    },
+    "BinSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minimum": 0,
+          "title": "Id",
+          "type": "integer"
+        },
+        "episodes": {
+          "exclusiveMinimum": 0,
+          "title": "Episodes",
+          "type": "integer"
+        },
+        "seed": {
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "lookup_start_index": {
+          "minimum": 0,
+          "title": "Lookup Start Index",
+          "type": "integer"
+        },
+        "shard": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shard"
+        }
+      },
+      "required": [
+        "id",
+        "episodes",
+        "seed",
+        "lookup_start_index"
+      ],
+      "title": "BinSpec",
+      "type": "object"
+    },
+    "ClosedLoopSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "episodes": {
+          "exclusiveMinimum": 0,
+          "title": "Episodes",
+          "type": "integer"
+        },
+        "bins": {
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Bins",
+          "type": "array"
+        },
+        "output": {
+          "title": "Output",
+          "type": "string"
+        },
+        "success_metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Success Metric"
+        },
+        "lift_success_height": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lift Success Height"
+        },
+        "exclude_source_reports": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Exclude Source Reports",
+          "type": "array"
+        }
+      },
+      "required": [
+        "episodes",
+        "bins",
+        "output"
+      ],
+      "title": "ClosedLoopSpec",
+      "type": "object"
+    },
+    "ExporterCommonSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "fps": {
+          "exclusiveMinimum": 0,
+          "title": "Fps",
+          "type": "integer"
+        },
+        "width": {
+          "default": 256,
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 256,
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "capture_render_replay": {
+          "default": false,
+          "title": "Capture Render Replay",
+          "type": "boolean"
+        },
+        "teacher_style": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Teacher Style"
+        },
+        "approach_steps": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approach Steps"
+        },
+        "settle_steps": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Settle Steps"
+        },
+        "close_steps": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Close Steps"
+        },
+        "lift_steps": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lift Steps"
+        },
+        "lift_target_height": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lift Target Height"
+        },
+        "lift_controller_z_error": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lift Controller Z Error"
+        },
+        "trajectory_variant": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trajectory Variant"
+        },
+        "start_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start Mode"
+        },
+        "grip_the_cube_start_profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grip The Cube Start Profile"
+        },
+        "move_target_z_offset": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Move Target Z Offset"
+        },
+        "near_target_joint_std": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Near Target Joint Std"
+        },
+        "near_target_xy_std": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Near Target Xy Std"
+        },
+        "close_alignment_gate_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Close Alignment Gate Mode"
+        },
+        "skill_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skill Mode"
+        },
+        "terminal_hold_steps": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Hold Steps"
+        },
+        "edge_contact_xy_success_threshold": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Edge Contact Xy Success Threshold"
+        },
+        "edge_contact_parallel_success_threshold_deg": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Edge Contact Parallel Success Threshold Deg"
+        },
+        "max_attempt_multiplier": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Attempt Multiplier"
+        },
+        "grid_balance_size": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grid Balance Size"
+        },
+        "grid_balance_spawn_lookup": {
+          "default": false,
+          "title": "Grid Balance Spawn Lookup",
+          "type": "boolean"
+        },
+        "grid_lookup_preserve_order": {
+          "default": false,
+          "title": "Grid Lookup Preserve Order",
+          "type": "boolean"
+        },
+        "grid_lookup_x_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grid Lookup X Min"
+        },
+        "grid_lookup_x_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grid Lookup X Max"
+        },
+        "grid_lookup_y_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grid Lookup Y Min"
+        },
+        "grid_lookup_y_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grid Lookup Y Max"
+        },
+        "grid_lookup_resolution": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grid Lookup Resolution"
+        },
+        "deterministic_camera_bin_lookup": {
+          "default": false,
+          "title": "Deterministic Camera Bin Lookup",
+          "type": "boolean"
+        },
+        "target_object_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Object Color"
+        },
+        "spawn_center_x": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spawn Center X"
+        },
+        "spawn_center_y": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spawn Center Y"
+        },
+        "spawn_min_radius": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spawn Min Radius"
+        },
+        "spawn_max_radius": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spawn Max Radius"
+        },
+        "spawn_angle_half_range_deg": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spawn Angle Half Range Deg"
+        },
+        "object_half_sizes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Half Sizes"
+        }
+      },
+      "required": [
+        "fps"
+      ],
+      "title": "ExporterCommonSpec",
+      "type": "object"
+    },
+    "LookupBuilderSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "output": {
+          "title": "Output",
+          "type": "string"
+        },
+        "source_reports": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Reports",
+          "type": "array"
+        },
+        "grid_size": {
+          "exclusiveMinimum": 0,
+          "title": "Grid Size",
+          "type": "integer"
+        },
+        "resolution": {
+          "exclusiveMinimum": 0,
+          "title": "Resolution",
+          "type": "integer"
+        },
+        "x_range": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "X Range",
+          "type": "array"
+        },
+        "y_range": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Y Range",
+          "type": "array"
+        },
+        "bins": {
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Bins",
+          "type": "array"
+        },
+        "candidate_start_index": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Start Index"
+        }
+      },
+      "required": [
+        "name",
+        "output",
+        "source_reports",
+        "grid_size",
+        "resolution",
+        "x_range",
+        "y_range",
+        "bins"
+      ],
+      "title": "LookupBuilderSpec",
+      "type": "object"
+    },
+    "ObjectPoolEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "slot": {
+          "minimum": 0,
+          "title": "Slot",
+          "type": "integer"
+        },
+        "color": {
+          "title": "Color",
+          "type": "string"
+        },
+        "half_size": {
+          "exclusiveMinimum": 0,
+          "title": "Half Size",
+          "type": "number"
+        }
+      },
+      "required": [
+        "slot",
+        "color",
+        "half_size"
+      ],
+      "title": "ObjectPoolEntry",
+      "type": "object"
+    },
+    "OverlapAuditSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "reference_root": {
+          "title": "Reference Root",
+          "type": "string"
+        },
+        "reference_bins": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Reference Bins",
+          "type": "object"
+        },
+        "output": {
+          "title": "Output",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "reference_root",
+        "reference_bins",
+        "output"
+      ],
+      "title": "OverlapAuditSpec",
+      "type": "object"
+    },
+    "RenderEnvironmentSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "factory": {
+          "const": "make_high_contrast_picklift_env",
+          "default": "make_high_contrast_picklift_env",
+          "title": "Factory",
+          "type": "string"
+        },
+        "target_object_color": {
+          "default": "green",
+          "title": "Target Object Color",
+          "type": "string"
+        },
+        "object_half_sizes": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Object Half Sizes",
+          "type": "array"
+        },
+        "spawn_center": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Spawn Center",
+          "type": "array"
+        },
+        "spawn_min_radius": {
+          "default": 0.1,
+          "title": "Spawn Min Radius",
+          "type": "number"
+        },
+        "spawn_max_radius": {
+          "default": 0.3,
+          "title": "Spawn Max Radius",
+          "type": "number"
+        },
+        "spawn_angle_half_range_deg": {
+          "default": 90.0,
+          "title": "Spawn Angle Half Range Deg",
+          "type": "number"
+        },
+        "n_distractors": {
+          "default": 0,
+          "minimum": 0,
+          "title": "N Distractors",
+          "type": "integer"
+        },
+        "action_repeat": {
+          "default": 1,
+          "exclusiveMinimum": 0,
+          "title": "Action Repeat",
+          "type": "integer"
+        },
+        "object_pool_order": {
+          "items": {
+            "$ref": "#/$defs/ObjectPoolEntry"
+          },
+          "title": "Object Pool Order",
+          "type": "array"
+        }
+      },
+      "title": "RenderEnvironmentSpec",
+      "type": "object"
+    },
+    "RenderProfileSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "blender_cycles",
+          "default": "blender_cycles",
+          "title": "Mode",
+          "type": "string"
+        },
+        "output_dir": {
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "material_profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material Profile"
+        },
+        "scene_profile": {
+          "default": "neutral",
+          "enum": [
+            "neutral",
+            "black_table_clutter"
+          ],
+          "title": "Scene Profile",
+          "type": "string"
+        },
+        "asset_root": {
+          "default": "_workspace/photoreal_assets",
+          "title": "Asset Root",
+          "type": "string"
+        },
+        "blender_bin": {
+          "default": "blender",
+          "title": "Blender Bin",
+          "type": "string"
+        },
+        "width": {
+          "default": 256,
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 256,
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "samples": {
+          "default": 32,
+          "exclusiveMinimum": 0,
+          "title": "Samples",
+          "type": "integer"
+        },
+        "denoise": {
+          "default": true,
+          "title": "Denoise",
+          "type": "boolean"
+        },
+        "cycles_seed": {
+          "default": 98200,
+          "title": "Cycles Seed",
+          "type": "integer"
+        },
+        "camera_keys": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Camera Keys",
+          "type": "array"
+        },
+        "duplicate_camera3_from_camera2": {
+          "default": true,
+          "title": "Duplicate Camera3 From Camera2",
+          "type": "boolean"
+        },
+        "blender_batch_size": {
+          "default": 4,
+          "exclusiveMinimum": 0,
+          "title": "Blender Batch Size",
+          "type": "integer"
+        },
+        "robot_material": {
+          "default": "matte_pla",
+          "enum": [
+            "plastic",
+            "matte_pla",
+            "metal"
+          ],
+          "title": "Robot Material",
+          "type": "string"
+        },
+        "lighting_profile": {
+          "default": "studio_small_08",
+          "enum": [
+            "studio_small_08",
+            "flat"
+          ],
+          "title": "Lighting Profile",
+          "type": "string"
+        },
+        "key_light_power": {
+          "default": 42.0,
+          "minimum": 0,
+          "title": "Key Light Power",
+          "type": "number"
+        },
+        "fill_light_power": {
+          "default": 5.0,
+          "minimum": 0,
+          "title": "Fill Light Power",
+          "type": "number"
+        },
+        "world_strength": {
+          "default": 0.28,
+          "minimum": 0,
+          "title": "World Strength",
+          "type": "number"
+        },
+        "hdri_rotation_deg": {
+          "default": 35.0,
+          "title": "Hdri Rotation Deg",
+          "type": "number"
+        },
+        "exposure": {
+          "default": -1.3,
+          "title": "Exposure",
+          "type": "number"
+        },
+        "color_management": {
+          "default": "Filmic",
+          "enum": [
+            "Filmic",
+            "Standard",
+            "AgX"
+          ],
+          "title": "Color Management",
+          "type": "string"
+        },
+        "color_look": {
+          "default": "Medium High Contrast",
+          "title": "Color Look",
+          "type": "string"
+        },
+        "gamma": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "title": "Gamma",
+          "type": "number"
+        },
+        "output_format": {
+          "default": "PNG",
+          "enum": [
+            "PNG",
+            "JPEG"
+          ],
+          "title": "Output Format",
+          "type": "string"
+        }
+      },
+      "required": [
+        "output_dir"
+      ],
+      "title": "RenderProfileSpec",
+      "type": "object"
+    },
+    "RenderReplaySpec": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "output_dir": {
+          "default": "render_replay",
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "state_spec": {
+          "const": "mjSTATE_INTEGRATION",
+          "default": "mjSTATE_INTEGRATION",
+          "title": "State Spec",
+          "type": "string"
+        },
+        "store_geom_world_transforms": {
+          "default": true,
+          "title": "Store Geom World Transforms",
+          "type": "boolean"
+        },
+        "store_camera_world_transforms": {
+          "default": true,
+          "title": "Store Camera World Transforms",
+          "type": "boolean"
+        },
+        "environment": {
+          "$ref": "#/$defs/RenderEnvironmentSpec"
+        }
+      },
+      "title": "RenderReplaySpec",
+      "type": "object"
+    },
+    "SidecarSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "camera_key": {
+          "title": "Camera Key",
+          "type": "string"
+        },
+        "grid_size": {
+          "exclusiveMinimum": 0,
+          "title": "Grid Size",
+          "type": "integer"
+        },
+        "frame_index": {
+          "minimum": 0,
+          "title": "Frame Index",
+          "type": "integer"
+        },
+        "min_area": {
+          "minimum": 0,
+          "title": "Min Area",
+          "type": "integer"
+        },
+        "bin_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bin Source"
+        }
+      },
+      "required": [
+        "camera_key",
+        "grid_size",
+        "frame_index",
+        "min_area"
+      ],
+      "title": "SidecarSpec",
+      "type": "object"
+    },
+    "SplitSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "default": "generated",
+          "enum": [
+            "generated",
+            "render_derivative"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "output_root": {
+          "title": "Output Root",
+          "type": "string"
+        },
+        "repo_id": {
+          "title": "Repo Id",
+          "type": "string"
+        },
+        "bins": {
+          "items": {
+            "$ref": "#/$defs/BinSpec"
+          },
+          "title": "Bins",
+          "type": "array"
+        },
+        "lookup_cache": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lookup Cache"
+        },
+        "closed_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClosedLoopSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_split": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Split"
+        },
+        "render": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RenderProfileSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expected_episodes": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Episodes"
+        }
+      },
+      "required": [
+        "output_root",
+        "repo_id"
+      ],
+      "title": "SplitSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Version"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "source_datasets": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Datasets",
+      "type": "array"
+    },
+    "exporter_revision": {
+      "title": "Exporter Revision",
+      "type": "string"
+    },
+    "exporter": {
+      "title": "Exporter",
+      "type": "string"
+    },
+    "lookup_builder_script": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lookup Builder Script"
+    },
+    "merge_script": {
+      "title": "Merge Script",
+      "type": "string"
+    },
+    "sidecar_script": {
+      "title": "Sidecar Script",
+      "type": "string"
+    },
+    "closed_loop_script": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Closed Loop Script"
+    },
+    "audit_script": {
+      "title": "Audit Script",
+      "type": "string"
+    },
+    "render_replay_script": {
+      "default": "scripts/build_so101_render_replay_sidecar.py",
+      "title": "Render Replay Script",
+      "type": "string"
+    },
+    "photoreal_builder_script": {
+      "default": "scripts/build_so101_photoreal_lerobot_dataset.py",
+      "title": "Photoreal Builder Script",
+      "type": "string"
+    },
+    "lookup_cache": {
+      "title": "Lookup Cache",
+      "type": "string"
+    },
+    "lookup_builders": {
+      "items": {
+        "$ref": "#/$defs/LookupBuilderSpec"
+      },
+      "title": "Lookup Builders",
+      "type": "array"
+    },
+    "common": {
+      "$ref": "#/$defs/ExporterCommonSpec"
+    },
+    "sidecar": {
+      "$ref": "#/$defs/SidecarSpec"
+    },
+    "render_replay": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RenderReplaySpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "splits": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SplitSpec"
+      },
+      "title": "Splits",
+      "type": "object"
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditSpec"
+    },
+    "overlap_audits": {
+      "items": {
+        "$ref": "#/$defs/OverlapAuditSpec"
+      },
+      "title": "Overlap Audits",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "name",
+    "description",
+    "exporter_revision",
+    "exporter",
+    "merge_script",
+    "sidecar_script",
+    "audit_script",
+    "lookup_cache",
+    "common",
+    "sidecar",
+    "splits",
+    "audit"
+  ],
+  "title": "DatasetGenerationRecipe",
+  "type": "object"
+}

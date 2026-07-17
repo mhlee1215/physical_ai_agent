@@ -15,7 +15,10 @@ from PIL import Image, ImageDraw
 
 from physical_ai_agent.sim.so101_nexus_env import DEFAULT_SO101_ENV_ID, sample_action
 
-from render_so101_mitsuba_probe import _export_mesh_geoms, _target_site
+try:
+    from render_so101_mitsuba_probe import _export_mesh_geoms, _target_site
+except ModuleNotFoundError:
+    from scripts.render_so101_mitsuba_probe import _export_mesh_geoms, _target_site
 
 
 BLENDER_DRIVER = r'''
@@ -50,10 +53,14 @@ def main():
         scene.cycles.sample_clamp_indirect = float(spec.get("sample_clamp_indirect", 1.25))
     scene.render.resolution_x = int(spec["width"])
     scene.render.resolution_y = int(spec["height"])
-    scene.view_settings.view_transform = "Filmic"
-    scene.view_settings.look = "Medium High Contrast"
-    scene.view_settings.exposure = -1.30
-    scene.view_settings.gamma = 1.0
+    scene.view_settings.view_transform = str(spec.get("color_management", "Filmic"))
+    scene.view_settings.look = str(spec.get("color_look", "Medium High Contrast"))
+    scene.view_settings.exposure = float(spec.get("exposure", -1.30))
+    scene.view_settings.gamma = float(spec.get("gamma", 1.0))
+    scene.render.image_settings.file_format = str(spec.get("output_format", "PNG"))
+    scene.render.image_settings.color_mode = "RGB"
+    if scene.render.image_settings.file_format == "JPEG":
+        scene.render.image_settings.quality = 95
 
     prefs = bpy.context.preferences.addons["cycles"].preferences
     prefs.compute_device_type = "METAL"
@@ -98,6 +105,11 @@ def main():
         bpy.ops.wm.ply_import(filepath=item["path"])
         obj = bpy.context.object
         obj.name = item["name"] or f"mesh_{item['geom_id']:03d}"
+        if item.get("position") is not None:
+            obj.location = tuple(float(value) for value in item["position"])
+        if item.get("quaternion_wxyz") is not None:
+            obj.rotation_mode = "QUATERNION"
+            obj.rotation_quaternion = tuple(float(value) for value in item["quaternion_wxyz"])
         obj.data.materials.append(
             make_robot_material(
                 item,
@@ -126,11 +138,16 @@ def main():
         sphere.data.materials.append(make_target_material())
         bpy.ops.object.shade_smooth()
 
-    add_area_light("softbox", (0.04, -0.48, 0.88), 42.0, 0.78)
-    add_area_light("fill", (-0.55, 0.34, 0.50), 5.0, 0.62)
+    add_area_light("softbox", (0.04, -0.48, 0.88), float(spec.get("key_light_power", 42.0)), 0.78)
+    add_area_light("fill", (-0.55, 0.34, 0.50), float(spec.get("fill_light_power", 5.0)), 0.62)
     world = scene.world or bpy.data.worlds.new("World")
     scene.world = world
-    configure_world(world, spec.get("hdri_path"))
+    configure_world(
+        world,
+        spec.get("hdri_path") if spec.get("lighting_profile", "studio_small_08") != "flat" else None,
+        strength=float(spec.get("world_strength", 0.28)),
+        rotation_deg=float(spec.get("hdri_rotation_deg", 35.0)),
+    )
 
     renders = spec.get("renders") or [
         {
@@ -318,8 +335,9 @@ def make_primitive_material(item, robot_material_config):
     if configured:
         rgb = configured["base_color"]
         roughness = float(configured["roughness"])
-    elif semantic_color == "red_cube" or "cube" in name or "pick_slot" in name:
-        rgb = (0.90, 0.04, 0.02)
+    elif semantic_color is not None or "cube" in name or "pick_slot" in name:
+        # Object color is part of the dataset/prompt contract.
+        rgb = tuple(float(value) for value in rgba[:3])
         roughness = 0.58
     elif "pad" in name:
         rgb = (0.025, 0.025, 0.024)
@@ -548,24 +566,24 @@ def make_wall_material():
     return mat
 
 
-def configure_world(world, hdri_path):
+def configure_world(world, hdri_path, strength=0.28, rotation_deg=35.0):
     world.use_nodes = True
     nodes = world.node_tree.nodes
     links = world.node_tree.links
     bg = nodes.get("Background")
     if not hdri_path:
         bg.inputs["Color"].default_value = (0.012, 0.013, 0.015, 1.0)
-        bg.inputs["Strength"].default_value = 0.28
+        bg.inputs["Strength"].default_value = strength
         return
     env = nodes.new("ShaderNodeTexEnvironment")
     env.image = bpy.data.images.load(hdri_path)
     mapping = nodes.new("ShaderNodeMapping")
-    mapping.inputs["Rotation"].default_value[2] = math.radians(35.0)
+    mapping.inputs["Rotation"].default_value[2] = math.radians(rotation_deg)
     coord = nodes.new("ShaderNodeTexCoord")
     links.new(coord.outputs["Generated"], mapping.inputs["Vector"])
     links.new(mapping.outputs["Vector"], env.inputs["Vector"])
     links.new(env.outputs["Color"], bg.inputs["Color"])
-    bg.inputs["Strength"].default_value = 0.62
+    bg.inputs["Strength"].default_value = max(strength, 0.0)
 
 
 def image_texture(nodes, path, colorspace="sRGB"):

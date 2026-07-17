@@ -330,6 +330,8 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
             output = Path(tmp) / "output"
             (source / "data" / "chunk-000").mkdir(parents=True)
             (source / "meta").mkdir()
+            (source / "render_replay").mkdir()
+            (source / "render_replay" / "manifest.json").write_text("{}", encoding="utf-8")
             (rendered / "episode_0000_frame_0000").mkdir(parents=True)
             for camera in ("camera1", "camera2"):
                 (rendered / "episode_0000_frame_0000" / f"episode_0000_frame_0000_{camera}.png").write_bytes(png_new)
@@ -361,9 +363,11 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
                 overwrite=True,
             )
             converted = pq.read_table(output / "data" / "chunk-000" / "file-000.parquet").to_pydict()
+            copied_render_replay = (output / "render_replay").exists()
 
         self.assertEqual(report["format"], "so101_photoreal_lerobot_v1")
         self.assertTrue(report["training_ready"])
+        self.assertFalse(copied_render_replay)
         from PIL import Image
 
         for key in (

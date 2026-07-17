@@ -386,6 +386,11 @@ def main() -> None:
     parser.add_argument("--spawn-angle-half-range-deg", type=float, default=90.0)
     parser.add_argument("--object-half-sizes", default="0.0125,0.015,0.0175")
     parser.add_argument("--no-camera3-duplicate", action="store_true")
+    parser.add_argument(
+        "--capture-render-replay",
+        action="store_true",
+        help="Capture exact pre-action MuJoCo/geom/camera state for renderer-independent replay.",
+    )
     args = parser.parse_args()
 
     report = export_teacher_rollouts(
@@ -460,6 +465,7 @@ def main() -> None:
         spawn_angle_half_range_deg=args.spawn_angle_half_range_deg,
         object_half_sizes=_parse_float_list(args.object_half_sizes),
         include_camera3_duplicate=not args.no_camera3_duplicate,
+        capture_render_replay=args.capture_render_replay,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 
@@ -537,6 +543,7 @@ def export_teacher_rollouts(
     spawn_angle_half_range_deg: float = 90.0,
     object_half_sizes: tuple[float, ...] = (0.0125, 0.015, 0.0175),
     include_camera3_duplicate: bool = True,
+    capture_render_replay: bool = False,
 ) -> dict[str, Any]:
     import shutil
 
@@ -694,6 +701,7 @@ def export_teacher_rollouts(
     attempted_episode_seeds: set[int] = set()
     skipped = []
     episode_summaries = []
+    render_replay_captures: list[dict[str, Any]] = []
     try:
         candidate_seed = seed
         while exported < episodes and attempted < episodes * max_attempt_multiplier:
@@ -821,7 +829,13 @@ def export_teacher_rollouts(
             ranked_candidates = sorted(candidates, key=lambda item: float(item["meta"].get("score", -1e9)), reverse=True)
             candidate_failures: list[dict[str, Any]] = []
             summary = None
+            candidate_start_snapshot = _snapshot_sim_state(env)
             for candidate_rank, best in enumerate(ranked_candidates):
+                # A failed candidate can leave the cube lifted, rotated, or in
+                # contact. Every candidate must start from the same settled
+                # episode state so the accepted trajectory and its replay
+                # snapshot are independent of retry order.
+                _restore_sim_state(env, candidate_start_snapshot)
                 candidate_meta = dict(best["meta"])
                 candidate_meta["teacher_candidate_rank"] = int(candidate_rank)
                 candidate_meta["teacher_candidate_count"] = int(len(ranked_candidates))
@@ -876,10 +890,13 @@ def export_teacher_rollouts(
                     above_edge_start_gripper_profile=above_edge_start_gripper_profile,
                     above_edge_terminal_hold_jitter=above_edge_terminal_hold_jitter,
                     include_camera3_duplicate=include_camera3_duplicate,
+                    capture_render_replay=capture_render_replay,
+                    capture_fps=fps,
                     reset_home_qpos=reset_home_qpos,
                 )
                 if summary["success"]:
                     break
+                summary.pop("_render_replay_capture", None)
                 candidate_failures.append(
                     {
                         "candidate_rank": int(candidate_rank),
@@ -946,6 +963,22 @@ def export_teacher_rollouts(
                         )
                         continue
                     balance_counts[grid_bin] += 1
+                replay_capture = summary.pop("_render_replay_capture", None)
+                if replay_capture is not None:
+                    replay_capture["episode_index"] = int(exported)
+                    for frame in replay_capture["frames"]:
+                        frame["episode_index"] = int(exported)
+                    replay_capture["target_slot_index"] = int(
+                        (target_object or {}).get("target_slot_index", -1)
+                    )
+                    target_slot = int(replay_capture["target_slot_index"])
+                    if target_slot >= 0 and replay_capture["frames"]:
+                        target_joint = env.unwrapped.model.joint(f"pick_slot_{target_slot}_joint")
+                        target_qpos_adr = int(np.asarray(target_joint.qposadr).item())
+                        replay_capture["initial_object_z"] = float(
+                            replay_capture["frames"][0]["qpos"][target_qpos_adr + 2]
+                        )
+                    render_replay_captures.append(replay_capture)
                 dataset.save_episode()
                 exported += 1
                 episode_summaries.append(summary)
@@ -959,6 +992,33 @@ def export_teacher_rollouts(
             else:
                 _clear_episode_buffer_robust(dataset)
                 skipped.append({"seed": episode_seed, "reason": "teacher_replay_failed", **summary})
+        if capture_render_replay:
+            from physical_ai_agent.so101_render_replay import write_captured_render_replay_sidecar
+
+            write_captured_render_replay_sidecar(
+                root,
+                model=env.unwrapped.model,
+                episode_captures=render_replay_captures,
+                environment={
+                    "factory": "make_high_contrast_picklift_env",
+                    "target_object_color": target_object_color,
+                    "object_half_sizes": [float(value) for value in object_half_sizes],
+                    "spawn_center": [float(spawn_center[0]), float(spawn_center[1])],
+                    "spawn_min_radius": float(spawn_min_radius),
+                    "spawn_max_radius": float(spawn_max_radius),
+                    "spawn_angle_half_range_deg": float(spawn_angle_half_range_deg),
+                    "n_distractors": 0,
+                    "action_repeat": 1,
+                    "object_pool_order": [
+                        {
+                            "slot": int(index),
+                            "color": str(target_object_color),
+                            "half_size": float(half_size),
+                        }
+                        for index, half_size in enumerate(object_half_sizes)
+                    ],
+                },
+            )
     finally:
         for renderer in [*policy_renderers.values(), *teacher_renderers.values()]:
             renderer.close()
@@ -1178,6 +1238,8 @@ def _write_teacher_episode(
     above_edge_start_gripper_profile: str,
     above_edge_terminal_hold_jitter: int,
     include_camera3_duplicate: bool,
+    capture_render_replay: bool = False,
+    capture_fps: int = 12,
     reset_home_qpos: np.ndarray | None = None,
 ) -> dict[str, Any]:
     if teacher_style == "legacy":
@@ -1281,6 +1343,8 @@ def _write_teacher_episode(
             above_edge_terminal_hold_jitter=above_edge_terminal_hold_jitter,
             task=task,
             include_camera3_duplicate=include_camera3_duplicate,
+            capture_render_replay=capture_render_replay,
+            capture_fps=capture_fps,
             reset_home_qpos=reset_home_qpos,
         )
 
@@ -2509,6 +2573,8 @@ def _write_fixed_jaw_edge_episode(
     above_edge_terminal_hold_jitter: int,
     task: str,
     include_camera3_duplicate: bool,
+    capture_render_replay: bool = False,
+    capture_fps: int = 12,
     reset_home_qpos: np.ndarray | None,
 ) -> dict[str, Any]:
     q_edge = _make_fixed_jaw_edge_qpos(env, q_open, best_meta)
@@ -2825,10 +2891,23 @@ def _write_fixed_jaw_edge_episode(
         for fraction in GRIP_THE_CUBE_V1_CLOSE_TRACE_FRACTIONS
     }
     previous_close_wrist_roll: float | None = None
+    render_replay_frames: list[dict[str, Any]] = []
 
     def add_step(action: np.ndarray, phase: str) -> tuple[bool, bool]:
         nonlocal frames, info, success_step, previous_action
         action = np.clip(np.asarray(action, dtype=np.float32), env.action_space.low, env.action_space.high)
+        if capture_render_replay:
+            from physical_ai_agent.so101_render_replay import capture_render_replay_frame
+
+            render_replay_frames.append(
+                capture_render_replay_frame(
+                    env,
+                    renderers,
+                    episode_index=episode_index,
+                    frame_index=frames,
+                    timestamp=float(frames) / float(capture_fps),
+                )
+            )
         episode_frames.append(
             _make_lerobot_frame(
                 env=env,
@@ -3015,7 +3094,7 @@ def _write_fixed_jaw_edge_episode(
         for frame in episode_frames:
             dataset.add_frame(frame)
 
-    return {
+    result = {
         "seed": seed,
         "frames": frames,
         "success": success,
@@ -3083,6 +3162,14 @@ def _write_fixed_jaw_edge_episode(
         "mean_action_delta": float(np.mean(action_deltas)) if action_deltas else 0.0,
         "max_action_delta": float(np.max(action_deltas)) if action_deltas else 0.0,
     }
+    if capture_render_replay:
+        result["_render_replay_capture"] = {
+            "episode_index": int(episode_index),
+            "seed": int(seed),
+            "frames": render_replay_frames,
+            "initial_object_z": float("nan"),
+        }
+    return result
 
 
 def _grip_the_cube_v1_close_trace_gate(

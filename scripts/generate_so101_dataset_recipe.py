@@ -17,6 +17,7 @@ from physical_ai_agent.so101_dataset_registry import (
     require_recipe_training_ready,
     validate_registered_recipe,
 )
+from physical_ai_agent.so101_dataset_generation_schema import load_dataset_generation_recipe
 
 
 DEFAULT_RECIPE = Path("configs/so101/dataset_generation/grip_the_cube_v2.json")
@@ -25,7 +26,7 @@ DEFAULT_RECIPE = Path("configs/so101/dataset_generation/grip_the_cube_v2.json")
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipe", type=Path, default=DEFAULT_RECIPE)
-    parser.add_argument("--split", choices=("train", "validation", "all"), default="all")
+    parser.add_argument("--split", default="all", help="Recipe split name or 'all'.")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
@@ -50,7 +51,13 @@ def main() -> None:
     if args.overwrite and not args.dry_run and not args.confirm_destructive_overwrite:
         parser.error("--overwrite requires --confirm-destructive-overwrite for a real run")
     recipe = load_recipe(args.recipe)
-    stages = build_stages(recipe, python=args.python, split=args.split, overwrite=args.overwrite)
+    stages = build_stages(
+        recipe,
+        python=args.python,
+        split=args.split,
+        overwrite=args.overwrite,
+        recipe_path=args.recipe,
+    )
     if args.dry_run:
         print(json.dumps({"recipe": str(args.recipe), "stages": stages}, indent=2))
         return
@@ -64,7 +71,7 @@ def main() -> None:
         workers=args.workers,
         reuse_complete_shards=args.reuse_complete_shards,
     )
-    selected_splits = list(recipe["splits"]) if args.split == "all" else [args.split]
+    selected_splits = _selected_split_names(recipe, args.split)
     try:
         registry = require_recipe_training_ready(
             repo_root,
@@ -87,12 +94,7 @@ def main() -> None:
 
 
 def load_recipe(path: Path) -> dict[str, Any]:
-    recipe = json.loads(path.read_text(encoding="utf-8"))
-    if int(recipe.get("schema_version", 0)) != 1:
-        raise ValueError("dataset generation recipe schema_version must be 1")
-    splits = recipe.get("splits")
-    if not isinstance(splits, dict) or not splits:
-        raise ValueError("recipe must define at least one split")
+    recipe = load_dataset_generation_recipe(path).as_dict()
     _validate_unique_seed_ranges(recipe)
     return recipe
 
@@ -102,7 +104,7 @@ def _require_append_only_output_roots(
 ) -> None:
     if overwrite:
         return
-    selected = list(recipe["splits"]) if split == "all" else [split]
+    selected = _selected_split_names(recipe, split)
     existing = [
         Path(str(recipe["splits"][name]["output_root"]))
         for name in selected
@@ -117,14 +119,17 @@ def _require_append_only_output_roots(
 
 
 def build_stages(
-    recipe: dict[str, Any], *, python: str, split: str, overwrite: bool
+    recipe: dict[str, Any],
+    *,
+    python: str,
+    split: str,
+    overwrite: bool,
+    recipe_path: Path = DEFAULT_RECIPE,
 ) -> list[dict[str, Any]]:
-    selected = list(recipe["splits"]) if split == "all" else [split]
-    missing = [name for name in selected if name not in recipe["splits"]]
-    if missing:
-        raise ValueError(f"recipe does not define split: {', '.join(missing)}")
+    selected = _selected_split_names(recipe, split)
     stages: list[dict[str, Any]] = []
-    for lookup in recipe.get("lookup_builders", []):
+    generated_selected = [name for name in selected if recipe["splits"][name].get("kind", "generated") == "generated"]
+    for lookup in recipe.get("lookup_builders", []) if generated_selected else []:
         stages.append(
             {
                 "name": f"lookup:{lookup['name']}",
@@ -133,6 +138,39 @@ def build_stages(
         )
     for split_name in selected:
         split_spec = recipe["splits"][split_name]
+        if split_spec.get("kind", "generated") == "render_derivative":
+            source_name = str(split_spec["source_split"])
+            source_spec = recipe["splits"][source_name]
+            stages.append(
+                {
+                    "name": f"render:{split_name}",
+                    "command": _render_command(
+                        recipe,
+                        split_spec=split_spec,
+                        source_spec=source_spec,
+                        python=python,
+                    ),
+                }
+            )
+            stages.append(
+                {
+                    "name": f"build-derivative:{split_name}",
+                    "command": _photoreal_builder_command(
+                        recipe,
+                        split_spec=split_spec,
+                        source_spec=source_spec,
+                        python=python,
+                        overwrite=overwrite,
+                    ),
+                }
+            )
+            stages.append(
+                {
+                    "name": f"sidecar:{split_name}",
+                    "command": _sidecar_command(recipe, split_spec=split_spec, python=python),
+                }
+            )
+            continue
         shard_roots = []
         for bin_spec in split_spec["bins"]:
             shard_name = str(bin_spec.get("shard", f"bin{bin_spec['id']}"))
@@ -163,6 +201,23 @@ def build_stages(
                 ),
             }
         )
+        replay = recipe.get("render_replay")
+        if isinstance(replay, dict) and replay.get("enabled", True):
+            stages.append(
+                {
+                    "name": f"render-replay:{split_name}",
+                    "command": [
+                        python,
+                        recipe["render_replay_script"],
+                        "--dataset-root",
+                        split_spec["output_root"],
+                        "--recipe",
+                        str(recipe_path),
+                        "--split",
+                        split_name,
+                    ],
+                }
+            )
         stages.append(
             {
                 "name": f"sidecar:{split_name}",
@@ -187,6 +242,126 @@ def build_stages(
                 }
             )
     return stages
+
+
+def _selected_split_names(recipe: dict[str, Any], split: str) -> list[str]:
+    if split == "all":
+        return list(recipe["splits"])
+    if split not in recipe["splits"]:
+        raise ValueError(f"recipe does not define split: {split}")
+    required = {split}
+    selected_spec = recipe["splits"][split]
+    if selected_spec.get("kind") == "render_derivative":
+        required.add(str(selected_spec["source_split"]))
+    return [name for name in recipe["splits"] if name in required]
+
+
+def _render_command(
+    recipe: dict[str, Any],
+    *,
+    split_spec: dict[str, Any],
+    source_spec: dict[str, Any],
+    python: str,
+) -> list[str]:
+    render = split_spec["render"]
+    replay = recipe["render_replay"]
+    source_root = Path(source_spec["output_root"])
+    episodes = int(split_spec.get("expected_episodes") or _expected_split_episodes(source_spec))
+    command = [
+        python,
+        "scripts/render_so101_dataset_blender_preview.py",
+        "--dataset-root",
+        str(source_root),
+        "--output-dir",
+        render["output_dir"],
+        "--episodes",
+        ",".join(str(index) for index in range(episodes)),
+        "--frames",
+        "all",
+        "--camera-keys",
+        ",".join(render["camera_keys"]),
+        "--render-replay-sidecar",
+        str(source_root / replay.get("output_dir", "render_replay")),
+        "--width",
+        str(render["width"]),
+        "--height",
+        str(render["height"]),
+        "--samples",
+        str(render["samples"]),
+        "--cycles-seed",
+        str(render["cycles_seed"]),
+        "--lighting-profile",
+        render["lighting_profile"],
+        "--key-light-power",
+        str(render["key_light_power"]),
+        "--fill-light-power",
+        str(render["fill_light_power"]),
+        "--world-strength",
+        str(render["world_strength"]),
+        "--hdri-rotation-deg",
+        str(render["hdri_rotation_deg"]),
+        "--exposure",
+        str(render["exposure"]),
+        "--color-management",
+        render["color_management"],
+        "--color-look",
+        render["color_look"],
+        "--gamma",
+        str(render["gamma"]),
+        "--output-format",
+        render["output_format"],
+        "--robot-material",
+        render["robot_material"],
+        "--scene-profile",
+        render["scene_profile"],
+        "--asset-root",
+        render["asset_root"],
+        "--blender-bin",
+        render["blender_bin"],
+        "--blender-batch-size",
+        str(render["blender_batch_size"]),
+    ]
+    if render.get("denoise"):
+        command.append("--denoise")
+    if render.get("material_profile"):
+        command.extend(["--robot-material-config", render["material_profile"]])
+    if not render.get("duplicate_camera3_from_camera2", True):
+        command.append("--no-duplicate-camera3-from-camera2")
+    return command
+
+
+def _photoreal_builder_command(
+    recipe: dict[str, Any],
+    *,
+    split_spec: dict[str, Any],
+    source_spec: dict[str, Any],
+    python: str,
+    overwrite: bool,
+) -> list[str]:
+    render = split_spec["render"]
+    command = [
+        python,
+        recipe["photoreal_builder_script"],
+        "--source-dataset-root",
+        source_spec["output_root"],
+        "--rendered-dir",
+        render["output_dir"],
+        "--output-root",
+        split_spec["output_root"],
+        "--repo-id",
+        split_spec["repo_id"],
+        "--camera-keys",
+        ",".join(render["camera_keys"]),
+    ]
+    if not render.get("duplicate_camera3_from_camera2", True):
+        command.append("--no-duplicate-camera3-from-camera2")
+    if overwrite:
+        command.append("--overwrite")
+    return command
+
+
+def _expected_split_episodes(split_spec: dict[str, Any]) -> int:
+    return sum(int(row["episodes"]) for row in split_spec.get("bins", []))
 
 
 def _export_command(
@@ -415,6 +590,8 @@ def _append_lift_audit_args(command: list[str], audit: dict[str, Any]) -> list[s
 def _validate_unique_seed_ranges(recipe: dict[str, Any]) -> None:
     ranges = []
     for split_name, split_spec in recipe["splits"].items():
+        if split_spec.get("kind", "generated") != "generated":
+            continue
         for bin_spec in split_spec["bins"]:
             start = (
                 int(bin_spec["seed"])

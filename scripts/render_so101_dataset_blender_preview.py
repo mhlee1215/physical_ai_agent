@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import re
@@ -16,8 +17,12 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from physical_ai_agent.sim.so101_camera_input import EGOCENTRIC_CAMERA1_POSE, _make_camera
-from render_so101_blender_probe import BLENDER_DRIVER, _pbr_paths, _write_photo_tabletop_texture
-from render_so101_mitsuba_probe import _export_mesh_geoms
+try:
+    from render_so101_blender_probe import BLENDER_DRIVER, _pbr_paths, _write_photo_tabletop_texture
+    from render_so101_mitsuba_probe import _export_mesh_geoms
+except ModuleNotFoundError:
+    from scripts.render_so101_blender_probe import BLENDER_DRIVER, _pbr_paths, _write_photo_tabletop_texture
+    from scripts.render_so101_mitsuba_probe import _export_mesh_geoms
 
 BLENDER_BATCH_DRIVER = BLENDER_DRIVER.replace(
     'def main():\n    args = sys.argv[sys.argv.index("--") + 1:]\n    spec_path = Path(args[0])\n    spec = json.loads(spec_path.read_text())',
@@ -68,6 +73,22 @@ def main() -> None:
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--samples", type=int, default=192)
     parser.add_argument("--denoise", action="store_true")
+    parser.add_argument("--cycles-seed", type=int, default=98200)
+    parser.add_argument("--lighting-profile", choices=("studio_small_08", "flat"), default="studio_small_08")
+    parser.add_argument("--key-light-power", type=float, default=42.0)
+    parser.add_argument("--fill-light-power", type=float, default=5.0)
+    parser.add_argument("--world-strength", type=float, default=0.28)
+    parser.add_argument("--hdri-rotation-deg", type=float, default=35.0)
+    parser.add_argument("--exposure", type=float, default=-1.3)
+    parser.add_argument("--color-management", choices=("Filmic", "Standard", "AgX"), default="Filmic")
+    parser.add_argument("--color-look", default="Medium High Contrast")
+    parser.add_argument("--gamma", type=float, default=1.0)
+    parser.add_argument("--output-format", choices=("PNG", "JPEG"), default="PNG")
+    parser.add_argument(
+        "--render-replay-sidecar",
+        type=Path,
+        help="Read exact frame geoms/cameras from render_replay instead of replaying MuJoCo actions.",
+    )
     parser.add_argument("--robot-material", choices=("plastic", "matte_pla", "metal"), default="matte_pla")
     parser.add_argument(
         "--robot-material-config",
@@ -120,6 +141,18 @@ def main() -> None:
         height=args.height,
         samples=args.samples,
         denoise=args.denoise,
+        cycles_seed=args.cycles_seed,
+        lighting_profile=args.lighting_profile,
+        key_light_power=args.key_light_power,
+        fill_light_power=args.fill_light_power,
+        world_strength=args.world_strength,
+        hdri_rotation_deg=args.hdri_rotation_deg,
+        exposure=args.exposure,
+        color_management=args.color_management,
+        color_look=args.color_look,
+        gamma=args.gamma,
+        output_format=args.output_format,
+        render_replay_sidecar=args.render_replay_sidecar,
         robot_material=args.robot_material,
         robot_material_config_path=args.robot_material_config,
         scene_profile=args.scene_profile,
@@ -149,6 +182,18 @@ def render_dataset_preview(
     height: int,
     samples: int,
     denoise: bool,
+    cycles_seed: int,
+    lighting_profile: str,
+    key_light_power: float,
+    fill_light_power: float,
+    world_strength: float,
+    hdri_rotation_deg: float,
+    exposure: float,
+    color_management: str,
+    color_look: str,
+    gamma: float,
+    output_format: str,
+    render_replay_sidecar: Path | None,
     robot_material: str,
     robot_material_config_path: Path | None,
     scene_profile: str,
@@ -195,6 +240,21 @@ def render_dataset_preview(
     for row in rows:
         rows_by_episode.setdefault(int(row["episode_index"]), []).append(row)
 
+    replay_manifest = None
+    replay_frames: dict[tuple[int, int], dict[str, Any]] = {}
+    if render_replay_sidecar is not None:
+        from physical_ai_agent.so101_render_replay import load_render_replay_frames
+
+        replay_manifest, replay_frames = load_render_replay_frames(render_replay_sidecar)
+        missing_replay = [
+            (episode, frame)
+            for episode, frames in episode_frames.items()
+            for frame in frames
+            if (episode, frame) not in replay_frames
+        ]
+        if missing_replay:
+            raise ValueError(f"render replay sidecar is missing requested frames: {missing_replay[:12]}")
+
     rendered: list[dict[str, Any]] = []
     driver_path = output_dir / "blender_driver.py"
     driver_path.write_text(BLENDER_BATCH_DRIVER if blender_batch_size > 1 else BLENDER_DRIVER, encoding="utf-8")
@@ -203,12 +263,14 @@ def render_dataset_preview(
     hdri_path = asset_root / "polyhaven" / "studio_small_08_2k.hdr"
     table_pbr_dir = asset_root / "ambientcg" / "Wood008_1K-JPG"
     plastic_pbr_dir = asset_root / "ambientcg" / "Plastic013A_1K-JPG"
+    output_extension = ".png" if output_format == "PNG" else ".jpg"
 
-    env = _make_env(env_id=env_id, env_source=env_source)
+    env = None if render_replay_sidecar is not None else _make_env(env_id=env_id, env_source=env_source)
     mujoco_renderers: dict[str, Any] = {}
     try:
-        for camera_name in ("egocentric_cam", "wrist_cam"):
-            mujoco_renderers[camera_name] = mujoco.Renderer(env.unwrapped.model, height=height, width=width)
+        if env is not None:
+            for camera_name in ("egocentric_cam", "wrist_cam"):
+                mujoco_renderers[camera_name] = mujoco.Renderer(env.unwrapped.model, height=height, width=width)
         for episode in sorted(rows_by_episode):
             seed = _seed_for_episode(
                 episode,
@@ -216,28 +278,36 @@ def render_dataset_preview(
                 dataset_root=dataset_root,
                 episode_summaries=episode_summaries,
             )
-            env.reset(seed=seed)
-            unwrapped = env.unwrapped
-            actuator_ids = getattr(unwrapped, "_actuator_ids", None)
+            if env is not None:
+                env.reset(seed=seed)
+                unwrapped = env.unwrapped
+                actuator_ids = getattr(unwrapped, "_actuator_ids", None)
+            else:
+                unwrapped = None
+                actuator_ids = None
             for row in rows_by_episode[episode]:
                 frame_index = int(row["frame_index"])
                 state = [float(value) for value in row["observation.state"]]
                 action = [float(value) for value in row["action"]]
-                replay_state = unwrapped.data.ctrl[actuator_ids] if actuator_ids is not None else unwrapped.data.ctrl
-                state_error = _state_replay_error(replay_state, state)
+                replay_frame = replay_frames.get((episode, frame_index))
+                if replay_frame is not None:
+                    state_error = 0.0
+                else:
+                    replay_state = unwrapped.data.ctrl[actuator_ids] if actuator_ids is not None else unwrapped.data.ctrl
+                    state_error = _state_replay_error(replay_state, state)
 
                 if frame_index in episode_frames[episode]:
                     frame_dir = output_dir / f"episode_{episode:04d}_frame_{frame_index:04d}"
                     image_paths = {
                         camera_key: str(
                             frame_dir
-                            / f"episode_{episode:04d}_frame_{frame_index:04d}_{_camera_slug(camera_key)}.png"
+                            / f"episode_{episode:04d}_frame_{frame_index:04d}_{_camera_slug(camera_key)}{output_extension}"
                         )
                         for camera_key in camera_keys
                     }
                     if duplicate_camera3_from_camera2 and "observation.images.camera2" in image_paths:
                         image_paths["observation.images.camera3"] = str(
-                            frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_camera3.png"
+                            frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_camera3{output_extension}"
                         )
                     if skip_existing and all(Path(path).exists() for path in image_paths.values()):
                         rendered.append(
@@ -258,23 +328,33 @@ def render_dataset_preview(
                                 "skipped_existing": True,
                             }
                         )
-                        env.step(np.asarray(action, dtype=float))
+                        if env is not None:
+                            env.step(np.asarray(action, dtype=float))
                         continue
                     mesh_dir = frame_dir / "ply"
                     mesh_dir.mkdir(parents=True, exist_ok=True)
-                    mujoco.mj_forward(unwrapped.model, unwrapped.data)
-                    exported = _export_mesh_geoms(
-                        unwrapped.model,
-                        unwrapped.data,
-                        mesh_dir,
-                        max_mesh_geoms=max_mesh_geoms,
-                    )
-                    primitives = _export_primitive_geoms(unwrapped.model, unwrapped.data)
-                    camera_specs = _camera_specs_from_mujoco_scene(
-                        env,
-                        mujoco_renderers,
-                        camera_lens=camera_lens,
-                    )
+                    if replay_frame is not None:
+                        from physical_ai_agent.so101_render_replay import sidecar_scene_items
+
+                        assert replay_manifest is not None and render_replay_sidecar is not None
+                        exported, primitives = sidecar_scene_items(
+                            render_replay_sidecar, replay_manifest, replay_frame
+                        )
+                        camera_specs = replay_frame["camera_specs"]
+                    else:
+                        mujoco.mj_forward(unwrapped.model, unwrapped.data)
+                        exported = _export_mesh_geoms(
+                            unwrapped.model,
+                            unwrapped.data,
+                            mesh_dir,
+                            max_mesh_geoms=max_mesh_geoms,
+                        )
+                        primitives = _export_primitive_geoms(unwrapped.model, unwrapped.data)
+                        camera_specs = _camera_specs_from_mujoco_scene(
+                            env,
+                            mujoco_renderers,
+                            camera_lens=camera_lens,
+                        )
                     render_specs = []
                     for camera_key in camera_keys:
                         if camera_key not in camera_specs:
@@ -289,7 +369,17 @@ def render_dataset_preview(
                         "height": height,
                         "samples": samples,
                         "denoise": denoise,
-                        "cycles_seed": 98200,
+                        "cycles_seed": int(cycles_seed),
+                        "lighting_profile": lighting_profile,
+                        "key_light_power": float(key_light_power),
+                        "fill_light_power": float(fill_light_power),
+                        "world_strength": float(world_strength),
+                        "hdri_rotation_deg": float(hdri_rotation_deg),
+                        "exposure": float(exposure),
+                        "color_management": color_management,
+                        "color_look": color_look,
+                        "gamma": float(gamma),
+                        "output_format": output_format,
                         "sample_clamp_indirect": 0.85,
                         "background_wall": False,
                         "stable_tabletop": True,
@@ -345,7 +435,8 @@ def render_dataset_preview(
                             )
                         )
                         pending_blender.clear()
-                env.step(np.asarray(action, dtype=float))
+                if env is not None:
+                    env.step(np.asarray(action, dtype=float))
         if pending_blender:
             rendered.extend(
                 _flush_blender_pending(
@@ -361,7 +452,8 @@ def render_dataset_preview(
     finally:
         for renderer in mujoco_renderers.values():
             renderer.close()
-        env.close()
+        if env is not None:
+            env.close()
     if len(rendered) != expected:
         raise RuntimeError(f"rendered {len(rendered)} frames, expected {expected}")
 
@@ -407,16 +499,39 @@ def render_dataset_preview(
         else {},
         "camera_lens": camera_lens,
         "samples": samples,
+        "cycles_seed": int(cycles_seed),
         "denoise": denoise,
+        "lighting_profile": lighting_profile,
+        "key_light_power": float(key_light_power),
+        "fill_light_power": float(fill_light_power),
+        "world_strength": float(world_strength),
+        "hdri_rotation_deg": float(hdri_rotation_deg),
+        "exposure": float(exposure),
+        "color_management": color_management,
+        "color_look": color_look,
+        "gamma": float(gamma),
+        "output_format": output_format,
+        "render_asset_checksums": _render_asset_checksums(
+            texture_path=texture_path,
+            hdri_path=hdri_path,
+            table_pbr_dir=table_pbr_dir,
+            plastic_pbr_dir=plastic_pbr_dir,
+            material_profile=robot_material_config_path,
+        ),
+        "render_replay_sidecar": (
+            str(render_replay_sidecar.resolve()) if render_replay_sidecar is not None else None
+        ),
+        "physics_replayed": render_replay_sidecar is None,
         "width": width,
         "height": height,
         "contact_sheet": str(contact_sheet) if contact_sheet else None,
         "contact_sheet_limit": contact_sheet_limit,
         "renders": rendered,
         "note": (
-            "Episode state is replayed from the source LeRobot actions: each episode "
-            "resets once with the recorded seed, renders the pre-action frame, then "
-            "steps the source action so cube/contact dynamics remain continuous."
+            "Frame geoms and camera transforms are read directly from render_replay; "
+            "MuJoCo physics is not rerun."
+            if render_replay_sidecar is not None
+            else "Episode state is replayed from source actions after a recorded-seed reset."
         ),
     }
     (output_dir / "so101_dataset_blender_preview_report.json").write_text(
@@ -424,6 +539,33 @@ def render_dataset_preview(
         encoding="utf-8",
     )
     return report
+
+
+def _render_asset_checksums(
+    *,
+    texture_path: Path,
+    hdri_path: Path,
+    table_pbr_dir: Path,
+    plastic_pbr_dir: Path,
+    material_profile: Path | None,
+) -> dict[str, str]:
+    paths = [texture_path]
+    if material_profile is not None:
+        paths.append(material_profile)
+    if hdri_path.exists():
+        paths.append(hdri_path)
+    for directory in (table_pbr_dir, plastic_pbr_dir):
+        if directory.exists():
+            paths.extend(path for path in sorted(directory.rglob("*")) if path.is_file())
+    return {str(path.resolve()): _sha256(path) for path in paths if path.is_file()}
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _flush_blender_pending(
@@ -468,7 +610,7 @@ def _flush_blender_pending(
                 _rotate_image(Path(image_path), int(rotation))
         if duplicate_camera3_from_camera2 and "observation.images.camera2" in image_paths:
             camera2_path = Path(image_paths["observation.images.camera2"])
-            camera3_path = item["frame_dir"] / f"{item['frame_dir'].name}_camera3.png"
+            camera3_path = item["frame_dir"] / f"{item['frame_dir'].name}_camera3{camera2_path.suffix}"
             shutil.copyfile(camera2_path, camera3_path)
             image_paths["observation.images.camera3"] = str(camera3_path)
         shutil.rmtree(item["mesh_dir"], ignore_errors=True)
@@ -523,7 +665,7 @@ def _export_primitive_geoms(model: Any, data: Any) -> list[dict[str, Any]]:
         if len(rgba) >= 4 and rgba[3] <= 0.01:
             continue
         name = model.geom(geom_id).name or f"geom_{geom_id:03d}"
-        semantic_color = "red_cube" if "cube" in name or "pick_slot" in name else None
+        semantic_color = "recorded_cube_color" if "cube" in name or "pick_slot" in name else None
         primitives.append(
             {
                 "geom_id": geom_id,
@@ -805,12 +947,56 @@ def _camera_specs_from_mujoco_scene(
     )
     camera1["rotation_degrees"] = int(EGOCENTRIC_CAMERA1_POSE["rotation_degrees"])
     return {
-        "observation.images.camera1": camera1,
-        "observation.images.camera2": _fixed_mujoco_camera_spec(
-            unwrapped.model,
-            unwrapped.data,
-            "wrist_cam",
+        "observation.images.camera1": _with_explicit_camera_contract(
+            camera1, role="egocentric_cam", width=256, height=256
         ),
+        "observation.images.camera2": _with_explicit_camera_contract(
+            _fixed_mujoco_camera_spec(
+                unwrapped.model,
+                unwrapped.data,
+                "wrist_cam",
+            ),
+            role="wrist_cam",
+            width=256,
+            height=256,
+        ),
+    }
+
+
+def _with_explicit_camera_contract(
+    spec: dict[str, Any], *, role: str, width: int, height: int
+) -> dict[str, Any]:
+    import math
+    import numpy as np
+
+    fovy_rad = math.radians(float(spec["fovy"]))
+    focal = 0.5 * float(height) / math.tan(0.5 * fovy_rad)
+    forward = np.asarray(spec["forward"], dtype=float)
+    forward /= np.linalg.norm(forward)
+    up = np.asarray(spec["up"], dtype=float)
+    up /= np.linalg.norm(up)
+    right = np.cross(forward, up)
+    right /= np.linalg.norm(right)
+    up = np.cross(right, forward)
+    matrix = np.eye(4, dtype=float)
+    matrix[:3, 0] = right
+    matrix[:3, 1] = up
+    matrix[:3, 2] = -forward
+    matrix[:3, 3] = np.asarray(spec["location"], dtype=float)
+    return {
+        **spec,
+        "role": role,
+        "world_from_camera": matrix.reshape(-1).tolist(),
+        "intrinsics": {
+            "fx": focal,
+            "fy": focal,
+            "cx": float(width) / 2.0,
+            "cy": float(height) / 2.0,
+            "width": int(width),
+            "height": int(height),
+        },
+        "clip_end": float(spec.get("clip_end", 10.0)),
+        "distortion": None,
     }
 
 

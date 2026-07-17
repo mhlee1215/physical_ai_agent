@@ -7,6 +7,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from pydantic import ValidationError
+
+from physical_ai_agent.so101_dataset_generation_schema import DatasetGenerationRecipe
+
 
 REGISTRY_SCHEMA_VERSION = 1
 DATASET_RECIPE_DIR = Path("configs/so101/dataset_generation")
@@ -142,8 +146,13 @@ def scan_dataset_registry(
             )
             continue
         try:
-            recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            raw_recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
+            recipe = (
+                DatasetGenerationRecipe.model_validate(raw_recipe).as_dict()
+                if "exporter" in raw_recipe
+                else raw_recipe
+            )
+        except (OSError, json.JSONDecodeError, ValidationError) as exc:
             issues.append(RegistryIssue("invalid_recipe_json", str(exc), relative_recipe))
             continue
 
