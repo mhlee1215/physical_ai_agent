@@ -340,17 +340,38 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
         for split, root in skill_roots.items()
         if _resolve_dataset_path(repo_root, root) not in recipe_paths
     ]
+    photoreal_items = [
+        _so101_photoreal_dataset_catalog_item(repo_root, split, path)
+        for split, path in _discover_so101_photoreal_datasets(repo_root).items()
+        if _resolve_dataset_path(repo_root, path) not in recipe_paths
+    ]
+    photoreal_items.extend(
+        _dataset_catalog_item(repo_root, split, path, category="photoreal")
+        for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()
+        if _resolve_dataset_path(repo_root, path) not in recipe_paths
+    )
     generated_items: list[dict[str, Any]] = []
     official_paths = {_resolve_dataset_path(repo_root, root) for root in official_roots.values()}
     skill_paths = {_resolve_dataset_path(repo_root, root) for root in skill_roots.values()}
     for split, root in recipe_roots.items():
         resolved = _resolve_dataset_path(repo_root, root)
-        category = "official" if resolved in official_paths else "skill" if resolved in skill_paths else "generated"
+        if (resolved / "photoreal_lerobot_manifest.json").is_file():
+            category = "photoreal"
+        else:
+            category = (
+                "official"
+                if resolved in official_paths
+                else "skill"
+                if resolved in skill_paths
+                else "generated"
+            )
         item = _dataset_catalog_item(repo_root, split, root, category=category)
         if category == "official":
             official_items.append(item)
         elif category == "skill":
             skill_items.append(item)
+        elif category == "photoreal":
+            photoreal_items.append(item)
         else:
             generated_items.append(item)
     archived_items = [_dataset_catalog_item(repo_root, split, DATASETS[split], category="archived") for split in ARCHIVED_DATASET_SPLITS]
@@ -359,14 +380,6 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
         _dataset_catalog_item(repo_root, split, path, category="temporary")
         for split, path in _discover_temporary_datasets(repo_root).items()
     ]
-    photoreal_items = [
-        _so101_photoreal_dataset_catalog_item(repo_root, split, path)
-        for split, path in _discover_so101_photoreal_datasets(repo_root).items()
-    ]
-    photoreal_items.extend(
-        _dataset_catalog_item(repo_root, split, path, category="photoreal")
-        for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()
-    )
     mycobot_items = [
         _mycobot_dataset_catalog_item(repo_root, split, path)
         for split, path in _discover_mycobot_datasets(repo_root).items()
@@ -2556,7 +2569,7 @@ def _index_html() -> str:
 	      };
 	      if (!datasetNamesByKind.train.length) datasetNamesByKind.train = orderedNames;
 	      if (!datasetNamesByKind.valid.length) datasetNamesByKind.valid = orderedNames.filter(name => !isTrainDataset(name));
-	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !isTrainDataset(name) && !name.endsWith("_val") && !name.endsWith("_valid") && !isPhotorealDataset(name) && datasetCategoryByName[name] !== "closed_loop");
+	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !isTrainDataset(name) && !name.endsWith("_val") && !name.endsWith("_valid") && !name.includes("_validation") && !isPhotorealDataset(name) && datasetCategoryByName[name] !== "closed_loop");
 	      syncViewKind();
 	    }
 

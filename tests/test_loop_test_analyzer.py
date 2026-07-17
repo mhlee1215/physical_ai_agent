@@ -174,6 +174,47 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertNotIn("legacy_alias", payload["datasets"])
         self.assertEqual(payload["dataset_groups"][0]["items"][0]["name"], "canonical")
 
+    def test_recipe_photoreal_derivative_uses_photoreal_catalog_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "photoreal_derivative"
+            root.mkdir()
+            (root / "photoreal_lerobot_manifest.json").write_text(
+                json.dumps({"format": "so101_photoreal_lerobot_v1"}), encoding="utf-8"
+            )
+
+            def catalog_item(_repo_root: Path, split: str, _root: Path, *, category: str):
+                summary = {"name": split, "root": str(root), "episodes": 1, "frames": 1}
+                return {
+                    "name": split,
+                    "status": "available",
+                    "category": category,
+                    "summary": summary,
+                }
+
+            with (
+                patch.object(dataset_viewer, "_official_dataset_roots", return_value={}),
+                patch.object(dataset_viewer, "_skill_dataset_roots", return_value={}),
+                patch.object(
+                    dataset_viewer,
+                    "_generation_recipe_dataset_roots",
+                    return_value={"photoreal_derivative": root},
+                ),
+                patch.object(dataset_viewer, "_dataset_catalog_item", side_effect=catalog_item),
+                patch.object(dataset_viewer, "_discover_temporary_datasets", return_value={}),
+                patch.object(dataset_viewer, "_discover_so101_photoreal_datasets", return_value={}),
+                patch.object(
+                    dataset_viewer, "_discover_so101_photoreal_lerobot_datasets", return_value={}
+                ),
+                patch.object(dataset_viewer, "_discover_mycobot_datasets", return_value={}),
+                patch.object(dataset_viewer, "ARCHIVED_DATASET_SPLITS", []),
+            ):
+                payload = dataset_viewer._build_datasets_payload(Path(tmpdir))
+
+        groups = {group["id"]: group["items"] for group in payload["dataset_groups"]}
+        self.assertEqual(groups["generated"], [])
+        self.assertEqual(groups["photoreal"][0]["name"], "photoreal_derivative")
+        self.assertEqual(groups["photoreal"][0]["category"], "photoreal")
+
     def test_qwen_chain_loop_test_id_keeps_nact15_variant_distinct(self) -> None:
         self.assertEqual(
             exporter._loop_test_id_from_report_path(
@@ -569,6 +610,7 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertIn('value="train" selected>Train datasets', html)
         self.assertIn('value="valid">Validation datasets', html)
         self.assertIn('value="photoreal">Photoreal datasets', html)
+        self.assertIn('!name.includes("_validation")', html)
         self.assertIn('value="closed_loop">closed loop test case', html)
         self.assertNotIn('id="datasetTab"', html)
         self.assertNotIn('id="loopTab"', html)
