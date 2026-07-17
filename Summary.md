@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-07-09
+Last updated: 2026-07-16
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -34,6 +34,22 @@ lightweight VLA policy.
   the implementation on that evidence and record the source-backed rationale in
   the work note, PR, or code comment as appropriate. Do not invent architecture
   changes from scratch when comparable public implementations exist.
+- Deterministic photoreal robot dataset work is routed through
+  `.agents/skills/robot-photoreal-dataset-rendering/SKILL.md`. The immutable
+  contract is the source dataset identity, trajectory, episode timeline,
+  simulator state, world assets, and recorded camera calibration. Render
+  engine, samples, lighting, and material JSON are mutable only in a new
+  append-only derivative. A full render is blocked until an all-episode replay
+  preflight and representative-frame canary pass; probe renders and partial
+  sidecars are diagnostics, not training datasets.
+- Current `v2_5` replay audit is not full-rerender ready. All 300 episodes have
+  snapshots and the source contains 50,456 frames, but the default renderer
+  exposes 9 RGB object slots while the recorded report expects 3 green cubes,
+  296 episode starts match exactly, episodes 2, 41, 96, and 295 have invalid
+  start snapshots, and the recorded model dimensions differ from snapshot
+  dimensions (`69/60` versus `27/24`). Seed `31010278` therefore requires a
+  version-matched environment or explicit state-recovery path before a full
+  deterministic render can proceed.
 
 The immediate collaboration goal is to produce manuscript-table experiment data
 as quickly and efficiently as possible. Research and orchestration choices should
@@ -151,6 +167,15 @@ paper-facing concepts:
   run logdir. Closed-loop tests must be invoked from the training process after
   checkpoint/evaluation events through `scripts/run_so101_training_loop_test.py`,
   not by a separate polling monitor.
+- User policy: whenever TensorBoard is started or reported, provide both the
+  local URL and the same-Wi-Fi mobile TensorBoard URL.
+- User policy: local dataset/viewer dashboards must reuse the current
+  user-visible server and port. If the user is viewing
+  `http://127.0.0.1:8769/`, update or restart that same `8769` server rather
+  than starting another viewer on a fallback port. Starting extra viewer
+  servers or changing ports is allowed only when the user explicitly asks for a
+  separate server or the original port is owned by an unrelated process and the
+  exception is reported clearly.
 - User policy: SO101 Live Training Process Safety Contract. Read-only status
   and root-cause checks may inspect `status --json`, `ps`, `tail`, TensorBoard
   events, `stat`, `find`, `du`, `rg`, and `sed` without another confirmation.

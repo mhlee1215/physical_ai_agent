@@ -21,6 +21,7 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 | Role | Responsibility | Reusable skill | Writes |
 | --- | --- | --- | --- |
 | Orchestrator | Select the next checkpoint and enforce validation | `.agents/skills/physical-ai-orchestrator/SKILL.md` | final response or `_workspace/*` |
+| Photoreal Dataset Renderer | Preserve source trajectories and recorded cameras while producing deterministic Blender renders and training-ready image-only derivatives | `.agents/skills/robot-photoreal-dataset-rendering/SKILL.md` | repo config/tests/docs and `_workspace/so101_photoreal_*` artifacts |
 | Real SO-100 Agentic SmolVLA Specialist | Preserve real hardware camera routing, SmolVLA execution gates, observer evidence, and agentic-loop semantics | `.agents/skills/real-so100-agentic-smolvla/SKILL.md` | `_workspace/real_so100/*`, `docs/real_so100_*` |
 | Evaluation Results Manager | Classify paper-facing evaluation result packages as paper-ready, diagnostic-only, or blocked | n/a | result ledger summaries from researcher/reviewer packages |
 | Implementer | Add code, config, and tests for the checkpoint | n/a | repo files |
@@ -152,6 +153,66 @@ Required persistence targets:
 
 The postdoc should still notify PM and affected workers, but the file update is
 part of the orchestration change itself.
+
+### Local Dashboard Server Lifecycle
+
+Dataset viewers, Robot Experiment Manager, loop analyzers, TensorBoard-adjacent
+inspection surfaces, and other user-visible local servers must reuse the
+current user-visible server and port by default. Before starting a viewer or
+dashboard server, check whether the requested/current port is already serving
+the target surface. If it is, reuse it and refresh the data or restart that same
+server only when needed.
+
+Do not work around a live server by starting a second copy on a new port. A port
+change is allowed only when the user explicitly asks for a separate server, the
+original port is owned by an unrelated process and cannot be stopped safely, or
+the final report clearly labels the new port as a temporary exception. For the
+SO101/photoreal dataset viewer lane, the active browser port is the contract:
+if the user is looking at `http://127.0.0.1:8769/`, update or restart that
+server on `8769` instead of launching another viewer on `8768`, `8770`, or an
+ad hoc fallback.
+
+### Photoreal Dataset Orchestration
+
+All photoreal robot dataset generation and rerendering must use
+`.agents/skills/robot-photoreal-dataset-rendering/SKILL.md`. PM owns a phase
+board with source owner, replay-preflight verdict, canary verdict, full-render
+owner, derivative-builder owner, verifier, render profile, artifact root, and
+active dashboard port.
+
+Required phase order:
+
+1. Audit the immutable source identity and make the output append-only. Source
+   and output roots must differ.
+2. Run replay preflight across every episode. Record environment/version
+   manifest, snapshot compatibility, targets and collisions, action/timeline
+   completeness, and camera metadata. Any state or model-shape mismatch blocks
+   the full render.
+3. Render a canary containing episode start, contact/grasp, and terminal frames.
+   Verify recorded camera matrices, task prompt and cube color, gripper shape,
+   temporal continuity, noise stability, materials, lighting, table, and props.
+4. Render every declared camera for every frame. Reset once per episode, replay
+   pre-action state sequentially, and fail on missing frames. Partial sidecars
+   and sample probes remain diagnostic-only.
+5. Build a new image-only LeRobot derivative. Preserve episode boundaries,
+   state, action, timestamps, indices, task prompts, and non-image features;
+   replace only declared camera streams.
+6. Complete only after the recipe is declared, the training-ready registry gate
+   passes, the dataset appears through `/api/datasets`, one `/api/frame` request
+   succeeds, and mobile/full playback works in the existing viewer session.
+
+Keep large raw renders and derivative datasets under `_workspace/`; commit code,
+recipe/config, tests, reports, and small representative images. MyCobot work
+uses the official adaptive gripper profile by default unless the user explicitly
+requests a different end effector.
+
+The current SO101 `v2_5` source is blocked before phase 4: all 300 episodes have
+snapshots and the source has 50,456 frames, but 296 starts match exactly while
+episodes 2, 41, 96, and 295 contain invalid start snapshots; the renderer model
+dimensions are `69/60` while snapshots record `27/24`; and the renderer exposes
+9 RGB object slots while the source report expects 3 green cubes. Seed
+`31010278` requires a matching historical environment or explicit recovery and
+a fresh all-episode preflight before full rendering.
 
 ### Paper-Table Data Priority
 

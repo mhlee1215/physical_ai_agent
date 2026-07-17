@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 
 def main():
@@ -41,6 +41,13 @@ def main():
     scene.cycles.samples = int(spec["samples"])
     scene.cycles.preview_samples = min(64, int(spec["samples"]))
     scene.cycles.use_denoising = bool(spec["denoise"])
+    scene.cycles.seed = int(spec.get("cycles_seed", 0))
+    if hasattr(scene.cycles, "use_animated_seed"):
+        scene.cycles.use_animated_seed = False
+    if hasattr(scene.cycles, "sample_clamp_direct"):
+        scene.cycles.sample_clamp_direct = float(spec.get("sample_clamp_direct", 0.0))
+    if hasattr(scene.cycles, "sample_clamp_indirect"):
+        scene.cycles.sample_clamp_indirect = float(spec.get("sample_clamp_indirect", 1.25))
     scene.render.resolution_x = int(spec["width"])
     scene.render.resolution_y = int(spec["height"])
     scene.view_settings.view_transform = "Filmic"
@@ -58,30 +65,53 @@ def main():
             metal_devices.append(device.name)
     scene.cycles.device = "GPU" if metal_devices else "CPU"
 
-    floor_mat = make_tabletop_material(spec["table_pbr"])
-    bpy.ops.mesh.primitive_plane_add(size=2.5, location=(0.0, 0.0, -0.002))
+    scene_profile = spec.get("scene_profile", "neutral")
+    floor_mat = (
+        make_black_tabletop_material()
+        if scene_profile == "black_table_clutter"
+        else make_stable_tabletop_material() if spec.get("stable_tabletop") else make_tabletop_material(spec["table_pbr"])
+    )
+    if scene_profile == "black_table_clutter":
+        bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.28, 0.10, -0.018))
+        bpy.context.object.scale = (0.72, 0.62, 0.018)
+    else:
+        bpy.ops.mesh.primitive_plane_add(size=2.5, location=(0.0, 0.0, -0.002))
     floor = bpy.context.object
     floor.name = "tabletop"
     floor.data.materials.append(floor_mat)
 
-    wall_mat = make_wall_material()
-    bpy.ops.mesh.primitive_plane_add(
-        size=2.5,
-        location=(0.0, 0.78, 0.62),
-        rotation=(math.radians(90.0), 0.0, 0.0),
-    )
-    wall = bpy.context.object
-    wall.name = "matte_background_wall"
-    wall.data.materials.append(wall_mat)
+    for item in spec.get("visual_props", []):
+        add_visual_prop(item)
+
+    if spec.get("background_wall", True):
+        wall_mat = make_wall_material()
+        bpy.ops.mesh.primitive_plane_add(
+            size=2.5,
+            location=(0.0, 0.78, 0.62),
+            rotation=(math.radians(90.0), 0.0, 0.0),
+        )
+        wall = bpy.context.object
+        wall.name = "matte_background_wall"
+        wall.data.materials.append(wall_mat)
 
     for item in spec["meshes"]:
         bpy.ops.wm.ply_import(filepath=item["path"])
         obj = bpy.context.object
         obj.name = item["name"] or f"mesh_{item['geom_id']:03d}"
-        obj.data.materials.append(make_robot_material(item["rgba"], spec["plastic_pbr"], spec.get("robot_material", "plastic")))
+        obj.data.materials.append(
+            make_robot_material(
+                item,
+                spec["plastic_pbr"],
+                spec.get("robot_material", "plastic"),
+                spec.get("robot_material_config"),
+            )
+        )
         bpy.ops.object.shade_smooth()
         weighted = obj.modifiers.new("weighted_normals", "WEIGHTED_NORMAL")
         weighted.keep_sharp = True
+
+    for item in spec.get("primitives", []):
+        add_primitive(item, spec.get("robot_material_config"))
 
     target = spec.get("target_site")
     if target:
@@ -102,19 +132,26 @@ def main():
     scene.world = world
     configure_world(world, spec.get("hdri_path"))
 
+    renders = spec.get("renders") or [
+        {
+            "image_path": spec["image_path"],
+            "camera": {
+                "mode": "look_at",
+                "location": [0.48, -0.50, 0.31],
+                "target": [0.12, 0.015, 0.075],
+                "lens": float(spec.get("camera_lens", 48)),
+                "focus_distance": 0.56,
+            },
+        }
+    ]
     camera = bpy.data.cameras.new("camera")
     camera_obj = bpy.data.objects.new("camera", camera)
     bpy.context.collection.objects.link(camera_obj)
-    camera_obj.location = (0.48, -0.50, 0.31)
-    look_at(camera_obj, Vector((0.12, 0.015, 0.075)))
-    camera.lens = 48
-    camera.dof.use_dof = True
-    camera.dof.focus_distance = 0.56
-    camera.dof.aperture_fstop = 8.0
     scene.camera = camera_obj
-
-    scene.render.filepath = spec["image_path"]
-    bpy.ops.render.render(write_still=True)
+    for render in renders:
+        configure_camera(camera_obj, camera, render["camera"], default_lens=float(spec.get("camera_lens", 48)))
+        scene.render.filepath = render["image_path"]
+        bpy.ops.render.render(write_still=True)
 
     report = {
         "blender_version": bpy.app.version_string,
@@ -125,13 +162,29 @@ def main():
     Path(spec["blender_report_path"]).write_text(json.dumps(report, indent=2, sort_keys=True))
 
 
-def make_robot_material(rgba, plastic_pbr, robot_material):
+def make_robot_material(item, plastic_pbr, robot_material, robot_material_config):
+    rgba = item["rgba"]
     rgb = material_color(rgba)
     mat = bpy.data.materials.new("robot_material")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
     bsdf = nodes.get("Principled BSDF")
+    configured = configured_material_spec(item, robot_material_config, allow_default=True)
+    if configured:
+        color = configured["base_color"]
+        bsdf.inputs["Base Color"].default_value = (*color, 1.0)
+        bsdf.inputs["Roughness"].default_value = float(configured["roughness"])
+        bsdf.inputs["Metallic"].default_value = float(configured["metallic"])
+        noise = nodes.new("ShaderNodeTexNoise")
+        noise.inputs["Scale"].default_value = float(configured.get("noise_scale", 100.0))
+        noise.inputs["Detail"].default_value = 8.0
+        bump = nodes.new("ShaderNodeBump")
+        bump.inputs["Strength"].default_value = float(configured.get("bump_strength", 0.015))
+        bump.inputs["Distance"].default_value = 0.0012
+        links.new(noise.outputs["Fac"], bump.inputs["Height"])
+        links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+        return mat
     is_yellow_body = rgb[0] > 0.5 and rgb[1] > 0.25
     if robot_material == "metal" and is_yellow_body:
         rgb = [0.86, 0.70, 0.38]
@@ -222,6 +275,112 @@ def make_target_material():
     return mat
 
 
+def add_primitive(item, robot_material_config):
+    if len(item.get("rgba", [])) >= 4 and float(item["rgba"][3]) <= 0.01:
+        return
+    kind = item["type"]
+    location = item["position"]
+    rotation = matrix_to_euler(item["xmat"])
+    name = item["name"] or f"primitive_{item['geom_id']:03d}"
+    size = [float(value) for value in item["size"]]
+    if kind == "box":
+        bpy.ops.mesh.primitive_cube_add(size=2.0, location=location, rotation=rotation)
+        obj = bpy.context.object
+        obj.scale = (size[0], size[1], size[2])
+    elif kind == "cylinder":
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=size[0], depth=2.0 * size[1], location=location, rotation=rotation)
+        obj = bpy.context.object
+    elif kind == "sphere":
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=48, ring_count=24, radius=size[0], location=location, rotation=rotation)
+        obj = bpy.context.object
+    else:
+        return
+    obj.name = name
+    obj.data.materials.append(make_primitive_material(item, robot_material_config))
+    bpy.ops.object.shade_smooth()
+
+
+def matrix_to_euler(values):
+    rows = [values[0:3], values[3:6], values[6:9]]
+    return Matrix(rows).to_euler()
+
+
+def make_primitive_material(item, robot_material_config):
+    name = item["name"]
+    rgba = item["rgba"]
+    semantic_color = item.get("semantic_color")
+    mat = bpy.data.materials.new(f"{name}_material")
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    bsdf = nodes.get("Principled BSDF")
+    configured = configured_material_spec(item, robot_material_config, allow_default=False)
+    if configured:
+        rgb = configured["base_color"]
+        roughness = float(configured["roughness"])
+    elif semantic_color == "red_cube" or "cube" in name or "pick_slot" in name:
+        rgb = (0.90, 0.04, 0.02)
+        roughness = 0.58
+    elif "pad" in name:
+        rgb = (0.025, 0.025, 0.024)
+        roughness = 0.76
+    else:
+        color = material_color(rgba)
+        rgb = (color[0], color[1], color[2])
+        roughness = 0.66
+    bsdf.inputs["Base Color"].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
+    bsdf.inputs["Metallic"].default_value = float(configured["metallic"]) if configured else 0.0
+    bsdf.inputs["Roughness"].default_value = roughness
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 84.0
+    noise.inputs["Detail"].default_value = 10.0
+    bump = nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.010
+    bump.inputs["Distance"].default_value = 0.0012
+    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    return mat
+
+
+def configured_material_spec(item, config, allow_default):
+    if not config:
+        return None
+    if config.get("schema_version") == 2:
+        for part in config.get("parts", {}).values():
+            if any(selector_rule_matches(item, rule) for rule in part.get("selectors", [])):
+                return config["materials"][part["material"]]
+        if allow_default:
+            return config["materials"][config["default_material"]]
+        return None
+    selector_fields = {
+        "body_names": "body_name",
+        "mesh_names": "mesh_name",
+        "primitive_names": "name",
+    }
+    for part_name, selector in config.get("selectors", {}).items():
+        if any(item.get(item_key) in selector.get(selector_key, []) for selector_key, item_key in selector_fields.items()):
+            return config["parts"][part_name]
+    if allow_default:
+        return config["parts"][config["default_part"]]
+    return None
+
+
+def selector_rule_matches(item, rule):
+    selector_fields = {
+        "body_names": "body_name",
+        "mesh_names": "mesh_name",
+        "primitive_names": "name",
+    }
+    populated = False
+    for selector_key, item_key in selector_fields.items():
+        if selector_key not in rule:
+            continue
+        populated = True
+        if item.get(item_key) not in rule[selector_key]:
+            return False
+    return populated
+
+
 def make_tabletop_material(table_pbr):
     mat = bpy.data.materials.new("textured_tabletop")
     mat.use_nodes = True
@@ -259,6 +418,114 @@ def make_tabletop_material(table_pbr):
     else:
         mat.node_tree.links.new(noise.outputs["Fac"], bump.inputs["Height"])
         mat.node_tree.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    return mat
+
+
+def make_stable_tabletop_material():
+    mat = bpy.data.materials.new("stable_training_tabletop")
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (0.52, 0.52, 0.49, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.82
+    bsdf.inputs["Metallic"].default_value = 0.0
+    return mat
+
+
+def make_black_tabletop_material():
+    mat = bpy.data.materials.new("black_workbench")
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    bsdf = nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (0.025, 0.028, 0.032, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.72
+    bsdf.inputs["Metallic"].default_value = 0.0
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 115.0
+    noise.inputs["Detail"].default_value = 4.0
+    bump = nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.025
+    bump.inputs["Distance"].default_value = 0.0008
+    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    return mat
+
+
+def add_visual_prop(item):
+    kind = item["kind"]
+    x, y = item["position"]
+    yaw = math.radians(float(item.get("yaw_degrees", 0.0)))
+    color = item["color"]
+    material = make_simple_material(f"{item['name']}_material", color, float(item.get("roughness", 0.48)))
+
+    def finish(obj, name, mat=material):
+        obj.name = name
+        obj.data.materials.append(mat)
+        bpy.ops.object.shade_smooth()
+        return obj
+
+    if kind == "mug":
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=0.034, depth=0.070, location=(x, y, 0.035))
+        finish(bpy.context.object, item["name"])
+        dark = make_simple_material(f"{item['name']}_inside", (0.008, 0.009, 0.010), 0.82)
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=0.027, depth=0.002, location=(x, y, 0.071))
+        finish(bpy.context.object, f"{item['name']}_inside", dark)
+        handle_x, handle_y = x + 0.038 * math.cos(yaw), y + 0.038 * math.sin(yaw)
+        bpy.ops.mesh.primitive_torus_add(
+            major_radius=0.022,
+            minor_radius=0.006,
+            major_segments=48,
+            minor_segments=16,
+            location=(handle_x, handle_y, 0.040),
+            rotation=(math.radians(90.0), 0.0, yaw),
+        )
+        finish(bpy.context.object, f"{item['name']}_handle")
+    elif kind == "bottle":
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=0.028, depth=0.095, location=(x, y, 0.0475))
+        finish(bpy.context.object, item["name"])
+        bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=0.016, depth=0.024, location=(x, y, 0.107))
+        finish(bpy.context.object, f"{item['name']}_neck")
+        cap = make_simple_material(f"{item['name']}_cap_material", (0.06, 0.065, 0.07), 0.62)
+        bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=0.017, depth=0.012, location=(x, y, 0.125))
+        finish(bpy.context.object, f"{item['name']}_cap", cap)
+    elif kind == "tape":
+        bpy.ops.mesh.primitive_torus_add(
+            major_radius=0.030,
+            minor_radius=0.010,
+            major_segments=64,
+            minor_segments=20,
+            location=(x, y, 0.011),
+            rotation=(0.0, 0.0, yaw),
+        )
+        finish(bpy.context.object, item["name"])
+    elif kind == "screwdriver":
+        direction = Vector((math.cos(yaw), math.sin(yaw), 0.0))
+        bpy.ops.mesh.primitive_cylinder_add(
+            vertices=32,
+            radius=0.012,
+            depth=0.075,
+            location=Vector((x, y, 0.016)) - direction * 0.040,
+            rotation=(0.0, math.radians(90.0), yaw),
+        )
+        finish(bpy.context.object, f"{item['name']}_handle")
+        steel = make_simple_material(f"{item['name']}_steel", (0.30, 0.32, 0.34), 0.28, metallic=0.85)
+        bpy.ops.mesh.primitive_cylinder_add(
+            vertices=24,
+            radius=0.004,
+            depth=0.105,
+            location=Vector((x, y, 0.016)) + direction * 0.050,
+            rotation=(0.0, math.radians(90.0), yaw),
+        )
+        finish(bpy.context.object, f"{item['name']}_shaft", steel)
+
+
+def make_simple_material(name, color, roughness, metallic=0.0):
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (*color, 1.0)
+    bsdf.inputs["Roughness"].default_value = roughness
+    bsdf.inputs["Metallic"].default_value = metallic
     return mat
 
 
@@ -327,6 +594,63 @@ def add_area_light(name, location, power, size):
     bpy.context.collection.objects.link(obj)
     obj.location = location
     look_at(obj, Vector((0.12, 0.02, 0.05)))
+
+
+def configure_camera(camera_obj, camera, camera_spec, default_lens):
+    mode = camera_spec.get("mode", "look_at")
+    if mode == "matrix":
+        camera_obj.location = camera_spec["location"]
+        xmat = camera_spec["xmat"]
+        rows = [xmat[0:3], xmat[3:6], xmat[6:9]]
+        columns = [
+            [rows[0][0], rows[1][0], rows[2][0]],
+            [rows[0][1], rows[1][1], rows[2][1]],
+            [rows[0][2], rows[1][2], rows[2][2]],
+        ]
+        direction = -Vector(columns[2])
+        look_at(camera_obj, camera_obj.location + direction)
+    elif mode == "forward_up":
+        camera_obj.location = camera_spec["location"]
+        forward = Vector(camera_spec["forward"]).normalized()
+        up = Vector(camera_spec["up"]).normalized()
+        z_axis = -forward
+        x_axis = up.cross(z_axis).normalized()
+        y_axis = z_axis.cross(x_axis).normalized()
+        rotation = Matrix(
+            (
+                (x_axis.x, y_axis.x, z_axis.x),
+                (x_axis.y, y_axis.y, z_axis.y),
+                (x_axis.z, y_axis.z, z_axis.z),
+            )
+        )
+        camera_obj.rotation_euler = rotation.to_euler()
+    elif mode == "spherical":
+        lookat = Vector(camera_spec["lookat"])
+        distance = float(camera_spec["distance"])
+        azimuth = math.radians(float(camera_spec["azimuth"]))
+        elevation = math.radians(float(camera_spec["elevation"]))
+        location = Vector(
+            (
+                lookat.x + distance * math.cos(elevation) * math.cos(azimuth),
+                lookat.y + distance * math.cos(elevation) * math.sin(azimuth),
+                lookat.z - distance * math.sin(elevation),
+            )
+        )
+        camera_obj.location = location
+        look_at(camera_obj, lookat)
+    else:
+        camera_obj.location = camera_spec["location"]
+        look_at(camera_obj, Vector(camera_spec["target"]))
+    if camera_spec.get("fovy") is not None:
+        camera.sensor_fit = "VERTICAL"
+        camera.angle = math.radians(float(camera_spec["fovy"]))
+    else:
+        camera.lens = float(camera_spec.get("lens", default_lens))
+    camera.clip_start = float(camera_spec.get("clip_start", 0.001))
+    camera.clip_end = float(camera_spec.get("clip_end", 100.0))
+    camera.dof.use_dof = bool(camera_spec.get("use_dof", True))
+    camera.dof.focus_distance = float(camera_spec.get("focus_distance", 0.56))
+    camera.dof.aperture_fstop = float(camera_spec.get("aperture_fstop", 8.0))
 
 
 def look_at(obj, target):

@@ -148,6 +148,8 @@ def _export_mesh_geoms(model: Any, data: Any, mesh_dir: Path, *, max_mesh_geoms:
             continue
 
         name = model.geom(geom_id).name or f"geom_{geom_id:03d}"
+        body_name = model.body(int(model.geom_bodyid[geom_id])).name
+        mesh_name = model.mesh(mesh_id).name
         path = mesh_dir / f"{geom_id:03d}_{_safe_name(name)}.ply"
         _write_ply(path, vertices, faces)
         rgba = _geom_rgba(model, geom_id)
@@ -156,6 +158,8 @@ def _export_mesh_geoms(model: Any, data: Any, mesh_dir: Path, *, max_mesh_geoms:
                 "geom_id": geom_id,
                 "mesh_id": mesh_id,
                 "name": name,
+                "body_name": body_name,
+                "mesh_name": mesh_name,
                 "path": str(path),
                 "rgba": rgba,
             }

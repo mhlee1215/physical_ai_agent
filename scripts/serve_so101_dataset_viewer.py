@@ -25,6 +25,9 @@ from physical_ai_agent.so101_dataset_registry import (
 )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
@@ -34,6 +37,7 @@ SKILL_DATASET_CONTRACT = Path("configs/so101/training_datasets/skill_dataset_con
 TRAINING_CONFIGS = [
     Path("configs/so101/training_datasets/qwen_edge_primitives.json"),
     Path("configs/so101/training/qwen_edge_primitives.json"),
+    Path("configs/so101/training/pick_photoreal.json"),
     Path("configs/so101/training/grip_the_cube_v2.json"),
 ]
 DATASET_GENERATION_CONFIG_DIR = DATASET_RECIPE_DIR
@@ -59,6 +63,15 @@ CAMERA_KEYS = [
     "observation.images.camera2",
     "observation.images.camera3",
 ]
+SO101_CAMERA_CONTRACT = {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam",
+    "observation.images.camera3": "wrist_cam duplicate",
+}
+PHOTO_REAL_PREVIEW_ROOT = Path("docs/research/2026_07_04/so101_photoreal_render_pipeline")
+PHOTO_REAL_PREVIEW_DIRS = {
+    "pick_cube_train50_ego_wrist_256_seed98200": PHOTO_REAL_PREVIEW_ROOT / "so101_pick_cube_train5episodes",
+}
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 MYCOBOT_JOINT_NAMES = [
     "joint2_to_joint1",
@@ -346,11 +359,27 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
         _dataset_catalog_item(repo_root, split, path, category="temporary")
         for split, path in _discover_temporary_datasets(repo_root).items()
     ]
+    photoreal_items = [
+        _so101_photoreal_dataset_catalog_item(repo_root, split, path)
+        for split, path in _discover_so101_photoreal_datasets(repo_root).items()
+    ]
+    photoreal_items.extend(
+        _dataset_catalog_item(repo_root, split, path, category="photoreal")
+        for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()
+    )
     mycobot_items = [
         _mycobot_dataset_catalog_item(repo_root, split, path)
         for split, path in _discover_mycobot_datasets(repo_root).items()
     ]
-    for item in [*official_items, *skill_items, *generated_items, *archived_items, *temporary_items, *mycobot_items]:
+    for item in [
+        *official_items,
+        *skill_items,
+        *generated_items,
+        *archived_items,
+        *temporary_items,
+        *photoreal_items,
+        *mycobot_items,
+    ]:
         if item["status"] == "available":
             payload[item["name"]] = item["summary"]
     return {
@@ -379,6 +408,12 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
                 "title": "Temporary / recently generated",
                 "description": "Smoke or experimental datasets generated while testing new object/grasp variants.",
                 "items": temporary_items,
+            },
+            {
+                "id": "photoreal",
+                "title": "Photoreal datasets",
+                "description": "SO101 datasets whose stored image frames are photoreal renders.",
+                "items": photoreal_items,
             },
             {
                 "id": "mycobot",
@@ -600,6 +635,7 @@ def _dataset_catalog_item(repo_root: Path, split: str, root: Path, *, category: 
 
 def _dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
     platform = _dataset_platform(split, Path(dataset["root"]))
+    photoreal_preview = _photoreal_preview_summary(Path(dataset["root"]))
     return {
         "dataset_format": "lerobot_parquet",
         "root": str(dataset["root"]),
@@ -620,6 +656,8 @@ def _dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
             key: dataset["info"]["features"][key]["shape"] for key in dataset["camera_keys"]
         },
         "episode_lengths": dataset["episode_lengths"],
+        "camera_contract": SO101_CAMERA_CONTRACT,
+        "photoreal_preview": photoreal_preview,
     }
 
 
@@ -632,6 +670,51 @@ def _dataset_platform(split: str, root: Path) -> str:
 
 def _platform_label(platform: str) -> str:
     return {"mycobot": "MyCobot", "so101": "SO101"}.get(platform, platform)
+
+
+def _photoreal_preview_summary(dataset_root: Path) -> dict[str, Any]:
+    preview_dir = _photoreal_preview_dir(dataset_root)
+    if preview_dir is None:
+        return {"available": False}
+    frames: dict[int, list[int]] = {}
+    for path in sorted(preview_dir.glob("episode_*_frame_*.png")):
+        match = re.search(r"episode_(\d+)_frame_(\d+)\.png$", path.name)
+        if not match:
+            continue
+        episode = int(match.group(1))
+        frame = int(match.group(2))
+        frames.setdefault(episode, []).append(frame)
+    return {
+        "available": bool(frames),
+        "path": str(preview_dir),
+        "contact_sheet": str(preview_dir / "contact_sheet.png") if (preview_dir / "contact_sheet.png").exists() else None,
+        "episodes": sorted(frames),
+        "frames_by_episode": {str(episode): sorted(values) for episode, values in frames.items()},
+        "note": "Photoreal sidecar preview; original LeRobot camera images remain canonical policy inputs.",
+    }
+
+
+def _photoreal_frame_images(dataset_root: Path, *, episode: int, frame: int) -> dict[str, str]:
+    preview_dir = _photoreal_preview_dir(dataset_root)
+    if preview_dir is None:
+        return {}
+    image_path = preview_dir / f"episode_{episode:04d}_frame_{frame:04d}.png"
+    if not image_path.exists():
+        return {}
+    return {"photoreal_sidecar": _file_data_uri(image_path)}
+
+
+def _photoreal_preview_dir(dataset_root: Path) -> Path | None:
+    relative = PHOTO_REAL_PREVIEW_DIRS.get(dataset_root.name)
+    if relative is None:
+        return None
+    path = relative if relative.is_absolute() else REPO_ROOT / relative
+    return path if path.exists() else None
+
+
+def _file_data_uri(path: Path) -> str:
+    mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
 def _discover_temporary_datasets(repo_root: Path) -> dict[str, Path]:
@@ -667,6 +750,139 @@ def _discover_temporary_datasets(repo_root: Path) -> dict[str, Path]:
                 discovered[split] = path
                 seen_paths.add(resolved)
     return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
+
+
+def _discover_so101_photoreal_datasets(repo_root: Path) -> dict[str, Path]:
+    discovered = _parse_dataset_env("SO101_PHOTOREAL_DATASETS")
+    roots = [
+        repo_root / "_workspace" / "so101_photoreal_datasets",
+        REPO_ROOT / "_workspace" / "so101_photoreal_datasets",
+    ]
+    seen = {path.resolve() for path in discovered.values()}
+    for root in roots:
+        if not root.exists():
+            continue
+        for manifest_path in sorted(root.glob("*/manifest.json")):
+            dataset_root = manifest_path.parent
+            resolved = dataset_root.resolve()
+            if resolved in seen:
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if manifest.get("format") != "so101_photoreal_jsonl_v1":
+                continue
+            split = _unique_split_name("photoreal_" + _slug(dataset_root.name), discovered)
+            discovered[split] = dataset_root
+            seen.add(resolved)
+    return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
+
+
+def _discover_so101_photoreal_lerobot_datasets(repo_root: Path) -> dict[str, Path]:
+    discovered = _parse_dataset_env("SO101_PHOTOREAL_LEROBOT_DATASETS")
+    roots = [
+        repo_root / "_workspace" / "so101_photoreal_lerobot",
+        REPO_ROOT / "_workspace" / "so101_photoreal_lerobot",
+    ]
+    seen = {path.resolve() for path in discovered.values()}
+    for root in roots:
+        if not root.exists():
+            continue
+        for manifest_path in sorted(root.glob("*/photoreal_lerobot_manifest.json")):
+            dataset_root = manifest_path.parent
+            resolved = dataset_root.resolve()
+            if resolved in seen:
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if manifest.get("format") != "so101_photoreal_lerobot_v1":
+                continue
+            split = _unique_split_name("photoreal_lerobot_" + _slug(dataset_root.name), discovered)
+            discovered[split] = dataset_root
+            seen.add(resolved)
+    return dict(sorted(discovered.items(), key=lambda item: _safe_mtime(item[1]), reverse=True))
+
+
+def _so101_photoreal_dataset_catalog_item(repo_root: Path, split: str, root: Path) -> dict[str, Any]:
+    resolved = _resolve_dataset_path(repo_root, root)
+    base = {
+        "name": split,
+        "root": str(resolved),
+        "category": "photoreal",
+        "platform": "so101",
+        "platform_label": "SO101",
+        "dataset_format": "so101_photoreal_jsonl_v1",
+    }
+    try:
+        dataset = _so101_photoreal_dataset(resolved)
+    except Exception as exc:  # noqa: BLE001 - dashboard should show incomplete datasets instead of failing.
+        return {
+            **base,
+            "status": "missing",
+            "detail": str(exc),
+            "summary": {
+                **base,
+                "episodes": 0,
+                "frames": 0,
+                "size_bytes": _dir_size(resolved),
+                "size_human": _format_bytes(_dir_size(resolved)),
+            },
+        }
+    summary = _so101_photoreal_dataset_summary(split, dataset)
+    return {
+        **base,
+        "status": "available" if summary["episodes"] > 0 and summary["frames"] > 0 else "incomplete",
+        "detail": "photoreal image dataset",
+        "summary": summary,
+        **summary,
+    }
+
+
+def _so101_photoreal_dataset(root: Path) -> dict[str, Any]:
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("format") != "so101_photoreal_jsonl_v1":
+        raise ValueError(f"unsupported SO101 photoreal dataset format: {manifest.get('format')}")
+    summaries = manifest.get("episode_summaries") or []
+    return {
+        "root": root,
+        "manifest": manifest,
+        "episode_lengths": [int(row.get("frames") or 0) for row in summaries],
+        "size_bytes": _dir_size(root),
+    }
+
+
+def _so101_photoreal_dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
+    manifest = dataset["manifest"]
+    image_shape = manifest.get("image_shape") or [480, 640, 3]
+    image_features = [feature for feature in manifest.get("features", []) if str(feature).startswith("observation.images.")]
+    return {
+        "type": "so101_photoreal_jsonl",
+        "dataset_format": "so101_photoreal_jsonl_v1",
+        "platform": "so101",
+        "platform_label": "SO101",
+        "root": str(dataset["root"]),
+        "name": split,
+        "episodes": int(manifest.get("episodes") or len(dataset["episode_lengths"])),
+        "frames": int(manifest.get("frames") or sum(dataset["episode_lengths"])),
+        "fps": manifest.get("fps"),
+        "size_bytes": dataset["size_bytes"],
+        "size_human": _format_bytes(dataset["size_bytes"]),
+        "data_bytes": _dir_size(dataset["root"] / "episodes"),
+        "data_human": _format_bytes(_dir_size(dataset["root"] / "episodes")),
+        "image_bytes": _dir_size(dataset["root"] / "images"),
+        "image_human": _format_bytes(_dir_size(dataset["root"] / "images")),
+        "features": manifest.get("features") or ["observation.images.camera1"],
+        "image_shapes": {feature: image_shape for feature in image_features},
+        "episode_lengths": dataset["episode_lengths"],
+        "camera_contract": manifest.get("camera_contract") or {},
+        "source_dataset_root": manifest.get("source_dataset_root"),
+        "source_dataset_name": manifest.get("source_dataset_name"),
+        "training_ready": bool(manifest.get("training_ready")),
+        "note": manifest.get("note"),
+    }
 
 
 def _generation_recipe_dataset_roots(repo_root: Path) -> dict[str, Path]:
@@ -746,6 +962,7 @@ def _training_config_dataset_roots(repo_root: Path) -> dict[str, Path]:
         train = dataset_config.get("train_dataset")
         train_datasets = dataset_config.get("train_datasets")
         validation = dataset_config.get("validation_dataset")
+        loop_validation = dataset_config.get("loop_validation_dataset")
         if isinstance(train, dict) and train.get("root"):
             roots[f"{name}_train"] = Path(train["root"])
         if isinstance(train_datasets, list):
@@ -756,6 +973,8 @@ def _training_config_dataset_roots(repo_root: Path) -> dict[str, Path]:
                 roots[split_name] = Path(dataset["root"])
         if isinstance(validation, dict) and validation.get("root"):
             roots[f"{name}_val"] = Path(validation["root"])
+        if isinstance(loop_validation, dict) and loop_validation.get("root"):
+            roots[f"{name}_loop_val"] = Path(loop_validation["root"])
         if isinstance(validation, dict):
             sources = validation.get("hf_resolved_sources") or validation.get("hf_merge_sources")
             if isinstance(sources, list):
@@ -813,6 +1032,9 @@ def _safe_mtime(path: Path) -> float:
 
 
 def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dict[str, Any]:
+    photoreal_roots = _discover_so101_photoreal_datasets(repo_root)
+    if split in photoreal_roots:
+        return _so101_photoreal_frame_payload(_resolve_dataset_path(repo_root, photoreal_roots[split]), split, episode, frame)
     mycobot_roots = _discover_mycobot_datasets(repo_root)
     if split in mycobot_roots:
         return _mycobot_frame_payload(_resolve_dataset_path(repo_root, mycobot_roots[split]), split, episode, frame)
@@ -835,6 +1057,7 @@ def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dic
     prompt = dataset["tasks"].get(task_index)
     if prompt is None:
         prompt = meta["tasks"][0] if meta.get("tasks") else ""
+    photoreal_images = _photoreal_frame_images(Path(dataset["root"]), episode=episode, frame=frame)
     return {
         "split": split,
         "episode": episode,
@@ -846,6 +1069,8 @@ def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dic
         "prompt": prompt,
         "task_index": task_index,
         "images": images,
+        "camera_contract": SO101_CAMERA_CONTRACT,
+        "photoreal_images": photoreal_images,
         "state": dict(zip(JOINT_NAMES, state, strict=True)),
         "action": dict(zip(JOINT_NAMES, action, strict=True)),
     }
@@ -861,6 +1086,53 @@ def _mycobot_dataset(root: Path) -> dict[str, Any]:
         "manifest": manifest,
         "episode_lengths": [int(row.get("frames") or 0) for row in summaries],
         "size_bytes": _dir_size(root),
+    }
+
+
+def _so101_photoreal_frame_payload(root: Path, split: str, episode: int, frame: int) -> dict[str, Any]:
+    dataset = _so101_photoreal_dataset(root)
+    lengths = dataset["episode_lengths"]
+    if episode < 0 or episode >= len(lengths):
+        raise ValueError(f"episode out of range: {episode}")
+    frame = max(0, min(frame, lengths[episode] - 1))
+    episode_path = root / "episodes" / f"episode_{episode:04d}.jsonl"
+    row = _jsonl_row(episode_path, frame)
+    images = {}
+    image_paths = {}
+    for name, image_rel in (row.get("observation", {}).get("images", {}) or {}).items():
+        if not image_rel:
+            continue
+        image_file = root / image_rel
+        mime = dataset["manifest"].get("image_mime_type") or "image/png"
+        key = name if str(name).startswith("observation.images.") else f"observation.images.{name}"
+        image_paths[key] = str(image_rel)
+        images[key] = f"data:{mime};base64," + base64.b64encode(image_file.read_bytes()).decode("ascii")
+    state_values = [float(value) for value in row.get("observation", {}).get("state", [])]
+    action_values = [float(value) for value in row.get("action", [])]
+    return {
+        "split": split,
+        "episode": episode,
+        "frame": frame,
+        "episode_length": lengths[episode],
+        "row_index": frame,
+        "timestamp": float(row.get("timestamp") or 0.0),
+        "task": row.get("task", ""),
+        "prompt": row.get("prompt") or row.get("task", ""),
+        "task_index": row.get("task_index"),
+        "source_episode_index": row.get("source_episode_index"),
+        "source_frame_index": row.get("source_frame_index"),
+        "source_seed": row.get("source_seed"),
+        "images": images,
+        "image_paths": image_paths,
+        "camera_contract": dataset["manifest"].get("camera_contract") or {},
+        "state": _named_values(dataset["manifest"].get("joint_names") or JOINT_NAMES, state_values),
+        "action": _named_values(dataset["manifest"].get("action_names") or JOINT_NAMES, action_values),
+        "info": {
+            "format": dataset["manifest"].get("format"),
+            "source_dataset_root": dataset["manifest"].get("source_dataset_root"),
+            "source_dataset_name": dataset["manifest"].get("source_dataset_name"),
+            "training_ready": bool(dataset["manifest"].get("training_ready")),
+        },
     }
 
 
@@ -1011,6 +1283,7 @@ def _dataset_roots(repo_root: Path) -> dict[str, Path]:
     roots.update({split: _resolve_dataset_path(repo_root, root) for split, root in _skill_dataset_roots(repo_root).items()})
     roots.update({split: _resolve_dataset_path(repo_root, root) for split, root in _generation_recipe_dataset_roots(repo_root).items()})
     roots.update({split: path.resolve() for split, path in _discover_temporary_datasets(repo_root).items()})
+    roots.update({split: path.resolve() for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()})
     return roots
 
 
@@ -1969,6 +2242,10 @@ def _index_html() -> str:
     button:not(.tab-button):not(.zoom-btn) { background: #f8fafc; transition: background 120ms ease, border-color 120ms ease, transform 120ms ease; }
     button:not(.tab-button):not(.zoom-btn):hover { background: #eef4ff; border-color: #9fb7ee; transform: translateY(-1px); }
     .cameras { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .photoreal-cameras { grid-template-columns: minmax(260px, 520px); }
+    .quick-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .quick-strip:empty { display: none; }
+    .quick-strip button { min-height: 42px; border-color: #b9ccf5; background: var(--data-soft); color: #1e3a8a; }
     .rollout-row { display: grid; grid-template-columns: repeat(3, minmax(210px, 1fr)); gap: 12px; align-items: start; overflow-x: auto; padding-bottom: 2px; }
     .thumb-row { display: grid; grid-template-columns: repeat(3, minmax(110px, 160px)); gap: 9px; align-items: start; overflow-x: auto; padding-bottom: 2px; }
     .thumb-row img { max-height: 118px; object-fit: cover; }
@@ -2018,6 +2295,7 @@ def _index_html() -> str:
       header { padding: 18px 16px; }
       h1 { font-size: 25px; }
 	      .app-tabs, .controls, .cameras, .loop-grid, .viewer-kind, .manager-grid, .metric-grid, .loop-controls, .sim-controls, .sim-start-controls, .sim-policy-controls, .sim-run-controls { grid-template-columns: 1fr; }
+      .quick-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .rollout-row, .thumb-row { grid-template-columns: minmax(220px, 1fr); }
       .kv { grid-template-columns: 1fr; }
     }
@@ -2045,10 +2323,11 @@ def _index_html() -> str:
 	        </label>
 	        <label>Data type
 	          <select id="viewKind">
-	            <option value="train" selected>train</option>
-	            <option value="valid">valid</option>
+	            <option value="train" selected>Train datasets</option>
+	            <option value="valid">Validation datasets</option>
+	            <option value="photoreal">Photoreal datasets</option>
+	            <option value="preview">Preview datasets</option>
 	            <option value="closed_loop">closed loop test case</option>
-	            <option value="preview">preview</option>
 	          </select>
 	        </label>
 	        <p id="kindMeta" class="meta"></p>
@@ -2067,12 +2346,18 @@ def _index_html() -> str:
         <button id="next">Next</button>
       </div>
       <p id="meta" class="meta"></p>
+      <div id="photorealShortcuts" class="quick-strip"></div>
     </section>
     <section class="prompt">
       <div class="prompt-label">Prompt</div>
       <p id="promptText" class="prompt-text"></p>
     </section>
     <section class="cameras" id="cameras"></section>
+    <section id="photorealPanel" hidden>
+      <div class="prompt-label">Photoreal sidecar</div>
+      <p id="photorealMeta" class="meta"></p>
+      <div class="cameras photoreal-cameras" id="photorealCameras"></div>
+    </section>
     <section>
       <div class="prompt-label">Motor state and action</div>
       <table>
@@ -2171,7 +2456,7 @@ def _index_html() -> str:
 	  </main>
 	  <script>
 	    let datasets = {};
-	    let datasetNamesByKind = { train: [], valid: [], preview: [] };
+	    let datasetNamesByKind = { train: [], valid: [], photoreal: [], preview: [], closed_loop: [] };
 	    let datasetPlatformByName = {};
 	    let datasetCategoryByName = {};
 	    let loopAnalyzerLoaded = false;
@@ -2184,6 +2469,10 @@ def _index_html() -> str:
     const meta = document.getElementById("meta");
 	    const promptText = document.getElementById("promptText");
 	    const cameras = document.getElementById("cameras");
+	    const photorealShortcuts = document.getElementById("photorealShortcuts");
+	    const photorealPanel = document.getElementById("photorealPanel");
+	    const photorealMeta = document.getElementById("photorealMeta");
+	    const photorealCameras = document.getElementById("photorealCameras");
 	    const jointRows = document.getElementById("jointRows");
 	    const tabDataViewer = document.getElementById("tabDataViewer");
 	    const tabTrainingManager = document.getElementById("tabTrainingManager");
@@ -2261,11 +2550,13 @@ def _index_html() -> str:
 	      datasetNamesByKind = {
 	        train: orderedNames.filter(name => isTrainDataset(name)),
 	        valid: orderedNames.filter(name => name.endsWith("_val") || name.endsWith("_valid") || name.includes("_validation")),
+	        photoreal: orderedNames.filter(name => isPhotorealDataset(name)),
+	        closed_loop: orderedNames.filter(name => datasetCategoryByName[name] === "closed_loop"),
 	        preview: orderedNames.filter(name => isPreviewDataset(name)),
 	      };
 	      if (!datasetNamesByKind.train.length) datasetNamesByKind.train = orderedNames;
 	      if (!datasetNamesByKind.valid.length) datasetNamesByKind.valid = orderedNames.filter(name => !isTrainDataset(name));
-	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !isTrainDataset(name) && !name.endsWith("_val") && !name.endsWith("_valid"));
+	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !isTrainDataset(name) && !name.endsWith("_val") && !name.endsWith("_valid") && !isPhotorealDataset(name) && datasetCategoryByName[name] !== "closed_loop");
 	      syncViewKind();
 	    }
 
@@ -2307,7 +2598,7 @@ def _index_html() -> str:
 	      const platform = platformKind.value || "so101";
 	      const selectedNames = namesForKindAndPlatform(viewKind.value, platform);
 	      if (!selectedNames.length) {
-	        const fallbackKind = ["preview", "train", "valid"].find(kind => namesForKindAndPlatform(kind, platform).length);
+	        const fallbackKind = ["photoreal", "closed_loop", "preview", "train", "valid"].find(kind => namesForKindAndPlatform(kind, platform).length);
 	        if (fallbackKind && fallbackKind !== viewKind.value) {
 	          viewKind.value = fallbackKind;
 	        }
@@ -2317,16 +2608,20 @@ def _index_html() -> str:
 	      split.innerHTML = names.map(name => `<option value="${name}">${name}</option>`).join("");
 	      if (names.includes(previous)) split.value = previous;
 	      else if (names.length) split.value = names[0];
-	      kindMeta.textContent = `${platformLabel(platform)} ${viewKindLabel(viewKind.value)} datasets (${names.length})`;
-	      if (split.value) {
-	        syncEpisodeRange();
-	        loadFrame();
-	      } else {
-	        meta.textContent = "No datasets are available for this platform and data type.";
-	        promptText.textContent = "";
-	        cameras.innerHTML = "";
-	        jointRows.innerHTML = "";
-	      }
+      kindMeta.textContent = `${platformLabel(platform)} ${viewKindLabel(viewKind.value)} datasets (${names.length})`;
+      if (split.value) {
+        syncEpisodeRange();
+        renderPhotorealShortcuts();
+        loadFrame();
+      } else {
+        meta.textContent = "No datasets are available for this platform and data type.";
+        promptText.textContent = "";
+        cameras.innerHTML = "";
+        photorealShortcuts.innerHTML = "";
+        photorealPanel.hidden = true;
+        photorealCameras.innerHTML = "";
+        jointRows.innerHTML = "";
+      }
 	    }
 
 	    function namesForKindAndPlatform(kind, platform) {
@@ -2345,12 +2640,19 @@ def _index_html() -> str:
 	      return platform !== "so101" || category === "temporary" || category === "mycobot";
 	    }
 
+	    function isPhotorealDataset(name) {
+	      const category = datasetCategoryByName[name] || "";
+	      return category === "photoreal" || name.startsWith("photoreal_");
+	    }
+
 	    function platformLabel(platform) {
 	      return platform === "mycobot" ? "MyCobot" : "SO101";
 	    }
 
 	    function viewKindLabel(kind) {
 	      if (kind === "valid") return "validation";
+	      if (kind === "photoreal") return "photoreal";
+	      if (kind === "closed_loop") return "closed loop";
 	      if (kind === "preview") return "preview";
 	      return "train";
 	    }
@@ -2473,6 +2775,21 @@ def _index_html() -> str:
       frame.value = String(Math.min(Number(frame.value), length - 1));
     }
 
+	    function renderPhotorealShortcuts() {
+	      const data = datasets[split.value] || {};
+	      const preview = data.photoreal_preview || {};
+	      const framesByEpisode = preview.frames_by_episode || {};
+	      const buttons = [];
+	      for (const [episodeIndex, frames] of Object.entries(framesByEpisode)) {
+	        if (!Array.isArray(frames)) continue;
+	        frames.forEach((frameIndex, index) => {
+	          const label = index === 0 ? "start" : (index === frames.length - 1 ? "grip" : `f${frameIndex}`);
+	          buttons.push(`<button type="button" data-episode="${episodeIndex}" data-frame="${frameIndex}">ep${episodeIndex} ${label}</button>`);
+	        });
+	      }
+	      photorealShortcuts.innerHTML = buttons.join("");
+	    }
+
 	    async function loadFrame() {
       if (loading) return;
       loading = true;
@@ -2482,9 +2799,25 @@ def _index_html() -> str:
       meta.textContent = `${row.split} | episode ${row.episode}/${datasets[row.split].episodes - 1} | frame ${row.frame}/${row.episode_length - 1} | row ${row.row_index} | task_index ${row.task_index ?? "n/a"} | t=${row.timestamp.toFixed(3)}s`;
       promptText.textContent = row.prompt || row.task || "(no prompt stored)";
       cameras.innerHTML = cameraFigures(row.images);
+      renderPhotorealPanel(row);
       jointRows.innerHTML = Object.keys(row.state).map(joint => `
         <tr><td>${joint}</td><td>${fmt(row.state[joint])}</td><td>${fmt(row.action[joint])}</td></tr>
 	      `).join("");
+	    }
+
+	    function renderPhotorealPanel(row) {
+	      const images = row.photoreal_images || {};
+	      const entries = Object.entries(images).filter(([, src]) => src);
+	      if (!entries.length) {
+	        photorealPanel.hidden = true;
+	        photorealMeta.textContent = "";
+	        photorealCameras.innerHTML = "";
+	        return;
+	      }
+	      const contract = row.camera_contract || {};
+	      photorealPanel.hidden = false;
+	      photorealMeta.textContent = `sidecar frame for ep ${row.episode}, frame ${row.frame}; policy cameras: camera1=${contract["observation.images.camera1"] || "n/a"}, camera2=${contract["observation.images.camera2"] || "n/a"}`;
+	      photorealCameras.innerHTML = cameraFigures(images);
 	    }
 
 	    function initLoopAnalyzer(force = false) {
@@ -2831,7 +3164,15 @@ def _index_html() -> str:
 	    zoomModal.addEventListener("click", event => {
 	      if (event.target === zoomModal) closeZoom();
 	    });
-	    split.addEventListener("change", () => { syncEpisodeRange(); loadFrame(); });
+	    photorealShortcuts.addEventListener("click", event => {
+	      const button = event.target.closest?.("button[data-episode][data-frame]");
+	      if (!button) return;
+	      episode.value = button.dataset.episode;
+	      syncFrameRange();
+	      frame.value = button.dataset.frame;
+	      loadFrame();
+	    });
+	    split.addEventListener("change", () => { syncEpisodeRange(); renderPhotorealShortcuts(); loadFrame(); });
 	    episode.addEventListener("input", () => { frame.value = "0"; loadFrame(); });
 	    frame.addEventListener("input", loadFrame);
     play.addEventListener("click", () => {

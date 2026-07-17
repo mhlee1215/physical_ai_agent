@@ -1,0 +1,144 @@
+{
+  "schema_version": 2,
+  "name": "black_arm_green_white_gripper",
+  "default_material": "black_matte_pla",
+  "materials": {
+    "black_matte_pla": {
+      "base_color": [0.025, 0.03, 0.035],
+      "roughness": 0.82,
+      "metallic": 0.0,
+      "noise_scale": 95.0,
+      "bump_strength": 0.018
+    },
+    "white_matte_pla": {
+      "base_color": [0.82, 0.84, 0.80],
+      "roughness": 0.76,
+      "metallic": 0.0,
+      "noise_scale": 120.0,
+      "bump_strength": 0.014
+    },
+    "green_matte_pla": {
+      "base_color": [0.035, 0.52, 0.11],
+      "roughness": 0.72,
+      "metallic": 0.0,
+      "noise_scale": 110.0,
+      "bump_strength": 0.016
+    }
+  },
+  "parts": {
+    "base_mounting_plate": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["base"], "mesh_names": ["waveshare_mounting_plate_so101_v2"]}
+      ]
+    },
+    "base_shell": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["base"], "mesh_names": ["base_so101_v2"]}
+      ]
+    },
+    "base_motor_holder": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["base"], "mesh_names": ["base_motor_holder_so101_v1"]}
+      ]
+    },
+    "base_servo": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["base"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "shoulder_motor_holder": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["shoulder"], "mesh_names": ["motor_holder_so101_base_v1"]}
+      ]
+    },
+    "shoulder_rotation_bracket": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["shoulder"], "mesh_names": ["rotation_pitch_so101_v1"]}
+      ]
+    },
+    "shoulder_servos": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["shoulder"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "upper_arm_link": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["upper_arm"], "mesh_names": ["upper_arm_so101_v1"]}
+      ]
+    },
+    "upper_arm_servos": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["upper_arm"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "forearm_link": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["lower_arm"], "mesh_names": ["under_arm_so101_v1"]}
+      ]
+    },
+    "wrist_motor_holder": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["lower_arm"], "mesh_names": ["motor_holder_so101_wrist_v1"]}
+      ]
+    },
+    "lower_arm_servos": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["lower_arm"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "wrist_servo": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["wrist"], "mesh_names": ["sts3215_03a_no_horn_v1"]}
+      ]
+    },
+    "wrist_roll_bracket": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["wrist"], "mesh_names": ["wrist_roll_pitch_so101_v2"]}
+      ]
+    },
+    "gripper_servo": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["gripper"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "fixed_jaw": {
+      "material": "green_matte_pla",
+      "selectors": [
+        {"body_names": ["gripper"], "mesh_names": ["wrist_roll_follower_so101_v1"]}
+      ]
+    },
+    "fixed_finger_pad": {
+      "material": "green_matte_pla",
+      "selectors": [
+        {"body_names": ["gripper"], "primitive_names": ["static_finger_pad"]}
+      ]
+    },
+    "moving_jaw": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["moving_jaw_so101_v1"], "mesh_names": ["moving_jaw_so101_v1"]}
+      ]
+    },
+    "moving_finger_pad": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["moving_jaw_so101_v1"], "primitive_names": ["moving_finger_pad"]}
+      ]
+    }
+  }
+}

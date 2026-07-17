@@ -115,6 +115,23 @@ camera_name_mapping
 baseline handoff
 ```
 
+### Robot Photoreal Dataset Rendering
+
+When the task mentions photoreal robot datasets, deterministic rerendering,
+Blender/Cycles dataset images, SO101 render profiles, camera-preserving dataset
+conversion, or MyCobot photoreal output, open and follow:
+
+```text
+.agents/skills/robot-photoreal-dataset-rendering/SKILL.md
+```
+
+That skill owns the source/replay/render contract. The PM must track the source
+identity, replay-preflight verdict, canary evidence, render profile, full-render
+artifact, image-only derivative build, registry validation, and dashboard
+frame/playback checks as separate gates. A probe render or incomplete frame
+sidecar is diagnostic evidence and must not be reported as a completed training
+dataset.
+
 ### SO101 SmolVLA Fine-Tuning
 
 When the task mentions SO101 SmolVLA training, RunPod SO101 fine-tuning,
