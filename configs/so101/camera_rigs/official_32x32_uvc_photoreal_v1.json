@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "status": "review_candidate_not_applied_to_existing_datasets",
+  "preset": "official_overhead_and_integrated_32x32_uvc",
+  "camera_contract": {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam"
+  },
+  "sensor": {
+    "model_name": "InnoMaker U20CAM-1080P (Amazon B0CNCSFQC1)",
+    "source_resolution": [1920, 1080],
+    "horizontal_fov_degrees": 104.0,
+    "vertical_fov_degrees": 71.5,
+    "reported_diagonal_fov_degrees": [120.0, 130.0],
+    "distortion": {
+      "model": "opencv_brown_conrady",
+      "coefficients": [-0.08, 0.01, 0.0, 0.0, 0.0],
+      "calibration_status": "uncalibrated_candidate"
+    },
+    "board_half_size_m": [0.016, 0.016, 0.0015],
+    "lens_size_m": [0.008, 0.005],
+    "board_distance_behind_pinhole_m": 0.010,
+    "lens_distance_behind_pinhole_m": 0.005
+  },
+  "assets": {
+    "wrist_stl_path": "_workspace/so101_camera_mount_assets/Wrist_Cam_Mount_32x32_UVC_Module_SO101.stl",
+    "wrist_stl_sha256": "b4345ccf23f1f2ed3f4885c205cac5afbed6ddd1b183617c4801751e3bafb7b4",
+    "wrist_mesh_scale": [0.001, 0.001, 0.001],
+    "overhead_stl_dir": "_workspace/so101_camera_mount_assets/overhead_32x32_uvc",
+    "overhead_stl_sha256": {
+      "arm_base.stl": "169adfd40bcca689334efd1188c9b42cc03c914dc0afeaa98cb5431013610833",
+      "cam_mount_bottom.stl": "b3545b6cae437210e17b7dcfee2e12e00dc7a59ece9264f4b13ab9fd8ceb8088",
+      "cam_mount_middle.stl": "f6f3980df74777f74cf53a4697cbb63e4e000ab53f418de209559214f733f84b",
+      "cam_mount_top.stl": "206762be157918967741eb53665cac796485c4609ac64d4c9444d85c7fcb2c4c"
+    },
+    "overhead_mesh_scale": [0.001, 0.001, 0.001],
+    "generated_asset_dir": "_workspace/so101_camera_mount_assets/generated_config_v1"
+  },
+  "robot": {
+    "joint_names": [
+      "shoulder_pan",
+      "shoulder_lift",
+      "elbow_flex",
+      "wrist_flex",
+      "wrist_roll",
+      "gripper"
+    ],
+    "home_qpos": [
+      0.0,
+      -1.5707963267948966,
+      1.5707963267948966,
+      0.66,
+      1.5707963267948966,
+      -0.17453
+    ]
+  },
+  "environment": {
+    "seed": 50000000,
+    "target_object_color": "green",
+    "object_half_sizes_m": [0.015],
+    "spawn_center_xy_m": [0.15, 0.0],
+    "spawn_min_radius_m": 0.10,
+    "spawn_max_radius_m": 0.30,
+    "spawn_angle_half_range_degrees": 90.0
+  },
+  "camera1": {
+    "preset": "official_overhead_and_integrated_32x32_uvc",
+    "rig_world_position_m": [0.04912092, -0.05343047, 0.0050],
+    "rig_quaternion_wxyz": [0.7071067811865476, 0.7071067811865475, 0.0, 0.0],
+    "robot_base_world_position_m": [-0.019835293745632178, 0.0, 0.0072],
+    "tower_position_cad_m": [-0.09392091755867003, -0.005, -0.2059750366210938],
+    "tower_quaternion_cad_wxyz": [1.0, 0.0, 0.0, 0.0],
+    "mesh_translation_cad_m": {
+      "arm_base.stl": [0.0, 0.0, 0.0],
+      "cam_mount_bottom.stl": [0.0, 0.0, 0.0],
+      "cam_mount_middle.stl": [0.0187, 0.1881, 0.0365125],
+      "cam_mount_top.stl": [0.0187, 0.1881, 0.0365125]
+    },
+    "mesh_quaternion_cad_wxyz": {
+      "arm_base.stl": [1.0, 0.0, 0.0, 0.0],
+      "cam_mount_bottom.stl": [1.0, 0.0, 0.0, 0.0],
+      "cam_mount_middle.stl": [1.0, 0.0, 0.0, 0.0],
+      "cam_mount_top.stl": [1.0, 0.0, 0.0, 0.0]
+    },
+    "camera_mount_face_center_top_part_cad_m": [0.029523, 0.362249, 0.0],
+    "upper_mast_translation_cad_m": [0.0187, 0.1881, 0.0365125],
+    "camera_mount_face_normal_cad": [0.42261826174069944, -0.9063077870366499, 0.0],
+    "camera_mount_quaternion_cad_wxyz": [0.5963678105290182, -0.37992819659091526, -0.5963678105290181, -0.37992819659091526],
+    "camera_quaternion_cad_wxyz": [0.6408563820557885, -0.2988362387301198, -0.6408563820557885, -0.2988362387301199],
+    "camera_downward_angle_degrees": 50.0,
+    "camera_pinhole_protrusion_m": 0.020,
+    "connector_insertion_depth_m": 0.00785,
+    "arm_base_to_lower_mast_insertion_depth_m": 0.010,
+    "pixel_postprocess_rotation_degrees": 0
+  },
+  "camera2": {
+    "preset": "integrated_32x32_uvc",
+    "camera_body": "gripper",
+    "collision_mesh": "wrist_roll_follower_so101_v1",
+    "mount_position_gripper_m": [0.00252405, -0.07120722, 0.00233990],
+    "rear_up_direction_gripper": [0.0, 0.5920689131972674, -0.8058873382957488],
+    "rear_up_offset_m": 0.005,
+    "mount_downward_angle_degrees": 65.0,
+    "optical_downward_angle_degrees": 66.0,
+    "optical_target_distance_m": 0.15060335474204708,
+    "source_center_mm": [2.52405, 71.83424728, -3.20281401],
+    "source_forward": [0.0, -0.42261826174069944, 0.9063077870366499],
+    "pixel_postprocess_rotation_degrees": 0
+  },
+  "render": {
+    "mode": "blender_cycles_live",
+    "output_dir": "_workspace/so101_camera_mount_preview/official_hardware_rig_v27_config_repro",
+    "render_policy_inference_only": true,
+    "source_width": 640,
+    "source_height": 360,
+    "policy_size": 256,
+    "policy_resize": "center_crop_square_then_resize",
+    "samples": 32,
+    "denoise": false,
+    "cycles_seed": 98200,
+    "lighting_profile": "studio_small_08",
+    "key_light_power": 42.0,
+    "fill_light_power": 5.0,
+    "world_strength": 0.28,
+    "hdri_rotation_degrees": 90.0,
+    "exposure": -1.3,
+    "color_management": "Filmic",
+    "color_look": "Medium High Contrast",
+    "gamma": 1.0,
+    "output_format": "PNG",
+    "sample_clamp_indirect": 0.85,
+    "background_wall": false,
+    "stable_tabletop": true,
+    "scene_profile": "black_table_clutter",
+    "robot_material": "matte_pla",
+    "material_profile": "configs/so101/render_profiles/black_arm_green_white_gripper_official_camera_rig.json",
+    "material_profile_sha256": "1a3160a54b4dfb6762c37846833ec0db684051b815927c8df56dde6f2c9e86ae",
+    "camera_lens_mm": 48.0,
+    "photoreal_asset_root": "_workspace/photoreal_assets",
+    "blender_bin": "blender",
+    "expected_blender_version": "Blender 5.1.2",
+    "compute_device_type": "METAL",
+    "max_mesh_geoms": 128,
+    "preserve_pinhole_renders": true,
+    "evidence_views": [
+      {
+        "kind": "free",
+        "name": "external_scene",
+        "filename": "external_camera_rig_photoreal.png",
+        "lookat_m": [0.0, 0.0, 0.29],
+        "distance_m": 0.82,
+        "azimuth_degrees": 180.0,
+        "elevation_degrees": -3.0,
+        "fovy_degrees": 45.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      },
+      {
+        "kind": "free",
+        "name": "base_joint_closeup",
+        "filename": "base_joint_closeup_photoreal.png",
+        "lookat_m": [-0.0261, 0.0745, 0.012],
+        "distance_m": 0.16,
+        "azimuth_degrees": -90.0,
+        "elevation_degrees": -18.0,
+        "fovy_degrees": 45.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      },
+      {
+        "kind": "free",
+        "name": "base_joint_topdown",
+        "filename": "base_joint_topdown_photoreal.png",
+        "lookat_m": [-0.0261, 0.0745, 0.004],
+        "distance_m": 0.13,
+        "azimuth_degrees": 180.0,
+        "elevation_degrees": -82.0,
+        "fovy_degrees": 45.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      },
+      {
+        "kind": "mounted_front",
+        "name": "camera_head_closeup",
+        "filename": "camera_head_closeup_photoreal.png",
+        "camera_name": "egocentric_cam",
+        "distance_m": 0.18,
+        "fovy_degrees": 35.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      },
+      {
+        "kind": "mounted_front",
+        "name": "wrist_camera_closeup",
+        "filename": "wrist_camera_closeup_photoreal.png",
+        "camera_name": "wrist_cam",
+        "distance_m": 0.11,
+        "fovy_degrees": 35.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      }
+    ],
+    "outputs": {
+      "photoreal_subdir": "photoreal",
+      "camera1_policy_filename": "camera1_policy_256.png",
+      "camera2_policy_filename": "camera2_policy_256.png",
+      "report_filename": "preview_report.json",
+      "contact_sheet": {
+        "filename": "official_32x32_camera_rig_photoreal.png",
+        "tile_size": 512,
+        "header_height": 38,
+        "font_size": 18,
+        "background_rgb": [15, 23, 42],
+        "foreground_rgb": [241, 245, 249]
+      }
+    }
+  }
+}

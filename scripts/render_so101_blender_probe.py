@@ -63,14 +63,15 @@ def main():
         scene.render.image_settings.quality = 95
 
     prefs = bpy.context.preferences.addons["cycles"].preferences
-    prefs.compute_device_type = "METAL"
+    compute_device_type = str(spec.get("compute_device_type", "METAL"))
+    prefs.compute_device_type = compute_device_type
     prefs.get_devices()
-    metal_devices = []
+    selected_devices = []
     for device in prefs.devices:
-        device.use = device.type == "METAL"
+        device.use = device.type == compute_device_type
         if device.use:
-            metal_devices.append(device.name)
-    scene.cycles.device = "GPU" if metal_devices else "CPU"
+            selected_devices.append(device.name)
+    scene.cycles.device = "GPU" if selected_devices else "CPU"
 
     scene_profile = spec.get("scene_profile", "neutral")
     floor_mat = (
@@ -174,7 +175,8 @@ def main():
         "blender_version": bpy.app.version_string,
         "cycles_device": scene.cycles.device,
         "compute_device_type": prefs.compute_device_type,
-        "metal_devices": metal_devices,
+        "metal_devices": selected_devices if compute_device_type == "METAL" else [],
+        "selected_devices": selected_devices,
     }
     Path(spec["blender_report_path"]).write_text(json.dumps(report, indent=2, sort_keys=True))
 
