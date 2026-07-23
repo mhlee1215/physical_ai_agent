@@ -99,6 +99,9 @@ class LiveBlenderCyclesPolicyRenderer:
             max_mesh_geoms=int(self.config["max_mesh_geoms"]),
         )
         primitives = _export_primitive_geoms(env.unwrapped.model, env.unwrapped.data)
+        primitives.extend(
+            dict(item) for item in self.config.get("debug_primitives", [])
+        )
         camera_specs = _camera_specs_from_mujoco_scene(
             env,
             mujoco_renderers,
@@ -1283,16 +1286,24 @@ def _camera_specs_from_mujoco_scene(
     height: int = 256,
 ) -> dict[str, dict[str, Any]]:
     unwrapped = env.unwrapped
-    camera1 = _scene_camera_spec(
-        unwrapped.model,
-        unwrapped.data,
-        renderers["egocentric_cam"],
-        "egocentric_cam",
-    )
+    has_named_camera1 = _named_camera_exists(unwrapped.model, "egocentric_cam")
+    if has_named_camera1:
+        # MjvScene exposes stereo eye cameras; scene.camera[0] is displaced
+        # from the physical pinhole by half the inter-pupillary distance.
+        camera1 = _fixed_mujoco_camera_spec(
+            unwrapped.model,
+            unwrapped.data,
+            "egocentric_cam",
+        )
+    else:
+        camera1 = _scene_camera_spec(
+            unwrapped.model,
+            unwrapped.data,
+            renderers["egocentric_cam"],
+            "egocentric_cam",
+        )
     camera1["rotation_degrees"] = (
-        0
-        if _named_camera_exists(unwrapped.model, "egocentric_cam")
-        else int(EGOCENTRIC_CAMERA1_POSE["rotation_degrees"])
+        0 if has_named_camera1 else int(EGOCENTRIC_CAMERA1_POSE["rotation_degrees"])
     )
     return {
         "observation.images.camera1": _with_explicit_camera_contract(

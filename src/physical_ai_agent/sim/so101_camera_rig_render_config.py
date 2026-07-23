@@ -118,6 +118,7 @@ class WristCameraMountConfig(StrictModel):
     camera_body: str
     collision_mesh: str
     mount_face_center_gripper_m: tuple[float, float, float]
+    mount_plate_thickness_m: float | None = Field(default=None, gt=0.0)
     lens_protrusion_m: float = Field(gt=0.0)
     mount_downward_angle_degrees: float
     optical_downward_angle_degrees: float
@@ -144,9 +145,18 @@ class WristCameraMountConfig(StrictModel):
         return self
 
     @property
-    def camera_position_gripper(self) -> tuple[float, float, float]:
+    def board_contact_center_gripper_m(self) -> tuple[float, float, float]:
+        thickness = self.mount_plate_thickness_m or 0.0
         return tuple(
             self.mount_face_center_gripper_m[index]
+            - thickness * self.camera_forward_gripper[index]
+            for index in range(3)
+        )
+
+    @property
+    def camera_position_gripper(self) -> tuple[float, float, float]:
+        return tuple(
+            self.board_contact_center_gripper_m[index]
             + self.lens_protrusion_m * self.camera_forward_gripper[index]
             for index in range(3)
         )
@@ -198,6 +208,7 @@ class OverheadCameraMountConfig(StrictModel):
         lt=180.0,
     )
     camera_pinhole_protrusion_m: float = Field(ge=0.0)
+    mount_plate_thickness_m: float | None = Field(default=None, gt=0.0)
     connector_insertion_depth_m: float = Field(ge=0.0)
     arm_base_to_lower_mast_insertion_depth_m: float = Field(ge=0.0)
     pixel_postprocess_rotation_degrees: int
@@ -257,9 +268,18 @@ class OverheadCameraMountConfig(StrictModel):
         )
 
     @property
-    def camera_pinhole_cad_m(self) -> tuple[float, float, float]:
+    def camera_board_contact_center_cad_m(self) -> tuple[float, float, float]:
+        thickness = self.mount_plate_thickness_m or 0.0
         return tuple(
             self.camera_mount_face_center_cad_m[index]
+            - thickness * self.camera_mount_face_normal_cad[index]
+            for index in range(3)
+        )
+
+    @property
+    def camera_pinhole_cad_m(self) -> tuple[float, float, float]:
+        return tuple(
+            self.camera_board_contact_center_cad_m[index]
             + self.camera_pinhole_protrusion_m * self.camera_mount_face_normal_cad[index]
             for index in range(3)
         )
@@ -403,7 +423,10 @@ class PhotorealRenderConfig(StrictModel):
     source_width: int = Field(gt=0)
     source_height: int = Field(gt=0)
     policy_size: int = Field(gt=0)
-    policy_resize: Literal["center_crop_square_then_resize"]
+    policy_resize: Literal[
+        "center_crop_square_then_resize",
+        "direct_square_render",
+    ]
     samples: int = Field(gt=0)
     denoise: bool
     cycles_seed: int = Field(ge=0)
@@ -491,13 +514,18 @@ class SO101CameraRigRenderConfig(StrictModel):
             raise ValueError(f"camera_contract must be exactly {expected}")
         if self.preset != self.camera1.preset:
             raise ValueError("root preset and camera1 preset must match")
-        sensor_width, sensor_height = self.sensor.source_resolution
-        sensor_aspect = sensor_width / sensor_height
-        render_aspect = self.render.source_width / self.render.source_height
-        if not math.isclose(render_aspect, sensor_aspect, abs_tol=0.01):
+        if self.render.policy_resize == "center_crop_square_then_resize":
+            sensor_width, sensor_height = self.sensor.source_resolution
+            sensor_aspect = sensor_width / sensor_height
+            render_aspect = self.render.source_width / self.render.source_height
+            if not math.isclose(render_aspect, sensor_aspect, abs_tol=0.01):
+                raise ValueError(
+                    "render source aspect ratio must match the physical sensor before "
+                    "the square policy crop"
+                )
+        elif self.render.source_width != self.render.source_height:
             raise ValueError(
-                "render source aspect ratio must match the physical sensor before "
-                "the square policy crop"
+                "direct_square_render requires a square source render"
             )
         if not math.isclose(
             self.camera1.camera_pinhole_protrusion_m,
@@ -534,7 +562,23 @@ class SO101CameraRigRenderConfig(StrictModel):
                 abs_tol=1e-9,
             ):
                 raise ValueError(
-                    f"PCB front face must touch the {camera_name} mount face"
+                    f"PCB front face must touch the rear {camera_name} mount face"
+                )
+        for camera_name, protrusion, plate_thickness in (
+            (
+                "camera1",
+                self.camera1.camera_pinhole_protrusion_m,
+                self.camera1.mount_plate_thickness_m,
+            ),
+            (
+                "camera2",
+                self.camera2.lens_protrusion_m,
+                self.camera2.mount_plate_thickness_m,
+            ),
+        ):
+            if plate_thickness is not None and protrusion <= plate_thickness:
+                raise ValueError(
+                    f"{camera_name} lens must pass through and protrude beyond its mount plate"
                 )
         if self.assembly_lock is not None:
             printed_base = self.assembly_lock.fastener_alignment.printed_base_stl
@@ -584,8 +628,8 @@ def assembly_fingerprint_sha256(payload: dict[str, object]) -> str:
                 "lens_distance_behind_pinhole_m"
             ],
         },
-        "camera1_assembly": payload["camera1"],
-        "camera2_assembly": payload["camera2"],
+        "camera1_assembly": _fingerprint_camera_assembly(payload["camera1"]),
+        "camera2_assembly": _fingerprint_camera_assembly(payload["camera2"]),
         "fastener_alignment": assembly_lock["fastener_alignment"],
     }
     canonical = json.dumps(
@@ -595,6 +639,15 @@ def assembly_fingerprint_sha256(payload: dict[str, object]) -> str:
         ensure_ascii=True,
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _fingerprint_camera_assembly(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise TypeError("camera assembly must be a mapping")
+    normalized = dict(payload)
+    if normalized.get("mount_plate_thickness_m") is None:
+        normalized.pop("mount_plate_thickness_m", None)
+    return normalized
 
 
 def _rotate_vector_wxyz(

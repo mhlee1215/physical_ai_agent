@@ -34,12 +34,22 @@ DEFAULT_CONFIG_PATH = Path(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render the config-defined SO101 camera rig.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--debug-camera-origins",
+        action="store_true",
+        help="Render red pinhole markers and forward optical-axis rods.",
+    )
     args = parser.parse_args()
 
     config_path = args.config.expanduser().resolve()
     config = load_so101_camera_rig_render_config(config_path)
     _validate_render_dependencies(config)
-    output_dir = resolve_repository_path(config.render.output_dir).resolve()
+    output_dir = (
+        args.output_dir.expanduser().resolve()
+        if args.output_dir is not None
+        else resolve_repository_path(config.render.output_dir).resolve()
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     _remove_stale_expected_outputs(output_dir, config)
     asset = prepare_official_32x32_uvc_camera_rig_xml(rig_config=config)
@@ -78,6 +88,11 @@ def main() -> None:
             config=_photoreal_config(
                 config,
                 evidence_renders=tuple(evidence_renders.values()),
+                debug_primitives=(
+                    _camera_origin_debug_primitives(env)
+                    if args.debug_camera_origins
+                    else ()
+                ),
             ),
         )
         pixels, metadata = renderer.render(
@@ -92,11 +107,15 @@ def main() -> None:
                 raise RuntimeError(
                     f"Cycles batch did not produce camera-rig evidence: {evidence_path}"
                 )
-        camera1_policy = _center_crop_policy_input(
-            pixels["egocentric_cam"], size=config.render.policy_size
+        camera1_policy = _policy_input(
+            pixels["egocentric_cam"],
+            size=config.render.policy_size,
+            mode=config.render.policy_resize,
         )
-        camera2_policy = _center_crop_policy_input(
-            pixels["wrist_cam"], size=config.render.policy_size
+        camera2_policy = _policy_input(
+            pixels["wrist_cam"],
+            size=config.render.policy_size,
+            mode=config.render.policy_resize,
         )
         camera1_policy_path = output_dir / config.render.outputs.camera1_policy_filename
         camera2_policy_path = output_dir / config.render.outputs.camera2_policy_filename
@@ -129,6 +148,10 @@ def main() -> None:
                 "mount_face_center_cad": list(
                     config.camera1.camera_mount_face_center_cad_m
                 ),
+                "board_contact_center_cad": list(
+                    config.camera1.camera_board_contact_center_cad_m
+                ),
+                "mount_plate_thickness_m": config.camera1.mount_plate_thickness_m,
                 "lens_protrusion_m": config.camera1.camera_pinhole_protrusion_m,
                 "assembly_mode": config.camera1.assembly_mode,
                 "downward_angle_degrees": config.camera1.camera_downward_angle_degrees,
@@ -150,6 +173,10 @@ def main() -> None:
                 "mount_face_center_gripper": list(
                     config.camera2.mount_face_center_gripper_m
                 ),
+                "board_contact_center_gripper": list(
+                    config.camera2.board_contact_center_gripper_m
+                ),
+                "mount_plate_thickness_m": config.camera2.mount_plate_thickness_m,
                 "lens_protrusion_m": config.camera2.lens_protrusion_m,
                 "assembly_mode": config.camera2.assembly_mode,
                 "downward_angle_degrees": config.camera2.optical_downward_angle_degrees,
@@ -182,6 +209,7 @@ def main() -> None:
             },
             "live_renderer_metadata": metadata,
             "live_renderer_report": renderer.report(),
+            "debug_camera_origins": bool(args.debug_camera_origins),
         }
         report_path = output_dir / config.render.outputs.report_filename
         report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -255,6 +283,7 @@ def _photoreal_config(
     config: SO101CameraRigRenderConfig,
     *,
     evidence_renders: tuple[tuple[Path, dict[str, Any]], ...],
+    debug_primitives: tuple[dict[str, Any], ...] = (),
 ) -> dict[str, Any]:
     render = config.render
     return {
@@ -321,7 +350,67 @@ def _photoreal_config(
             }
             for image_path, camera_spec in evidence_renders
         ],
+        "debug_primitives": [dict(item) for item in debug_primitives],
     }
+
+
+def _camera_origin_debug_primitives(env: Any) -> tuple[dict[str, Any], ...]:
+    import mujoco
+
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    primitives: list[dict[str, Any]] = []
+    for index, camera_name in enumerate(("egocentric_cam", "wrist_cam"), start=1):
+        camera_id = mujoco.mj_name2id(
+            model,
+            mujoco.mjtObj.mjOBJ_CAMERA,
+            camera_name,
+        )
+        position = np.asarray(data.cam_xpos[camera_id], dtype=float)
+        rotation = np.asarray(data.cam_xmat[camera_id], dtype=float).reshape(3, 3)
+        forward = rotation @ np.array([0.0, 0.0, -1.0])
+        forward /= np.linalg.norm(forward)
+        length = 0.13 if index == 1 else 0.10
+        primitives.extend(
+            (
+                {
+                    "geom_id": -100 - index,
+                    "name": f"debug_camera{index}_pinhole_red",
+                    "body_name": "world",
+                    "type": "sphere",
+                    "position": position.tolist(),
+                    "xmat": np.eye(3).reshape(-1).tolist(),
+                    "size": [0.012 if index == 1 else 0.009, 0.0, 0.0],
+                    "rgba": [1.0, 0.01, 0.01, 1.0],
+                    "semantic_color": None,
+                },
+                {
+                    "geom_id": -110 - index,
+                    "name": f"debug_camera{index}_optical_axis_red",
+                    "body_name": "world",
+                    "type": "cylinder",
+                    "position": (position + forward * length * 0.5).tolist(),
+                    "xmat": _matrix_with_z_axis(forward),
+                    "size": [0.0035, length * 0.5, 0.0],
+                    "rgba": [1.0, 0.01, 0.01, 1.0],
+                    "semantic_color": None,
+                },
+            )
+        )
+    return tuple(primitives)
+
+
+def _matrix_with_z_axis(direction: np.ndarray) -> list[float]:
+    z_axis = np.asarray(direction, dtype=float)
+    z_axis /= np.linalg.norm(z_axis)
+    helper = np.array([0.0, 0.0, 1.0])
+    if abs(float(np.dot(z_axis, helper))) > 0.9:
+        helper = np.array([0.0, 1.0, 0.0])
+    x_axis = np.cross(helper, z_axis)
+    x_axis /= np.linalg.norm(x_axis)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis /= np.linalg.norm(y_axis)
+    return np.column_stack((x_axis, y_axis, z_axis)).reshape(-1).tolist()
 
 
 def _evidence_renders(
@@ -522,8 +611,21 @@ def _write_contact_sheet(
     sheet.save(output_path)
 
 
-def _center_crop_policy_input(pixels: np.ndarray, *, size: int) -> np.ndarray:
+def _policy_input(
+    pixels: np.ndarray,
+    *,
+    size: int,
+    mode: str,
+) -> np.ndarray:
     image = Image.fromarray(np.asarray(pixels, dtype=np.uint8)).convert("RGB")
+    if mode == "direct_square_render":
+        if image.width != image.height:
+            raise ValueError("direct_square_render received a non-square image")
+        return np.asarray(
+            image.resize((size, size), Image.Resampling.LANCZOS)
+        ).copy()
+    if mode != "center_crop_square_then_resize":
+        raise ValueError(f"unsupported policy resize mode: {mode}")
     side = min(image.width, image.height)
     left = (image.width - side) // 2
     top = (image.height - side) // 2
@@ -533,6 +635,14 @@ def _center_crop_policy_input(pixels: np.ndarray, *, size: int) -> np.ndarray:
             Image.Resampling.LANCZOS,
         )
     ).copy()
+
+
+def _center_crop_policy_input(pixels: np.ndarray, *, size: int) -> np.ndarray:
+    return _policy_input(
+        pixels,
+        size=size,
+        mode="center_crop_square_then_resize",
+    )
 
 
 def _validate_render_dependencies(config: SO101CameraRigRenderConfig) -> None:

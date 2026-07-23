@@ -9,9 +9,63 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest import mock
 
 
 class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
+    def test_named_camera1_uses_the_physical_pinhole_not_a_stereo_eye(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        class Env:
+            unwrapped = type("Unwrapped", (), {"model": object(), "data": object()})()
+
+        def fixed_camera(_model, _data, camera_name):
+            location = [1.0, 2.0, 3.0] if camera_name == "egocentric_cam" else [4.0, 5.0, 6.0]
+            return {
+                "mode": "forward_up",
+                "location": location,
+                "forward": [0.0, 0.0, -1.0],
+                "up": [0.0, 1.0, 0.0],
+                "fovy": 70.0,
+                "focus_distance": 0.5,
+                "aperture_fstop": 10.0,
+                "use_dof": False,
+                "clip_start": 0.001,
+            }
+
+        with (
+            mock.patch.object(module, "_named_camera_exists", return_value=True),
+            mock.patch.object(module, "_fixed_mujoco_camera_spec", side_effect=fixed_camera),
+            mock.patch.object(
+                module,
+                "_scene_camera_spec",
+                side_effect=AssertionError("named camera must not use an MjvScene stereo eye"),
+            ),
+        ):
+            cameras = module._camera_specs_from_mujoco_scene(
+                Env(),
+                {"egocentric_cam": object()},
+                camera_lens=48.0,
+                width=256,
+                height=256,
+            )
+
+        self.assertEqual(
+            cameras["observation.images.camera1"]["location"],
+            [1.0, 2.0, 3.0],
+        )
+        self.assertEqual(
+            cameras["observation.images.camera2"]["location"],
+            [4.0, 5.0, 6.0],
+        )
+
     def test_dry_run_includes_photoreal_preview_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recipe_path = Path(tmp) / "recipes.json"

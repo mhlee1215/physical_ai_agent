@@ -31,8 +31,10 @@ from physical_ai_agent.sim.so101_wrist_camera_mount import (
     INTEGRATED_32X32_UVC_CAMERA_OPTICAL_AXIS_OFFSET_DEGREES,
     INTEGRATED_32X32_UVC_CAMERA_OPTICAL_TARGET_GRIPPER,
     INTEGRATED_32X32_UVC_CAMERA_POSITION,
+    INTEGRATED_32X32_UVC_BOARD_CONTACT_CENTER_GRIPPER,
     INTEGRATED_32X32_UVC_LENS_PROTRUSION_M,
     INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER,
+    INTEGRATED_32X32_UVC_MOUNT_PLATE_THICKNESS_M,
     INTEGRATED_32X32_UVC_PRESET,
     prepare_integrated_32x32_uvc_robot_xml,
 )
@@ -165,10 +167,11 @@ OVERHEAD_CAMERA_UP_WORLD = (
     0.0,
     math.cos(_OVERHEAD_CAMERA_DOWNWARD_ANGLE_RADIANS),
 )
-# The four M2-hole centres on the top STL define the camera-board centre. The
-# PCB front face sits on that plane and the 10 mm lens barrel passes through
-# the centre opening, placing the optical pinhole at the barrel tip.
+# The four M2-hole centres define the optical/front face of the 3 mm printed
+# plate. The PCB sits against its rear face and the 10 mm lens barrel passes
+# through the centre opening, placing the optical pinhole at the barrel tip.
 OVERHEAD_CAMERA_PINHOLE_PROTRUSION_M = 0.010
+OVERHEAD_CAMERA_MOUNT_PLATE_THICKNESS_M = 0.003
 OVERHEAD_CAMERA_MOUNT_FACE_CENTER_TOP_PART_CAD_M = (
     0.029523,
     0.362249,
@@ -182,8 +185,14 @@ OVERHEAD_CAMERA_MOUNT_FACE_CENTER_CAD_M = (
     OVERHEAD_CAMERA_MOUNT_FACE_CENTER_TOP_PART_CAD_M[2]
     + OVERHEAD_UPPER_MAST_TRANSLATION_CAD_M[2],
 )
-OVERHEAD_CAMERA_PINHOLE_CAD = tuple(
+OVERHEAD_CAMERA_BOARD_CONTACT_CENTER_CAD_M = tuple(
     OVERHEAD_CAMERA_MOUNT_FACE_CENTER_CAD_M[index]
+    - OVERHEAD_CAMERA_MOUNT_PLATE_THICKNESS_M
+    * OVERHEAD_CAMERA_MOUNT_FACE_NORMAL_CAD[index]
+    for index in range(3)
+)
+OVERHEAD_CAMERA_PINHOLE_CAD = tuple(
+    OVERHEAD_CAMERA_BOARD_CONTACT_CENTER_CAD_M[index]
     + OVERHEAD_CAMERA_PINHOLE_PROTRUSION_M
     * OVERHEAD_CAMERA_MOUNT_FACE_NORMAL_CAD[index]
     for index in range(3)
@@ -400,6 +409,16 @@ def _prepare_official_32x32_uvc_camera_rig_xml_unlocked(
                     if camera2
                     else INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER
                 ),
+                "board_contact_center_gripper": list(
+                    camera2.board_contact_center_gripper_m
+                    if camera2
+                    else INTEGRATED_32X32_UVC_BOARD_CONTACT_CENTER_GRIPPER
+                ),
+                "mount_plate_thickness_m": (
+                    camera2.mount_plate_thickness_m
+                    if camera2 and camera2.mount_plate_thickness_m is not None
+                    else INTEGRATED_32X32_UVC_MOUNT_PLATE_THICKNESS_M
+                ),
                 "lens_protrusion_m": (
                     camera2.lens_protrusion_m
                     if camera2
@@ -429,6 +448,16 @@ def _prepare_official_32x32_uvc_camera_rig_xml_unlocked(
                     camera1.camera_mount_face_center_cad_m
                     if camera1
                     else OVERHEAD_CAMERA_MOUNT_FACE_CENTER_CAD_M
+                ),
+                "board_contact_center_cad": list(
+                    camera1.camera_board_contact_center_cad_m
+                    if camera1
+                    else OVERHEAD_CAMERA_BOARD_CONTACT_CENTER_CAD_M
+                ),
+                "mount_plate_thickness_m": (
+                    camera1.mount_plate_thickness_m
+                    if camera1 and camera1.mount_plate_thickness_m is not None
+                    else OVERHEAD_CAMERA_MOUNT_PLATE_THICKNESS_M
                 ),
                 "lens_protrusion_m": (
                     camera1.camera_pinhole_protrusion_m

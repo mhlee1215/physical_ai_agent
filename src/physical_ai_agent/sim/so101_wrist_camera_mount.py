@@ -63,14 +63,15 @@ INTEGRATED_32X32_UVC_CAMERA_FORWARD_SOURCE = (
     0.9063077870366499,
 )
 
-# The four PCB screw holes locate this center on the rear face of the printed
-# mount. The 10 mm lens barrel passes through its center opening. Its rear face
-# meets the PCB front face and its front tip is the optical pinhole.
+# The source center is the optical/front face of the printed plate. The PCB
+# mounts against the opposite face, 4 mm behind it. The 10 mm lens barrel starts
+# at the PCB, passes through the plate opening, and ends at the optical pinhole.
 INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER = (
     0.00252405,
     -0.07205246128,
     0.00415252001,
 )
+INTEGRATED_32X32_UVC_MOUNT_PLATE_THICKNESS_M = 0.004
 INTEGRATED_32X32_UVC_LENS_PROTRUSION_M = 0.010
 
 # The camera PCB is flush with the printed 65-degree mounting face, so its
@@ -92,8 +93,14 @@ INTEGRATED_32X32_UVC_CAMERA_UP_GRIPPER = (
     -math.sin(_INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_RADIANS),
     -math.cos(_INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_RADIANS),
 )
-INTEGRATED_32X32_UVC_CAMERA_POSITION = tuple(
+INTEGRATED_32X32_UVC_BOARD_CONTACT_CENTER_GRIPPER = tuple(
     INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER[index]
+    - INTEGRATED_32X32_UVC_MOUNT_PLATE_THICKNESS_M
+    * INTEGRATED_32X32_UVC_CAMERA_FORWARD_GRIPPER[index]
+    for index in range(3)
+)
+INTEGRATED_32X32_UVC_CAMERA_POSITION = tuple(
+    INTEGRATED_32X32_UVC_BOARD_CONTACT_CENTER_GRIPPER[index]
     + INTEGRATED_32X32_UVC_LENS_PROTRUSION_M
     * INTEGRATED_32X32_UVC_CAMERA_FORWARD_GRIPPER[index]
     for index in range(3)
@@ -309,6 +316,16 @@ def prepare_integrated_32x32_uvc_robot_xml(
                 wrist.mount_face_center_gripper_m
                 if wrist
                 else INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER
+            ),
+            "camera_board_contact_center_gripper": list(
+                wrist.board_contact_center_gripper_m
+                if wrist
+                else INTEGRATED_32X32_UVC_BOARD_CONTACT_CENTER_GRIPPER
+            ),
+            "camera_mount_plate_thickness_m": (
+                wrist.mount_plate_thickness_m
+                if wrist and wrist.mount_plate_thickness_m is not None
+                else INTEGRATED_32X32_UVC_MOUNT_PLATE_THICKNESS_M
             ),
             "camera_lens_protrusion_m": (
                 wrist.lens_protrusion_m

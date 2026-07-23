@@ -1,4 +1,5 @@
 import json
+import math
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -26,9 +27,209 @@ CAMERA_RIG_V9_CONFIG = Path(
     "configs/so101/camera_rigs/"
     "official_32x32_uvc_photoreal_v9_white_mount_locked.json"
 )
+CAMERA_RIG_V10_CONFIG = Path(
+    "configs/so101/camera_rigs/"
+    "official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json"
+)
 
 
 class SO101OfficialCameraRigTest(unittest.TestCase):
+    def test_v10_camera_axes_are_perpendicular_to_their_mounting_plates(self) -> None:
+        from physical_ai_agent.sim.so101_camera_rig_render_config import (
+            _rotate_vector_wxyz,
+            load_so101_camera_rig_render_config,
+        )
+        from so101_nexus_core import get_so101_simulation_dir
+
+        config = load_so101_camera_rig_render_config(CAMERA_RIG_V10_CONFIG)
+
+        self.assertEqual(config.camera1.effective_vertical_fov_degrees, 50.0)
+        self.assertEqual(config.camera2.effective_vertical_fov_degrees, 50.0)
+        self.assertEqual(config.camera1.virtual_optical_yaw_degrees, 0.0)
+        self.assertEqual(config.camera1.mount_plate_thickness_m, 0.003)
+        self.assertEqual(config.camera2.mount_plate_thickness_m, 0.004)
+        self.assertEqual(config.camera2.mount_downward_angle_degrees, 65.0)
+        self.assertEqual(
+            config.camera2.optical_downward_angle_degrees,
+            config.camera2.mount_downward_angle_degrees,
+        )
+        downward_mast_cad = (0.0, -1.0, 0.0)
+        mast_to_optical_cosine = sum(
+            actual * expected
+            for actual, expected in zip(
+                config.camera1.camera_forward_cad,
+                downward_mast_cad,
+                strict=True,
+            )
+        )
+        mast_to_optical_degrees = math.degrees(
+            math.acos(max(-1.0, min(1.0, mast_to_optical_cosine)))
+        )
+        self.assertAlmostEqual(mast_to_optical_degrees, 25.0)
+        self.assertAlmostEqual(
+            config.camera1.effective_vertical_fov_degrees,
+            2.0 * mast_to_optical_degrees,
+        )
+        downward_wrist_support = (0.0, 0.0, -1.0)
+        wrist_support_to_optical_cosine = sum(
+            actual * expected
+            for actual, expected in zip(
+                config.camera2.camera_forward_gripper,
+                downward_wrist_support,
+                strict=True,
+            )
+        )
+        wrist_support_to_optical_degrees = math.degrees(
+            math.acos(
+                max(-1.0, min(1.0, wrist_support_to_optical_cosine))
+            )
+        )
+        self.assertAlmostEqual(wrist_support_to_optical_degrees, 25.0)
+        self.assertAlmostEqual(
+            config.camera2.effective_vertical_fov_degrees,
+            2.0 * wrist_support_to_optical_degrees,
+        )
+        root = ET.parse(get_so101_simulation_dir() / "so101_new_calib.xml").getroot()
+        wrist_mount = next(
+            geom
+            for geom in root.findall(".//geom")
+            if geom.get("class") == "visual"
+            and geom.get("mesh") == config.camera2.collision_mesh
+        )
+        source_to_gripper = tuple(
+            float(value) for value in wrist_mount.get("quat", "").split()
+        )
+        mount_normal_gripper = _rotate_vector_wxyz(
+            source_to_gripper,
+            config.camera2.source_forward,
+        )
+        for actual, expected in zip(
+            config.camera2.camera_forward_gripper,
+            mount_normal_gripper,
+            strict=True,
+        ):
+            self.assertAlmostEqual(actual, expected)
+
+        self.assertEqual(
+            config.camera1.assembly_mode,
+            "pcb_flush_lens_through_center_hole",
+        )
+        self.assertEqual(
+            config.camera2.assembly_mode,
+            "pcb_flush_lens_through_center_hole",
+        )
+
+    def test_v10_camera_pcbs_are_behind_the_printed_plates_without_overlap(
+        self,
+    ) -> None:
+        from physical_ai_agent.sim.so101_camera_rig_render_config import (
+            load_so101_camera_rig_render_config,
+        )
+        from physical_ai_agent.sim.so101_overhead_camera_mount import (
+            prepare_official_32x32_uvc_camera_rig_xml,
+        )
+
+        config = load_so101_camera_rig_render_config(CAMERA_RIG_V10_CONFIG)
+        with TemporaryDirectory() as temp_dir:
+            asset = prepare_official_32x32_uvc_camera_rig_xml(
+                output_dir=Path(temp_dir),
+                rig_config=config,
+            )
+            root = ET.parse(asset.robot_xml).getroot()
+
+            def position(name: str, kind: str) -> tuple[float, float, float]:
+                element = root.find(f'.//{kind}[@name="{name}"]')
+                self.assertIsNotNone(element)
+                assert element is not None
+                return tuple(float(value) for value in element.get("pos", "").split())
+
+            camera_specs = (
+                (
+                    "camera1",
+                    config.camera1.camera_mount_face_center_cad_m,
+                    config.camera1.camera_board_contact_center_cad_m,
+                    config.camera1.camera_mount_face_normal_cad,
+                    config.camera1.mount_plate_thickness_m,
+                    position("egocentric_cam", "camera"),
+                    position("overhead_camera_board", "geom"),
+                    position("overhead_camera_lens", "geom"),
+                ),
+                (
+                    "camera2",
+                    config.camera2.mount_face_center_gripper_m,
+                    config.camera2.board_contact_center_gripper_m,
+                    config.camera2.camera_forward_gripper,
+                    config.camera2.mount_plate_thickness_m,
+                    position("wrist_cam", "camera"),
+                    position("wrist_camera_board", "geom"),
+                    position("wrist_camera_lens", "geom"),
+                ),
+            )
+            for (
+                camera_name,
+                optical_face,
+                board_contact,
+                forward,
+                plate_thickness,
+                pinhole,
+                board_center,
+                lens_center,
+            ) in camera_specs:
+                with self.subTest(camera=camera_name):
+                    self.assertIsNotNone(plate_thickness)
+                    assert plate_thickness is not None
+                    measured_thickness = sum(
+                        (optical_face[index] - board_contact[index]) * forward[index]
+                        for index in range(3)
+                    )
+                    self.assertAlmostEqual(measured_thickness, plate_thickness)
+                    board_front = tuple(
+                        board_center[index]
+                        + config.sensor.board_half_size_m[2] * forward[index]
+                        for index in range(3)
+                    )
+                    lens_back = tuple(
+                        lens_center[index]
+                        - config.sensor.lens_size_m[1] * forward[index]
+                        for index in range(3)
+                    )
+                    lens_tip = tuple(
+                        lens_center[index]
+                        + config.sensor.lens_size_m[1] * forward[index]
+                        for index in range(3)
+                    )
+                    for actual, expected in zip(
+                        board_front,
+                        board_contact,
+                        strict=True,
+                    ):
+                        self.assertAlmostEqual(actual, expected)
+                    for actual, expected in zip(
+                        lens_back,
+                        board_contact,
+                        strict=True,
+                    ):
+                        self.assertAlmostEqual(actual, expected)
+                    for actual, expected in zip(lens_tip, pinhole, strict=True):
+                        self.assertAlmostEqual(actual, expected)
+
+    def test_camera_debug_axis_matrix_points_along_the_render_forward_vector(self) -> None:
+        import numpy as np
+
+        from render_so101_official_32x32_camera_rig_preview import (
+            _matrix_with_z_axis,
+        )
+
+        forward = np.asarray([0.42, 0.10, -0.90], dtype=float)
+        matrix = np.asarray(_matrix_with_z_axis(forward)).reshape(3, 3)
+
+        np.testing.assert_allclose(
+            matrix[:, 2],
+            forward / np.linalg.norm(forward),
+            atol=1e-9,
+        )
+        np.testing.assert_allclose(matrix.T @ matrix, np.eye(3), atol=1e-9)
+
     def test_preview_defaults_to_the_locked_v9_assembly(self) -> None:
         from render_so101_official_32x32_camera_rig_preview import DEFAULT_CONFIG_PATH
 
@@ -54,6 +255,31 @@ class SO101OfficialCameraRigTest(unittest.TestCase):
 
         config = load_so101_camera_rig_render_config(CAMERA_RIG_CONFIG)
         self.assertEqual(config.render.hdri_rotation_degrees, 90.0)
+
+    def test_direct_square_render_preserves_the_full_render(self) -> None:
+        import numpy as np
+
+        from render_so101_official_32x32_camera_rig_preview import _policy_input
+
+        pixels = np.arange(12 * 12 * 3, dtype=np.uint8).reshape(12, 12, 3)
+        resized = _policy_input(pixels, size=12, mode="direct_square_render")
+
+        np.testing.assert_array_equal(resized, pixels)
+
+    def test_direct_square_render_rejects_non_square_source(self) -> None:
+        from pydantic import ValidationError
+
+        from physical_ai_agent.sim.so101_camera_rig_render_config import (
+            SO101CameraRigRenderConfig,
+            load_so101_camera_rig_render_config,
+        )
+
+        config = load_so101_camera_rig_render_config(CAMERA_RIG_CONFIG)
+        payload = config.model_dump(mode="json")
+        payload["render"]["policy_resize"] = "direct_square_render"
+
+        with self.assertRaises(ValidationError):
+            SO101CameraRigRenderConfig.model_validate(payload)
 
     def test_canonical_camera_rig_config_is_strict_and_complete(self) -> None:
         from pydantic import ValidationError
