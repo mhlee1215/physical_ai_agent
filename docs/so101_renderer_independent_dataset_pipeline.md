@@ -12,6 +12,83 @@ Recipes are parsed by the strict Pydantic models in
 rejected. The generated JSON Schema is stored at
 `configs/so101/schemas/dataset_generation_recipe.schema.json`.
 
+New recipes use `schema_version: 2` and must choose one source mode:
+
+```json
+{
+  "schema_version": 2,
+  "source": {"mode": "from_scratch"}
+}
+```
+
+`from_scratch` means that MuJoCo state, spawn lookup, teacher trajectory, and
+images are all constructed by the recipe without reading another dataset.
+
+When only object placement is reused, extract and declare a seed-free spawn
+catalog instead of making the old dataset look like the trajectory source:
+
+```json
+{
+  "schema_version": 2,
+  "source": {
+    "mode": "from_spawn_catalog",
+    "catalogs": ["configs/so101/spawn_catalogs/task_v1.json"]
+  }
+}
+```
+
+The catalog stores only `bin -> [[world_x, world_y], ...]`. The new export owns
+its simulator state, teacher trajectory, images, actions, and episode seeds.
+
+```json
+{
+  "schema_version": 2,
+  "source": {
+    "mode": "from_existing_dataset",
+    "operation": "regenerate_teacher",
+    "datasets": ["_workspace/so101_lerobot/source_v1"]
+  }
+}
+```
+
+`regenerate_teacher` may reuse the declared source export reports to build a
+spawn lookup, but it writes new simulator trajectories into new append-only
+roots. Use `operation: render_derivative` when state/action/timeline stay
+immutable and only declared image streams are rerendered. Pydantic requires the
+lookup-report roots or render-source roots to exactly match `source.datasets`.
+Historical schema-v1 recipes remain readable so an existing dataset can be
+reproduced without silently changing its semantics.
+
+New `grip_the_cube_v1` recipes also require a constructive alignment gate:
+
+```json
+{
+  "common": {
+    "inspection_gates": [
+      {
+        "kind": "geometry_contact_alignment",
+        "contract": "jaw_line_vs_contact_face_normal_through_cube_center",
+        "max_pre_close_error_deg": 3.0
+      },
+      {
+        "kind": "camera2_visual_alignment",
+        "camera_key": "observation.images.camera2",
+        "edge_mode": "top_contact",
+        "strategy": "constructive_refine_then_probe",
+        "mode": "preclose_and_early_trace",
+        "pre_close_max_deg": 8.0,
+        "close_25_max_deg": 8.0,
+        "close_50_max_deg": 8.0
+      }
+    ]
+  }
+}
+```
+
+The geometry threshold and camera2 trace limits are forwarded to the teacher
+exporter and participate in episode acceptance. They are not merely a
+post-export filter.
+
 A renderer-independent recipe has two split kinds:
 
 - `generated`: executes the MuJoCo teacher and writes the ordinary LeRobot data.

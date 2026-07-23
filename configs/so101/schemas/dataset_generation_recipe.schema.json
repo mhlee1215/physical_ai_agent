@@ -105,6 +105,136 @@
       "title": "BinSpec",
       "type": "object"
     },
+    "Camera2CloseTraceSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "strict_image_trace",
+            "preclose_and_early_trace"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "pre_close_max_deg": {
+          "exclusiveMinimum": 0,
+          "maximum": 90,
+          "title": "Pre Close Max Deg",
+          "type": "number"
+        },
+        "close_25_max_deg": {
+          "exclusiveMinimum": 0,
+          "maximum": 90,
+          "title": "Close 25 Max Deg",
+          "type": "number"
+        },
+        "close_50_max_deg": {
+          "exclusiveMinimum": 0,
+          "maximum": 90,
+          "title": "Close 50 Max Deg",
+          "type": "number"
+        },
+        "close_75_max_deg": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 90,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Close 75 Max Deg"
+        }
+      },
+      "required": [
+        "mode",
+        "pre_close_max_deg",
+        "close_25_max_deg",
+        "close_50_max_deg"
+      ],
+      "title": "Camera2CloseTraceSpec",
+      "type": "object"
+    },
+    "Camera2VisualAlignmentGateSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "camera2_visual_alignment",
+          "title": "Kind",
+          "type": "string"
+        },
+        "camera_key": {
+          "const": "observation.images.camera2",
+          "title": "Camera Key",
+          "type": "string"
+        },
+        "edge_mode": {
+          "const": "top_contact",
+          "title": "Edge Mode",
+          "type": "string"
+        },
+        "strategy": {
+          "const": "constructive_refine_then_probe",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "strict_image_trace",
+            "preclose_and_early_trace"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "pre_close_max_deg": {
+          "exclusiveMinimum": 0,
+          "maximum": 90,
+          "title": "Pre Close Max Deg",
+          "type": "number"
+        },
+        "close_25_max_deg": {
+          "exclusiveMinimum": 0,
+          "maximum": 90,
+          "title": "Close 25 Max Deg",
+          "type": "number"
+        },
+        "close_50_max_deg": {
+          "exclusiveMinimum": 0,
+          "maximum": 90,
+          "title": "Close 50 Max Deg",
+          "type": "number"
+        },
+        "close_75_max_deg": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 90,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Close 75 Max Deg"
+        }
+      },
+      "required": [
+        "kind",
+        "camera_key",
+        "edge_mode",
+        "strategy",
+        "mode",
+        "pre_close_max_deg",
+        "close_25_max_deg",
+        "close_50_max_deg"
+      ],
+      "title": "Camera2VisualAlignmentGateSpec",
+      "type": "object"
+    },
     "ClosedLoopSpec": {
       "additionalProperties": false,
       "properties": {
@@ -163,6 +293,85 @@
         "output"
       ],
       "title": "ClosedLoopSpec",
+      "type": "object"
+    },
+    "ContactAlignmentSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "jaw_line_vs_contact_face_normal_through_cube_center",
+          "title": "Contract",
+          "type": "string"
+        },
+        "max_pre_close_error_deg": {
+          "exclusiveMinimum": 0,
+          "maximum": 90,
+          "title": "Max Pre Close Error Deg",
+          "type": "number"
+        },
+        "camera2_trace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Camera2CloseTraceSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "contract",
+        "max_pre_close_error_deg"
+      ],
+      "title": "ContactAlignmentSpec",
+      "type": "object"
+    },
+    "EpisodeSubsetSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "metric": {
+          "const": "camera2_top_contact_alignment_error_deg",
+          "title": "Metric",
+          "type": "string"
+        },
+        "camera_key": {
+          "const": "observation.images.camera2",
+          "title": "Camera Key",
+          "type": "string"
+        },
+        "edge_mode": {
+          "const": "top-contact",
+          "title": "Edge Mode",
+          "type": "string"
+        },
+        "max_angle_deg": {
+          "exclusiveMinimum": 0,
+          "maximum": 90,
+          "title": "Max Angle Deg",
+          "type": "number"
+        },
+        "selection_source_root": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selection Source Root"
+        }
+      },
+      "required": [
+        "metric",
+        "camera_key",
+        "edge_mode",
+        "max_angle_deg"
+      ],
+      "title": "EpisodeSubsetSpec",
       "type": "object"
     },
     "ExporterCommonSpec": {
@@ -364,6 +573,42 @@
           ],
           "default": null,
           "title": "Close Alignment Gate Mode"
+        },
+        "contact_alignment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContactAlignmentSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inspection_gates": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "camera2_visual_alignment": "#/$defs/Camera2VisualAlignmentGateSpec",
+                "geometry_contact_alignment": "#/$defs/GeometryContactAlignmentGateSpec",
+                "gripper_floor_clearance": "#/$defs/GripperFloorClearanceGateSpec"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/GeometryContactAlignmentGateSpec"
+              },
+              {
+                "$ref": "#/$defs/Camera2VisualAlignmentGateSpec"
+              },
+              {
+                "$ref": "#/$defs/GripperFloorClearanceGateSpec"
+              }
+            ]
+          },
+          "title": "Inspection Gates",
+          "type": "array"
         },
         "skill_mode": {
           "anyOf": [
@@ -593,6 +838,20 @@
           "default": null,
           "title": "Spawn Angle Half Range Deg"
         },
+        "target_object_yaw_deg": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Object Yaw Deg"
+        },
         "object_half_sizes": {
           "anyOf": [
             {
@@ -604,12 +863,252 @@
           ],
           "default": null,
           "title": "Object Half Sizes"
+        },
+        "camera_rig_config": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Rig Config"
         }
       },
       "required": [
         "fps"
       ],
       "title": "ExporterCommonSpec",
+      "type": "object"
+    },
+    "FromExistingDatasetSourceSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "from_existing_dataset",
+          "title": "Mode",
+          "type": "string"
+        },
+        "datasets": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Datasets",
+          "type": "array"
+        },
+        "operation": {
+          "enum": [
+            "regenerate_teacher",
+            "render_derivative",
+            "episode_subset"
+          ],
+          "title": "Operation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "datasets",
+        "operation"
+      ],
+      "title": "FromExistingDatasetSourceSpec",
+      "type": "object"
+    },
+    "FromScratchSourceSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "from_scratch",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "FromScratchSourceSpec",
+      "type": "object"
+    },
+    "FromSpawnCatalogSourceSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "from_spawn_catalog",
+          "title": "Mode",
+          "type": "string"
+        },
+        "catalogs": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Catalogs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode",
+        "catalogs"
+      ],
+      "title": "FromSpawnCatalogSourceSpec",
+      "type": "object"
+    },
+    "GeometryContactAlignmentGateSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "geometry_contact_alignment",
+          "title": "Kind",
+          "type": "string"
+        },
+        "contract": {
+          "const": "jaw_line_vs_contact_face_normal_through_cube_center",
+          "title": "Contract",
+          "type": "string"
+        },
+        "max_pre_close_error_deg": {
+          "exclusiveMinimum": 0,
+          "maximum": 90,
+          "title": "Max Pre Close Error Deg",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "contract",
+        "max_pre_close_error_deg"
+      ],
+      "title": "GeometryContactAlignmentGateSpec",
+      "type": "object"
+    },
+    "GripperFloorClearanceGateSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "gripper_floor_clearance",
+          "title": "Kind",
+          "type": "string"
+        },
+        "min_clearance_m": {
+          "exclusiveMinimum": 0.0,
+          "title": "Min Clearance M",
+          "type": "number"
+        },
+        "geom_scope": {
+          "const": "all_gripper_collision_geoms",
+          "default": "all_gripper_collision_geoms",
+          "title": "Geom Scope",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "min_clearance_m"
+      ],
+      "title": "GripperFloorClearanceGateSpec",
+      "type": "object"
+    },
+    "HardwareStartPoseSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "enum": [
+            "lerobot_calibrated_so101_position_to_mujoco_qpos",
+            "camera_image_aligned_so101_mujoco_qpos"
+          ],
+          "title": "Contract",
+          "type": "string"
+        },
+        "readback_artifact": {
+          "title": "Readback Artifact",
+          "type": "string"
+        },
+        "calibration_artifact": {
+          "title": "Calibration Artifact",
+          "type": "string"
+        },
+        "joint_order": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "title": "Joint Order",
+          "type": "array"
+        },
+        "raw_positions": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "title": "Raw Positions",
+          "type": "array"
+        },
+        "lerobot_positions": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "title": "Lerobot Positions",
+          "type": "array"
+        },
+        "sim_qpos": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "title": "Sim Qpos",
+          "type": "array"
+        },
+        "camera_rig_config": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Rig Config"
+        },
+        "image_reference_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Image Reference Artifacts",
+          "type": "array"
+        },
+        "alignment_method": {
+          "anyOf": [
+            {
+              "const": "manual_multiview_silhouette_alignment",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alignment Method"
+        }
+      },
+      "required": [
+        "contract",
+        "readback_artifact",
+        "calibration_artifact",
+        "joint_order",
+        "raw_positions",
+        "lerobot_positions",
+        "sim_qpos"
+      ],
+      "title": "HardwareStartPoseSpec",
       "type": "object"
     },
     "LookupBuilderSpec": {
@@ -797,6 +1296,20 @@
           "title": "Spawn Angle Half Range Deg",
           "type": "number"
         },
+        "target_object_yaw_deg": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Object Yaw Deg"
+        },
         "n_distractors": {
           "default": 0,
           "minimum": 0,
@@ -815,6 +1328,31 @@
           },
           "title": "Object Pool Order",
           "type": "array"
+        },
+        "camera_rig_config": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Rig Config"
+        },
+        "camera_rig_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Rig Sha256"
         }
       },
       "title": "RenderEnvironmentSpec",
@@ -1114,7 +1652,8 @@
           "default": "generated",
           "enum": [
             "generated",
-            "render_derivative"
+            "render_derivative",
+            "episode_subset"
           ],
           "title": "Kind",
           "type": "string"
@@ -1223,6 +1762,17 @@
           ],
           "default": null,
           "title": "Expected Episodes"
+        },
+        "subset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EpisodeSubsetSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -1236,7 +1786,10 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": 1,
+      "enum": [
+        1,
+        2
+      ],
       "title": "Schema Version",
       "type": "integer"
     },
@@ -1260,6 +1813,36 @@
       "title": "Description",
       "type": "string"
     },
+    "source": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "from_existing_dataset": "#/$defs/FromExistingDatasetSourceSpec",
+              "from_scratch": "#/$defs/FromScratchSourceSpec",
+              "from_spawn_catalog": "#/$defs/FromSpawnCatalogSourceSpec"
+            },
+            "propertyName": "mode"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FromScratchSourceSpec"
+            },
+            {
+              "$ref": "#/$defs/FromExistingDatasetSourceSpec"
+            },
+            {
+              "$ref": "#/$defs/FromSpawnCatalogSourceSpec"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source"
+    },
     "source_datasets": {
       "items": {
         "type": "string"
@@ -1267,12 +1850,28 @@
       "title": "Source Datasets",
       "type": "array"
     },
+    "start_pose": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HardwareStartPoseSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "exporter_revision": {
       "title": "Exporter Revision",
       "type": "string"
     },
     "exporter": {
       "title": "Exporter",
+      "type": "string"
+    },
+    "subset_script": {
+      "default": "scripts/filter_so101_lerobot_visual_alignment.py",
+      "title": "Subset Script",
       "type": "string"
     },
     "lookup_builder_script": {
@@ -1327,8 +1926,16 @@
       "type": "string"
     },
     "lookup_cache": {
-      "title": "Lookup Cache",
-      "type": "string"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lookup Cache"
     },
     "lookup_builders": {
       "items": {
@@ -1381,7 +1988,6 @@
     "merge_script",
     "sidecar_script",
     "audit_script",
-    "lookup_cache",
     "common",
     "sidecar",
     "splits",

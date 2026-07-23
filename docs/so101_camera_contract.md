@@ -62,15 +62,16 @@ STL is pinned by SHA-256, converted from ASCII to MuJoCo-compatible binary STL,
 and used for the fixed-jaw visual geom only; the original collision mesh stays
 unchanged. The camera remains attached to the `gripper` body. The center of the
 four 32x32 camera-board M2 holes defines the mount reference. The reviewed
-camera module, lens, and pinhole are translated together 5 mm rearward/upward
-along the optical axis. A larger offset places the optical center behind the
-printed mount and occludes the image. A live 1920x1080 capture
-from the installed U20CAM showed both jaws centred around the optical axis.
-The reviewed optical axis is 66 degrees downward and shares the pinhole's X
-coordinate. This is one degree below the approximately 65-degree printed mount
-plane and places the jaw tips at about 60% of the image height, matching the
-installed camera frame. It replaces the earlier lateral target that pushed
-both jaws to the right of the simulated camera2 frame. The
+camera assembly is constrained physically: the 32x32 PCB front face is flush
+with the rear face of the printed square mount, the 10 mm lens barrel passes
+through the center opening, and the optical pinhole is at the barrel tip. The
+PCB center is therefore 11.5 mm behind the pinhole (10 mm barrel plus the
+1.5 mm PCB half-thickness), while the lens center is 5 mm behind it. The lens
+axis is the printed mount's 65-degree face normal; independently tilting the
+optical axis is rejected by the Pydantic config because it would describe a
+camera that is not seated against the mount. A live 1920x1080 capture from the
+installed U20CAM, center-cropped to the policy's square input, is used to
+review framing and the visible fixed-jaw hole sequence. The
 physical camera mount roll is 180 degrees so the closed home pose
 keeps the white moving jaw on the left and the green fixed jaw on the right.
 This is an extrinsic rotation, not image postprocessing, so camera2 still has
@@ -83,16 +84,15 @@ As with every candidate camera preset, existing datasets and the default
 factory remain unchanged until the user explicitly adopts it for a new dataset
 contract.
 
-The integrated candidate uses the connected module's full 104-degree
-horizontal / 71.5-degree vertical rectilinear estimate for `camera2`; the stock
-SO101-Nexus wrist camera is 75 degrees vertical. The earlier 91.5-degree
-horizontal / 60-degree vertical crop was rejected after comparing a live frame
-because it made the simulated jaws too large. Published U20CAM-1080P specifications describe
-an approximately 102-106 degree horizontal lens, while published diagonal FOV
-values vary between 120 and 130 degrees. Exact real-camera intrinsics and lens
-distortion therefore require checkerboard calibration. The narrower reviewed
-camera2 crop is part of the candidate preset and is recorded in its generated
-manifest. Preview rendering uses the OpenCV Brown-Conrady model with weak
+The B0CNCSFQC1 listing specifies a 130-degree diagonal FOV (`D`) and a
+103-degree horizontal FOV (`H`); 103 degrees is not the vertical FOV. The
+16:9 rectilinear vertical equivalent is 70.533 degrees. Camera1 and camera2
+share these intrinsics; their framing differs only through the physical
+extrinsics and occlusion. Preview rendering first produces a 16:9 frame matching the sensor,
+then center-crops it to a square and resizes it to 256x256. It must not render a
+square source directly or apply an independent per-camera zoom. Exact
+real-camera intrinsics and lens distortion still require checkerboard
+calibration. Preview rendering uses the OpenCV Brown-Conrady model with weak
 candidate coefficients `[-0.08, 0.01, 0, 0, 0]` and an overscanned pinhole
 source to avoid synthetic borders. These coefficients are explicitly marked
 `uncalibrated_candidate`; replace them with measured coefficients before
@@ -121,18 +121,22 @@ front edge exactly matches the arm-base front edge; this moves the robot away
 from the external preview camera without changing its Y alignment or height.
 All mast sections retain their source orientation, so the top STL's +X-facing
 camera-board plane still points toward the home gripper and workspace. The board centre is
-derived from the four STL M2 holes and the pinhole sits 20 mm in front of that
-face. A static named
+derived from the four STL M2 holes. As with camera2, the 32x32 PCB front face
+must sit flush against the rear of the printed square plate, the 10 mm lens
+barrel passes through its center hole, and the pinhole is at the barrel tip.
+The camera1 pinhole therefore sits exactly 10 mm in front of the mount face; a
+larger offset would leave both square plates visibly disconnected. A static named
 `egocentric_cam` follows this transformed top-mount lens position
-above the simulated table. The printed face normal points 65 degrees downward,
-but applying it directly made the mast visible inside camera1, unlike a live
-frame from the installed module. The candidate optical axis is therefore
-live-frame calibrated to 50 degrees downward while retaining the physical
-pinhole position. A segmentation gate requires zero pixels from the overhead
-mount and tower in the home-pose camera1 image.
+above the simulated table. Its optical axis follows the printed face normal at
+65 degrees downward; the Pydantic camera-rig schema rejects an independently
+tilted optical axis because the lens could no longer pass through the mount
+hole. A segmentation gate requires zero pixels from the camera PCB and lens in
+their own camera1 image. With the physical 65-degree axis and the measured wide
+FOV, part of the mast can enter the lower edge; removing it by tilting only the
+optical axis would describe an impossible assembly and is not allowed.
 The official-rig preview rotates the `studio_small_08` HDRI to 90 degrees so
 its black softbox is not mistaken for a visible camera tower.
-It uses the module's 71.5 degree vertical FOV and no pixel rotation. Camera1
+It uses the module's 70.533 degree vertical FOV and no pixel rotation. Camera1
 and camera2 share the current U20CAM sensor estimate but retain independent
 extrinsic contracts. The
 two printed mounts include the same low-detail camera-module envelope: a
@@ -163,6 +167,25 @@ The output report records the absolute config path, SHA-256, and complete
 validated config snapshot. The loaded config is passed through the environment
 factory into both camera-mount XML builders, so this command does not depend on
 duplicated renderer constants.
+
+The opt-in V4 quality profile is stored separately at
+`configs/so101/camera_rigs/official_32x32_uvc_photoreal_v4.json`. It preserves
+the V1 robot home pose, environment, sensor, and camera1/camera2 extrinsics
+exactly. V4 renders at 912x512, center-crops the 16:9 frame to 512x512, and
+downsamples it to the 256x256 policy input,
+uses 256 Cycles samples with denoising disabled, applies 0.24-0.32 mm mesh
+bevels, hashed PBR roughness/normal/wear/fingerprint textures, real Poly Haven
+thermos, screwdriver, and workshop shelf assets at the side and rear of the
+work surface, a neutral workshop wall,
+directional key/fill/rim lights, and AgX color management. Reproduce the V4
+review canary with:
+
+```bash
+PYTHONPATH=src:.:scripts .venv/bin/python scripts/render_so101_official_32x32_camera_rig_preview.py --config configs/so101/camera_rigs/official_32x32_uvc_photoreal_v4.json
+```
+
+V4 is a review-only render derivative and does not rewrite existing datasets
+or replace the V1 default.
 
 `top_down` is debug/teacher evidence only. Do not feed `top_down` to SmolVLA
 for the local SO101/real-hardware-aligned training lane.

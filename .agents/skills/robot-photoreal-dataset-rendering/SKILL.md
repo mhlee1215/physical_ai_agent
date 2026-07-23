@@ -44,9 +44,12 @@ task prompt, or grasp dynamics.
    replace camera bytes while preserving state, action, timestamps, episode
    boundaries, and approved task prompts. Source and output roots must differ.
 7. **Validate and publish.** Run targeted tests, strict frame/camera checks,
-   dataset registry validation, `/api/datasets`, one `/api/frame`, and mobile
-   viewer inspection on the existing orchestrated dashboard port. Commit only
-   code, config, docs, and small review images; keep raw renders in `_workspace`.
+   dataset registry validation, then the mandatory
+   `scripts/verify_so101_dataset_completion.py` gate, which restarts the
+   launchctl viewer and checks `/api/datasets` plus one `/api/frame` per split.
+   Finish with mobile viewer inspection on the existing orchestrated dashboard
+   port. Commit only code, config, docs, and small review images; keep raw
+   renders in `_workspace`.
 
 ## Hard Gates
 

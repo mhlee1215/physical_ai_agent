@@ -378,15 +378,16 @@ class SO101OverheadCameraMountTest(unittest.TestCase):
         self.assertEqual(manifest["distortion"]["calibration_status"], "uncalibrated_candidate")
         self.assertEqual(
             manifest["camera1_optical_axis"]["downward_angle_degrees"],
-            50.0,
+            65.0,
         )
         self.assertEqual(
             manifest["camera1_optical_axis"]["calibration_source"],
-            "installed_camera_frame",
+            "printed_mount_face_geometry",
         )
         self.assertFalse(
-            manifest["camera1_optical_axis"]["self_mount_visible_at_home_pose"]
+            manifest["camera1_optical_axis"]["self_camera_module_visible_at_home_pose"]
         )
+        self.assertTrue(manifest["camera1_optical_axis"]["tower_may_enter_lower_fov"])
         self.assertFalse(manifest["assembly"]["stl_parts_share_one_cad_frame"])
         self.assertEqual(
             manifest["assembly"]["assembly_mode"],
@@ -413,7 +414,7 @@ class SO101OverheadCameraMountTest(unittest.TestCase):
             manifest["assembly"]["camera_pinhole_protrusion_m"],
             OVERHEAD_CAMERA_PINHOLE_PROTRUSION_M,
         )
-        self.assertEqual(OVERHEAD_CAMERA_PINHOLE_PROTRUSION_M, 0.020)
+        self.assertEqual(OVERHEAD_CAMERA_PINHOLE_PROTRUSION_M, 0.010)
         self.assertEqual(
             manifest["assembly"]["part_quaternion_cad_wxyz"]["cam_mount_top.stl"],
             [1.0, 0.0, 0.0, 0.0],

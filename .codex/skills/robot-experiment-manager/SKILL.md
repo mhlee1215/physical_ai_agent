@@ -22,6 +22,15 @@ and future robot platforms.
   explicitly asks for that exact cleanup.
 - Keep raw datasets, checkpoints, rollout media, TensorBoard logs, and other
   artifacts out of PRs.
+- Whenever this dashboard is started, opened, or reported, provide the verified
+  access set together: localhost, same-Wi-Fi mobile, and external URL. Keep the
+  server and `cloudflared` tunnel under `launchctl`, and verify the external
+  `/api/datasets` endpoint before presenting the link.
+- Recipe-backed dataset generation must end with
+  `scripts/verify_so101_dataset_completion.py`. The normal gate restarts this
+  launchctl-managed server before checking `/api/datasets` and one real
+  `/api/frame` per selected split, so a process holding an older Pydantic schema
+  cannot be mistaken for a completed viewer registration.
 - When a loop-test GIF is checked into a PR or research note as review evidence,
   generate it with the same TensorBoard closed-loop media renderer used for
   `closed_loop/<test_id>/rollout_camera1_camera2_episode_*`. Do not copy the raw
@@ -51,6 +60,7 @@ Lifecycle commands:
 
 ```bash
 sh scripts/launch_so101_dataset_viewer.sh status
+sh scripts/launch_so101_dataset_viewer.sh links
 sh scripts/launch_so101_dataset_viewer.sh stop
 sh scripts/launch_so101_dataset_viewer.sh restart
 ```

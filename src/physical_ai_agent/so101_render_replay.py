@@ -430,6 +430,16 @@ def build_render_replay_sidecar(
         )
 
     environment = replay.environment
+    camera_rig_config = None
+    if environment.camera_rig_config:
+        from physical_ai_agent.sim.so101_camera_rig_render_config import (
+            load_so101_camera_rig_render_config,
+        )
+
+        camera_rig_path = Path(environment.camera_rig_config).expanduser().resolve()
+        if _sha256(camera_rig_path) != environment.camera_rig_sha256:
+            raise ValueError("camera rig config checksum does not match replay recipe")
+        camera_rig_config = load_so101_camera_rig_render_config(camera_rig_path)
     env = make_high_contrast_picklift_env(
         target_object_color=environment.target_object_color,
         object_half_sizes=tuple(environment.object_half_sizes),
@@ -437,6 +447,8 @@ def build_render_replay_sidecar(
         spawn_min_radius=environment.spawn_min_radius,
         spawn_max_radius=environment.spawn_max_radius,
         spawn_angle_half_range_deg=environment.spawn_angle_half_range_deg,
+        camera_rig_preset=(None if camera_rig_config is None else camera_rig_config.preset),
+        camera_rig_config=camera_rig_config,
     )
     model = env.unwrapped.model
     data = env.unwrapped.data

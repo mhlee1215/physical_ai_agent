@@ -27,7 +27,7 @@ from physical_ai_agent.sim.so101_overhead_camera_mount import (
 )
 
 DEFAULT_CONFIG_PATH = Path(
-    "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v1.json"
+    "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v9_white_mount_locked.json"
 )
 
 
@@ -126,6 +126,12 @@ def main() -> None:
                 "position_world": list(asset.camera1_position_world),
                 "forward_world": list(asset.camera1_forward_world),
                 "up_world": list(asset.camera1_up_world),
+                "mount_face_center_cad": list(
+                    config.camera1.camera_mount_face_center_cad_m
+                ),
+                "lens_protrusion_m": config.camera1.camera_pinhole_protrusion_m,
+                "assembly_mode": config.camera1.assembly_mode,
+                "downward_angle_degrees": config.camera1.camera_downward_angle_degrees,
                 "fovy_degrees": asset.camera1_fovy_degrees,
                 "horizontal_fov_degrees": config.sensor.horizontal_fov_degrees,
                 "pixel_rotation_degrees": config.camera1.pixel_postprocess_rotation_degrees,
@@ -133,11 +139,19 @@ def main() -> None:
             },
             "camera2": {
                 "mount": "official integrated 32x32 UVC fixed-jaw replacement",
-                "fovy_degrees": config.sensor.vertical_fov_degrees,
+                "fovy_degrees": (
+                    config.camera2.effective_vertical_fov_degrees
+                    or config.sensor.vertical_fov_degrees
+                ),
+                "sensor_vertical_fov_degrees": config.sensor.vertical_fov_degrees,
                 "horizontal_fov_degrees": config.sensor.horizontal_fov_degrees,
                 "pixel_rotation_degrees": config.camera2.pixel_postprocess_rotation_degrees,
                 "position_gripper": list(config.camera2.camera_position_gripper),
-                "rear_up_offset_m": config.camera2.rear_up_offset_m,
+                "mount_face_center_gripper": list(
+                    config.camera2.mount_face_center_gripper_m
+                ),
+                "lens_protrusion_m": config.camera2.lens_protrusion_m,
+                "assembly_mode": config.camera2.assembly_mode,
                 "downward_angle_degrees": config.camera2.optical_downward_angle_degrees,
                 "optical_axis_offset_degrees": abs(
                     config.camera2.optical_downward_angle_degrees
@@ -273,6 +287,28 @@ def _photoreal_config(
         "blender_bin": render.blender_bin,
         "compute_device_type": render.compute_device_type,
         "max_mesh_geoms": render.max_mesh_geoms,
+        "bevel_width_range_m": (
+            [value / 1000.0 for value in render.bevel_width_mm_range]
+            if render.bevel_width_mm_range is not None
+            else None
+        ),
+        "bevel_segments": render.bevel_segments,
+        "visual_props": (
+            [
+                {
+                    "kind": "blend_asset",
+                    "name": asset.name,
+                    "blend_path": str(resolve_repository_path(asset.blend.path).resolve()),
+                    "object_name": asset.object_name,
+                    "position": list(asset.position_m),
+                    "rotation_euler_degrees": list(asset.rotation_euler_degrees),
+                    "scale_xyz": list(asset.scale_xyz),
+                }
+                for asset in render.scene_assets
+            ]
+            or None
+        ),
+        "lights": [light.model_dump(mode="json") for light in render.lights],
         "lens_distortion": {
             camera_key: _distortion_profile(config)
             for camera_key in config.camera_contract
@@ -426,17 +462,25 @@ def _write_contact_sheet(
 ) -> None:
     sheet_config = config.render.outputs.contact_sheet
     font = ImageFont.load_default(size=sheet_config.font_size)
+    camera1_fovy = (
+        config.camera1.effective_vertical_fov_degrees
+        or config.sensor.vertical_fov_degrees
+    )
+    camera2_fovy = (
+        config.camera2.effective_vertical_fov_degrees
+        or config.sensor.vertical_fov_degrees
+    )
     entries = (
         (
             "camera1 | overhead | "
             f"H{config.sensor.horizontal_fov_degrees:g}/"
-            f"V{config.sensor.vertical_fov_degrees:g} | Brown barrel candidate",
+            f"V{camera1_fovy:g} | Brown barrel candidate",
             camera1,
         ),
         (
             "camera2 | wrist | "
             f"H{config.sensor.horizontal_fov_degrees:g}/"
-            f"V{config.sensor.vertical_fov_degrees:g} | hardware-centred axis + Brown barrel",
+            f"V{camera2_fovy:g} | hardware-centred axis + Brown barrel",
             camera2,
         ),
         ("external | official STL camera rig", external),
@@ -501,6 +545,18 @@ def _validate_render_dependencies(config: SO101CameraRigRenderConfig) -> None:
             "material profile SHA-256 mismatch: "
             f"expected {config.render.material_profile_sha256}, got {actual_material_sha}"
         )
+
+    for scene_asset in config.render.scene_assets:
+        for asset_file in (scene_asset.blend, *scene_asset.dependencies):
+            path = resolve_repository_path(asset_file.path).resolve()
+            if not path.is_file():
+                raise FileNotFoundError(f"render asset is missing: {path}")
+            actual_sha = _sha256_file(path)
+            if actual_sha != asset_file.sha256:
+                raise ValueError(
+                    f"render asset SHA-256 mismatch for {path}: "
+                    f"expected {asset_file.sha256}, got {actual_sha}"
+                )
 
     blender_bin = shutil.which(config.render.blender_bin) or config.render.blender_bin
     completed = subprocess.run(

@@ -13,6 +13,7 @@ from physical_ai_agent.so101_dataset_generation_schema import DatasetGenerationR
 
 
 REGISTRY_SCHEMA_VERSION = 1
+SUPPORTED_RECIPE_SCHEMA_VERSIONS = {1, 2}
 DATASET_RECIPE_DIR = Path("configs/so101/dataset_generation")
 DATASET_ROOT = Path("_workspace/so101_lerobot")
 REQUIRED_CAMERA_KEYS = (
@@ -156,11 +157,13 @@ def scan_dataset_registry(
             issues.append(RegistryIssue("invalid_recipe_json", str(exc), relative_recipe))
             continue
 
-        if int(recipe.get("schema_version", 0)) != REGISTRY_SCHEMA_VERSION:
+        recipe_schema_version = int(recipe.get("schema_version", 0))
+        if recipe_schema_version not in SUPPORTED_RECIPE_SCHEMA_VERSIONS:
             issues.append(
                 RegistryIssue(
                     "unsupported_schema_version",
-                    f"schema_version must be {REGISTRY_SCHEMA_VERSION}",
+                    "recipe schema_version must be one of "
+                    f"{sorted(SUPPORTED_RECIPE_SCHEMA_VERSIONS)}",
                     relative_recipe,
                 )
             )
@@ -488,7 +491,7 @@ def _training_readiness_errors(
 
 def _expected_episodes(split_spec: dict[str, Any]) -> int | None:
     bins = split_spec.get("bins")
-    if not isinstance(bins, list):
+    if not isinstance(bins, list) or not bins:
         return _optional_int(split_spec.get("expected_episodes"))
     counts = [row.get("episodes") for row in bins if isinstance(row, dict)]
     if not counts or any(not isinstance(value, int) for value in counts):

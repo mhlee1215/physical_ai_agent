@@ -22,6 +22,7 @@ except ModuleNotFoundError:
 
 
 BLENDER_DRIVER = r'''
+import hashlib
 import json
 import math
 import sys
@@ -74,12 +75,17 @@ def main():
     scene.cycles.device = "GPU" if selected_devices else "CPU"
 
     scene_profile = spec.get("scene_profile", "neutral")
+    uses_black_workbench = scene_profile in {
+        "black_table_clutter",
+        "pbr_workbench_v4",
+        "pbr_workshop_v4",
+    }
     floor_mat = (
         make_black_tabletop_material()
-        if scene_profile == "black_table_clutter"
+        if uses_black_workbench
         else make_stable_tabletop_material() if spec.get("stable_tabletop") else make_tabletop_material(spec["table_pbr"])
     )
-    if scene_profile == "black_table_clutter":
+    if uses_black_workbench:
         bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.28, 0.10, -0.018))
         bpy.context.object.scale = (0.72, 0.62, 0.018)
     else:
@@ -87,6 +93,9 @@ def main():
     floor = bpy.context.object
     floor.name = "tabletop"
     floor.data.materials.append(floor_mat)
+
+    if scene_profile == "pbr_workshop_v4":
+        add_workshop_background(spec)
 
     for item in spec.get("visual_props", []):
         add_visual_prop(item)
@@ -120,11 +129,12 @@ def main():
             )
         )
         bpy.ops.object.shade_smooth()
+        add_bevel(obj, spec)
         weighted = obj.modifiers.new("weighted_normals", "WEIGHTED_NORMAL")
         weighted.keep_sharp = True
 
     for item in spec.get("primitives", []):
-        add_primitive(item, spec.get("robot_material_config"))
+        add_primitive(item, spec.get("robot_material_config"), spec)
 
     target = spec.get("target_site")
     if target:
@@ -139,8 +149,12 @@ def main():
         sphere.data.materials.append(make_target_material())
         bpy.ops.object.shade_smooth()
 
-    add_area_light("softbox", (0.04, -0.48, 0.88), float(spec.get("key_light_power", 42.0)), 0.78)
-    add_area_light("fill", (-0.55, 0.34, 0.50), float(spec.get("fill_light_power", 5.0)), 0.62)
+    if spec.get("lights"):
+        for light_spec in spec["lights"]:
+            add_render_light(light_spec)
+    else:
+        add_area_light("softbox", (0.04, -0.48, 0.88), float(spec.get("key_light_power", 42.0)), 0.78)
+        add_area_light("fill", (-0.55, 0.34, 0.50), float(spec.get("fill_light_power", 5.0)), 0.62)
     world = scene.world or bpy.data.worlds.new("World")
     scene.world = world
     configure_world(
@@ -195,6 +209,9 @@ def make_robot_material(item, plastic_pbr, robot_material, robot_material_config
         bsdf.inputs["Base Color"].default_value = (*color, 1.0)
         bsdf.inputs["Roughness"].default_value = float(configured["roughness"])
         bsdf.inputs["Metallic"].default_value = float(configured["metallic"])
+        if configured.get("roughness_texture"):
+            configure_pbr_surface(nodes, links, bsdf, configured)
+            return mat
         noise = nodes.new("ShaderNodeTexNoise")
         noise.inputs["Scale"].default_value = float(configured.get("noise_scale", 100.0))
         noise.inputs["Detail"].default_value = 8.0
@@ -294,7 +311,7 @@ def make_target_material():
     return mat
 
 
-def add_primitive(item, robot_material_config):
+def add_primitive(item, robot_material_config, spec):
     if len(item.get("rgba", [])) >= 4 and float(item["rgba"][3]) <= 0.01:
         return
     kind = item["type"]
@@ -317,6 +334,7 @@ def add_primitive(item, robot_material_config):
     obj.name = name
     obj.data.materials.append(make_primitive_material(item, robot_material_config))
     bpy.ops.object.shade_smooth()
+    add_bevel(obj, spec)
 
 
 def matrix_to_euler(values):
@@ -351,6 +369,9 @@ def make_primitive_material(item, robot_material_config):
     bsdf.inputs["Base Color"].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
     bsdf.inputs["Metallic"].default_value = float(configured["metallic"]) if configured else 0.0
     bsdf.inputs["Roughness"].default_value = roughness
+    if configured and configured.get("roughness_texture"):
+        configure_pbr_surface(nodes, links, bsdf, configured)
+        return mat
     noise = nodes.new("ShaderNodeTexNoise")
     noise.inputs["Scale"].default_value = 84.0
     noise.inputs["Detail"].default_value = 10.0
@@ -360,6 +381,122 @@ def make_primitive_material(item, robot_material_config):
     links.new(noise.outputs["Fac"], bump.inputs["Height"])
     links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
     return mat
+
+
+def configure_pbr_surface(nodes, links, bsdf, configured):
+    coord = nodes.new("ShaderNodeTexCoord")
+    mapping = nodes.new("ShaderNodeMapping")
+    scale = float(configured.get("texture_scale", 5.0))
+    mapping.inputs["Scale"].default_value = (scale, scale, scale)
+    links.new(coord.outputs["Generated"], mapping.inputs["Vector"])
+
+    roughness = mapped_image_texture(
+        nodes,
+        links,
+        mapping,
+        configured["roughness_texture"],
+        colorspace="Non-Color",
+    )
+    roughness_output = roughness.outputs["Color"]
+    wear_factor = None
+    if configured.get("wear_mask_texture"):
+        wear = mapped_image_texture(
+            nodes,
+            links,
+            mapping,
+            configured["wear_mask_texture"],
+            colorspace="Non-Color",
+        )
+        wear_factor = nodes.new("ShaderNodeMath")
+        wear_factor.operation = "MULTIPLY"
+        wear_factor.inputs[1].default_value = float(configured.get("wear_strength", 0.18))
+        links.new(wear.outputs["Color"], wear_factor.inputs[0])
+        wear_roughness = nodes.new("ShaderNodeMixRGB")
+        wear_roughness.blend_type = "MIX"
+        wear_value = float(configured.get("wear_roughness", 0.30))
+        wear_roughness.inputs[2].default_value = (
+            wear_value,
+            wear_value,
+            wear_value,
+            1.0,
+        )
+        links.new(wear_factor.outputs[0], wear_roughness.inputs[0])
+        links.new(roughness_output, wear_roughness.inputs[1])
+        roughness_output = wear_roughness.outputs["Color"]
+
+        wear_color = nodes.new("ShaderNodeMixRGB")
+        wear_color.blend_type = "MIX"
+        wear_color.inputs[1].default_value = (*configured["base_color"], 1.0)
+        wear_color.inputs[2].default_value = (
+            *configured.get("wear_color", configured["base_color"]),
+            1.0,
+        )
+        links.new(wear_factor.outputs[0], wear_color.inputs[0])
+        links.new(wear_color.outputs["Color"], bsdf.inputs["Base Color"])
+
+    if configured.get("fingerprint_mask_texture"):
+        fingerprints = mapped_image_texture(
+            nodes,
+            links,
+            mapping,
+            configured["fingerprint_mask_texture"],
+            colorspace="Non-Color",
+        )
+        fingerprint_factor = nodes.new("ShaderNodeMath")
+        fingerprint_factor.operation = "MULTIPLY"
+        fingerprint_factor.inputs[1].default_value = float(
+            configured.get("fingerprint_strength", 0.12)
+        )
+        links.new(fingerprints.outputs["Color"], fingerprint_factor.inputs[0])
+        fingerprint_roughness = nodes.new("ShaderNodeMixRGB")
+        fingerprint_roughness.blend_type = "MIX"
+        fingerprint_value = float(configured.get("fingerprint_roughness", 0.34))
+        fingerprint_roughness.inputs[2].default_value = (
+            fingerprint_value,
+            fingerprint_value,
+            fingerprint_value,
+            1.0,
+        )
+        links.new(fingerprint_factor.outputs[0], fingerprint_roughness.inputs[0])
+        links.new(roughness_output, fingerprint_roughness.inputs[1])
+        roughness_output = fingerprint_roughness.outputs["Color"]
+
+    links.new(roughness_output, bsdf.inputs["Roughness"])
+    normal = mapped_image_texture(
+        nodes,
+        links,
+        mapping,
+        configured["normal_texture"],
+        colorspace="Non-Color",
+    )
+    normal_map = nodes.new("ShaderNodeNormalMap")
+    normal_map.inputs["Strength"].default_value = float(
+        configured.get("normal_strength", 0.16)
+    )
+    links.new(normal.outputs["Color"], normal_map.inputs["Color"])
+    links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
+
+
+def mapped_image_texture(nodes, links, mapping, path, colorspace):
+    texture = image_texture(nodes, path, colorspace=colorspace)
+    texture.projection = "BOX"
+    texture.projection_blend = 0.20
+    links.new(mapping.outputs["Vector"], texture.inputs["Vector"])
+    return texture
+
+
+def add_bevel(obj, spec):
+    width_range = spec.get("bevel_width_range_m")
+    if not width_range:
+        return
+    minimum, maximum = (float(value) for value in width_range)
+    digest = hashlib.sha256(obj.name.encode("utf-8")).digest()
+    blend = int.from_bytes(digest[:2], "big") / 65535.0
+    modifier = obj.modifiers.new("v4_micro_bevel", "BEVEL")
+    modifier.width = minimum + (maximum - minimum) * blend
+    modifier.segments = int(spec.get("bevel_segments", 3))
+    modifier.limit_method = "ANGLE"
+    modifier.angle_limit = math.radians(25.0)
 
 
 def configured_material_spec(item, config, allow_default):
@@ -471,8 +608,86 @@ def make_black_tabletop_material():
     return mat
 
 
+def make_workshop_wall_material():
+    mat = bpy.data.materials.new("warm_gray_workshop_wall")
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    bsdf = nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (0.19, 0.205, 0.21, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.88
+    bsdf.inputs["Metallic"].default_value = 0.0
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 7.0
+    noise.inputs["Detail"].default_value = 4.0
+    bump = nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.025
+    bump.inputs["Distance"].default_value = 0.003
+    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    return mat
+
+
+def make_workshop_floor_material():
+    mat = bpy.data.materials.new("charcoal_workshop_floor")
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    bsdf = nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (0.065, 0.072, 0.078, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.90
+    bsdf.inputs["Metallic"].default_value = 0.0
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 18.0
+    noise.inputs["Detail"].default_value = 5.0
+    bump = nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.018
+    bump.inputs["Distance"].default_value = 0.004
+    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    return mat
+
+
+def add_workshop_background(spec):
+    floor_mat = make_workshop_floor_material()
+    bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.20, 0.10, -0.075))
+    room_floor = bpy.context.object
+    room_floor.name = "v4_workshop_room_floor"
+    room_floor.scale = (6.0, 6.0, 0.025)
+    room_floor.data.materials.append(floor_mat)
+
+    wall_mat = make_workshop_wall_material()
+    bpy.ops.mesh.primitive_cube_add(size=2.0, location=(-0.48, 0.10, 0.68))
+    wall = bpy.context.object
+    wall.name = "v4_workshop_back_wall"
+    wall.scale = (0.018, 1.42, 0.68)
+    wall.data.materials.append(wall_mat)
+    add_bevel(wall, spec)
+
+    bpy.ops.mesh.primitive_cube_add(size=2.0, location=(2.80, 0.10, 1.20))
+    far_wall = bpy.context.object
+    far_wall.name = "v4_workshop_far_wall"
+    far_wall.scale = (0.018, 3.0, 1.20)
+    far_wall.data.materials.append(wall_mat)
+    add_bevel(far_wall, spec)
+
+    trim_mat = make_simple_material(
+        "workshop_wall_trim_material",
+        (0.055, 0.062, 0.067),
+        0.62,
+    )
+    bpy.ops.mesh.primitive_cube_add(size=2.0, location=(-0.455, 0.10, 0.035))
+    trim = bpy.context.object
+    trim.name = "v4_workshop_wall_trim"
+    trim.scale = (0.024, 1.41, 0.035)
+    trim.data.materials.append(trim_mat)
+    add_bevel(trim, spec)
+
+
 def add_visual_prop(item):
     kind = item["kind"]
+    if kind == "blend_asset":
+        return add_blend_asset(item)
     x, y = item["position"]
     yaw = math.radians(float(item.get("yaw_degrees", 0.0)))
     color = item["color"]
@@ -537,6 +752,33 @@ def add_visual_prop(item):
             rotation=(0.0, math.radians(90.0), yaw),
         )
         finish(bpy.context.object, f"{item['name']}_shaft", steel)
+
+
+def add_blend_asset(item):
+    blend_path = Path(item["blend_path"])
+    object_name = item["object_name"]
+    known_images = set(bpy.data.images.keys())
+    with bpy.data.libraries.load(str(blend_path), link=False) as (source, target):
+        if object_name not in source.objects:
+            raise ValueError(f"{object_name!r} is not present in {blend_path}")
+        target.objects = [object_name]
+    obj = target.objects[0]
+    bpy.context.collection.objects.link(obj)
+    obj.name = item["name"]
+    obj.location = tuple(float(value) for value in item["position"])
+    obj.rotation_mode = "XYZ"
+    obj.rotation_euler = tuple(
+        math.radians(float(value)) for value in item["rotation_euler_degrees"]
+    )
+    obj.scale = tuple(float(value) for value in item["scale_xyz"])
+    for image_name in set(bpy.data.images.keys()) - known_images:
+        image = bpy.data.images[image_name]
+        if not image.filepath.startswith("//"):
+            continue
+        resolved = blend_path.parent / image.filepath[2:]
+        if resolved.is_file():
+            image.filepath = str(resolved.resolve())
+    return obj
 
 
 def make_simple_material(name, color, roughness, metallic=0.0):
@@ -614,6 +856,23 @@ def add_area_light(name, location, power, size):
     bpy.context.collection.objects.link(obj)
     obj.location = location
     look_at(obj, Vector((0.12, 0.02, 0.05)))
+
+
+def add_render_light(spec):
+    light = bpy.data.lights.new(spec["name"], spec["type"])
+    light.energy = float(spec["power"])
+    light.color = tuple(float(value) for value in spec["color_rgb"])
+    if spec["type"] == "AREA":
+        light.shape = "DISK"
+        light.size = float(spec["size_m"])
+    else:
+        light.spot_size = math.radians(float(spec["spot_size_degrees"]))
+        light.spot_blend = float(spec["spot_blend"])
+        light.shadow_soft_size = float(spec["size_m"])
+    obj = bpy.data.objects.new(spec["name"], light)
+    bpy.context.collection.objects.link(obj)
+    obj.location = tuple(float(value) for value in spec["position_m"])
+    look_at(obj, Vector(tuple(float(value) for value in spec["target_m"])))
 
 
 def configure_camera(camera_obj, camera, camera_spec, default_lens):

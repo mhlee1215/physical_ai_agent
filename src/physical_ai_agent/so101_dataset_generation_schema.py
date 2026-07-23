@@ -4,13 +4,135 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class FromScratchSourceSpec(StrictModel):
+    mode: Literal["from_scratch"]
+
+
+class FromExistingDatasetSourceSpec(StrictModel):
+    mode: Literal["from_existing_dataset"]
+    datasets: list[str] = Field(min_length=1)
+    operation: Literal["regenerate_teacher", "render_derivative", "episode_subset"]
+
+
+class FromSpawnCatalogSourceSpec(StrictModel):
+    mode: Literal["from_spawn_catalog"]
+    catalogs: list[str] = Field(min_length=1)
+
+
+DatasetSourceSpec = Annotated[
+    FromScratchSourceSpec | FromExistingDatasetSourceSpec | FromSpawnCatalogSourceSpec,
+    Field(discriminator="mode"),
+]
+
+
+class HardwareStartPoseSpec(StrictModel):
+    contract: Literal[
+        "lerobot_calibrated_so101_position_to_mujoco_qpos",
+        "camera_image_aligned_so101_mujoco_qpos",
+    ]
+    readback_artifact: str
+    calibration_artifact: str
+    joint_order: list[str] = Field(min_length=6, max_length=6)
+    raw_positions: list[float] = Field(min_length=6, max_length=6)
+    lerobot_positions: list[float] = Field(min_length=6, max_length=6)
+    sim_qpos: list[float] = Field(min_length=6, max_length=6)
+    camera_rig_config: str | None = None
+    image_reference_artifacts: list[str] = Field(default_factory=list)
+    alignment_method: Literal["manual_multiview_silhouette_alignment"] | None = None
+
+    @model_validator(mode="after")
+    def validate_joint_order(self) -> HardwareStartPoseSpec:
+        expected = [
+            "shoulder_pan",
+            "shoulder_lift",
+            "elbow_flex",
+            "wrist_flex",
+            "wrist_roll",
+            "gripper",
+        ]
+        if self.joint_order != expected:
+            raise ValueError(f"hardware start pose joint_order must be {expected}")
+        if self.contract == "camera_image_aligned_so101_mujoco_qpos":
+            if not self.camera_rig_config:
+                raise ValueError("image-aligned start pose requires camera_rig_config")
+            if len(self.image_reference_artifacts) < 2:
+                raise ValueError(
+                    "image-aligned start pose requires camera1 and camera2 reference artifacts"
+                )
+            if self.alignment_method is None:
+                raise ValueError("image-aligned start pose requires alignment_method")
+        return self
+
+
+class Camera2CloseTraceSpec(StrictModel):
+    mode: Literal["strict_image_trace", "preclose_and_early_trace"]
+    pre_close_max_deg: float = Field(gt=0, le=90)
+    close_25_max_deg: float = Field(gt=0, le=90)
+    close_50_max_deg: float = Field(gt=0, le=90)
+    close_75_max_deg: float | None = Field(default=None, gt=0, le=90)
+
+    @model_validator(mode="after")
+    def validate_trace_contract(self) -> Camera2CloseTraceSpec:
+        if self.mode == "strict_image_trace" and self.close_75_max_deg is None:
+            raise ValueError("strict_image_trace requires close_75_max_deg")
+        if self.mode == "preclose_and_early_trace" and self.close_75_max_deg is not None:
+            raise ValueError("preclose_and_early_trace must omit close_75_max_deg")
+        return self
+
+
+class ContactAlignmentSpec(StrictModel):
+    contract: Literal["jaw_line_vs_contact_face_normal_through_cube_center"]
+    max_pre_close_error_deg: float = Field(gt=0, le=90)
+    camera2_trace: Camera2CloseTraceSpec | None = None
+
+
+class GeometryContactAlignmentGateSpec(StrictModel):
+    kind: Literal["geometry_contact_alignment"]
+    contract: Literal["jaw_line_vs_contact_face_normal_through_cube_center"]
+    max_pre_close_error_deg: float = Field(gt=0, le=90)
+
+
+class Camera2VisualAlignmentGateSpec(StrictModel):
+    kind: Literal["camera2_visual_alignment"]
+    camera_key: Literal["observation.images.camera2"]
+    edge_mode: Literal["top_contact"]
+    strategy: Literal["constructive_refine_then_probe"]
+    mode: Literal["strict_image_trace", "preclose_and_early_trace"]
+    pre_close_max_deg: float = Field(gt=0, le=90)
+    close_25_max_deg: float = Field(gt=0, le=90)
+    close_50_max_deg: float = Field(gt=0, le=90)
+    close_75_max_deg: float | None = Field(default=None, gt=0, le=90)
+
+    @model_validator(mode="after")
+    def validate_trace_contract(self) -> Camera2VisualAlignmentGateSpec:
+        if self.mode == "strict_image_trace" and self.close_75_max_deg is None:
+            raise ValueError("strict_image_trace requires close_75_max_deg")
+        if self.mode == "preclose_and_early_trace" and self.close_75_max_deg is not None:
+            raise ValueError("preclose_and_early_trace must omit close_75_max_deg")
+        return self
+
+
+class GripperFloorClearanceGateSpec(StrictModel):
+    kind: Literal["gripper_floor_clearance"]
+    min_clearance_m: float = Field(gt=0.0)
+    geom_scope: Literal["all_gripper_collision_geoms"] = "all_gripper_collision_geoms"
+
+
+InspectionGateSpec = Annotated[
+    GeometryContactAlignmentGateSpec
+    | Camera2VisualAlignmentGateSpec
+    | GripperFloorClearanceGateSpec,
+    Field(discriminator="kind"),
+]
 
 
 class ExporterCommonSpec(StrictModel):
@@ -32,6 +154,8 @@ class ExporterCommonSpec(StrictModel):
     near_target_joint_std: float | None = Field(default=None, ge=0)
     near_target_xy_std: float | None = Field(default=None, ge=0)
     close_alignment_gate_mode: str | None = None
+    contact_alignment: ContactAlignmentSpec | None = None
+    inspection_gates: list[InspectionGateSpec] = Field(default_factory=list)
     skill_mode: str | None = None
     terminal_hold_steps: int | None = Field(default=None, ge=0)
     edge_contact_xy_success_threshold: float | None = Field(default=None, ge=0)
@@ -52,7 +176,9 @@ class ExporterCommonSpec(StrictModel):
     spawn_min_radius: float | None = Field(default=None, ge=0)
     spawn_max_radius: float | None = Field(default=None, ge=0)
     spawn_angle_half_range_deg: float | None = Field(default=None, ge=0)
+    target_object_yaw_deg: float | None = Field(default=None, ge=-180.0, le=180.0)
     object_half_sizes: str | None = None
+    camera_rig_config: str | None = None
 
     @model_validator(mode="after")
     def validate_common_contract(self) -> ExporterCommonSpec:
@@ -64,6 +190,27 @@ class ExporterCommonSpec(StrictModel):
             and self.spawn_max_radius < self.spawn_min_radius
         ):
             raise ValueError("spawn radius range is invalid")
+        if self.contact_alignment is not None and (
+            self.close_alignment_gate_mode is not None
+            or self.edge_contact_parallel_success_threshold_deg is not None
+            or self.inspection_gates
+        ):
+            raise ValueError(
+                "contact_alignment replaces close_alignment_gate_mode and "
+                "edge_contact_parallel_success_threshold_deg, and cannot be combined "
+                "with inspection_gates"
+            )
+        gate_kinds = [gate.kind for gate in self.inspection_gates]
+        if len(gate_kinds) != len(set(gate_kinds)):
+            raise ValueError("inspection_gates must not repeat a gate kind")
+        if self.inspection_gates and (
+            self.close_alignment_gate_mode is not None
+            or self.edge_contact_parallel_success_threshold_deg is not None
+        ):
+            raise ValueError(
+                "inspection_gates replace close_alignment_gate_mode and "
+                "edge_contact_parallel_success_threshold_deg"
+            )
         return self
 
 
@@ -100,9 +247,12 @@ class RenderEnvironmentSpec(StrictModel):
     spawn_min_radius: float = 0.10
     spawn_max_radius: float = 0.30
     spawn_angle_half_range_deg: float = 90.0
+    target_object_yaw_deg: float | None = Field(default=None, ge=-180.0, le=180.0)
     n_distractors: int = Field(default=0, ge=0)
     action_repeat: int = Field(default=1, gt=0)
     object_pool_order: list[ObjectPoolEntry] = Field(default_factory=list)
+    camera_rig_config: str | None = None
+    camera_rig_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def validate_ranges(self) -> RenderEnvironmentSpec:
@@ -116,6 +266,10 @@ class RenderEnvironmentSpec(StrictModel):
                 raise ValueError("object_pool_order slots must be unique")
             if [entry.half_size for entry in self.object_pool_order] != self.object_half_sizes:
                 raise ValueError("object_pool_order half sizes must match object_half_sizes")
+        if bool(self.camera_rig_config) != bool(self.camera_rig_sha256):
+            raise ValueError(
+                "camera_rig_config and camera_rig_sha256 must be declared together"
+            )
         return self
 
 
@@ -170,8 +324,16 @@ class RenderProfileSpec(StrictModel):
         return self
 
 
+class EpisodeSubsetSpec(StrictModel):
+    metric: Literal["camera2_top_contact_alignment_error_deg"]
+    camera_key: Literal["observation.images.camera2"]
+    edge_mode: Literal["top-contact"]
+    max_angle_deg: float = Field(gt=0, le=90)
+    selection_source_root: str | None = None
+
+
 class SplitSpec(StrictModel):
-    kind: Literal["generated", "render_derivative"] = "generated"
+    kind: Literal["generated", "render_derivative", "episode_subset"] = "generated"
     output_root: str
     repo_id: str
     bins: list[BinSpec] = Field(default_factory=list)
@@ -183,6 +345,7 @@ class SplitSpec(StrictModel):
     expected_bins: dict[int, int] = Field(default_factory=dict)
     render: RenderProfileSpec | None = None
     expected_episodes: int | None = Field(default=None, gt=0)
+    subset: EpisodeSubsetSpec | None = None
 
     @model_validator(mode="after")
     def validate_kind(self) -> SplitSpec:
@@ -204,6 +367,18 @@ class SplitSpec(StrictModel):
                     raise ValueError("external render source requires render_replay_sidecar")
                 if not self.expected_bins:
                     raise ValueError("external render source requires expected_bins")
+        if self.kind == "episode_subset":
+            if not self.source_dataset_root or self.expected_episodes is None or self.subset is None:
+                raise ValueError(
+                    "episode_subset split requires source_dataset_root, expected_episodes, and subset"
+                )
+            if self.bins or self.source_split or self.render is not None or self.render_replay_sidecar:
+                raise ValueError(
+                    "episode_subset split must not declare bins, source_split, render, or "
+                    "render_replay_sidecar"
+                )
+            if not self.expected_bins:
+                raise ValueError("episode_subset split requires expected_bins")
         return self
 
 
@@ -243,13 +418,16 @@ class OverlapAuditSpec(StrictModel):
 
 
 class DatasetGenerationRecipe(StrictModel):
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     name: str
     version: str | None = None
     description: str
+    source: DatasetSourceSpec | None = None
     source_datasets: list[str] = Field(default_factory=list)
+    start_pose: HardwareStartPoseSpec | None = None
     exporter_revision: str
     exporter: str
+    subset_script: str = "scripts/filter_so101_lerobot_visual_alignment.py"
     lookup_builder_script: str | None = None
     merge_script: str
     sidecar_script: str
@@ -258,7 +436,7 @@ class DatasetGenerationRecipe(StrictModel):
     render_replay_script: str = "scripts/build_so101_render_replay_sidecar.py"
     photoreal_builder_script: str = "scripts/build_so101_photoreal_lerobot_dataset.py"
     render_determinism_script: str = "scripts/verify_so101_render_determinism.py"
-    lookup_cache: str
+    lookup_cache: str | None = None
     lookup_builders: list[LookupBuilderSpec] = Field(default_factory=list)
     common: ExporterCommonSpec
     sidecar: SidecarSpec
@@ -271,6 +449,24 @@ class DatasetGenerationRecipe(StrictModel):
     def validate_contract(self) -> DatasetGenerationRecipe:
         if not self.splits:
             raise ValueError("recipe must define at least one split")
+        self._validate_source_contract()
+        if self.schema_version == 2:
+            if self.common.skill_mode == "grip_the_cube_v1":
+                geometry_gates = [
+                    gate
+                    for gate in self.common.inspection_gates
+                    if gate.kind == "geometry_contact_alignment"
+                ]
+                if self.common.contact_alignment is None and len(geometry_gates) != 1:
+                    raise ValueError(
+                        "schema_version 2 grip_the_cube_v1 recipes require "
+                        "one common.inspection_gates geometry_contact_alignment gate"
+                    )
+            if self.common.close_alignment_gate_mode is not None:
+                raise ValueError(
+                    "schema_version 2 uses structured alignment inspection gates instead "
+                    "of close_alignment_gate_mode"
+                )
         for name, split in self.splits.items():
             if split.kind == "render_derivative":
                 if split.source_split:
@@ -315,11 +511,19 @@ class DatasetGenerationRecipe(StrictModel):
                 value = getattr(self.common, key)
                 if value is not None and float(value) != float(expected):
                     raise ValueError(f"common.{key} must match render_replay.environment")
+            if self.common.target_object_yaw_deg != environment.target_object_yaw_deg:
+                raise ValueError(
+                    "common.target_object_yaw_deg must match render_replay.environment"
+                )
             center = (self.common.spawn_center_x, self.common.spawn_center_y)
             if all(value is not None for value in center) and [
                 float(value) for value in center
             ] != list(environment.spawn_center):
                 raise ValueError("common spawn center must match render_replay.environment")
+            if self.common.camera_rig_config != environment.camera_rig_config:
+                raise ValueError(
+                    "common.camera_rig_config must match render_replay.environment"
+                )
         if any(
             split.kind == "render_derivative" and split.source_split
             for split in self.splits.values()
@@ -329,6 +533,92 @@ class DatasetGenerationRecipe(StrictModel):
                     "generated render derivatives require common.capture_render_replay=true"
                 )
         return self
+
+    def _validate_source_contract(self) -> None:
+        if self.schema_version == 1:
+            if self.source is not None:
+                raise ValueError("schema_version 1 uses legacy source_datasets")
+            return
+        if self.source is None:
+            raise ValueError("schema_version 2 requires source")
+        if self.source_datasets:
+            raise ValueError("schema_version 2 uses source.datasets, not source_datasets")
+
+        generated = [split for split in self.splits.values() if split.kind == "generated"]
+        external_render_roots = {
+            split.source_dataset_root
+            for split in self.splits.values()
+            if split.kind == "render_derivative" and split.source_dataset_root
+        }
+        subset_roots = {
+            split.source_dataset_root
+            for split in self.splits.values()
+            if split.kind == "episode_subset" and split.source_dataset_root
+        }
+        if self.source.mode == "from_scratch":
+            if self.lookup_builders:
+                raise ValueError("from_scratch must not read lookup source_reports")
+            if external_render_roots or subset_roots:
+                raise ValueError("from_scratch must not reference an external dataset root")
+            return
+
+        if self.source.mode == "from_spawn_catalog":
+            if not generated:
+                raise ValueError("from_spawn_catalog requires generated splits")
+            if self.lookup_builders:
+                raise ValueError("from_spawn_catalog must not run lookup_builders")
+            if external_render_roots or subset_roots:
+                raise ValueError("from_spawn_catalog cannot use external render sources")
+            referenced = {
+                str(Path(split.lookup_cache or self.lookup_cache)) for split in generated
+            }
+            declared = {str(Path(value)) for value in self.source.catalogs}
+            if referenced != declared:
+                raise ValueError(
+                    "source.catalogs must exactly match generated split lookup_cache values"
+                )
+            return
+
+        declared = {str(Path(value)) for value in self.source.datasets}
+        if self.source.operation == "regenerate_teacher":
+            if not generated or not self.lookup_builders:
+                raise ValueError(
+                    "regenerate_teacher requires generated splits and lookup_builders"
+                )
+            referenced = {
+                str(Path(report).parent)
+                for builder in self.lookup_builders
+                for report in builder.source_reports
+            }
+            if referenced != declared:
+                raise ValueError(
+                    "source.datasets must exactly match lookup_builder source report roots"
+                )
+            if external_render_roots:
+                raise ValueError("regenerate_teacher cannot use external render sources")
+            if subset_roots:
+                raise ValueError("regenerate_teacher cannot contain episode subsets")
+            return
+
+        if self.source.operation == "episode_subset":
+            if generated or self.lookup_builders or external_render_roots:
+                raise ValueError(
+                    "episode_subset source mode may contain only episode_subset splits"
+                )
+            if not subset_roots or subset_roots != declared:
+                raise ValueError(
+                    "source.datasets must exactly match episode_subset source_dataset_root values"
+                )
+            return
+
+        if generated or subset_roots:
+            raise ValueError("render_derivative source mode cannot contain generated splits")
+        if self.lookup_builders:
+            raise ValueError("render_derivative source mode must not run lookup_builders")
+        if external_render_roots != declared:
+            raise ValueError(
+                "source.datasets must exactly match render_derivative source_dataset_root values"
+            )
 
     def as_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=True)

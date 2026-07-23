@@ -24,6 +24,15 @@ RECIPE = Path("configs/so101/dataset_generation/grip_the_cube_v2_5_photoreal_pre
 
 
 class SO101RenderReplayPipelineTests(unittest.TestCase):
+    def test_teacher_export_captures_target_object_yaw_in_replay_manifest(self) -> None:
+        source = Path("scripts/export_so101_teacher_rollouts_lerobot.py").read_text(
+            encoding="utf-8"
+        )
+        capture_call = source.split("write_captured_render_replay_sidecar(", 1)[1]
+        capture_call = capture_call.split("\n            )", 1)[0]
+        self.assertIn('"target_object_yaw_deg"', capture_call)
+        self.assertIn("float(target_object_yaw_deg)", capture_call)
+
     def test_photoreal_preview_preserves_v25_teacher_contract(self) -> None:
         base = json.loads(
             Path("configs/so101/dataset_generation/grip_the_cube_v2_5.json").read_text(
@@ -38,7 +47,7 @@ class SO101RenderReplayPipelineTests(unittest.TestCase):
     def test_all_registered_generation_recipes_validate_with_pydantic(self) -> None:
         for path in Path("configs/so101/dataset_generation").glob("*.json"):
             with self.subTest(path=path):
-                self.assertEqual(load_dataset_generation_recipe(path).schema_version, 1)
+                self.assertIn(load_dataset_generation_recipe(path).schema_version, {1, 2})
 
     def test_schema_forbids_unknown_render_fields(self) -> None:
         payload = json.loads(RECIPE.read_text(encoding="utf-8"))

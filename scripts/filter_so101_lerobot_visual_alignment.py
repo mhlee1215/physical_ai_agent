@@ -27,6 +27,12 @@ def main() -> None:
         description="Filter SO101 LeRobot episodes by camera-space cube/jaw alignment."
     )
     parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument(
+        "--selection-source-root",
+        type=Path,
+        default=None,
+        help="Score episode indices from this aligned source while copying frames from --source-root.",
+    )
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--repo-id", required=True)
     parser.add_argument("--camera-key", default="observation.images.camera2")
@@ -55,6 +61,7 @@ def main() -> None:
 
     report = filter_dataset(
         source_root=args.source_root,
+        selection_source_root=args.selection_source_root,
         output_root=args.output_root,
         repo_id=args.repo_id,
         camera_key=args.camera_key,
@@ -74,6 +81,7 @@ def main() -> None:
 def filter_dataset(
     *,
     source_root: Path,
+    selection_source_root: Path | None = None,
     output_root: Path,
     repo_id: str,
     camera_key: str,
@@ -103,6 +111,11 @@ def filter_dataset(
 
     source_report_path = source_root / "so101_lerobot_export_report.json"
     source_report = json.loads(source_report_path.read_text(encoding="utf-8"))
+    selection_source_root = selection_source_root or source_root
+    selection_report = json.loads(
+        (selection_source_root / "so101_lerobot_export_report.json").read_text(encoding="utf-8")
+    )
+    _validate_selection_source(source_report=source_report, selection_report=selection_report)
     include_camera3 = bool(source_report.get("camera3_duplicate", {}).get("enabled", True))
     width, height = _image_size_from_report(source_report)
     features = _lerobot_features(
@@ -122,11 +135,12 @@ def filter_dataset(
         image_writer_threads=0,
     )
     source = LeRobotDataset(str(source_report["repo_id"]), root=source_root)
-    frame_table = _load_frame_table(source_root)
+    frame_table = _load_frame_table(selection_source_root)
 
     selected: list[tuple[dict[str, Any], dict[str, Any]]] = []
     rejected: list[dict[str, Any]] = []
-    for episode_index, episode in enumerate(source_report.get("episodes") or []):
+    source_episodes = source_report.get("episodes") or []
+    for episode_index, episode in enumerate(selection_report.get("episodes") or []):
         score = _episode_alignment_score(
             frame_table=frame_table,
             episode=episode,
@@ -179,7 +193,7 @@ def filter_dataset(
             and float(score["image_alignment_error_deg"]) <= float(max_angle_deg)
             and stable_ok
         ):
-            kept_episode = dict(episode)
+            kept_episode = dict(source_episodes[episode_index])
             kept_episode["source_episode_index"] = int(episode_index)
             kept_episode["image_space_alignment"] = row
             selected.append((kept_episode, row))
@@ -223,6 +237,7 @@ def filter_dataset(
             "root": str(output_root),
             "repo_id": repo_id,
             "source_root": str(source_root),
+            "selection_source_root": str(selection_source_root),
             "requested_episodes": len(kept),
             "exported_episodes": len(kept),
             "episodes": kept,
@@ -250,6 +265,7 @@ def filter_dataset(
     merge_report = {
         "operation": "filter_so101_lerobot_visual_alignment",
         "source_root": str(source_root),
+        "selection_source_root": str(selection_source_root),
         "output_root": str(output_root),
         "repo_id": repo_id,
         "camera_key": camera_key,
@@ -269,7 +285,84 @@ def filter_dataset(
         json.dumps(merge_report, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    (output_root / "so101_lerobot_merge_report.json").write_text(
+        json.dumps(merge_report, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    _write_filtered_photoreal_manifest(
+        source_root=source_root,
+        output_root=output_root,
+        repo_id=repo_id,
+        selection_source_root=selection_source_root,
+        episodes=len(kept),
+        frames=int(audit["dataset_len"]),
+    )
     return merge_report
+
+
+def _validate_selection_source(
+    *, source_report: dict[str, Any], selection_report: dict[str, Any]
+) -> None:
+    source_episodes = source_report.get("episodes") or []
+    selection_episodes = selection_report.get("episodes") or []
+    if len(source_episodes) != len(selection_episodes):
+        raise ValueError(
+            "selection source episode count does not match copied source: "
+            f"{len(selection_episodes)} != {len(source_episodes)}"
+        )
+    mismatches: list[dict[str, Any]] = []
+    for index, (source_episode, selection_episode) in enumerate(
+        zip(source_episodes, selection_episodes, strict=True)
+    ):
+        for key in ("seed", "frames"):
+            if source_episode.get(key) != selection_episode.get(key):
+                mismatches.append(
+                    {
+                        "episode_index": index,
+                        "field": key,
+                        "source": source_episode.get(key),
+                        "selection": selection_episode.get(key),
+                    }
+                )
+        if len(mismatches) >= 8:
+            break
+    if mismatches:
+        raise ValueError(
+            "selection source is not episode-aligned with copied source: "
+            + json.dumps(mismatches, sort_keys=True)
+        )
+
+
+def _write_filtered_photoreal_manifest(
+    *,
+    source_root: Path,
+    output_root: Path,
+    repo_id: str,
+    selection_source_root: Path,
+    episodes: int,
+    frames: int,
+) -> None:
+    source_manifest_path = source_root / "photoreal_lerobot_manifest.json"
+    if not source_manifest_path.is_file():
+        return
+    source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    camera_keys = list(source_manifest.get("camera_keys") or [])
+    manifest = {
+        **source_manifest,
+        "repo_id": repo_id,
+        "source_dataset_root": str(source_root.resolve()),
+        "source_dataset_name": source_root.name,
+        "selection_source_root": str(selection_source_root.resolve()),
+        "operation": "episode_subset",
+        "episodes": int(episodes),
+        "frames": int(frames),
+        "replaced_frames": int(frames),
+        "replaced_images": int(frames) * len(camera_keys),
+        "training_ready": bool(camera_keys) and frames > 0,
+    }
+    (output_root / "photoreal_lerobot_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
 
 
 def _load_frame_table(root: Path) -> pd.DataFrame:

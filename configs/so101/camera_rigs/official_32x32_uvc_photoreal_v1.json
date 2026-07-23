@@ -9,8 +9,8 @@
   "sensor": {
     "model_name": "InnoMaker U20CAM-1080P (Amazon B0CNCSFQC1)",
     "source_resolution": [1920, 1080],
-    "horizontal_fov_degrees": 104.0,
-    "vertical_fov_degrees": 71.5,
+    "horizontal_fov_degrees": 103.0,
+    "vertical_fov_degrees": 70.533,
     "reported_diagonal_fov_degrees": [120.0, 130.0],
     "distortion": {
       "model": "opencv_brown_conrady",
@@ -19,7 +19,7 @@
     },
     "board_half_size_m": [0.016, 0.016, 0.0015],
     "lens_size_m": [0.008, 0.005],
-    "board_distance_behind_pinhole_m": 0.010,
+    "board_distance_behind_pinhole_m": 0.0115,
     "lens_distance_behind_pinhole_m": 0.005
   },
   "assets": {
@@ -65,6 +65,7 @@
   },
   "camera1": {
     "preset": "official_overhead_and_integrated_32x32_uvc",
+    "assembly_mode": "pcb_flush_lens_through_center_hole",
     "rig_world_position_m": [0.04912092, -0.05343047, 0.0050],
     "rig_quaternion_wxyz": [0.7071067811865476, 0.7071067811865475, 0.0, 0.0],
     "robot_base_world_position_m": [-0.019835293745632178, 0.0, 0.0072],
@@ -86,22 +87,22 @@
     "upper_mast_translation_cad_m": [0.0187, 0.1881, 0.0365125],
     "camera_mount_face_normal_cad": [0.42261826174069944, -0.9063077870366499, 0.0],
     "camera_mount_quaternion_cad_wxyz": [0.5963678105290182, -0.37992819659091526, -0.5963678105290181, -0.37992819659091526],
-    "camera_quaternion_cad_wxyz": [0.6408563820557885, -0.2988362387301198, -0.6408563820557885, -0.2988362387301199],
-    "camera_downward_angle_degrees": 50.0,
-    "camera_pinhole_protrusion_m": 0.020,
+    "camera_quaternion_cad_wxyz": [0.5963678105290182, -0.37992819659091526, -0.5963678105290181, -0.37992819659091526],
+    "camera_downward_angle_degrees": 65.0,
+    "camera_pinhole_protrusion_m": 0.010,
     "connector_insertion_depth_m": 0.00785,
     "arm_base_to_lower_mast_insertion_depth_m": 0.010,
     "pixel_postprocess_rotation_degrees": 0
   },
   "camera2": {
     "preset": "integrated_32x32_uvc",
+    "assembly_mode": "pcb_flush_lens_through_center_hole",
     "camera_body": "gripper",
     "collision_mesh": "wrist_roll_follower_so101_v1",
-    "mount_position_gripper_m": [0.00252405, -0.07120722, 0.00233990],
-    "rear_up_direction_gripper": [0.0, 0.5920689131972674, -0.8058873382957488],
-    "rear_up_offset_m": 0.005,
+    "mount_face_center_gripper_m": [0.00252405, -0.07205246128, 0.00415252001],
+    "lens_protrusion_m": 0.010,
     "mount_downward_angle_degrees": 65.0,
-    "optical_downward_angle_degrees": 66.0,
+    "optical_downward_angle_degrees": 65.0,
     "optical_target_distance_m": 0.15060335474204708,
     "source_center_mm": [2.52405, 71.83424728, -3.20281401],
     "source_forward": [0.0, -0.42261826174069944, 0.9063077870366499],

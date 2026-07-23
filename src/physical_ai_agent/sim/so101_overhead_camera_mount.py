@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import math
 import os
@@ -30,7 +31,8 @@ from physical_ai_agent.sim.so101_wrist_camera_mount import (
     INTEGRATED_32X32_UVC_CAMERA_OPTICAL_AXIS_OFFSET_DEGREES,
     INTEGRATED_32X32_UVC_CAMERA_OPTICAL_TARGET_GRIPPER,
     INTEGRATED_32X32_UVC_CAMERA_POSITION,
-    INTEGRATED_32X32_UVC_CAMERA_REAR_UP_OFFSET_M,
+    INTEGRATED_32X32_UVC_LENS_PROTRUSION_M,
+    INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER,
     INTEGRATED_32X32_UVC_PRESET,
     prepare_integrated_32x32_uvc_robot_xml,
 )
@@ -119,11 +121,9 @@ SO101_BASE_WORLD_POSITION = (
     OVERHEAD_ARM_BASE_THICKNESS_M,
 )
 
-# The printed top mount has a 65 degree downward face normal. A live frame from
-# the installed camera showed that using that normal directly places the mast
-# inside camera1. The installed module's effective optical axis is therefore
-# calibrated independently from the mesh plane: 50 degrees downward preserves
-# the measured wide FOV while keeping the physical mast behind the image plane.
+# The printed top mount has a 65 degree downward face normal. The 32x32 PCB is
+# seated against the rear of that plane, so its optical axis must follow the
+# same normal; an independently tilted camera would not fit through the hole.
 OVERHEAD_CAMERA_MOUNT_FACE_NORMAL_CAD = (
     0.42261826174069944,
     -0.9063077870366499,
@@ -135,7 +135,7 @@ OVERHEAD_CAMERA_MOUNT_QUATERNION_CAD_WXYZ = (
     -0.5963678105290181,
     -0.37992819659091526,
 )
-OFFICIAL_OVERHEAD_CAMERA_DOWNWARD_ANGLE_DEGREES = 50.0
+OFFICIAL_OVERHEAD_CAMERA_DOWNWARD_ANGLE_DEGREES = 65.0
 _OVERHEAD_CAMERA_DOWNWARD_ANGLE_RADIANS = math.radians(
     OFFICIAL_OVERHEAD_CAMERA_DOWNWARD_ANGLE_DEGREES
 )
@@ -150,10 +150,10 @@ OVERHEAD_CAMERA_UP_CAD = (
     0.0,
 )
 OVERHEAD_CAMERA_QUATERNION_CAD_WXYZ = (
-    0.6408563820557885,
-    -0.2988362387301198,
-    -0.6408563820557885,
-    -0.2988362387301199,
+    0.5963678105290182,
+    -0.37992819659091526,
+    -0.5963678105290181,
+    -0.37992819659091526,
 )
 OVERHEAD_CAMERA_FORWARD_WORLD = (
     math.cos(_OVERHEAD_CAMERA_DOWNWARD_ANGLE_RADIANS),
@@ -166,9 +166,9 @@ OVERHEAD_CAMERA_UP_WORLD = (
     math.cos(_OVERHEAD_CAMERA_DOWNWARD_ANGLE_RADIANS),
 )
 # The four M2-hole centres on the top STL define the camera-board centre. The
-# installed lens protrudes beyond that mounting plane; 20 mm is the reviewed
-# camera1 viewpoint offset that keeps the optical centre clear of the tower.
-OVERHEAD_CAMERA_PINHOLE_PROTRUSION_M = 0.020
+# PCB front face sits on that plane and the 10 mm lens barrel passes through
+# the centre opening, placing the optical pinhole at the barrel tip.
+OVERHEAD_CAMERA_PINHOLE_PROTRUSION_M = 0.010
 OVERHEAD_CAMERA_MOUNT_FACE_CENTER_TOP_PART_CAD_M = (
     0.029523,
     0.362249,
@@ -218,6 +218,33 @@ def default_official_overhead_source_dir() -> Path:
 
 
 def prepare_official_32x32_uvc_camera_rig_xml(
+    overhead_source_dir: Path | None = None,
+    *,
+    output_dir: Path | None = None,
+    rig_config: SO101CameraRigRenderConfig | None = None,
+) -> SO101OfficialCameraRigAsset:
+    repo_root = Path(__file__).resolve().parents[3]
+    configured_build_dir = (
+        resolve_repository_path(rig_config.assets.generated_asset_dir)
+        if rig_config is not None
+        else repo_root / "_workspace" / "so101_camera_mount_assets" / "generated"
+    )
+    build_dir = (output_dir or configured_build_dir).resolve()
+    build_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = build_dir / ".official_32x32_uvc_camera_rig.lock"
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            return _prepare_official_32x32_uvc_camera_rig_xml_unlocked(
+                overhead_source_dir,
+                output_dir=build_dir,
+                rig_config=rig_config,
+            )
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _prepare_official_32x32_uvc_camera_rig_xml_unlocked(
     overhead_source_dir: Path | None = None,
     *,
     output_dir: Path | None = None,
@@ -273,7 +300,13 @@ def prepare_official_32x32_uvc_camera_rig_xml(
     )
     camera1_up_world = camera1.camera_up_world if camera1 else OVERHEAD_CAMERA_UP_WORLD
     camera1_fovy = (
-        sensor.vertical_fov_degrees if sensor else OFFICIAL_OVERHEAD_CAMERA_FOVY_DEGREES
+        camera1.effective_vertical_fov_degrees
+        if camera1 is not None and camera1.effective_vertical_fov_degrees is not None
+        else (
+            sensor.vertical_fov_degrees
+            if sensor
+            else OFFICIAL_OVERHEAD_CAMERA_FOVY_DEGREES
+        )
     )
     asset = SO101OfficialCameraRigAsset(
         preset=OFFICIAL_32X32_UVC_CAMERA_RIG_PRESET,
@@ -357,10 +390,20 @@ def prepare_official_32x32_uvc_camera_rig_xml(
                     if camera2
                     else INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_DEGREES
                 ),
-                "rear_up_offset_m": (
-                    camera2.rear_up_offset_m
+                "assembly_mode": (
+                    camera2.assembly_mode
                     if camera2
-                    else INTEGRATED_32X32_UVC_CAMERA_REAR_UP_OFFSET_M
+                    else "pcb_flush_lens_through_center_hole"
+                ),
+                "mount_face_center_gripper": list(
+                    camera2.mount_face_center_gripper_m
+                    if camera2
+                    else INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER
+                ),
+                "lens_protrusion_m": (
+                    camera2.lens_protrusion_m
+                    if camera2
+                    else INTEGRATED_32X32_UVC_LENS_PROTRUSION_M
                 ),
             },
             "camera1_optical_axis": {
@@ -377,8 +420,24 @@ def prepare_official_32x32_uvc_camera_rig_xml(
                 "forward_cad": list(
                     _camera1_forward_cad(rig_config)
                 ),
-                "calibration_source": "installed_camera_frame",
-                "self_mount_visible_at_home_pose": False,
+                "assembly_mode": (
+                    camera1.assembly_mode
+                    if camera1
+                    else "pcb_flush_lens_through_center_hole"
+                ),
+                "mount_face_center_cad": list(
+                    camera1.camera_mount_face_center_cad_m
+                    if camera1
+                    else OVERHEAD_CAMERA_MOUNT_FACE_CENTER_CAD_M
+                ),
+                "lens_protrusion_m": (
+                    camera1.camera_pinhole_protrusion_m
+                    if camera1
+                    else OVERHEAD_CAMERA_PINHOLE_PROTRUSION_M
+                ),
+                "calibration_source": "printed_mount_face_geometry",
+                "self_camera_module_visible_at_home_pose": False,
+                "tower_may_enter_lower_fov": True,
             },
             "policy_resolution": [256, 256],
             "policy_resize": "center_crop_square_then_resize",
@@ -517,11 +576,19 @@ def _build_camera_rig_xml(
         else OVERHEAD_CAMERA_MOUNT_QUATERNION_CAD_WXYZ
     )
     camera_quaternion = (
-        camera1.camera_quaternion_cad_wxyz
+        camera1.effective_camera_quaternion_cad_wxyz
         if camera1
         else OVERHEAD_CAMERA_QUATERNION_CAD_WXYZ
     )
-    camera_fovy = sensor.vertical_fov_degrees if sensor else OFFICIAL_OVERHEAD_CAMERA_FOVY_DEGREES
+    camera_fovy = (
+        camera1.effective_vertical_fov_degrees
+        if camera1 is not None and camera1.effective_vertical_fov_degrees is not None
+        else (
+            sensor.vertical_fov_degrees
+            if sensor
+            else OFFICIAL_OVERHEAD_CAMERA_FOVY_DEGREES
+        )
+    )
     board_distance = (
         sensor.board_distance_behind_pinhole_m
         if sensor
@@ -674,7 +741,12 @@ def _build_camera_rig_xml(
     )
 
     ET.indent(tree, space="  ")
-    tree.write(output_xml, encoding="unicode")
+    temporary_xml = output_xml.with_name(f".{output_xml.name}.{os.getpid()}.tmp")
+    try:
+        tree.write(temporary_xml, encoding="unicode")
+        os.replace(temporary_xml, output_xml)
+    finally:
+        temporary_xml.unlink(missing_ok=True)
 
 
 def _verify_official_assets(
@@ -724,8 +796,7 @@ def _camera1_forward_cad(
 ) -> tuple[float, float, float]:
     if rig_config is None:
         return OVERHEAD_CAMERA_FORWARD_CAD
-    angle = math.radians(rig_config.camera1.camera_downward_angle_degrees)
-    return (math.cos(angle), -math.sin(angle), 0.0)
+    return rig_config.camera1.camera_forward_cad
 
 
 def _format_vector(values: tuple[float, ...]) -> str:

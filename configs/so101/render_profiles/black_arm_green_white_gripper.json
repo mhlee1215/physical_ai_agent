@@ -23,6 +23,13 @@
       "metallic": 0.0,
       "noise_scale": 110.0,
       "bump_strength": 0.016
+    },
+    "lime_matte_pla": {
+      "base_color": [0.58, 0.76, 0.015],
+      "roughness": 0.74,
+      "metallic": 0.0,
+      "noise_scale": 105.0,
+      "bump_strength": 0.016
     }
   },
   "parts": {
@@ -119,7 +126,7 @@
     "fixed_jaw": {
       "material": "green_matte_pla",
       "selectors": [
-        {"body_names": ["gripper"], "mesh_names": ["wrist_roll_follower_so101_v1"]}
+        {"body_names": ["gripper"], "mesh_names": ["wrist_roll_follower_so101_v1", "wrist_cam_mount_32x32_uvc"]}
       ]
     },
     "fixed_finger_pad": {
@@ -138,6 +145,30 @@
       "material": "white_matte_pla",
       "selectors": [
         {"body_names": ["moving_jaw_so101_v1"], "primitive_names": ["moving_finger_pad"]}
+      ]
+    },
+    "overhead_arm_base": {
+      "material": "lime_matte_pla",
+      "selectors": [
+        {"body_names": ["overhead_camera_mount"], "mesh_names": ["overhead_arm_base_32x32_uvc"]}
+      ]
+    },
+    "overhead_mount_bottom": {
+      "material": "lime_matte_pla",
+      "selectors": [
+        {"body_names": ["overhead_camera_mount"], "mesh_names": ["overhead_cam_mount_bottom_32x32_uvc"]}
+      ]
+    },
+    "overhead_mount_upper": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["overhead_camera_mount"], "mesh_names": ["overhead_cam_mount_middle_32x32_uvc", "overhead_cam_mount_top_32x32_uvc"]}
+      ]
+    },
+    "overhead_camera_module": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["overhead_camera_mount"], "primitive_names": ["overhead_camera_board", "overhead_camera_lens"]}
       ]
     }
   }

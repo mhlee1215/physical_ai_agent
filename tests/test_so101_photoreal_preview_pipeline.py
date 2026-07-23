@@ -108,7 +108,16 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertEqual(config["default_material"], "black_matte_pla")
         self.assertEqual(config["materials"]["black_matte_pla"]["base_color"], [0.025, 0.03, 0.035])
         self.assertEqual(config["materials"]["white_matte_pla"]["base_color"], [0.82, 0.84, 0.80])
-        self.assertEqual(len(config["parts"]), 19)
+        self.assertTrue(
+            {
+                "fixed_jaw",
+                "moving_jaw",
+                "overhead_arm_base",
+                "overhead_mount_bottom",
+                "overhead_mount_upper",
+                "overhead_camera_module",
+            }.issubset(config["parts"])
+        )
         self.assertEqual(
             config["parts"]["wrist_motor_holder"],
             {
@@ -362,11 +371,19 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
                 repo_id="physical-ai-agent/test-photoreal",
                 overwrite=True,
             )
+            resumed = module.build_photoreal_lerobot_dataset(
+                source_dataset_root=source,
+                rendered_dir=rendered,
+                output_root=output,
+                repo_id="physical-ai-agent/test-photoreal",
+                skip_existing=True,
+            )
             converted = pq.read_table(output / "data" / "chunk-000" / "file-000.parquet").to_pydict()
             copied_render_replay = (output / "render_replay").exists()
 
         self.assertEqual(report["format"], "so101_photoreal_lerobot_v1")
         self.assertTrue(report["training_ready"])
+        self.assertTrue(resumed["skipped_existing"])
         self.assertFalse(copied_render_replay)
         from PIL import Image
 

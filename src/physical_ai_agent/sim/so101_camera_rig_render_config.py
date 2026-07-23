@@ -85,25 +85,69 @@ class PreviewEnvironmentConfig(StrictModel):
         return self
 
 
+class FastenerAlignmentContract(StrictModel):
+    reference: Literal["four_base_fastener_hole_centers"]
+    fastener_count: Literal[4]
+    printed_base_stl: Literal["arm_base.stl"]
+    robot_base_mesh: Literal["base_so101_v2.stl"]
+    robot_base_mesh_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    max_center_error_m: float = Field(gt=0.0)
+    measured_max_center_error_m: float = Field(ge=0.0)
+    measured_rotation_error_degrees: float = Field(ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_measured_alignment(self) -> FastenerAlignmentContract:
+        if self.measured_max_center_error_m > self.max_center_error_m:
+            raise ValueError(
+                "measured fastener-hole error exceeds the locked assembly tolerance"
+            )
+        return self
+
+
+class CameraRigAssemblyLockConfig(StrictModel):
+    state: Literal["locked"]
+    lock_id: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    fastener_alignment: FastenerAlignmentContract
+    fingerprint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class WristCameraMountConfig(StrictModel):
     preset: str
+    assembly_mode: Literal["pcb_flush_lens_through_center_hole"]
     camera_body: str
     collision_mesh: str
-    mount_position_gripper_m: tuple[float, float, float]
-    rear_up_direction_gripper: tuple[float, float, float]
-    rear_up_offset_m: float = Field(ge=0.0)
+    mount_face_center_gripper_m: tuple[float, float, float]
+    lens_protrusion_m: float = Field(gt=0.0)
     mount_downward_angle_degrees: float
     optical_downward_angle_degrees: float
+    effective_vertical_fov_degrees: float | None = Field(
+        default=None,
+        gt=0.0,
+        lt=180.0,
+    )
     optical_target_distance_m: float = Field(gt=0.0)
     source_center_mm: tuple[float, float, float]
     source_forward: tuple[float, float, float]
     pixel_postprocess_rotation_degrees: int
 
+    @model_validator(mode="after")
+    def validate_flush_optical_axis(self) -> WristCameraMountConfig:
+        if not math.isclose(
+            self.mount_downward_angle_degrees,
+            self.optical_downward_angle_degrees,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "a flush PCB camera must look along the mount-face normal"
+            )
+        return self
+
     @property
     def camera_position_gripper(self) -> tuple[float, float, float]:
         return tuple(
-            self.mount_position_gripper_m[index]
-            - self.rear_up_offset_m * self.rear_up_direction_gripper[index]
+            self.mount_face_center_gripper_m[index]
+            + self.lens_protrusion_m * self.camera_forward_gripper[index]
             for index in range(3)
         )
 
@@ -133,6 +177,7 @@ class WristCameraMountConfig(StrictModel):
 
 class OverheadCameraMountConfig(StrictModel):
     preset: str
+    assembly_mode: Literal["pcb_flush_lens_through_center_hole"]
     rig_world_position_m: tuple[float, float, float]
     rig_quaternion_wxyz: tuple[float, float, float, float]
     robot_base_world_position_m: tuple[float, float, float]
@@ -146,6 +191,12 @@ class OverheadCameraMountConfig(StrictModel):
     camera_mount_quaternion_cad_wxyz: tuple[float, float, float, float]
     camera_quaternion_cad_wxyz: tuple[float, float, float, float]
     camera_downward_angle_degrees: float
+    virtual_optical_yaw_degrees: float = Field(default=0.0, ge=-15.0, le=15.0)
+    effective_vertical_fov_degrees: float | None = Field(
+        default=None,
+        gt=0.0,
+        lt=180.0,
+    )
     camera_pinhole_protrusion_m: float = Field(ge=0.0)
     connector_insertion_depth_m: float = Field(ge=0.0)
     arm_base_to_lower_mast_insertion_depth_m: float = Field(ge=0.0)
@@ -163,7 +214,39 @@ class OverheadCameraMountConfig(StrictModel):
             raise ValueError("mesh_translation_cad_m must contain every official STL part")
         if set(self.mesh_quaternion_cad_wxyz) != parts:
             raise ValueError("mesh_quaternion_cad_wxyz must contain every official STL part")
+        normal_length = math.sqrt(
+            sum(value * value for value in self.camera_mount_face_normal_cad)
+        )
+        if not math.isclose(normal_length, 1.0, abs_tol=1e-9):
+            raise ValueError("camera_mount_face_normal_cad must be a unit vector")
+        for actual, expected in zip(
+            self.camera_forward_cad,
+            self.camera_mount_face_normal_cad,
+            strict=True,
+        ):
+            if not math.isclose(actual, expected, abs_tol=1e-9):
+                raise ValueError(
+                    "a flush overhead PCB camera must look through the mount-face hole"
+                )
+        camera_forward = _rotate_vector_wxyz(
+            self.camera_quaternion_cad_wxyz,
+            (0.0, 0.0, -1.0),
+        )
+        for actual, expected in zip(
+            camera_forward,
+            self.camera_mount_face_normal_cad,
+            strict=True,
+        ):
+            if not math.isclose(actual, expected, abs_tol=1e-9):
+                raise ValueError(
+                    "camera_quaternion_cad_wxyz must align the optical axis to the mount hole"
+                )
         return self
+
+    @property
+    def camera_forward_cad(self) -> tuple[float, float, float]:
+        angle = math.radians(self.camera_downward_angle_degrees)
+        return (math.cos(angle), -math.sin(angle), 0.0)
 
     @property
     def camera_mount_face_center_cad_m(self) -> tuple[float, float, float]:
@@ -183,13 +266,44 @@ class OverheadCameraMountConfig(StrictModel):
 
     @property
     def camera_forward_world(self) -> tuple[float, float, float]:
-        angle = math.radians(self.camera_downward_angle_degrees)
-        return (math.cos(angle), 0.0, -math.sin(angle))
+        tower_forward = _rotate_vector_wxyz(
+            self.tower_quaternion_cad_wxyz,
+            self.effective_camera_forward_cad,
+        )
+        return _rotate_vector_wxyz(self.rig_quaternion_wxyz, tower_forward)
 
     @property
     def camera_up_world(self) -> tuple[float, float, float]:
-        angle = math.radians(self.camera_downward_angle_degrees)
-        return (math.sin(angle), 0.0, math.cos(angle))
+        tower_up = _rotate_vector_wxyz(
+            self.tower_quaternion_cad_wxyz,
+            self.effective_camera_up_cad,
+        )
+        return _rotate_vector_wxyz(self.rig_quaternion_wxyz, tower_up)
+
+    @property
+    def effective_camera_quaternion_cad_wxyz(
+        self,
+    ) -> tuple[float, float, float, float]:
+        half_yaw = math.radians(self.virtual_optical_yaw_degrees) / 2.0
+        local_yaw = (math.cos(half_yaw), 0.0, math.sin(half_yaw), 0.0)
+        return _multiply_quaternions_wxyz(
+            self.camera_quaternion_cad_wxyz,
+            local_yaw,
+        )
+
+    @property
+    def effective_camera_forward_cad(self) -> tuple[float, float, float]:
+        return _rotate_vector_wxyz(
+            self.effective_camera_quaternion_cad_wxyz,
+            (0.0, 0.0, -1.0),
+        )
+
+    @property
+    def effective_camera_up_cad(self) -> tuple[float, float, float]:
+        return _rotate_vector_wxyz(
+            self.effective_camera_quaternion_cad_wxyz,
+            (0.0, 1.0, 0.0),
+        )
 
 
 class FreeEvidenceViewConfig(StrictModel):
@@ -222,6 +336,33 @@ EvidenceViewConfig = Annotated[
     FreeEvidenceViewConfig | MountedEvidenceViewConfig,
     Field(discriminator="kind"),
 ]
+
+
+class HashedRenderAssetConfig(StrictModel):
+    path: Path
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class BlenderSceneAssetConfig(StrictModel):
+    name: str
+    blend: HashedRenderAssetConfig
+    object_name: str
+    dependencies: tuple[HashedRenderAssetConfig, ...]
+    position_m: tuple[float, float, float]
+    rotation_euler_degrees: tuple[float, float, float]
+    scale_xyz: tuple[float, float, float]
+
+
+class RenderLightConfig(StrictModel):
+    name: str
+    type: Literal["AREA", "SPOT"]
+    position_m: tuple[float, float, float]
+    target_m: tuple[float, float, float]
+    power: float = Field(gt=0.0)
+    color_rgb: tuple[float, float, float]
+    size_m: float = Field(gt=0.0)
+    spot_size_degrees: float = Field(gt=0.0, lt=180.0)
+    spot_blend: float = Field(ge=0.0, le=1.0)
 
 
 class ContactSheetConfig(StrictModel):
@@ -290,6 +431,10 @@ class PhotorealRenderConfig(StrictModel):
     compute_device_type: Literal["METAL"]
     max_mesh_geoms: int = Field(gt=0)
     preserve_pinhole_renders: bool
+    bevel_width_mm_range: tuple[float, float] | None = None
+    bevel_segments: int = Field(default=3, ge=1, le=8)
+    scene_assets: tuple[BlenderSceneAssetConfig, ...] = ()
+    lights: tuple[RenderLightConfig, ...] = ()
     evidence_views: tuple[EvidenceViewConfig, ...]
     outputs: RenderOutputConfig
 
@@ -309,6 +454,16 @@ class PhotorealRenderConfig(StrictModel):
             raise ValueError("evidence view filenames must stay inside render.output_dir")
         if "external_scene" not in names:
             raise ValueError("evidence_views must define external_scene")
+        if self.bevel_width_mm_range is not None:
+            minimum, maximum = self.bevel_width_mm_range
+            if minimum <= 0.0 or maximum < minimum:
+                raise ValueError("bevel_width_mm_range must be positive and ordered")
+        asset_names = [asset.name for asset in self.scene_assets]
+        if len(asset_names) != len(set(asset_names)):
+            raise ValueError("scene asset names must be unique")
+        light_names = [light.name for light in self.lights]
+        if len(light_names) != len(set(light_names)):
+            raise ValueError("render light names must be unique")
         return self
 
 
@@ -323,6 +478,7 @@ class SO101CameraRigRenderConfig(StrictModel):
     environment: PreviewEnvironmentConfig
     camera1: OverheadCameraMountConfig
     camera2: WristCameraMountConfig
+    assembly_lock: CameraRigAssemblyLockConfig | None = None
     render: PhotorealRenderConfig
 
     @model_validator(mode="after")
@@ -335,7 +491,148 @@ class SO101CameraRigRenderConfig(StrictModel):
             raise ValueError(f"camera_contract must be exactly {expected}")
         if self.preset != self.camera1.preset:
             raise ValueError("root preset and camera1 preset must match")
+        sensor_width, sensor_height = self.sensor.source_resolution
+        sensor_aspect = sensor_width / sensor_height
+        render_aspect = self.render.source_width / self.render.source_height
+        if not math.isclose(render_aspect, sensor_aspect, abs_tol=0.01):
+            raise ValueError(
+                "render source aspect ratio must match the physical sensor before "
+                "the square policy crop"
+            )
+        if not math.isclose(
+            self.camera1.camera_pinhole_protrusion_m,
+            2.0 * self.sensor.lens_size_m[1],
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "camera1 pinhole protrusion must equal the modeled lens length"
+            )
+        if not math.isclose(
+            self.camera2.lens_protrusion_m,
+            2.0 * self.sensor.lens_size_m[1],
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "camera2 lens_protrusion_m must equal the modeled lens length"
+            )
+        if not math.isclose(
+            self.sensor.lens_distance_behind_pinhole_m,
+            self.sensor.lens_size_m[1],
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "lens center must be one lens half-length behind the pinhole"
+            )
+        for camera_name, protrusion in (
+            ("camera1", self.camera1.camera_pinhole_protrusion_m),
+            ("camera2", self.camera2.lens_protrusion_m),
+        ):
+            expected_board_distance = protrusion + self.sensor.board_half_size_m[2]
+            if not math.isclose(
+                self.sensor.board_distance_behind_pinhole_m,
+                expected_board_distance,
+                abs_tol=1e-9,
+            ):
+                raise ValueError(
+                    f"PCB front face must touch the {camera_name} mount face"
+                )
+        if self.assembly_lock is not None:
+            printed_base = self.assembly_lock.fastener_alignment.printed_base_stl
+            if printed_base not in self.assets.overhead_stl_sha256:
+                raise ValueError(
+                    "assembly lock printed base must be present in overhead assets"
+                )
+            actual_fingerprint = assembly_fingerprint_sha256(
+                self.model_dump(mode="json")
+            )
+            if actual_fingerprint != self.assembly_lock.fingerprint_sha256:
+                raise ValueError(
+                    "camera-rig assembly lock mismatch: a physical asset, camera "
+                    "mount, or base transform changed"
+                )
         return self
+
+
+def assembly_fingerprint_sha256(payload: dict[str, object]) -> str:
+    assets = payload["assets"]
+    sensor = payload["sensor"]
+    assembly_lock = payload["assembly_lock"]
+    if not isinstance(assets, dict):
+        raise TypeError("assets must be a mapping")
+    if not isinstance(sensor, dict):
+        raise TypeError("sensor must be a mapping")
+    if not isinstance(assembly_lock, dict):
+        raise TypeError("assembly_lock must be a mapping")
+    fingerprint_payload = {
+        "lock_id": assembly_lock["lock_id"],
+        "preset": payload["preset"],
+        "source_assets": {
+            "wrist_stl_path": assets["wrist_stl_path"],
+            "wrist_stl_sha256": assets["wrist_stl_sha256"],
+            "wrist_mesh_scale": assets["wrist_mesh_scale"],
+            "overhead_stl_dir": assets["overhead_stl_dir"],
+            "overhead_stl_sha256": assets["overhead_stl_sha256"],
+            "overhead_mesh_scale": assets["overhead_mesh_scale"],
+        },
+        "camera_module_geometry": {
+            "board_half_size_m": sensor["board_half_size_m"],
+            "lens_size_m": sensor["lens_size_m"],
+            "board_distance_behind_pinhole_m": sensor[
+                "board_distance_behind_pinhole_m"
+            ],
+            "lens_distance_behind_pinhole_m": sensor[
+                "lens_distance_behind_pinhole_m"
+            ],
+        },
+        "camera1_assembly": payload["camera1"],
+        "camera2_assembly": payload["camera2"],
+        "fastener_alignment": assembly_lock["fastener_alignment"],
+    }
+    canonical = json.dumps(
+        fingerprint_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _rotate_vector_wxyz(
+    quaternion: tuple[float, float, float, float],
+    vector: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    w, x, y, z = quaternion
+    norm = math.sqrt(w * w + x * x + y * y + z * z)
+    if not math.isclose(norm, 1.0, abs_tol=1e-9):
+        raise ValueError("camera quaternion must be normalized")
+    qx, qy, qz = x / norm, y / norm, z / norm
+    vx, vy, vz = vector
+    tx = 2.0 * (qy * vz - qz * vy)
+    ty = 2.0 * (qz * vx - qx * vz)
+    tz = 2.0 * (qx * vy - qy * vx)
+    return (
+        vx + (w / norm) * tx + (qy * tz - qz * ty),
+        vy + (w / norm) * ty + (qz * tx - qx * tz),
+        vz + (w / norm) * tz + (qx * ty - qy * tx),
+    )
+
+
+def _multiply_quaternions_wxyz(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    lw, lx, ly, lz = left
+    rw, rx, ry, rz = right
+    result = (
+        lw * rw - lx * rx - ly * ry - lz * rz,
+        lw * rx + lx * rw + ly * rz - lz * ry,
+        lw * ry - lx * rz + ly * rw + lz * rx,
+        lw * rz + lx * ry - ly * rx + lz * rw,
+    )
+    norm = math.sqrt(sum(value * value for value in result))
+    if math.isclose(norm, 0.0, abs_tol=1e-12):
+        raise ValueError("camera quaternion composition cannot be zero")
+    return tuple(value / norm for value in result)
 
 
 def repository_root() -> Path:

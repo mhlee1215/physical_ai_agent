@@ -132,6 +132,15 @@ class LiveBlenderCyclesPolicyRenderer:
             }
             for item in self.config.get("extra_renders", [])
         )
+        configured_props = self.config.get("visual_props")
+        if configured_props is None:
+            visual_props = (
+                _visual_props_for_episode(seed)
+                if self.config["scene_profile"] == "black_table_clutter"
+                else []
+            )
+        else:
+            visual_props = list(configured_props)
         spec_path = frame_dir / "blender_scene_spec.json"
         spec = {
             "width": int(self.config["width"]),
@@ -156,11 +165,10 @@ class LiveBlenderCyclesPolicyRenderer:
             "background_wall": bool(self.config["background_wall"]),
             "stable_tabletop": bool(self.config["stable_tabletop"]),
             "scene_profile": str(self.config["scene_profile"]),
-            "visual_props": (
-                _visual_props_for_episode(seed)
-                if self.config["scene_profile"] == "black_table_clutter"
-                else []
-            ),
+            "visual_props": visual_props,
+            "lights": list(self.config.get("lights", [])),
+            "bevel_width_range_m": self.config.get("bevel_width_range_m"),
+            "bevel_segments": int(self.config.get("bevel_segments", 3)),
             "robot_material": str(self.config["robot_material"]),
             "robot_material_config": self.robot_material_config,
             "camera_lens": float(self.config["camera_lens"]),
@@ -955,6 +963,10 @@ def _load_robot_material_config(path: Path | None) -> dict[str, Any] | None:
     config = json.loads(path.read_text(encoding="utf-8"))
     if config.get("schema_version") == 2:
         _validate_robot_material_config_v2(config, path)
+        _resolve_material_texture_paths(
+            config,
+            base_dir=Path(__file__).resolve().parents[1],
+        )
         return config
     parts = config.get("parts")
     default_part = config.get("default_part")
@@ -963,6 +975,37 @@ def _load_robot_material_config(path: Path | None) -> dict[str, Any] | None:
     for name, material in parts.items():
         _validate_material_spec(material, label=f"part {name}", path=path)
     return config
+
+
+def _resolve_material_texture_paths(config: dict[str, Any], *, base_dir: Path) -> None:
+    texture_keys = {
+        "roughness_texture",
+        "normal_texture",
+        "wear_mask_texture",
+        "fingerprint_mask_texture",
+    }
+    for material_name, material in config.get("materials", {}).items():
+        expected_hashes = material.get("texture_sha256", {})
+        for key in texture_keys:
+            value = material.get(key)
+            if value is None:
+                continue
+            path = Path(value)
+            path = path if path.is_absolute() else (base_dir / path)
+            path = path.resolve()
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"material texture is missing for {material_name}.{key}: {path}"
+                )
+            expected = expected_hashes.get(key)
+            if expected is not None:
+                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                if actual != expected:
+                    raise ValueError(
+                        f"material texture SHA-256 mismatch for {material_name}.{key}: "
+                        f"expected {expected}, got {actual}"
+                    )
+            material[key] = str(path)
 
 
 def _validate_robot_material_config_v2(config: dict[str, Any], path: Path) -> None:
@@ -1003,6 +1046,31 @@ def _validate_material_spec(material: Any, *, label: str, path: Path) -> None:
     for key in ("roughness", "metallic"):
         if not 0.0 <= float(material.get(key, -1.0)) <= 1.0:
             raise ValueError(f"invalid {key} for {label}: {path}")
+    if material.get("roughness_texture") is None:
+        return
+    required = {"roughness_texture", "normal_texture"}
+    if not required.issubset(material):
+        raise ValueError(f"incomplete PBR texture contract for {label}: {path}")
+    texture_keys = {
+        key
+        for key in (
+            "roughness_texture",
+            "normal_texture",
+            "wear_mask_texture",
+            "fingerprint_mask_texture",
+        )
+        if material.get(key) is not None
+    }
+    hashes = material.get("texture_sha256")
+    if not isinstance(hashes, dict) or set(hashes) != texture_keys:
+        raise ValueError(f"PBR texture hashes must match texture keys for {label}: {path}")
+    if any(
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+        for value in hashes.values()
+    ):
+        raise ValueError(f"invalid PBR texture SHA-256 for {label}: {path}")
 
 
 def _rows(columns: dict[str, list[Any]]) -> list[dict[str, Any]]:

@@ -126,14 +126,13 @@ class SO101WristCameraMountTest(unittest.TestCase):
                 INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_DEGREES,
                 INTEGRATED_32X32_UVC_CAMERA_FORWARD_GRIPPER,
                 INTEGRATED_32X32_UVC_CAMERA_FOVY_DEGREES,
-                INTEGRATED_32X32_UVC_CAMERA_MOUNT_POSITION,
                 INTEGRATED_32X32_UVC_CAMERA_OPTICAL_TARGET_GRIPPER,
                 INTEGRATED_32X32_UVC_CAMERA_POSITION,
                 INTEGRATED_32X32_UVC_CAMERA_QUATERNION_WXYZ,
-                INTEGRATED_32X32_UVC_CAMERA_REAR_UP_DIRECTION_GRIPPER,
-                INTEGRATED_32X32_UVC_CAMERA_REAR_UP_OFFSET_M,
                 INTEGRATED_32X32_UVC_CAMERA_UP_GRIPPER,
                 INTEGRATED_32X32_UVC_LENS_POSITION,
+                INTEGRATED_32X32_UVC_LENS_PROTRUSION_M,
+                INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER,
                 make_pick_lift_env_with_integrated_32x32_uvc,
             )
         except ModuleNotFoundError as exc:
@@ -152,10 +151,10 @@ class SO101WristCameraMountTest(unittest.TestCase):
                 model.cam_pos[camera_id], INTEGRATED_32X32_UVC_CAMERA_POSITION, atol=1e-8
             )
             np.testing.assert_allclose(
-                np.asarray(INTEGRATED_32X32_UVC_CAMERA_MOUNT_POSITION)
-                - np.asarray(INTEGRATED_32X32_UVC_CAMERA_POSITION),
-                INTEGRATED_32X32_UVC_CAMERA_REAR_UP_OFFSET_M
-                * np.asarray(INTEGRATED_32X32_UVC_CAMERA_REAR_UP_DIRECTION_GRIPPER),
+                np.asarray(INTEGRATED_32X32_UVC_CAMERA_POSITION),
+                np.asarray(INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER)
+                + INTEGRATED_32X32_UVC_LENS_PROTRUSION_M
+                * np.asarray(INTEGRATED_32X32_UVC_CAMERA_FORWARD_GRIPPER),
                 atol=1e-12,
             )
             np.testing.assert_allclose(
@@ -250,6 +249,27 @@ class SO101WristCameraMountTest(unittest.TestCase):
             )
             np.testing.assert_allclose(
                 model.geom_size[lens_id, :2], INNOMAKER_U20CAM_LENS_SIZE_M, atol=1e-8
+            )
+            mount_face = np.asarray(INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER)
+            camera_forward = np.asarray(INTEGRATED_32X32_UVC_CAMERA_FORWARD_GRIPPER)
+            board_front = (
+                np.asarray(INTEGRATED_32X32_UVC_BOARD_POSITION)
+                + INNOMAKER_U20CAM_BOARD_HALF_SIZE_M[2] * camera_forward
+            )
+            lens_back = (
+                np.asarray(INTEGRATED_32X32_UVC_LENS_POSITION)
+                - INNOMAKER_U20CAM_LENS_SIZE_M[1] * camera_forward
+            )
+            lens_tip = (
+                np.asarray(INTEGRATED_32X32_UVC_LENS_POSITION)
+                + INNOMAKER_U20CAM_LENS_SIZE_M[1] * camera_forward
+            )
+            np.testing.assert_allclose(board_front, mount_face, atol=1e-12)
+            np.testing.assert_allclose(lens_back, mount_face, atol=1e-12)
+            np.testing.assert_allclose(
+                lens_tip,
+                INTEGRATED_32X32_UVC_CAMERA_POSITION,
+                atol=1e-12,
             )
         finally:
             env.close()

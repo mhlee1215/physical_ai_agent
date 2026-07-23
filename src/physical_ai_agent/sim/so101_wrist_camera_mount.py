@@ -22,14 +22,13 @@ INTEGRATED_32X32_UVC_SOURCE_SHA256 = (
 )
 INTEGRATED_32X32_UVC_MESH_SCALE = (0.001, 0.001, 0.001)
 
-# Amazon B0CNCSFQC1 reports 103-106 degrees horizontal while InnoMaker reports
-# 102 degrees for the U20CAM-1080P. The midpoint is the least-assumptive
-# rectilinear approximation. At 16:9 it corresponds to about 71.5 degrees
-# vertical. The reported 120-130 degree diagonal values include lens distortion
-# and cannot be matched simultaneously by MuJoCo's pinhole camera.
+# The B0CNCSFQC1 listing labels 130 degrees as diagonal FOV (D) and 103
+# degrees as horizontal FOV (H), not vertical FOV. A 16:9 rectilinear
+# projection at H=103 degrees gives V=70.533 degrees. Barrel distortion accounts
+# for additional diagonal coverage and remains an uncalibrated candidate below.
 INNOMAKER_U20CAM_SOURCE_RESOLUTION = (1920, 1080)
-INNOMAKER_U20CAM_HORIZONTAL_FOV_DEGREES = 104.0
-INNOMAKER_U20CAM_VERTICAL_FOV_DEGREES = 71.5
+INNOMAKER_U20CAM_HORIZONTAL_FOV_DEGREES = 103.0
+INNOMAKER_U20CAM_VERTICAL_FOV_DEGREES = 70.533
 INNOMAKER_U20CAM_DIAGONAL_FOV_REPORTED_DEGREES = (120.0, 130.0)
 # The product page does not publish calibrated coefficients. This weak barrel
 # profile is therefore a replaceable preview candidate, not measured hardware
@@ -42,13 +41,11 @@ INNOMAKER_U20CAM_DISTORTION_CALIBRATION_STATUS = "uncalibrated_candidate"
 # wrist and overhead printed frames: a 32 x 32 mm board with one central lens.
 INNOMAKER_U20CAM_BOARD_HALF_SIZE_M = (0.016, 0.016, 0.0015)
 INNOMAKER_U20CAM_LENS_SIZE_M = (0.008, 0.005)
-INNOMAKER_U20CAM_BOARD_DISTANCE_BEHIND_PINHOLE_M = 0.010
+INNOMAKER_U20CAM_BOARD_DISTANCE_BEHIND_PINHOLE_M = 0.0115
 INNOMAKER_U20CAM_LENS_DISTANCE_BEHIND_PINHOLE_M = 0.005
 
-# A live 1920x1080 capture from the installed wrist module showed the full
-# U20CAM field rather than the earlier assumed crop. Use the same rectilinear
-# FOV contract as the connected camera and model the extra diagonal coverage
-# through the lens-distortion profile below.
+# Render the same full 16:9 field as the connected camera. Policy preprocessing
+# center-crops that frame to a square before the 256x256 resize.
 INTEGRATED_32X32_UVC_CAMERA_FOVY_DEGREES = INNOMAKER_U20CAM_VERTICAL_FOV_DEGREES
 INTEGRATED_32X32_UVC_CAMERA_HORIZONTAL_FOV_DEGREES = (
     INNOMAKER_U20CAM_HORIZONTAL_FOV_DEGREES
@@ -66,35 +63,22 @@ INTEGRATED_32X32_UVC_CAMERA_FORWARD_SOURCE = (
     0.9063077870366499,
 )
 
-# MuJoCo gripper-local optical frame. A live feed from the installed camera
-# showed that the jaw gap lies on the image centreline, so the optical target
-# shares the pinhole's local X. The module is offset 5 mm rearward/upward along
-# the optical axis from the STL hole-derived pose. Larger offsets put the
-# pinhole behind the printed mount and visibly occlude the image.
-INTEGRATED_32X32_UVC_CAMERA_MOUNT_POSITION = (
+# The four PCB screw holes locate this center on the rear face of the printed
+# mount. The 10 mm lens barrel passes through its center opening. Its rear face
+# meets the PCB front face and its front tip is the optical pinhole.
+INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER = (
     0.00252405,
-    -0.07120722,
-    0.00233990,
+    -0.07205246128,
+    0.00415252001,
 )
-INTEGRATED_32X32_UVC_CAMERA_REAR_UP_DIRECTION_GRIPPER = (
-    0.0,
-    0.5920689131972674,
-    -0.8058873382957488,
-)
-INTEGRATED_32X32_UVC_CAMERA_REAR_UP_OFFSET_M = 0.005
-INTEGRATED_32X32_UVC_CAMERA_POSITION = tuple(
-    INTEGRATED_32X32_UVC_CAMERA_MOUNT_POSITION[index]
-    - INTEGRATED_32X32_UVC_CAMERA_REAR_UP_OFFSET_M
-    * INTEGRATED_32X32_UVC_CAMERA_REAR_UP_DIRECTION_GRIPPER[index]
-    for index in range(3)
-)
+INTEGRATED_32X32_UVC_LENS_PROTRUSION_M = 0.010
 
-# The live wrist feed places the jaw tips around 60% of the image height. A
-# 66-degree downward axis reproduces that framing while preserving useful
-# workspace above the jaws. The physical mount plane is approximately 65
-# degrees downward, so this is a one-degree installed-camera correction.
+# The camera PCB is flush with the printed 65-degree mounting face, so its
+# optical axis is the face normal. Framing calibration must move the physical
+# pinhole or adjust the reviewed effective crop; tilting the lens independently
+# would describe an impossible assembly.
 INTEGRATED_32X32_UVC_CAMERA_MOUNT_DOWNWARD_ANGLE_DEGREES = 65.0
-INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_DEGREES = 66.0
+INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_DEGREES = 65.0
 _INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_RADIANS = math.radians(
     INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_DEGREES
 )
@@ -107,6 +91,12 @@ INTEGRATED_32X32_UVC_CAMERA_UP_GRIPPER = (
     0.0,
     -math.sin(_INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_RADIANS),
     -math.cos(_INTEGRATED_32X32_UVC_CAMERA_DOWNWARD_ANGLE_RADIANS),
+)
+INTEGRATED_32X32_UVC_CAMERA_POSITION = tuple(
+    INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER[index]
+    + INTEGRATED_32X32_UVC_LENS_PROTRUSION_M
+    * INTEGRATED_32X32_UVC_CAMERA_FORWARD_GRIPPER[index]
+    for index in range(3)
 )
 INTEGRATED_32X32_UVC_CAMERA_OPTICAL_TARGET_DISTANCE_M = 0.15060335474204708
 INTEGRATED_32X32_UVC_CAMERA_OPTICAL_TARGET_GRIPPER = tuple(
@@ -264,9 +254,13 @@ def prepare_integrated_32x32_uvc_robot_xml(
         else INTEGRATED_32X32_UVC_MESH_SCALE
     )
     camera_fovy = (
-        sensor.vertical_fov_degrees
-        if sensor is not None
-        else INTEGRATED_32X32_UVC_CAMERA_FOVY_DEGREES
+        wrist.effective_vertical_fov_degrees
+        if wrist is not None and wrist.effective_vertical_fov_degrees is not None
+        else (
+            sensor.vertical_fov_degrees
+            if sensor is not None
+            else INTEGRATED_32X32_UVC_CAMERA_FOVY_DEGREES
+        )
     )
     board_half_size = (
         sensor.board_half_size_m if sensor is not None else INNOMAKER_U20CAM_BOARD_HALF_SIZE_M
@@ -311,20 +305,20 @@ def prepare_integrated_32x32_uvc_robot_xml(
             "camera_forward_source": list(
                 wrist.source_forward if wrist else INTEGRATED_32X32_UVC_CAMERA_FORWARD_SOURCE
             ),
-            "camera_mount_position_gripper": list(
-                wrist.mount_position_gripper_m
+            "camera_mount_face_center_gripper": list(
+                wrist.mount_face_center_gripper_m
                 if wrist
-                else INTEGRATED_32X32_UVC_CAMERA_MOUNT_POSITION
+                else INTEGRATED_32X32_UVC_MOUNT_FACE_CENTER_GRIPPER
             ),
-            "camera_rear_up_offset_m": (
-                wrist.rear_up_offset_m
+            "camera_lens_protrusion_m": (
+                wrist.lens_protrusion_m
                 if wrist
-                else INTEGRATED_32X32_UVC_CAMERA_REAR_UP_OFFSET_M
+                else INTEGRATED_32X32_UVC_LENS_PROTRUSION_M
             ),
-            "camera_rear_up_direction_gripper": list(
-                wrist.rear_up_direction_gripper
+            "camera_assembly_mode": (
+                wrist.assembly_mode
                 if wrist
-                else INTEGRATED_32X32_UVC_CAMERA_REAR_UP_DIRECTION_GRIPPER
+                else "pcb_flush_lens_through_center_hole"
             ),
             "camera_downward_angle_degrees": (
                 wrist.optical_downward_angle_degrees

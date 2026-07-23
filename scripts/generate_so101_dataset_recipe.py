@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -99,8 +101,59 @@ def main() -> None:
 
 def load_recipe(path: Path) -> dict[str, Any]:
     recipe = load_dataset_generation_recipe(path).as_dict()
+    _validate_spawn_catalogs(recipe)
     _validate_unique_seed_ranges(recipe)
     return recipe
+
+
+def _validate_spawn_catalogs(recipe: dict[str, Any]) -> None:
+    source = recipe.get("source") or {}
+    if source.get("mode") != "from_spawn_catalog":
+        return
+    expected_yaw = recipe.get("common", {}).get("target_object_yaw_deg")
+    expected_qpos = (recipe.get("start_pose") or {}).get("sim_qpos")
+    expected_rig = recipe.get("common", {}).get("camera_rig_config")
+    expected_rig_sha256 = None
+    if expected_rig:
+        expected_rig_path = Path(expected_rig)
+        if not expected_rig_path.is_file():
+            raise FileNotFoundError(f"camera rig config does not exist: {expected_rig_path}")
+        expected_rig_sha256 = hashlib.sha256(expected_rig_path.read_bytes()).hexdigest()
+    for raw_path in source["catalogs"]:
+        path = Path(raw_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"spawn catalog does not exist: {path}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("format") != "so101_spawn_catalog_v1":
+            raise ValueError(f"unsupported spawn catalog format: {path}")
+        if expected_yaw is not None and (
+            payload.get("target_object_yaw_deg") is None
+            or not math.isclose(
+                float(payload["target_object_yaw_deg"]), float(expected_yaw), abs_tol=1e-9
+            )
+        ):
+            raise ValueError(f"spawn catalog target yaw does not match recipe: {path}")
+        if expected_qpos is not None and payload.get("initial_qpos") != expected_qpos:
+            raise ValueError(f"spawn catalog initial qpos does not match recipe: {path}")
+        if expected_rig is not None and payload.get("camera_rig_config") != expected_rig:
+            raise ValueError(f"spawn catalog camera rig does not match recipe: {path}")
+        if expected_rig_sha256 is not None and payload.get("camera_rig_sha256") != expected_rig_sha256:
+            raise ValueError(f"spawn catalog camera rig checksum does not match recipe: {path}")
+        lookup = payload.get("lookup")
+        if not isinstance(lookup, dict) or not lookup:
+            raise ValueError(f"spawn catalog has no lookup mapping: {path}")
+        for bin_id, candidates in lookup.items():
+            if not isinstance(candidates, list):
+                raise ValueError(f"spawn catalog bin {bin_id} is not a list: {path}")
+            if any(
+                not isinstance(candidate, list)
+                or len(candidate) != 2
+                or not all(isinstance(value, (int, float)) for value in candidate)
+                for candidate in candidates
+            ):
+                raise ValueError(
+                    f"spawn catalog candidates must contain only [x, y], bin={bin_id}: {path}"
+                )
 
 
 def _require_append_only_output_roots(
@@ -144,6 +197,34 @@ def build_stages(
         )
     for split_name in selected:
         split_spec = recipe["splits"][split_name]
+        if split_spec.get("kind", "generated") == "episode_subset":
+            stages.append(
+                {
+                    "name": f"subset:{split_name}",
+                    "command": _episode_subset_command(
+                        recipe,
+                        split_spec=split_spec,
+                        python=python,
+                        overwrite=overwrite,
+                    ),
+                }
+            )
+            stages.append(
+                {
+                    "name": f"sidecar:{split_name}",
+                    "command": _sidecar_command(recipe, split_spec=split_spec, python=python),
+                }
+            )
+            if split_spec.get("closed_loop"):
+                stages.append(
+                    {
+                        "name": f"closed-loop-starts:{split_name}",
+                        "command": _closed_loop_command(
+                            recipe, split_spec=split_spec, python=python
+                        ),
+                    }
+                )
+            continue
         if split_spec.get("kind", "generated") == "render_derivative":
             source_spec = _render_source_spec(recipe, split_spec)
             if split_spec.get("source_dataset_root"):
@@ -295,6 +376,20 @@ def build_stages(
                     "command": _reference_audit_command(recipe, reference=reference, python=python),
                 }
             )
+    completion_command = [
+        python,
+        "scripts/verify_so101_dataset_completion.py",
+        "--recipe",
+        str(recipe_path),
+    ]
+    for split_name in selected:
+        completion_command.extend(["--split", split_name])
+    stages.append(
+        {
+            "name": "completion:registry-viewer",
+            "command": completion_command,
+        }
+    )
     return stages
 
 
@@ -488,6 +583,8 @@ def _photoreal_builder_command(
         command.append("--no-duplicate-camera3-from-camera2")
     if overwrite:
         command.append("--overwrite")
+    elif render.get("skip_existing", True):
+        command.append("--skip-existing")
     return command
 
 
@@ -523,10 +620,24 @@ def _export_command(
         str(bin_id),
         "--grid-lookup-start-index",
         str(bin_spec["lookup_start_index"]),
-        "--grid-lookup-cache",
-        split_spec.get("lookup_cache", recipe["lookup_cache"]),
     ]
+    lookup_cache = split_spec.get("lookup_cache") or recipe.get("lookup_cache")
+    if lookup_cache:
+        command.extend(["--grid-lookup-cache", str(lookup_cache)])
+    start_pose = recipe.get("start_pose")
+    if start_pose:
+        command.append(
+            "--initial-qpos=" + ",".join(
+                str(value) for value in start_pose["sim_qpos"]
+            )
+        )
     for key, value in recipe["common"].items():
+        if key == "contact_alignment":
+            command.extend(_contact_alignment_args(value))
+            continue
+        if key == "inspection_gates":
+            command.extend(_inspection_gate_args(value))
+            continue
         flag = "--" + key.replace("_", "-")
         if isinstance(value, bool):
             if value:
@@ -535,6 +646,104 @@ def _export_command(
             command.extend([flag, str(value)])
     if overwrite:
         command.append("--overwrite")
+    return command
+
+
+def _episode_subset_command(
+    recipe: dict[str, Any],
+    *,
+    split_spec: dict[str, Any],
+    python: str,
+    overwrite: bool,
+) -> list[str]:
+    subset = split_spec["subset"]
+    command = [
+        python,
+        recipe["subset_script"],
+        "--source-root",
+        split_spec["source_dataset_root"],
+        "--output-root",
+        split_spec["output_root"],
+        "--repo-id",
+        split_spec["repo_id"],
+        "--camera-key",
+        subset["camera_key"],
+        "--edge-mode",
+        subset["edge_mode"],
+        "--max-angle-deg",
+        str(subset["max_angle_deg"]),
+    ]
+    if subset.get("selection_source_root"):
+        command.extend(["--selection-source-root", subset["selection_source_root"]])
+    if overwrite:
+        command.append("--overwrite")
+    return command
+
+
+def _contact_alignment_args(spec: dict[str, Any]) -> list[str]:
+    command = [
+        "--edge-contact-parallel-success-threshold-deg",
+        str(spec["max_pre_close_error_deg"]),
+    ]
+    trace = spec.get("camera2_trace")
+    if trace is None:
+        command.extend(["--close-alignment-gate-mode", "geometry_only"])
+        return command
+    command.extend(
+        [
+            "--close-alignment-gate-mode",
+            str(trace["mode"]),
+            "--pre-close-image-alignment-max-deg",
+            str(trace["pre_close_max_deg"]),
+            "--close-25-image-alignment-max-deg",
+            str(trace["close_25_max_deg"]),
+            "--close-50-image-alignment-max-deg",
+            str(trace["close_50_max_deg"]),
+        ]
+    )
+    if "close_75_max_deg" in trace:
+        command.extend(
+            ["--close-75-image-alignment-max-deg", str(trace["close_75_max_deg"])]
+        )
+    return command
+
+
+def _inspection_gate_args(gates: list[dict[str, Any]]) -> list[str]:
+    by_kind = {str(gate["kind"]): gate for gate in gates}
+    geometry = by_kind.get("geometry_contact_alignment")
+    if geometry is None:
+        return []
+    command = [
+        "--edge-contact-parallel-success-threshold-deg",
+        str(geometry["max_pre_close_error_deg"]),
+    ]
+    floor_clearance = by_kind.get("gripper_floor_clearance")
+    if floor_clearance is not None:
+        command.extend(
+            [
+                "--min-gripper-floor-clearance-m",
+                str(floor_clearance["min_clearance_m"]),
+            ]
+        )
+    visual = by_kind.get("camera2_visual_alignment")
+    if visual is None:
+        return [*command, "--close-alignment-gate-mode", "geometry_only"]
+    command.extend(
+        [
+            "--close-alignment-gate-mode",
+            str(visual["mode"]),
+            "--pre-close-image-alignment-max-deg",
+            str(visual["pre_close_max_deg"]),
+            "--close-25-image-alignment-max-deg",
+            str(visual["close_25_max_deg"]),
+            "--close-50-image-alignment-max-deg",
+            str(visual["close_50_max_deg"]),
+        ]
+    )
+    if "close_75_max_deg" in visual:
+        command.extend(
+            ["--close-75-image-alignment-max-deg", str(visual["close_75_max_deg"])]
+        )
     return command
 
 
@@ -668,7 +877,7 @@ def _audit_command(recipe: dict[str, Any], *, python: str) -> list[str]:
         "--expected-terminal-hold-steps",
         str(recipe["common"]["terminal_hold_steps"]),
         "--max-pre-close-alignment-deg",
-        str(recipe["common"]["edge_contact_parallel_success_threshold_deg"]),
+        str(_max_pre_close_alignment_deg(recipe)),
         "--output",
         str(Path(validation) / "meta" / "split_overlap_audit.json"),
     ]
@@ -715,11 +924,21 @@ def _reference_audit_command(
         "--expected-terminal-hold-steps",
         str(recipe["common"]["terminal_hold_steps"]),
         "--max-pre-close-alignment-deg",
-        str(recipe["common"]["edge_contact_parallel_success_threshold_deg"]),
+        str(_max_pre_close_alignment_deg(recipe)),
         "--output",
         str(Path(train_spec["output_root"]) / reference["output"]),
     ]
     return _append_lift_audit_args(command, audit)
+
+
+def _max_pre_close_alignment_deg(recipe: dict[str, Any]) -> float:
+    common = recipe["common"]
+    for gate in common.get("inspection_gates", []):
+        if gate["kind"] == "geometry_contact_alignment":
+            return float(gate["max_pre_close_error_deg"])
+    if "contact_alignment" in common:
+        return float(common["contact_alignment"]["max_pre_close_error_deg"])
+    return float(common["edge_contact_parallel_success_threshold_deg"])
 
 
 def _append_lift_audit_args(command: list[str], audit: dict[str, Any]) -> list[str]:
