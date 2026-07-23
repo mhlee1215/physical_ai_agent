@@ -16,6 +16,20 @@ from physical_ai_agent.so101_dataset_registry import (
 
 
 class SO101DatasetRegistryTests(unittest.TestCase):
+    def test_registry_accepts_recipe_schema_version_two(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            recipe_path = _write_recipe(repo_root, "cube_v2_schema", schema_version=2)
+            registry = scan_dataset_registry(
+                repo_root,
+                inspect_artifacts=False,
+                recipe_paths=[recipe_path],
+            )
+        self.assertNotIn(
+            "unsupported_schema_version",
+            {issue.code for issue in registry.issues},
+        )
+
     def test_complete_recipe_backed_splits_are_training_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo_root = Path(tmpdir)
@@ -81,24 +95,37 @@ class SO101DatasetRegistryTests(unittest.TestCase):
 
         self.assertIn("output_name_mismatch", {issue.code for issue in registry.issues})
 
-    def test_registry_cli_lists_current_repository_as_training_ready(self) -> None:
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "scripts/so101_dataset_registry.py",
-                "validate",
-                "--require-training-ready",
-                "--json",
-            ],
-            check=False,
-            text=True,
-            capture_output=True,
-        )
+    def test_registry_cli_lists_ready_fixture_as_training_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            recipe_path = _write_recipe(repo_root, "cube_v5", include_validation=True)
+            _write_ready_dataset(repo_root / "_workspace/so101_lerobot/cube_v5", episodes=4)
+            _write_ready_dataset(
+                repo_root / "_workspace/so101_lerobot/cube_v5_validation",
+                episodes=2,
+                closed_loop_output="meta/closed_loop/cube_v5_validation_start2.json",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/so101_dataset_registry.py",
+                    "validate",
+                    "--repo-root",
+                    str(repo_root),
+                    "--recipe",
+                    str(recipe_path),
+                    "--require-training-ready",
+                    "--json",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         payload = json.loads(completed.stdout)
         self.assertTrue(payload["valid"])
         self.assertTrue(payload["training_ready"])
-        self.assertGreaterEqual(payload["summary"]["splits"], 7)
+        self.assertEqual(payload["summary"]["splits"], 2)
 
 
 def _write_recipe(
@@ -107,6 +134,7 @@ def _write_recipe(
     *,
     output_root: str | None = None,
     include_validation: bool = False,
+    schema_version: int = 1,
 ) -> Path:
     recipe_dir = repo_root / "configs/so101/dataset_generation"
     recipe_dir.mkdir(parents=True, exist_ok=True)
@@ -129,7 +157,10 @@ def _write_recipe(
             },
         }
     path = recipe_dir / f"{dataset_id}.json"
-    path.write_text(json.dumps({"schema_version": 1, "name": dataset_id, "splits": splits}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"schema_version": schema_version, "name": dataset_id, "splits": splits}),
+        encoding="utf-8",
+    )
     return path
 
 

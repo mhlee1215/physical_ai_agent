@@ -10,7 +10,19 @@ from typing import Any
 
 import numpy as np
 
-from physical_ai_agent.sim.so101_camera_input import _make_camera, postprocess_camera_frame
+from physical_ai_agent.sim.so101_camera_input import (
+    _make_camera,
+    configure_wrist_camera_over_fixed_jaw,
+    postprocess_camera_frame,
+)
+from physical_ai_agent.sim.so101_overhead_camera_mount import (
+    OFFICIAL_32X32_UVC_CAMERA_RIG_PRESET,
+    make_pick_lift_env_with_official_32x32_uvc_camera_rig,
+)
+from physical_ai_agent.sim.so101_wrist_camera_mount import (
+    INTEGRATED_32X32_UVC_PRESET,
+    make_pick_lift_env_with_integrated_32x32_uvc,
+)
 from physical_ai_agent.sim.so101_live_viewer import _cartesian_error_controller_action
 from physical_ai_agent.sim.so101_visual_rl import _json_safe_info
 from train_so101_visual_picklift_bc import _plot_bars, _plot_curve, _resolve_device
@@ -1528,6 +1540,9 @@ def make_high_contrast_picklift_env(
     spawn_min_radius: float = 0.10,
     spawn_max_radius: float = 0.30,
     spawn_angle_half_range_deg: float = 90.0,
+    wrist_camera_mount_preset: str | None = None,
+    camera_rig_preset: str | None = None,
+    camera_rig_config: Any | None = None,
 ) -> Any:
     from so101_nexus_core.config import PickConfig
     from so101_nexus_core.objects import CubeObject
@@ -1544,16 +1559,37 @@ def make_high_contrast_picklift_env(
         for half_size in object_half_sizes
         for color in colors
     ]
-    return PickLiftEnv(
-        config=PickConfig(
-            objects=objects,
-            spawn_center=spawn_center,
-            spawn_min_radius=spawn_min_radius,
-            spawn_max_radius=spawn_max_radius,
-            spawn_angle_half_range_deg=spawn_angle_half_range_deg,
-        ),
-        render_mode=None,
+    pick_config = PickConfig(
+        objects=objects,
+        spawn_center=spawn_center,
+        spawn_min_radius=spawn_min_radius,
+        spawn_max_radius=spawn_max_radius,
+        spawn_angle_half_range_deg=spawn_angle_half_range_deg,
     )
+    if camera_rig_preset == OFFICIAL_32X32_UVC_CAMERA_RIG_PRESET:
+        if wrist_camera_mount_preset not in {None, INTEGRATED_32X32_UVC_PRESET}:
+            raise ValueError(
+                "official 32x32 UVC camera rig already includes the integrated wrist mount"
+            )
+        env = make_pick_lift_env_with_official_32x32_uvc_camera_rig(
+            config=pick_config,
+            render_mode=None,
+            rig_config=camera_rig_config,
+        )
+    elif camera_rig_preset is not None:
+        raise ValueError(f"unsupported camera rig preset: {camera_rig_preset}")
+    elif wrist_camera_mount_preset == INTEGRATED_32X32_UVC_PRESET:
+        env = make_pick_lift_env_with_integrated_32x32_uvc(
+            config=pick_config,
+            render_mode=None,
+        )
+    else:
+        env = PickLiftEnv(config=pick_config, render_mode=None)
+    if wrist_camera_mount_preset == "over_fixed_jaw_rear_3cm":
+        configure_wrist_camera_over_fixed_jaw(env)
+    elif wrist_camera_mount_preset not in {None, INTEGRATED_32X32_UVC_PRESET}:
+        raise ValueError(f"unsupported wrist camera mount preset: {wrist_camera_mount_preset}")
+    return env
 
 
 def _high_contrast_object_description() -> list[dict[str, Any]]:

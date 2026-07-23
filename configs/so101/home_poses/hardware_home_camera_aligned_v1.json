@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "name": "hardware_home_camera_aligned_v1",
+  "status": "camera_aligned_canary_candidate",
+  "joint_order": [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper"
+  ],
+  "hardware_anchor": {
+    "readback_artifact": "_workspace/real_so101/all_motor_wide_validation_20260721/postflight.json",
+    "calibration_artifact": "_workspace/real_so100/calibration/so100_local.json",
+    "raw_positions": [2047, 2049, 2048, 2038, 2050, 2054],
+    "lerobot_positions": [
+      -13.23076923076923,
+      -88.74725274725274,
+      69.14285714285714,
+      77.0989010989011,
+      0.21978021978021978,
+      2.3001095290251916
+    ]
+  },
+  "sim_qpos": [
+    0.0,
+    -1.5707963267948966,
+    1.5707963267948966,
+    0.66,
+    1.5707963267948966,
+    -0.17453
+  ],
+  "alignment": {
+    "method": "manual_multiview_silhouette_alignment",
+    "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v4.json",
+    "camera1_reference": "_workspace/real_so101/all_motor_wide_validation_20260721/home_before_tests/visual/after.jpg",
+    "camera2_reference": "_workspace/real_so101/all_motor_microstep_validation_20260720/preflight_camera1/frames/camera_1_000000.jpg",
+    "camera1_reference_pose": "exact 2026-07-21 hardware home readback",
+    "camera2_reference_pose": "near-home wrist-camera reference; used for finger-side and optical-axis alignment",
+    "policy_preprocess": "center_crop_square_then_resize_256",
+    "observed_contract": {
+      "camera1": "robot base and folded arm occupy the lower-right region",
+      "camera2": "white moving finger is left and green fixed finger is right in the lower frame"
+    }
+  },
+  "notes": [
+    "The calibrated LeRobot motor coordinates are retained as the hardware anchor.",
+    "MuJoCo qpos is image-aligned because the hardware calibration zero/sign convention is not the MuJoCo model joint convention."
+  ]
+}

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -109,6 +111,42 @@ STATE_NAMES = [
 ]
 
 
+def _close_alignment_limits(
+    *,
+    mode: str,
+    pre_close: float | None,
+    close_25: float | None,
+    close_50: float | None,
+    close_75: float | None,
+) -> dict[str, float] | None:
+    values = {
+        "pre_close_image_alignment_error_deg": pre_close,
+        "close_25_image_alignment_error_deg": close_25,
+        "close_50_image_alignment_error_deg": close_50,
+        "close_75_image_alignment_error_deg": close_75,
+    }
+    supplied = {key: float(value) for key, value in values.items() if value is not None}
+    if not supplied:
+        return None
+    if mode == "geometry_only":
+        raise ValueError("geometry_only does not accept camera2 image alignment limits")
+    required = {
+        "pre_close_image_alignment_error_deg",
+        "close_25_image_alignment_error_deg",
+        "close_50_image_alignment_error_deg",
+    }
+    if mode == "strict_image_trace":
+        required.add("close_75_image_alignment_error_deg")
+    missing = sorted(required - supplied.keys())
+    if missing:
+        raise ValueError(f"missing camera2 close alignment limits: {missing}")
+    if mode == "preclose_and_early_trace" and "close_75_image_alignment_error_deg" in supplied:
+        raise ValueError("preclose_and_early_trace must not set a close-75 limit")
+    if any(value <= 0.0 or value > 90.0 for value in supplied.values()):
+        raise ValueError("camera2 close alignment limits must be in (0, 90]")
+    return supplied
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Export privileged SO101 teacher PickLift rollouts to a local LeRobotDataset."
@@ -145,6 +183,10 @@ def main() -> None:
         default="strict_image_trace",
         help="Gate close alignment by camera2, early camera2 trace, or authoritative simulator geometry.",
     )
+    parser.add_argument("--pre-close-image-alignment-max-deg", type=float)
+    parser.add_argument("--close-25-image-alignment-max-deg", type=float)
+    parser.add_argument("--close-50-image-alignment-max-deg", type=float)
+    parser.add_argument("--close-75-image-alignment-max-deg", type=float)
     parser.add_argument("--lift-steps", type=int, default=58)
     parser.add_argument(
         "--lift-target-height",
@@ -384,8 +426,33 @@ def main() -> None:
     parser.add_argument("--spawn-min-radius", type=float, default=0.10)
     parser.add_argument("--spawn-max-radius", type=float, default=0.30)
     parser.add_argument("--spawn-angle-half-range-deg", type=float, default=90.0)
+    parser.add_argument(
+        "--target-object-yaw-deg",
+        type=float,
+        help="Override the settled target cube yaw after reset and before frame 0.",
+    )
     parser.add_argument("--object-half-sizes", default="0.0125,0.015,0.0175")
+    parser.add_argument(
+        "--initial-qpos",
+        help="Exact 6D MuJoCo start qpos, comma-separated. The first recorded frame preserves it.",
+    )
+    parser.add_argument(
+        "--camera-rig-config",
+        type=Path,
+        help="Config-defined physical camera rig used for both camera geometry and policy images.",
+    )
+    parser.add_argument(
+        "--min-gripper-floor-clearance-m",
+        type=float,
+        default=0.0,
+        help="Reject a teacher trajectory if any gripper collision geom is closer to the floor.",
+    )
     parser.add_argument("--no-camera3-duplicate", action="store_true")
+    parser.add_argument(
+        "--capture-render-replay",
+        action="store_true",
+        help="Capture exact pre-action MuJoCo/geom/camera state for renderer-independent replay.",
+    )
     args = parser.parse_args()
 
     report = export_teacher_rollouts(
@@ -406,6 +473,13 @@ def main() -> None:
         trajectory_variant=args.trajectory_variant,
         grip_the_cube_start_profile=args.grip_the_cube_start_profile,
         close_alignment_gate_mode=args.close_alignment_gate_mode,
+        close_alignment_limits=_close_alignment_limits(
+            mode=args.close_alignment_gate_mode,
+            pre_close=args.pre_close_image_alignment_max_deg,
+            close_25=args.close_25_image_alignment_max_deg,
+            close_50=args.close_50_image_alignment_max_deg,
+            close_75=args.close_75_image_alignment_max_deg,
+        ),
         lift_steps=args.lift_steps,
         lift_target_height=args.lift_target_height,
         lift_controller_z_error=args.lift_controller_z_error,
@@ -458,10 +532,17 @@ def main() -> None:
         spawn_min_radius=args.spawn_min_radius,
         spawn_max_radius=args.spawn_max_radius,
         spawn_angle_half_range_deg=args.spawn_angle_half_range_deg,
+        target_object_yaw_deg=args.target_object_yaw_deg,
         object_half_sizes=_parse_float_list(args.object_half_sizes),
+        initial_qpos=(None if args.initial_qpos is None else _parse_float_list(args.initial_qpos)),
+        camera_rig_config_path=args.camera_rig_config,
+        min_gripper_floor_clearance_m=args.min_gripper_floor_clearance_m,
         include_camera3_duplicate=not args.no_camera3_duplicate,
+        capture_render_replay=args.capture_render_replay,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
+    if int(report.get("exported_episodes", 0)) != int(report.get("requested_episodes", 0)):
+        raise SystemExit(2)
 
 
 def export_teacher_rollouts(
@@ -483,6 +564,7 @@ def export_teacher_rollouts(
     trajectory_variant: str = "standard",
     grip_the_cube_start_profile: str = "mixed",
     close_alignment_gate_mode: str = "strict_image_trace",
+    close_alignment_limits: dict[str, float] | None = None,
     lift_steps: int = 58,
     lift_target_height: float = 0.05,
     lift_controller_z_error: float = 0.12,
@@ -535,8 +617,13 @@ def export_teacher_rollouts(
     spawn_min_radius: float = 0.10,
     spawn_max_radius: float = 0.30,
     spawn_angle_half_range_deg: float = 90.0,
+    target_object_yaw_deg: float | None = None,
     object_half_sizes: tuple[float, ...] = (0.0125, 0.015, 0.0175),
+    initial_qpos: tuple[float, ...] | None = None,
+    camera_rig_config_path: Path | None = None,
+    min_gripper_floor_clearance_m: float = 0.0,
     include_camera3_duplicate: bool = True,
+    capture_render_replay: bool = False,
 ) -> dict[str, Any]:
     import shutil
 
@@ -544,6 +631,10 @@ def export_teacher_rollouts(
 
     export_started = time.perf_counter()
     require_so101_image_resolution(height=height, width=width, context="SO101 LeRobot teacher export")
+    if initial_qpos is not None and len(initial_qpos) != 6:
+        raise ValueError(f"--initial-qpos requires 6 values, got {len(initial_qpos)}")
+    if float(min_gripper_floor_clearance_m) < 0.0:
+        raise ValueError("--min-gripper-floor-clearance-m must be >= 0")
     if root.exists():
         if not overwrite:
             raise FileExistsError(f"{root} already exists; pass --overwrite or choose a new --root")
@@ -588,6 +679,18 @@ def export_teacher_rollouts(
         grid_balance_spawn_lookup = True
 
     config = WristEgoServoConfig(width=width, height=height)
+    camera_rig_config = None
+    camera_rig_config_sha256 = None
+    camera_rig_config_declared = None
+    if camera_rig_config_path is not None:
+        from physical_ai_agent.sim.so101_camera_rig_render_config import (
+            load_so101_camera_rig_render_config,
+        )
+
+        camera_rig_config_declared = str(camera_rig_config_path)
+        camera_rig_config_path = camera_rig_config_path.expanduser().resolve()
+        camera_rig_config = load_so101_camera_rig_render_config(camera_rig_config_path)
+        camera_rig_config_sha256 = hashlib.sha256(camera_rig_config_path.read_bytes()).hexdigest()
     env = make_high_contrast_picklift_env(
         target_object_color=target_object_color,
         object_half_sizes=object_half_sizes,
@@ -595,6 +698,8 @@ def export_teacher_rollouts(
         spawn_min_radius=spawn_min_radius,
         spawn_max_radius=spawn_max_radius,
         spawn_angle_half_range_deg=spawn_angle_half_range_deg,
+        camera_rig_preset=(None if camera_rig_config is None else camera_rig_config.preset),
+        camera_rig_config=camera_rig_config,
     )
     policy_renderers = _make_policy_renderers(env, config)
     teacher_renderers = _make_teacher_renderers(env, config)
@@ -618,6 +723,7 @@ def export_teacher_rollouts(
                 resolution=int(grid_lookup_resolution),
                 x_range=(float(grid_lookup_x_min), float(grid_lookup_x_max)),
                 y_range=(float(grid_lookup_y_min), float(grid_lookup_y_max)),
+                target_object_yaw_deg=target_object_yaw_deg,
             )
             lookup_cache_kind = str(cache.get("candidate_kind", "generated_camera1_spawn"))
             spawn_lookup = {
@@ -640,6 +746,7 @@ def export_teacher_rollouts(
                 y_min=float(grid_lookup_y_min),
                 y_max=float(grid_lookup_y_max),
                 resolution=int(grid_lookup_resolution),
+                target_object_yaw_deg=target_object_yaw_deg,
             )
             if grid_lookup_cache:
                 grid_lookup_cache.parent.mkdir(parents=True, exist_ok=True)
@@ -651,6 +758,7 @@ def export_teacher_rollouts(
                             resolution=int(grid_lookup_resolution),
                             x_range=(float(grid_lookup_x_min), float(grid_lookup_x_max)),
                             y_range=(float(grid_lookup_y_min), float(grid_lookup_y_max)),
+                            target_object_yaw_deg=target_object_yaw_deg,
                         ),
                         indent=2,
                         sort_keys=True,
@@ -678,6 +786,9 @@ def export_teacher_rollouts(
                 edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
                 max_candidates_per_bin=int(grid_lookup_max_candidates_per_bin),
                 allow_diagonal_fixed_jaw=allow_diagonal_fixed_jaw,
+                min_gripper_floor_clearance_m=float(min_gripper_floor_clearance_m),
+                close_steps=max(1, int(close_steps)),
+                target_object_yaw_deg=target_object_yaw_deg,
             )
         missing = [int(bin_id) for bin_id in balance_bins if not spawn_lookup.get(int(bin_id))]
         if missing:
@@ -694,6 +805,7 @@ def export_teacher_rollouts(
     attempted_episode_seeds: set[int] = set()
     skipped = []
     episode_summaries = []
+    render_replay_captures: list[dict[str, Any]] = []
     try:
         candidate_seed = seed
         while exported < episodes and attempted < episodes * max_attempt_multiplier:
@@ -741,6 +853,20 @@ def export_teacher_rollouts(
             env.reset(seed=episode_seed)
             if forced_spawn_xy is not None:
                 _set_target_object_xy(env, forced_spawn_xy)
+            if target_object_yaw_deg is not None:
+                _set_target_object_yaw(env, float(target_object_yaw_deg))
+            if initial_qpos is not None:
+                requested_initial_qpos = np.asarray(initial_qpos, dtype=np.float32)
+                clipped_initial_qpos = np.clip(
+                    requested_initial_qpos, env.action_space.low, env.action_space.high
+                ).astype(np.float32)
+                if not np.allclose(requested_initial_qpos, clipped_initial_qpos, atol=1e-7):
+                    raise ValueError(
+                        "initial qpos is outside the simulator action contract: "
+                        f"requested={requested_initial_qpos.tolist()} "
+                        f"clipped={clipped_initial_qpos.tolist()}"
+                    )
+                _set_qpos(env, clipped_initial_qpos)
             reset_home_qpos = _current_qpos(env).astype(np.float32)
             target_object = _target_object_metadata(env)
             episode_task = _format_skill_task(skill_mode, target_object)
@@ -799,6 +925,7 @@ def export_teacher_rollouts(
                 candidates = _make_fast_fixed_jaw_teacher_targets(
                     env,
                     allow_diagonal=allow_diagonal_fixed_jaw,
+                    min_floor_clearance_m=float(min_gripper_floor_clearance_m),
                 )
             else:
                 candidates = make_teacher_targets(env)
@@ -821,7 +948,13 @@ def export_teacher_rollouts(
             ranked_candidates = sorted(candidates, key=lambda item: float(item["meta"].get("score", -1e9)), reverse=True)
             candidate_failures: list[dict[str, Any]] = []
             summary = None
+            candidate_start_snapshot = _snapshot_sim_state(env)
             for candidate_rank, best in enumerate(ranked_candidates):
+                # A failed candidate can leave the cube lifted, rotated, or in
+                # contact. Every candidate must start from the same settled
+                # episode state so the accepted trajectory and its replay
+                # snapshot are independent of retry order.
+                _restore_sim_state(env, candidate_start_snapshot)
                 candidate_meta = dict(best["meta"])
                 candidate_meta["teacher_candidate_rank"] = int(candidate_rank)
                 candidate_meta["teacher_candidate_count"] = int(len(ranked_candidates))
@@ -842,6 +975,7 @@ def export_teacher_rollouts(
                     trajectory_variant=trajectory_variant,
                     grip_the_cube_start_profile=grip_the_cube_start_profile,
                     close_alignment_gate_mode=close_alignment_gate_mode,
+                    close_alignment_limits=close_alignment_limits,
                     lift_steps=lift_steps,
                     lift_target_height=lift_target_height,
                     lift_controller_z_error=lift_controller_z_error,
@@ -876,10 +1010,15 @@ def export_teacher_rollouts(
                     above_edge_start_gripper_profile=above_edge_start_gripper_profile,
                     above_edge_terminal_hold_jitter=above_edge_terminal_hold_jitter,
                     include_camera3_duplicate=include_camera3_duplicate,
+                    capture_render_replay=capture_render_replay,
+                    capture_fps=fps,
                     reset_home_qpos=reset_home_qpos,
+                    exact_start_pose=initial_qpos is not None,
+                    min_gripper_floor_clearance_m=min_gripper_floor_clearance_m,
                 )
                 if summary["success"]:
                     break
+                summary.pop("_render_replay_capture", None)
                 candidate_failures.append(
                     {
                         "candidate_rank": int(candidate_rank),
@@ -892,6 +1031,8 @@ def export_teacher_rollouts(
                             if isinstance(summary.get("best_meta"), dict)
                             else None
                         ),
+                        "jaw_vertical_angle_deg": summary.get("best_meta", {}).get("jaw_vertical_angle_deg"),
+                        "gripper_floor_clearance_gate": summary.get("gripper_floor_clearance_gate"),
                     }
                 )
             assert summary is not None
@@ -907,21 +1048,22 @@ def export_teacher_rollouts(
                 summary["desired_grid_bin"] = desired_grid_bin
             if summary["success"]:
                 if balance_enabled:
-                    use_source_manifest_bin = bool(
+                    use_declared_spawn_bin = bool(
                         str(grip_the_cube_start_profile) == "correction"
-                        and lookup_cache_kind == "source_episode_manifest"
+                        and bool(deterministic_camera_bin_lookup)
                         and desired_grid_bin is not None
                         and forced_spawn_xy is not None
-                        and len(forced_spawn_xy) >= 3
                     )
                     grid_bin = (
                         int(desired_grid_bin)
-                        if use_source_manifest_bin
+                        if use_declared_spawn_bin
                         else _summary_start_grid_bin(summary, grid_size=int(grid_balance_size))
                     )
                     summary["grid_balance_bin"] = grid_bin
                     summary["grid_balance_bin_source"] = (
-                        "source_episode_manifest" if use_source_manifest_bin else "start_camera1_centroid"
+                        "declared_camera1_spawn_catalog"
+                        if use_declared_spawn_bin
+                        else "start_camera1_centroid"
                     )
                     if grid_bin not in balance_counts:
                         _clear_episode_buffer_robust(dataset)
@@ -946,6 +1088,22 @@ def export_teacher_rollouts(
                         )
                         continue
                     balance_counts[grid_bin] += 1
+                replay_capture = summary.pop("_render_replay_capture", None)
+                if replay_capture is not None:
+                    replay_capture["episode_index"] = int(exported)
+                    for frame in replay_capture["frames"]:
+                        frame["episode_index"] = int(exported)
+                    replay_capture["target_slot_index"] = int(
+                        (target_object or {}).get("target_slot_index", -1)
+                    )
+                    target_slot = int(replay_capture["target_slot_index"])
+                    if target_slot >= 0 and replay_capture["frames"]:
+                        target_joint = env.unwrapped.model.joint(f"pick_slot_{target_slot}_joint")
+                        target_qpos_adr = int(np.asarray(target_joint.qposadr).item())
+                        replay_capture["initial_object_z"] = float(
+                            replay_capture["frames"][0]["qpos"][target_qpos_adr + 2]
+                        )
+                    render_replay_captures.append(replay_capture)
                 dataset.save_episode()
                 exported += 1
                 episode_summaries.append(summary)
@@ -959,6 +1117,50 @@ def export_teacher_rollouts(
             else:
                 _clear_episode_buffer_robust(dataset)
                 skipped.append({"seed": episode_seed, "reason": "teacher_replay_failed", **summary})
+                print(
+                    "[so101-lerobot] rejected "
+                    f"seed={episode_seed} reason={summary.get('reason')} "
+                    f"grasped={summary.get('final_info', {}).get('is_grasped')} "
+                    f"lift={summary.get('final_info', {}).get('lift_height')} "
+                    f"candidate_reasons={[row.get('reason') for row in candidate_failures]}",
+                    flush=True,
+                )
+        if capture_render_replay:
+            from physical_ai_agent.so101_render_replay import write_captured_render_replay_sidecar
+
+            write_captured_render_replay_sidecar(
+                root,
+                model=env.unwrapped.model,
+                episode_captures=render_replay_captures,
+                environment={
+                    "factory": "make_high_contrast_picklift_env",
+                    "target_object_color": target_object_color,
+                    "object_half_sizes": [float(value) for value in object_half_sizes],
+                    "spawn_center": [float(spawn_center[0]), float(spawn_center[1])],
+                    "spawn_min_radius": float(spawn_min_radius),
+                    "spawn_max_radius": float(spawn_max_radius),
+                    "spawn_angle_half_range_deg": float(spawn_angle_half_range_deg),
+                    "target_object_yaw_deg": (
+                        None
+                        if target_object_yaw_deg is None
+                        else float(target_object_yaw_deg)
+                    ),
+                    "n_distractors": 0,
+                    "action_repeat": 1,
+                    "camera_rig_config": (
+                        camera_rig_config_declared
+                    ),
+                    "camera_rig_sha256": camera_rig_config_sha256,
+                    "object_pool_order": [
+                        {
+                            "slot": int(index),
+                            "color": str(target_object_color),
+                            "half_size": float(half_size),
+                        }
+                        for index, half_size in enumerate(object_half_sizes)
+                    ],
+                },
+            )
     finally:
         for renderer in [*policy_renderers.values(), *teacher_renderers.values()]:
             renderer.close()
@@ -1035,6 +1237,7 @@ def export_teacher_rollouts(
             "settle_steps": int(settle_steps),
             "close_steps": int(close_steps),
             "close_alignment_gate_mode": str(close_alignment_gate_mode),
+            "close_alignment_limits": dict(close_alignment_limits or {}),
             "trajectory_variant": str(trajectory_variant),
             "grip_the_cube_start_profile": str(grip_the_cube_start_profile),
             "lift_steps": int(lift_steps),
@@ -1070,7 +1273,18 @@ def export_teacher_rollouts(
             "spawn_min_radius": float(spawn_min_radius),
             "spawn_max_radius": float(spawn_max_radius),
             "spawn_angle_half_range_deg": float(spawn_angle_half_range_deg),
+            "target_object_yaw_deg": (
+                None if target_object_yaw_deg is None else float(target_object_yaw_deg)
+            ),
             "object_half_sizes": [float(value) for value in object_half_sizes],
+            "initial_qpos": (
+                None if initial_qpos is None else [float(value) for value in initial_qpos]
+            ),
+            "camera_rig_config": (
+                camera_rig_config_declared
+            ),
+            "camera_rig_sha256": camera_rig_config_sha256,
+            "min_gripper_floor_clearance_m": float(min_gripper_floor_clearance_m),
         },
         "camera3_duplicate": {
             "enabled": bool(include_camera3_duplicate),
@@ -1144,6 +1358,7 @@ def _write_teacher_episode(
     trajectory_variant: str,
     grip_the_cube_start_profile: str,
     close_alignment_gate_mode: str,
+    close_alignment_limits: dict[str, float] | None,
     lift_steps: int,
     lift_target_height: float,
     lift_controller_z_error: float,
@@ -1178,7 +1393,11 @@ def _write_teacher_episode(
     above_edge_start_gripper_profile: str,
     above_edge_terminal_hold_jitter: int,
     include_camera3_duplicate: bool,
+    capture_render_replay: bool = False,
+    capture_fps: int = 12,
     reset_home_qpos: np.ndarray | None = None,
+    exact_start_pose: bool = False,
+    min_gripper_floor_clearance_m: float = 0.0,
 ) -> dict[str, Any]:
     if teacher_style == "legacy":
         return _write_legacy_teacher_episode(
@@ -1258,6 +1477,7 @@ def _write_teacher_episode(
             settle_steps=settle_steps,
             close_steps=close_steps,
             close_alignment_gate_mode=close_alignment_gate_mode,
+            close_alignment_limits=close_alignment_limits,
             trajectory_variant=trajectory_variant,
             grip_the_cube_start_profile=grip_the_cube_start_profile,
             lift_steps=lift_steps,
@@ -1281,7 +1501,11 @@ def _write_teacher_episode(
             above_edge_terminal_hold_jitter=above_edge_terminal_hold_jitter,
             task=task,
             include_camera3_duplicate=include_camera3_duplicate,
+            capture_render_replay=capture_render_replay,
+            capture_fps=capture_fps,
             reset_home_qpos=reset_home_qpos,
+            exact_start_pose=exact_start_pose,
+            min_gripper_floor_clearance_m=min_gripper_floor_clearance_m,
         )
 
     return _write_staged_teacher_episode(
@@ -1402,6 +1626,23 @@ def _set_target_object_xy(env: Any, xy: list[float] | tuple[float, float] | np.n
         unwrapped._refresh_reset_reference_state()
 
 
+def _set_target_object_yaw(env: Any, yaw_degrees: float) -> None:
+    """Set the active cube yaw without changing its settled XYZ position."""
+    import mujoco
+
+    unwrapped = env.unwrapped
+    slot = unwrapped._slots[int(unwrapped._target_slot_idx)]
+    addr = int(slot.qpos_addr)
+    half_yaw = 0.5 * math.radians(float(yaw_degrees))
+    unwrapped.data.qpos[addr + 3 : addr + 7] = np.asarray(
+        [math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw)], dtype=float
+    )
+    unwrapped.data.qvel[:] = 0.0
+    mujoco.mj_forward(unwrapped.model, unwrapped.data)
+    if hasattr(unwrapped, "_refresh_reset_reference_state"):
+        unwrapped._refresh_reset_reference_state()
+
+
 def _build_camera1_spawn_lookup(
     env: Any,
     renderers: dict[str, Any],
@@ -1412,6 +1653,7 @@ def _build_camera1_spawn_lookup(
     y_min: float,
     y_max: float,
     resolution: int,
+    target_object_yaw_deg: float | None = None,
 ) -> dict[int, list[list[float]]]:
     resolution = max(2, int(resolution))
     lookup: dict[int, list[list[float]]] = {}
@@ -1420,6 +1662,8 @@ def _build_camera1_spawn_lookup(
         for x in np.linspace(float(x_min), float(x_max), resolution):
             for y in np.linspace(float(y_min), float(y_max), resolution):
                 _set_target_object_xy(env, [float(x), float(y)])
+                if target_object_yaw_deg is not None:
+                    _set_target_object_yaw(env, float(target_object_yaw_deg))
                 visibility = _object_visibility_in_camera(env, renderers["egocentric_cam"], "egocentric_cam")
                 centroid = visibility.get("normalized_centroid")
                 if not visibility.get("visible") or centroid is None:
@@ -1439,6 +1683,7 @@ def _camera1_spawn_lookup_cache_payload(
     resolution: int,
     x_range: tuple[float, float],
     y_range: tuple[float, float],
+    target_object_yaw_deg: float | None = None,
 ) -> dict[str, Any]:
     return {
         "format": "so101_camera1_spawn_lookup_v1",
@@ -1446,6 +1691,9 @@ def _camera1_spawn_lookup_cache_payload(
         "resolution": int(resolution),
         "x_range": [float(value) for value in x_range],
         "y_range": [float(value) for value in y_range],
+        "target_object_yaw_deg": (
+            None if target_object_yaw_deg is None else float(target_object_yaw_deg)
+        ),
         "lookup": {
             str(int(bin_id)): [[float(x), float(y)] for x, y in values]
             for bin_id, values in sorted(lookup.items())
@@ -1460,8 +1708,12 @@ def _validate_camera1_spawn_lookup_cache(
     resolution: int,
     x_range: tuple[float, float],
     y_range: tuple[float, float],
+    target_object_yaw_deg: float | None = None,
 ) -> None:
-    if payload.get("format") != "so101_camera1_spawn_lookup_v1":
+    if payload.get("format") not in {
+        "so101_camera1_spawn_lookup_v1",
+        "so101_spawn_catalog_v1",
+    }:
         raise ValueError("unsupported camera1 spawn lookup cache format")
     expected = {
         "grid_size": int(grid_size),
@@ -1472,6 +1724,15 @@ def _validate_camera1_spawn_lookup_cache(
     for key, value in expected.items():
         if payload.get(key) != value:
             raise ValueError(f"camera1 spawn lookup cache mismatch for {key}: {payload.get(key)!r} != {value!r}")
+    payload_yaw = payload.get("target_object_yaw_deg")
+    if target_object_yaw_deg is not None and (
+        payload_yaw is None
+        or not math.isclose(float(payload_yaw), float(target_object_yaw_deg), abs_tol=1e-9)
+    ):
+        raise ValueError(
+            "camera1 spawn lookup cache mismatch for target_object_yaw_deg: "
+            f"{payload_yaw!r} != {float(target_object_yaw_deg)!r}"
+        )
     if not isinstance(payload.get("lookup"), dict):
         raise ValueError("camera1 spawn lookup cache has no lookup mapping")
 
@@ -1488,6 +1749,9 @@ def _filter_spawn_lookup_for_teacher_feasibility(
     edge_contact_parallel_success_threshold_deg: float,
     max_candidates_per_bin: int,
     allow_diagonal_fixed_jaw: bool,
+    min_gripper_floor_clearance_m: float,
+    close_steps: int,
+    target_object_yaw_deg: float | None = None,
 ) -> dict[int, list[list[float]]]:
     filtered_lookup: dict[int, list[list[float]]] = {}
     max_candidates_per_bin = max(0, int(max_candidates_per_bin))
@@ -1497,6 +1761,8 @@ def _filter_spawn_lookup_for_teacher_feasibility(
             candidate_seed = int(seed) + int(bin_id) * 1000 + index
             env.reset(seed=candidate_seed)
             _set_target_object_xy(env, xy)
+            if target_object_yaw_deg is not None:
+                _set_target_object_yaw(env, float(target_object_yaw_deg))
             visible, _search_steps = sweep_until_visible(env, renderers, max_sweeps=config.max_sweeps)
             if not visible:
                 continue
@@ -1506,6 +1772,7 @@ def _filter_spawn_lookup_for_teacher_feasibility(
                 candidates=_make_fast_fixed_jaw_teacher_targets(
                     env,
                     allow_diagonal=allow_diagonal_fixed_jaw,
+                    min_floor_clearance_m=float(min_gripper_floor_clearance_m),
                 ),
                 move_target_z_offset=move_target_z_offset,
             )
@@ -1514,6 +1781,8 @@ def _filter_spawn_lookup_for_teacher_feasibility(
                 candidates,
                 edge_contact_xy_success_threshold=edge_contact_xy_success_threshold,
                 edge_contact_parallel_success_threshold_deg=edge_contact_parallel_success_threshold_deg,
+                min_gripper_floor_clearance_m=float(min_gripper_floor_clearance_m),
+                close_steps=max(1, int(close_steps)),
             ):
                 continue
             accepted.append([float(xy[0]), float(xy[1])])
@@ -1534,6 +1803,8 @@ def _has_success_contract_fixed_jaw_candidate(
     *,
     edge_contact_xy_success_threshold: float,
     edge_contact_parallel_success_threshold_deg: float,
+    min_gripper_floor_clearance_m: float = 0.0,
+    close_steps: int = 42,
 ) -> bool:
     snapshot = _snapshot_sim_state(env)
     try:
@@ -1543,6 +1814,15 @@ def _has_success_contract_fixed_jaw_candidate(
                 continue
             q_edge = _make_fixed_jaw_edge_qpos(env, np.asarray(candidate["q_open"], dtype=np.float32), meta)
             q_edge[-1] = _open_gripper_value(env)
+            if float(min_gripper_floor_clearance_m) > 0.0:
+                q_edge, floor_meta = _raise_edge_pose_for_floor_clearance(
+                    env,
+                    q_edge,
+                    required_clearance_m=float(min_gripper_floor_clearance_m),
+                    close_steps=max(1, int(close_steps)),
+                )
+                if not bool(floor_meta.get("passed_preflight", False)):
+                    continue
             _set_qpos(env, q_edge)
             if float(_static_finger_edge_error(env, meta)["xy_error"]) <= float(edge_contact_xy_success_threshold):
                 return True
@@ -1679,18 +1959,45 @@ def _camera1_grid_bin_at_qpos(
     return int(y * grid_size + x)
 
 
-def _make_fast_fixed_jaw_teacher_targets(env: Any, *, allow_diagonal: bool = True) -> list[dict[str, Any]]:
+def _make_fast_fixed_jaw_teacher_targets(
+    env: Any,
+    *,
+    allow_diagonal: bool = True,
+    min_floor_clearance_m: float = 0.0,
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    specs = [
+    base_specs = [
         spec
         for spec in _grasp_candidate_specs(env)
         if (allow_diagonal or not str(spec.get("mode", "")).startswith("diag_"))
         and (allow_diagonal or str(spec.get("grasp_mode")) in {"front", "overhead"})
+        and (
+            float(min_floor_clearance_m) <= 0.0
+            or str(spec.get("mode", "")).endswith("overhead_biased")
+        )
     ]
+    # The jaw line is unoriented for the parallelism gate, but the physical
+    # gripper is not symmetric: choosing the opposite contacted face swaps
+    # which side carries the moving-jaw body. Generate both directions
+    # constructively so the floor-clearance gate can select a feasible pose
+    # instead of relying on low-probability post-export rejection.
+    specs: list[dict[str, Any]] = []
+    for base_spec in base_specs:
+        for direction, suffix in ((1.0, "positive"), (-1.0, "negative")):
+            spec = dict(base_spec)
+            spec["axis"] = direction * np.asarray(base_spec["axis"], dtype=float)
+            spec["mode"] = f"{base_spec['mode']}_{suffix}"
+            spec["candidate_index"] = len(specs)
+            spec["contact_direction"] = suffix
+            specs.append(spec)
     for raw_spec in specs:
         try:
             spec = _spec_with_rotated_cube_face_normal(env, raw_spec)
-            q_open, solve_meta = _solve_fixed_jaw_edge_qpos_variant(env, spec)
+            q_open, solve_meta = _solve_fixed_jaw_edge_qpos_variant(
+                env,
+                spec,
+                min_floor_clearance_m=float(min_floor_clearance_m),
+            )
         except Exception:
             continue
         meta = {
@@ -1702,6 +2009,9 @@ def _make_fast_fixed_jaw_teacher_targets(env: Any, *, allow_diagonal: bool = Tru
             ],
             "gap": float(spec["gap"]),
             "z_offset": float(spec["z_offset"]),
+            "floor_safe_contact_z_offset_m": float(
+                spec.get("floor_safe_contact_z_offset_m", 0.0)
+            ),
             "open_value": float(spec["open_value"]),
             "success_step": None,
             "score": (
@@ -1713,6 +2023,7 @@ def _make_fast_fixed_jaw_teacher_targets(env: Any, *, allow_diagonal: bool = Tru
             ),
             "candidate_index": int(spec["candidate_index"]),
             "candidate_attempts": len(specs),
+            "contact_direction": str(spec["contact_direction"]),
             "mode_successes": None,
             "fast_preview_candidate": True,
             "fast_preview_source": "fixed_jaw_edge_ik",
@@ -1745,7 +2056,7 @@ def _filter_fixed_jaw_move_candidates_in_policy_view(
                 continue
             center_distance = float(wrist["center_distance"] or 0.0)
             _set_qpos(env, q_edge)
-            alignment = _camera2_top_contact_alignment(env, renderers)
+            alignment = _camera2_top_contact_alignment(env, renderers, best_meta=meta)
             meta["preselected_policy_camera_visibility"] = visibility
             meta["camera2_top_contact_alignment"] = alignment
             alignment_error = alignment.get("image_alignment_error_deg")
@@ -1762,14 +2073,41 @@ def _filter_fixed_jaw_move_candidates_in_policy_view(
     return [candidate for _score, candidate in sorted(ranked, key=lambda item: item[0], reverse=True)]
 
 
-def _camera2_top_contact_alignment(env: Any, renderers: dict[str, Any]) -> dict[str, Any]:
+def _camera2_top_contact_alignment(
+    env: Any,
+    renderers: dict[str, Any],
+    *,
+    best_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     image = _render_camera(env, renderers["wrist_cam"], "wrist_cam")
     score = _image_alignment_score(image, edge_mode="top-contact")
+    projected_jaw_angle = _projected_jaw_line_angle(
+        env,
+        camera_name="wrist_cam",
+        width=int(image.shape[1]),
+        height=int(image.shape[0]),
+    )
+    projected_contact_normal_angle = _projected_cube_contact_normal_angle(
+        env,
+        best_meta=best_meta,
+        camera_name="wrist_cam",
+        width=int(image.shape[1]),
+        height=int(image.shape[0]),
+    )
+    cube_edge_angle = score.get("cube_top_contact_edge_angle_deg")
+    alignment_error = score.get("image_alignment_error_deg")
+    jaw_angle = score.get("jaw_angle_deg")
+    if projected_jaw_angle is not None and projected_contact_normal_angle is not None:
+        jaw_angle = float(projected_jaw_angle)
+        alignment_error = float(_angle_diff(float(projected_contact_normal_angle), jaw_angle))
     return {
         "reason": score.get("reason"),
-        "image_alignment_error_deg": score.get("image_alignment_error_deg"),
-        "cube_top_contact_edge_angle_deg": score.get("cube_top_contact_edge_angle_deg"),
-        "jaw_angle_deg": score.get("jaw_angle_deg"),
+        "image_alignment_error_deg": alignment_error,
+        "cube_top_contact_edge_angle_deg": cube_edge_angle,
+        "cube_contact_normal_angle_deg": projected_contact_normal_angle,
+        "jaw_angle_deg": jaw_angle,
+        "mask_jaw_angle_deg": score.get("jaw_angle_deg"),
+        "jaw_angle_source": "projected_finger_pad_centers" if projected_jaw_angle is not None else "rgb_mask_fallback",
         "contact_edge_distance_px": score.get("contact_edge_distance_px"),
     }
 
@@ -1778,39 +2116,153 @@ def _camera2_locked_top_contact_alignment(
     env: Any,
     renderers: dict[str, Any],
     *,
-    reference_edge_angle_deg: float | None,
+    reference_contact_normal_angle_deg: float | None,
 ) -> dict[str, Any]:
-    if reference_edge_angle_deg is None:
+    if reference_contact_normal_angle_deg is None:
         return _camera2_top_contact_alignment(env, renderers)
-    import cv2
-
     image = _render_camera(env, renderers["wrist_cam"], "wrist_cam")
-    hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-    yellow = ((hsv[:, :, 0] >= 15) & (hsv[:, :, 0] <= 45) & (hsv[:, :, 1] >= 55) & (hsv[:, :, 2] >= 55)).astype(
-        "uint8"
+    jaw_angle = _projected_jaw_line_angle(
+        env,
+        camera_name="wrist_cam",
+        width=int(image.shape[1]),
+        height=int(image.shape[0]),
     )
-    yellow = cv2.morphologyEx(yellow, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    jaw_angle = _jaw_axis_angle(yellow)
     if jaw_angle is None:
         return {
-            "reason": "missing_jaw_mask_locked_top_contact",
+            "reason": "missing_projected_jaw_line_locked_top_contact",
             "image_alignment_error_deg": None,
-            "cube_top_contact_edge_angle_deg": float(reference_edge_angle_deg),
+            "cube_contact_normal_angle_deg": float(reference_contact_normal_angle_deg),
             "jaw_angle_deg": None,
             "contact_edge_distance_px": None,
             "locked_top_contact_edge": True,
         }
     return {
         "reason": "ok",
-        "image_alignment_error_deg": float(_angle_diff(float(reference_edge_angle_deg), float(jaw_angle))),
-        "cube_top_contact_edge_angle_deg": float(reference_edge_angle_deg),
+        "image_alignment_error_deg": float(
+            _angle_diff(float(reference_contact_normal_angle_deg), float(jaw_angle))
+        ),
+        "cube_contact_normal_angle_deg": float(reference_contact_normal_angle_deg),
         "jaw_angle_deg": float(jaw_angle),
+        "jaw_angle_source": "projected_finger_pad_centers",
         "contact_edge_distance_px": None,
         "locked_top_contact_edge": True,
     }
 
 
-def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[np.ndarray, dict[str, float]]:
+def _projected_jaw_line_angle(
+    env: Any,
+    *,
+    camera_name: str,
+    width: int,
+    height: int,
+) -> float | None:
+    """Return the camera-image angle of the line connecting both finger pads."""
+    import mujoco
+
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    static_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "static_finger_pad")
+    moving_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "moving_finger_pad")
+    if min(camera_id, static_id, moving_id) < 0:
+        return None
+    points = [
+        _project_world_point_to_camera(
+            np.asarray(data.geom_xpos[geom_id], dtype=float),
+            camera_position=np.asarray(data.cam_xpos[camera_id], dtype=float),
+            camera_rotation=np.asarray(data.cam_xmat[camera_id], dtype=float).reshape(3, 3),
+            fovy_degrees=float(model.cam_fovy[camera_id]),
+            width=width,
+            height=height,
+        )
+        for geom_id in (static_id, moving_id)
+    ]
+    if any(point is None for point in points):
+        return None
+    static_xy, moving_xy = points
+    delta = np.asarray(moving_xy, dtype=float) - np.asarray(static_xy, dtype=float)
+    if float(np.linalg.norm(delta)) < 1e-6:
+        return None
+    return float((math.degrees(math.atan2(float(delta[1]), float(delta[0]))) + 180.0) % 180.0)
+
+
+def _projected_cube_contact_normal_angle(
+    env: Any,
+    *,
+    best_meta: dict[str, Any] | None,
+    camera_name: str,
+    width: int,
+    height: int,
+) -> float | None:
+    import mujoco
+
+    if not best_meta or best_meta.get("cube_face_normal_xy") is None:
+        return None
+    normal_xy = np.asarray(best_meta["cube_face_normal_xy"], dtype=float)
+    if normal_xy.shape != (2,) or float(np.linalg.norm(normal_xy)) < 1e-8:
+        return None
+    normal_xy = normal_xy / float(np.linalg.norm(normal_xy))
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    object_geom_id = int(env.unwrapped._obj_geom_id)
+    if camera_id < 0 or object_geom_id < 0:
+        return None
+    center = np.asarray(data.geom_xpos[object_geom_id], dtype=float)
+    half_length = 0.03
+    direction = np.asarray([normal_xy[0], normal_xy[1], 0.0], dtype=float)
+    projected = [
+        _project_world_point_to_camera(
+            center + sign * half_length * direction,
+            camera_position=np.asarray(data.cam_xpos[camera_id], dtype=float),
+            camera_rotation=np.asarray(data.cam_xmat[camera_id], dtype=float).reshape(3, 3),
+            fovy_degrees=float(model.cam_fovy[camera_id]),
+            width=width,
+            height=height,
+        )
+        for sign in (-1.0, 1.0)
+    ]
+    if any(point is None for point in projected):
+        return None
+    start, end = projected
+    delta = np.asarray(end, dtype=float) - np.asarray(start, dtype=float)
+    if float(np.linalg.norm(delta)) < 1e-6:
+        return None
+    return float((math.degrees(math.atan2(float(delta[1]), float(delta[0]))) + 180.0) % 180.0)
+
+
+def _project_world_point_to_camera(
+    point_world: np.ndarray,
+    *,
+    camera_position: np.ndarray,
+    camera_rotation: np.ndarray,
+    fovy_degrees: float,
+    width: int,
+    height: int,
+) -> np.ndarray | None:
+    relative = np.asarray(point_world, dtype=float) - np.asarray(camera_position, dtype=float)
+    rotation = np.asarray(camera_rotation, dtype=float).reshape(3, 3)
+    camera_x = float(np.dot(relative, rotation[:, 0]))
+    camera_y = float(np.dot(relative, rotation[:, 1]))
+    camera_z = float(np.dot(relative, -rotation[:, 2]))
+    if camera_z <= 1e-6:
+        return None
+    focal = 0.5 * float(height) / math.tan(0.5 * math.radians(float(fovy_degrees)))
+    return np.asarray(
+        [
+            0.5 * float(width) + focal * camera_x / camera_z,
+            0.5 * float(height) - focal * camera_y / camera_z,
+        ],
+        dtype=float,
+    )
+
+
+def _solve_fixed_jaw_edge_qpos_variant(
+    env: Any,
+    spec: dict[str, Any],
+    *,
+    min_floor_clearance_m: float = 0.0,
+) -> tuple[np.ndarray, dict[str, float]]:
     import mujoco
     from scipy.optimize import least_squares
 
@@ -1836,6 +2288,11 @@ def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[
     desired_moving = desired_static + axis * gap
     desired_center = 0.5 * (desired_static + desired_moving)
     desired_axis_xy = axis[:2] / max(1e-6, float(np.linalg.norm(axis[:2])))
+    floor_clearance_geoms = (
+        _gripper_floor_clearance_geoms(env)
+        if float(min_floor_clearance_m) > 0.0
+        else None
+    )
 
     def set_qpos(qpos: np.ndarray) -> None:
         for addr, value in zip(joint_addrs, qpos):
@@ -1852,18 +2309,50 @@ def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[
         finger_axis = moving_pos - static_pos
         finger_axis_xy = finger_axis[:2] / max(1e-6, float(np.linalg.norm(finger_axis[:2])))
         parallel_error = finger_axis_xy - desired_axis_xy
-        return np.concatenate(
-            [
-                (static_pos - desired_static) * 28.0,
-                (moving_pos - desired_moving) * 18.0,
-                (center - desired_center) * 6.0,
-                parallel_error * 18.0,
-                (arm_qpos - q_seed[:5]) * 0.025,
-            ]
-        )
+        terms = [
+            (static_pos - desired_static) * 28.0,
+            (moving_pos - desired_moving) * 18.0,
+            (center - desired_center) * 6.0,
+            parallel_error * 18.0,
+            # The contacted-face normal lies in the table plane. Matching
+            # only its XY projection admits a severely tilted jaw line,
+            # which can put the moving-jaw body through the floor.
+            np.asarray([finger_axis[2] * 48.0]),
+            (arm_qpos - q_seed[:5]) * 0.025,
+        ]
+        if floor_clearance_geoms is not None:
+            floor_geom, gripper_geoms = floor_clearance_geoms
+            clearance_penalties = []
+            # The SO101 moving jaw rotates. Its lowest point occurs midway
+            # through closing, not necessarily at either endpoint, so both
+            # endpoint-only checks can pass while the real close trajectory
+            # clips the table.
+            for gripper_qpos in np.linspace(open_value, float(low[-1]), 9):
+                sweep_qpos = np.concatenate(
+                    [arm_qpos, np.asarray([float(gripper_qpos)])]
+                )
+                set_qpos(sweep_qpos)
+                for geom_id in gripper_geoms:
+                    distance = float(
+                        mujoco.mj_geomDistance(
+                            model, data, floor_geom, geom_id, 1.0, None
+                        )
+                    )
+                    deficit = max(
+                        0.0,
+                        float(min_floor_clearance_m) + 0.001 - distance,
+                    )
+                    clearance_penalties.append(deficit * 80.0)
+            terms.append(np.asarray(clearance_penalties, dtype=float))
+        return np.concatenate(terms)
 
     base_starts = [
         q_seed[:5],
+        # Canonical floor-safe overhead postures found by the same constrained
+        # solver. Keeping both mirrored variants as deterministic warm starts
+        # avoids repeating a large global search for nearby spawn positions.
+        np.asarray([-0.52, 0.90, -0.90, 1.658, -1.45]),
+        np.asarray([0.52, 0.90, -0.90, 1.658, 1.45]),
         np.asarray([-0.5, 0.4, 0.1, 0.5, -1.3]),
         np.asarray([0.0, 0.55, -0.25, 0.85, 1.2]),
         np.asarray([0.6, 0.2, 0.2, 0.6, -1.0]),
@@ -1882,19 +2371,34 @@ def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[
             candidate = np.asarray(base, dtype=float).copy()
             candidate[4] = roll_target
             starts.append(candidate)
+    if float(min_floor_clearance_m) > 0.0:
+        from scipy.stats import qmc
+
+        # A fixed low-discrepancy multistart covers the non-convex five-joint
+        # IK space reproducibly. It is only enabled for the strict floor gate;
+        # ordinary exports keep the cheaper legacy starts.
+        sampler = qmc.Sobol(
+            d=5,
+            scramble=True,
+            seed=10_000 + int(spec.get("candidate_index", 0)),
+        )
+        unit_starts = sampler.random_base2(m=3)
+        starts.extend(
+            qmc.scale(unit_starts, low[:5], high[:5]).astype(float)
+        )
     best: tuple[float, np.ndarray] | None = None
     for start in starts:
         result = least_squares(
             residual,
             np.clip(start, low[:5], high[:5]),
             bounds=(low[:5], high[:5]),
-            max_nfev=35,
+            max_nfev=(80 if float(min_floor_clearance_m) > 0.0 else 35),
         )
         cost = float(np.linalg.norm(residual(result.x)))
         candidate = np.concatenate([result.x, np.asarray([open_value])])
         if best is None or cost < best[0]:
             best = (cost, candidate)
-        if best is not None and best[0] < 1.25:
+        if best is not None and best[0] < (0.35 if float(min_floor_clearance_m) > 0.0 else 1.25):
             break
     assert best is not None
     qpos = np.clip(best[1], low, high)
@@ -1903,12 +2407,45 @@ def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[
     moving_delta = np.asarray(data.geom_xpos[moving_pad] - data.geom_xpos[obj_geom_id], dtype=float)
     finger_axis = np.asarray(data.geom_xpos[moving_pad] - data.geom_xpos[static_pad], dtype=float)
     finger_axis_xy = finger_axis[:2] / max(1e-6, float(np.linalg.norm(finger_axis[:2])))
+    jaw_vertical_angle_deg = float(
+        np.degrees(
+            np.arctan2(
+                abs(float(finger_axis[2])),
+                max(1e-8, float(np.linalg.norm(finger_axis[:2]))),
+            )
+        )
+    )
     axis_parallel_dot = float(np.clip(np.dot(finger_axis_xy, desired_axis_xy), -1.0, 1.0))
     cube_face_normal_parallel_error_deg = _jaw_line_cube_face_normal_error_deg(
         finger_axis_xy,
         desired_axis_xy,
     )
     target_delta = desired_static - obj_pos
+    open_floor_clearance_m = None
+    closed_floor_clearance_m = None
+    sweep_floor_clearance_m = None
+    if floor_clearance_geoms is not None:
+        open_floor_clearance_m, _open_floor_geom = _minimum_gripper_floor_clearance(
+            env, floor_clearance_geoms
+        )
+        qpos_closed = qpos.copy()
+        qpos_closed[-1] = float(low[-1])
+        set_qpos(qpos_closed)
+        closed_floor_clearance_m, _closed_floor_geom = _minimum_gripper_floor_clearance(
+            env, floor_clearance_geoms
+        )
+        sweep_floor_clearance_m = float("inf")
+        for gripper_qpos in np.linspace(open_value, float(low[-1]), 33):
+            qpos_sweep = qpos.copy()
+            qpos_sweep[-1] = float(gripper_qpos)
+            set_qpos(qpos_sweep)
+            clearance, _clearance_geom = _minimum_gripper_floor_clearance(
+                env, floor_clearance_geoms
+            )
+            sweep_floor_clearance_m = min(
+                float(sweep_floor_clearance_m), float(clearance)
+            )
+        set_qpos(qpos)
     return qpos.astype(np.float32), {
         "cost": float(best[0]),
         "static_edge_xy_error": float(np.linalg.norm((static_delta - target_delta)[:2])),
@@ -1930,9 +2467,13 @@ def _solve_fixed_jaw_edge_qpos_variant(env: Any, spec: dict[str, Any]) -> tuple[
         "finger_axis_x": float(finger_axis[0]),
         "finger_axis_y": float(finger_axis[1]),
         "finger_axis_z": float(finger_axis[2]),
+        "jaw_vertical_angle_deg": jaw_vertical_angle_deg,
         "target_delta_x": float(target_delta[0]),
         "target_delta_y": float(target_delta[1]),
         "target_delta_z": float(target_delta[2]),
+        "ik_open_floor_clearance_m": open_floor_clearance_m,
+        "ik_closed_floor_clearance_m": closed_floor_clearance_m,
+        "ik_close_sweep_floor_clearance_m": sweep_floor_clearance_m,
     }
 
 
@@ -2486,6 +3027,7 @@ def _write_fixed_jaw_edge_episode(
     settle_steps: int,
     close_steps: int,
     close_alignment_gate_mode: str,
+    close_alignment_limits: dict[str, float] | None,
     trajectory_variant: str,
     grip_the_cube_start_profile: str,
     lift_steps: int,
@@ -2509,9 +3051,49 @@ def _write_fixed_jaw_edge_episode(
     above_edge_terminal_hold_jitter: int,
     task: str,
     include_camera3_duplicate: bool,
+    capture_render_replay: bool = False,
+    capture_fps: int = 12,
     reset_home_qpos: np.ndarray | None,
+    exact_start_pose: bool,
+    min_gripper_floor_clearance_m: float,
 ) -> dict[str, Any]:
     q_edge = _make_fixed_jaw_edge_qpos(env, q_open, best_meta)
+    q_edge, floor_pre_refine_meta = _raise_edge_pose_for_floor_clearance(
+        env,
+        q_edge,
+        required_clearance_m=float(min_gripper_floor_clearance_m),
+        close_steps=max(1, int(close_steps)),
+    )
+    if (
+        float(min_gripper_floor_clearance_m) > 0.0
+        and not bool(floor_pre_refine_meta.get("passed_preflight", False))
+    ):
+        best_meta = dict(best_meta)
+        best_meta["floor_clearance_constructive_refine"] = {
+            "before_camera2_refine": floor_pre_refine_meta,
+            "after_camera2_refine": None,
+        }
+        samples = list(floor_pre_refine_meta.get("samples", []))
+        best_sample = max(
+            samples,
+            key=lambda row: float(row.get("minimum_clearance_m", float("-inf"))),
+            default={},
+        )
+        return {
+            "seed": int(seed),
+            "success": False,
+            "reason": "gripper_floor_clearance_preflight_failed",
+            "frames": 0,
+            "best_meta": best_meta,
+            "gripper_floor_clearance_gate": {
+                "required_min_clearance_m": float(min_gripper_floor_clearance_m),
+                "minimum_clearance_m": best_sample.get("minimum_clearance_m"),
+                "minimum_frame_index": None,
+                "minimum_geom": best_sample.get("minimum_geom"),
+                "passed": False,
+                "stage": "dynamic_close_preflight_before_camera2",
+            },
+        }
     if close_alignment_gate_mode == "geometry_only":
         # The fixed-jaw IK already solved the authoritative geometry contract.
         # Do not let a perspective/occlusion-sensitive camera2 refinement
@@ -2528,10 +3110,71 @@ def _write_fixed_jaw_edge_episode(
             best_meta=best_meta,
             close_steps=max(1, int(close_steps)),
             close_alignment_gate_mode=close_alignment_gate_mode,
+            close_alignment_limits=close_alignment_limits,
+            min_floor_clearance_m=float(min_gripper_floor_clearance_m),
+        )
+    q_edge, floor_post_refine_meta = _raise_edge_pose_for_floor_clearance(
+        env,
+        q_edge,
+        required_clearance_m=float(min_gripper_floor_clearance_m),
+        close_steps=max(1, int(close_steps)),
+    )
+    if close_alignment_gate_mode != "geometry_only":
+        close_stable_refine_meta = dict(close_stable_refine_meta)
+        close_stable_refine_meta["close_probe"] = _probe_grip_the_cube_v1_close_trace_gate(
+            env,
+            renderers,
+            q_edge=q_edge,
+            best_meta=best_meta,
+            close_steps=max(1, int(close_steps)),
+            close_alignment_gate_mode=close_alignment_gate_mode,
+            close_alignment_limits=close_alignment_limits,
         )
     best_meta = dict(best_meta)
+    best_meta["floor_clearance_constructive_refine"] = {
+        "before_camera2_refine": floor_pre_refine_meta,
+        "after_camera2_refine": floor_post_refine_meta,
+    }
     best_meta["camera2_top_contact_close_stable_refine"] = close_stable_refine_meta
     best_meta["camera2_top_contact_roll_refine"] = close_stable_refine_meta.get("roll_refine", {})
+    if (
+        float(min_gripper_floor_clearance_m) > 0.0
+        and not bool(floor_post_refine_meta.get("passed_preflight", False))
+    ):
+        samples = list(floor_post_refine_meta.get("samples", []))
+        best_sample = max(
+            samples,
+            key=lambda row: float(row.get("minimum_clearance_m", float("-inf"))),
+            default={},
+        )
+        return {
+            "seed": int(seed),
+            "success": False,
+            "reason": "gripper_floor_clearance_preflight_failed",
+            "frames": 0,
+            "best_meta": best_meta,
+            "gripper_floor_clearance_gate": {
+                "required_min_clearance_m": float(min_gripper_floor_clearance_m),
+                "minimum_clearance_m": best_sample.get("minimum_clearance_m"),
+                "minimum_frame_index": None,
+                "minimum_geom": best_sample.get("minimum_geom"),
+                "passed": False,
+                "stage": "dynamic_close_preflight",
+            },
+        }
+    if not _close_probe_allows_full_episode(
+        mode=close_alignment_gate_mode,
+        refine_meta=close_stable_refine_meta,
+    ):
+        probe = close_stable_refine_meta.get("close_probe", {})
+        best_meta["camera2_top_contact_close_alignment_gate"] = probe.get("gate", {})
+        return {
+            "seed": int(seed),
+            "success": False,
+            "reason": "camera2_close_probe_failed",
+            "frames": 0,
+            "best_meta": best_meta,
+        }
     q_above = _make_fixed_jaw_above_qpos(env, q_edge, best_meta, move_target_z_offset=move_target_z_offset)
     q_above = q_above.copy()
     q_above[4] = q_edge[4]
@@ -2669,7 +3312,9 @@ def _write_fixed_jaw_edge_episode(
             raise ValueError(f"unknown grip_the_cube_v1 trajectory variant: {requested_path_variant}")
         home_start = _current_qpos(env).astype(np.float32) if reset_home_qpos is None else np.asarray(reset_home_qpos, dtype=np.float32).copy()
         home_start = np.clip(home_start, env.action_space.low, env.action_space.high).astype(np.float32)
-        home_start[-1] = _open_gripper_value(env)
+        hardware_start = home_start.copy()
+        if not exact_start_pose:
+            home_start[-1] = _open_gripper_value(env)
         q_edge = q_edge.copy()
         q_edge[-1] = _open_gripper_value(env)
         q_above = q_above.copy()
@@ -2766,6 +3411,28 @@ def _write_fixed_jaw_edge_episode(
                 ("close", q_edge, q_close, max(1, int(close_steps))),
                 ("lift", q_close, None, max(1, int(lift_steps))),
             ]
+        if exact_start_pose:
+            opened_start = hardware_start.copy()
+            opened_start[-1] = _open_gripper_value(env)
+            q_start = hardware_start
+            phases.insert(
+                0,
+                (
+                    "open_from_hardware_start",
+                    hardware_start,
+                    opened_start,
+                    max(1, int(settle_steps)),
+                ),
+            )
+            first_motion_phase = 1
+            phase_name, _old_start, phase_target, phase_steps = phases[first_motion_phase]
+            phases[first_motion_phase] = (
+                phase_name,
+                opened_start,
+                phase_target,
+                phase_steps,
+            )
+            start_variant = "exact_hardware_start"
         trajectory_variant = f"grip_the_cube_v1_{start_variant}_{requested_path_variant}"
         success_kind = "pick_success"
     else:
@@ -2825,10 +3492,36 @@ def _write_fixed_jaw_edge_episode(
         for fraction in GRIP_THE_CUBE_V1_CLOSE_TRACE_FRACTIONS
     }
     previous_close_wrist_roll: float | None = None
+    render_replay_frames: list[dict[str, Any]] = []
+    floor_clearance_geoms = _gripper_floor_clearance_geoms(env)
+    minimum_floor_clearance_m = float("inf")
+    minimum_floor_clearance_frame: int | None = None
+    minimum_floor_clearance_geom: str | None = None
 
     def add_step(action: np.ndarray, phase: str) -> tuple[bool, bool]:
         nonlocal frames, info, success_step, previous_action
+        nonlocal minimum_floor_clearance_m
+        nonlocal minimum_floor_clearance_frame, minimum_floor_clearance_geom
         action = np.clip(np.asarray(action, dtype=np.float32), env.action_space.low, env.action_space.high)
+        floor_clearance_m, floor_clearance_geom = _minimum_gripper_floor_clearance(
+            env, floor_clearance_geoms
+        )
+        if floor_clearance_m < minimum_floor_clearance_m:
+            minimum_floor_clearance_m = float(floor_clearance_m)
+            minimum_floor_clearance_frame = int(frames)
+            minimum_floor_clearance_geom = floor_clearance_geom
+        if capture_render_replay:
+            from physical_ai_agent.so101_render_replay import capture_render_replay_frame
+
+            render_replay_frames.append(
+                capture_render_replay_frame(
+                    env,
+                    renderers,
+                    episode_index=episode_index,
+                    frame_index=frames,
+                    timestamp=float(frames) / float(capture_fps),
+                )
+            )
         episode_frames.append(
             _make_lerobot_frame(
                 env=env,
@@ -2859,7 +3552,9 @@ def _write_fixed_jaw_edge_episode(
                 )
                 pre_close_policy_camera_visibility = _policy_camera_visibility(env, renderers)
                 if skill_mode == "grip_the_cube_v1":
-                    pre_close_camera2_top_contact_alignment = _camera2_top_contact_alignment(env, renderers)
+                    pre_close_camera2_top_contact_alignment = _camera2_top_contact_alignment(
+                        env, renderers, best_meta=best_meta
+                    )
             if phase == "lift":
                 action = np.asarray(
                     _cartesian_error_controller_action(
@@ -2929,13 +3624,19 @@ def _write_fixed_jaw_edge_episode(
                     "checkpoint_fraction" in close_visual_alignment_trace[-1]
                 )
             ):
-                reference_edge_angle = None
+                reference_contact_normal_angle = None
                 if pre_close_camera2_top_contact_alignment is not None:
-                    reference_edge_angle = pre_close_camera2_top_contact_alignment.get("cube_top_contact_edge_angle_deg")
+                    reference_contact_normal_angle = pre_close_camera2_top_contact_alignment.get(
+                        "cube_contact_normal_angle_deg"
+                    )
                 actual_alignment = _camera2_locked_top_contact_alignment(
                     env,
                     renderers,
-                    reference_edge_angle_deg=None if reference_edge_angle is None else float(reference_edge_angle),
+                    reference_contact_normal_angle_deg=(
+                        None
+                        if reference_contact_normal_angle is None
+                        else float(reference_contact_normal_angle)
+                    ),
                 )
                 actual_edge_error = _static_finger_edge_error(env, best_meta)
                 close_visual_alignment_trace[-1]["actual_after_step"] = {
@@ -2957,6 +3658,7 @@ def _write_fixed_jaw_edge_episode(
             pre_close_camera2_top_contact_alignment,
             close_visual_alignment_trace,
             mode=close_alignment_gate_mode,
+            limits=close_alignment_limits,
         )
         best_meta = dict(best_meta)
         best_meta["camera2_top_contact_close_alignment_gate"] = close_trace_gate
@@ -3003,9 +3705,16 @@ def _write_fixed_jaw_edge_episode(
     else:
         task_success = bool(final_static_edge_error["xy_error"] <= 0.015)
     success = task_success
+    floor_clearance_passed = bool(
+        float(min_gripper_floor_clearance_m) <= 0.0
+        or minimum_floor_clearance_m >= float(min_gripper_floor_clearance_m)
+    )
+    success = bool(success and floor_clearance_passed)
     failure_reason = None
     if not success:
-        if skill_mode == "grip_the_cube_v1" and close_trace_gate is not None and not bool(close_trace_gate.get("passed", False)):
+        if not floor_clearance_passed:
+            failure_reason = "gripper_floor_clearance_gate_failed"
+        elif skill_mode == "grip_the_cube_v1" and close_trace_gate is not None and not bool(close_trace_gate.get("passed", False)):
             failure_reason = "close_alignment_gate_failed"
         elif skill_mode == "grip_the_cube_v1" and not bool(best_meta.get("wrist_roll_delta_gate", {}).get("passed", True)):
             failure_reason = "wrist_roll_delta_gate_failed"
@@ -3015,7 +3724,7 @@ def _write_fixed_jaw_edge_episode(
         for frame in episode_frames:
             dataset.add_frame(frame)
 
-    return {
+    result = {
         "seed": seed,
         "frames": frames,
         "success": success,
@@ -3080,9 +3789,24 @@ def _write_fixed_jaw_edge_episode(
         },
         "fixed_jaw_reference": "static_finger_pad",
         "phase_counts": phase_counts,
+        "gripper_floor_clearance_gate": {
+            "required_min_clearance_m": float(min_gripper_floor_clearance_m),
+            "minimum_clearance_m": float(minimum_floor_clearance_m),
+            "minimum_frame_index": minimum_floor_clearance_frame,
+            "minimum_geom": minimum_floor_clearance_geom,
+            "passed": floor_clearance_passed,
+        },
         "mean_action_delta": float(np.mean(action_deltas)) if action_deltas else 0.0,
         "max_action_delta": float(np.max(action_deltas)) if action_deltas else 0.0,
     }
+    if capture_render_replay:
+        result["_render_replay_capture"] = {
+            "episode_index": int(episode_index),
+            "seed": int(seed),
+            "frames": render_replay_frames,
+            "initial_object_z": float("nan"),
+        }
+    return result
 
 
 def _grip_the_cube_v1_close_trace_gate(
@@ -3090,6 +3814,7 @@ def _grip_the_cube_v1_close_trace_gate(
     close_trace: list[dict[str, Any]],
     *,
     mode: str = "strict_image_trace",
+    limits: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     if mode == "geometry_only":
         # Camera2 remains recorded for debugging, but jaw occlusion and
@@ -3127,27 +3852,28 @@ def _grip_the_cube_v1_close_trace_gate(
         error = actual.get("image_alignment_error_deg", planned.get("image_alignment_error_deg"))
         checkpoints[checkpoint_key] = None if error is None else float(error)
 
-    limits = dict(GRIP_THE_CUBE_V1_CAMERA2_TOP_CONTACT_LIMITS)
+    resolved_limits = dict(limits or GRIP_THE_CUBE_V1_CAMERA2_TOP_CONTACT_LIMITS)
     if mode == "preclose_and_early_trace":
-        # After contact, the jaw mask can disappear behind the cube. Keep the
-        # camera2 pre-close and early-contact checks strict, while treating the
-        # late image angle as diagnostic rather than a rejection criterion.
-        limits.pop("close_75_image_alignment_error_deg", None)
-        limits["pre_close_image_alignment_error_deg"] = 8.0
-        limits["close_25_image_alignment_error_deg"] = 8.0
-        limits["close_50_image_alignment_error_deg"] = 8.0
+        if limits is None:
+            # After contact, the jaw mask can disappear behind the cube. Keep the
+            # camera2 pre-close and early-contact checks strict, while treating the
+            # late image angle as diagnostic rather than a rejection criterion.
+            resolved_limits.pop("close_75_image_alignment_error_deg", None)
+            resolved_limits["pre_close_image_alignment_error_deg"] = 8.0
+            resolved_limits["close_25_image_alignment_error_deg"] = 8.0
+            resolved_limits["close_50_image_alignment_error_deg"] = 8.0
     elif mode != "strict_image_trace":
         raise ValueError(f"unknown close alignment gate mode: {mode}")
     failures = {
         key: {"value": checkpoints.get(key), "limit": limit}
-        for key, limit in limits.items()
+        for key, limit in resolved_limits.items()
         if checkpoints.get(key) is None or float(checkpoints[key]) > float(limit)
     }
     return {
         "passed": not failures,
         "reason": "ok" if not failures else "threshold_exceeded",
         "mode": mode,
-        "limits": limits,
+        "limits": resolved_limits,
         "values": checkpoints,
         "failures": failures,
         "trace_steps": len(close_trace),
@@ -3184,6 +3910,8 @@ def _refine_close_stable_fixed_jaw_qpos_for_camera2_top_contact(
     best_meta: dict[str, Any],
     close_steps: int,
     close_alignment_gate_mode: str,
+    close_alignment_limits: dict[str, float] | None,
+    min_floor_clearance_m: float = 0.0,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     low = np.asarray(env.action_space.low, dtype=np.float32)
     high = np.asarray(env.action_space.high, dtype=np.float32)
@@ -3191,6 +3919,48 @@ def _refine_close_stable_fixed_jaw_qpos_for_camera2_top_contact(
     current[-1] = _open_gripper_value(env)
     rounds: list[dict[str, Any]] = []
     best: tuple[float, np.ndarray, dict[str, Any]] | None = None
+    initial_probe = _probe_grip_the_cube_v1_close_trace_gate(
+        env,
+        renderers,
+        q_edge=current,
+        best_meta=best_meta,
+        close_steps=max(1, int(close_steps)),
+        close_alignment_gate_mode=close_alignment_gate_mode,
+        close_alignment_limits=close_alignment_limits,
+    )
+    initial_snapshot = _snapshot_sim_state(env)
+    try:
+        _set_qpos(env, current)
+        initial_edge_error = _static_finger_edge_error(env, best_meta)
+        initial_geometry_error_deg = _current_jaw_cube_face_normal_error_deg(
+            env, best_meta
+        )
+    finally:
+        _restore_sim_state(env, initial_snapshot)
+    initial_floor_clearance_m, initial_floor_geom = _dynamic_close_floor_clearance(
+        env,
+        current,
+        close_steps=max(1, int(close_steps)),
+    )
+    if (
+        bool(initial_probe.get("gate", {}).get("passed", False))
+        and float(initial_edge_error["xy_error"]) <= 0.012
+        and float(initial_geometry_error_deg) <= 3.0
+        and (
+            float(min_floor_clearance_m) <= 0.0
+            or float(initial_floor_clearance_m) >= float(min_floor_clearance_m)
+        )
+    ):
+        return current, {
+            "reason": "existing_pose_passes_all_gates",
+            "close_probe": initial_probe,
+            "initial_static_edge_error": initial_edge_error,
+            "initial_geometry_parallel_error_deg": float(initial_geometry_error_deg),
+            "initial_floor_clearance_m": float(initial_floor_clearance_m),
+            "initial_floor_clearance_geom": initial_floor_geom,
+            "rounds": [],
+            "roll_refine": {"reason": "not_needed"},
+        }
     snapshot = _snapshot_sim_state(env)
     try:
         for round_index in range(2):
@@ -3224,6 +3994,7 @@ def _refine_close_stable_fixed_jaw_qpos_for_camera2_top_contact(
                 best_meta=best_meta,
                 close_steps=close_steps,
                 close_alignment_gate_mode=close_alignment_gate_mode,
+                close_alignment_limits=close_alignment_limits,
             )
             objective = _close_trace_probe_objective(probe) + 350.0 * float(after_edge_error["xy_error"])
             round_meta = {
@@ -3307,6 +4078,14 @@ def _close_trace_probe_objective(probe: dict[str, Any]) -> float:
     return float(objective)
 
 
+def _close_probe_allows_full_episode(*, mode: str, refine_meta: dict[str, Any]) -> bool:
+    if mode == "geometry_only":
+        return True
+    probe = refine_meta.get("close_probe", {})
+    gate = probe.get("gate", {}) if isinstance(probe, dict) else {}
+    return bool(gate.get("passed", False)) if isinstance(gate, dict) else False
+
+
 def _probe_grip_the_cube_v1_close_trace_gate(
     env: Any,
     renderers: dict[str, Any],
@@ -3315,6 +4094,7 @@ def _probe_grip_the_cube_v1_close_trace_gate(
     best_meta: dict[str, Any],
     close_steps: int,
     close_alignment_gate_mode: str = "strict_image_trace",
+    close_alignment_limits: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     low = np.asarray(env.action_space.low, dtype=np.float32)
     high = np.asarray(env.action_space.high, dtype=np.float32)
@@ -3332,8 +4112,8 @@ def _probe_grip_the_cube_v1_close_trace_gate(
     snapshot = _snapshot_sim_state(env)
     try:
         _set_qpos(env, start)
-        pre_close_alignment = _camera2_top_contact_alignment(env, renderers)
-        reference_edge_angle = pre_close_alignment.get("cube_top_contact_edge_angle_deg")
+        pre_close_alignment = _camera2_top_contact_alignment(env, renderers, best_meta=best_meta)
+        reference_contact_normal_angle = pre_close_alignment.get("cube_contact_normal_angle_deg")
         for index in range(max(1, int(close_steps))):
             alpha = (index + 1) / float(max(1, int(close_steps)))
             alpha = 0.5 - 0.5 * float(np.cos(np.pi * alpha))
@@ -3346,7 +4126,11 @@ def _probe_grip_the_cube_v1_close_trace_gate(
                     action=action,
                     best_meta=best_meta,
                     previous_roll=previous_roll,
-                    reference_edge_angle_deg=None if reference_edge_angle is None else float(reference_edge_angle),
+                    reference_contact_normal_angle_deg=(
+                        None
+                        if reference_contact_normal_angle is None
+                        else float(reference_contact_normal_angle)
+                    ),
                 )
                 previous_roll = float(action[4])
             else:
@@ -3371,7 +4155,11 @@ def _probe_grip_the_cube_v1_close_trace_gate(
                 actual_alignment = _camera2_locked_top_contact_alignment(
                     env,
                     renderers,
-                    reference_edge_angle_deg=None if reference_edge_angle is None else float(reference_edge_angle),
+                    reference_contact_normal_angle_deg=(
+                        None
+                        if reference_contact_normal_angle is None
+                        else float(reference_contact_normal_angle)
+                    ),
                 )
                 actual_edge_error = _static_finger_edge_error(env, best_meta)
                 entry["actual_after_step"] = {
@@ -3388,6 +4176,7 @@ def _probe_grip_the_cube_v1_close_trace_gate(
         pre_close_alignment,
         trace,
         mode=close_alignment_gate_mode,
+        limits=close_alignment_limits,
     )
     return {
         "pre_close_alignment": pre_close_alignment,
@@ -3418,9 +4207,12 @@ def _refine_wrist_roll_for_camera2_top_contact(
             candidate[4] = float(np.clip(roll, low[4], high[4]))
             candidate[-1] = _open_gripper_value(env)
             _set_qpos(env, candidate)
-            alignment = _camera2_top_contact_alignment(env, renderers)
+            alignment = _camera2_top_contact_alignment(env, renderers, best_meta=best_meta)
             alignment_error = alignment.get("image_alignment_error_deg")
             if alignment_error is None:
+                continue
+            parallel_error = _current_jaw_cube_face_normal_error_deg(env, best_meta)
+            if parallel_error > 3.0:
                 continue
             edge_error = _static_finger_edge_error(env, best_meta)
             xy_error = float(edge_error["xy_error"])
@@ -3429,6 +4221,7 @@ def _refine_wrist_roll_for_camera2_top_contact(
                 **alignment,
                 "objective": float(objective),
                 "static_edge_xy_error": xy_error,
+                "geometry_parallel_error_deg": float(parallel_error),
                 "wrist_roll": float(candidate[4]),
             }
             if best is None or objective < best[0]:
@@ -3449,7 +4242,7 @@ def _refine_close_step_wrist_roll_for_camera2_top_contact(
     action: np.ndarray,
     best_meta: dict[str, Any],
     previous_roll: float | None,
-    reference_edge_angle_deg: float | None,
+    reference_contact_normal_angle_deg: float | None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     low = np.asarray(env.action_space.low, dtype=np.float32)
     high = np.asarray(env.action_space.high, dtype=np.float32)
@@ -3481,10 +4274,13 @@ def _refine_close_step_wrist_roll_for_camera2_top_contact(
             alignment = _camera2_locked_top_contact_alignment(
                 env,
                 renderers,
-                reference_edge_angle_deg=reference_edge_angle_deg,
+                reference_contact_normal_angle_deg=reference_contact_normal_angle_deg,
             )
             alignment_error = alignment.get("image_alignment_error_deg")
             if alignment_error is None:
+                continue
+            parallel_error = _current_jaw_cube_face_normal_error_deg(env, best_meta)
+            if parallel_error > 3.0:
                 continue
             edge_error = _static_finger_edge_error(env, best_meta)
             xy_error = float(edge_error["xy_error"])
@@ -3500,6 +4296,7 @@ def _refine_close_step_wrist_roll_for_camera2_top_contact(
                 **alignment,
                 "objective": float(objective),
                 "static_edge_xy_error": xy_error,
+                "geometry_parallel_error_deg": float(parallel_error),
                 "wrist_roll": float(candidate[4]),
                 "base_wrist_roll": base_roll,
                 "previous_wrist_roll": None if previous_roll is None else float(previous_roll),
@@ -3848,7 +4645,191 @@ def _make_lerobot_frame(
 
 def _render_camera(env: Any, renderer: Any, camera_name: str) -> np.ndarray:
     renderer.update_scene(env.unwrapped.data, camera=_make_camera(env, camera_name))
-    return postprocess_camera_frame(camera_name, renderer.render()).astype(np.uint8)
+    rotation_degrees = None
+    rig_config = getattr(env.unwrapped, "_so101_camera_rig_config", None)
+    if rig_config is not None:
+        camera_config = rig_config.camera1 if camera_name == "egocentric_cam" else rig_config.camera2
+        rotation_degrees = int(camera_config.pixel_postprocess_rotation_degrees)
+    pixels = renderer.render()
+    if camera_name == "egocentric_cam" and rotation_degrees is not None:
+        pixels = postprocess_camera_frame(
+            camera_name,
+            pixels,
+            egocentric_rotation_degrees=rotation_degrees,
+        )
+    else:
+        pixels = postprocess_camera_frame(camera_name, pixels)
+    return pixels.astype(np.uint8)
+
+
+def _gripper_floor_clearance_geoms(env: Any) -> tuple[int, tuple[int, ...]]:
+    import mujoco
+
+    model = env.unwrapped.model
+    floor_geom = int(
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+    )
+    if floor_geom < 0:
+        raise ValueError("gripper floor-clearance gate requires a named floor geom")
+    gripper_body_ids = {
+        int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name))
+        for name in ("gripper", "moving_jaw_so101_v1")
+    }
+    gripper_body_ids.discard(-1)
+    collision_geoms = tuple(
+        geom_id
+        for geom_id in range(int(model.ngeom))
+        if int(model.geom_bodyid[geom_id]) in gripper_body_ids
+        and int(model.geom_contype[geom_id]) != 0
+    )
+    if not collision_geoms:
+        raise ValueError("gripper floor-clearance gate found no gripper collision geoms")
+    return floor_geom, collision_geoms
+
+
+def _minimum_gripper_floor_clearance(
+    env: Any,
+    clearance_geoms: tuple[int, tuple[int, ...]],
+) -> tuple[float, str]:
+    import mujoco
+
+    floor_geom, gripper_geoms = clearance_geoms
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    minimum = float("inf")
+    minimum_name = ""
+    for geom_id in gripper_geoms:
+        distance = float(
+            mujoco.mj_geomDistance(model, data, floor_geom, geom_id, 1.0, None)
+        )
+        if distance < minimum:
+            minimum = distance
+            geom_name = mujoco.mj_id2name(
+                model, mujoco.mjtObj.mjOBJ_GEOM, geom_id
+            )
+            minimum_name = geom_name or f"unnamed_geom_{geom_id}"
+    return minimum, minimum_name
+
+
+def _raise_edge_pose_for_floor_clearance(
+    env: Any,
+    q_edge: np.ndarray,
+    *,
+    required_clearance_m: float,
+    close_steps: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Constructively lift a grasp pose before export instead of rejection sampling."""
+    target = np.clip(
+        np.asarray(q_edge, dtype=np.float32),
+        env.action_space.low,
+        env.action_space.high,
+    ).astype(np.float32)
+    target[-1] = _open_gripper_value(env)
+    if float(required_clearance_m) <= 0.0:
+        return target, {
+            "enabled": False,
+            "required_clearance_m": float(required_clearance_m),
+            "z_correction_m": 0.0,
+        }
+
+    best_target = target.copy()
+    best_clearance, best_geom = _dynamic_close_floor_clearance(
+        env,
+        best_target,
+        close_steps=close_steps,
+    )
+    correction = 0.0
+    samples: list[dict[str, Any]] = [
+        {
+            "round": 0,
+            "minimum_clearance_m": float(best_clearance),
+            "minimum_geom": best_geom,
+            "accepted": True,
+        }
+    ]
+    for round_index in range(1, 4):
+        # Keep the correction small enough to preserve side contact on the
+        # 30 mm cube. The hard trajectory gate still enforces the exact 10 mm
+        # requirement; this is only a constructive search margin.
+        deficit = float(required_clearance_m) + 0.0002 - best_clearance
+        if deficit <= 0.0:
+            break
+        raised = _offset_qpos_by_cartesian(
+            env,
+            best_target,
+            np.asarray([0.0, 0.0, deficit], dtype=float),
+            steps=14,
+        )
+        raised[-1] = _open_gripper_value(env)
+        if float(np.linalg.norm(raised[:5] - best_target[:5])) < 1e-6:
+            break
+        clearance, geom_name = _dynamic_close_floor_clearance(
+            env,
+            raised,
+            close_steps=close_steps,
+        )
+        accepted = bool(clearance > best_clearance + 0.00025)
+        samples.append(
+            {
+                "round": int(round_index),
+                "minimum_clearance_m": float(clearance),
+                "minimum_geom": geom_name,
+                "accepted": accepted,
+                "requested_z_correction_m": float(deficit),
+            }
+        )
+        if not accepted:
+            break
+        best_target = raised.astype(np.float32)
+        best_clearance = float(clearance)
+        best_geom = geom_name
+        correction += float(deficit)
+    return best_target, {
+        "enabled": True,
+        "required_clearance_m": float(required_clearance_m),
+        "safety_margin_m": 0.0002,
+        "z_correction_m": float(correction),
+        "samples": samples,
+        "passed_preflight": bool(
+            best_clearance >= float(required_clearance_m)
+        ),
+    }
+
+
+def _dynamic_close_floor_clearance(
+    env: Any,
+    q_edge: np.ndarray,
+    *,
+    close_steps: int,
+) -> tuple[float, str]:
+    clearance_geoms = _gripper_floor_clearance_geoms(env)
+    start = np.clip(np.asarray(q_edge, dtype=np.float32), env.action_space.low, env.action_space.high)
+    start[-1] = _open_gripper_value(env)
+    closed = start.copy()
+    closed[-1] = float(env.action_space.low[-1])
+    minimum = float("inf")
+    minimum_geom = ""
+    snapshot = _snapshot_sim_state(env)
+    try:
+        _set_qpos(env, start)
+        for index in range(max(1, int(close_steps))):
+            value, geom_name = _minimum_gripper_floor_clearance(env, clearance_geoms)
+            if value < minimum:
+                minimum = float(value)
+                minimum_geom = geom_name
+            alpha = (index + 1) / float(max(1, int(close_steps)))
+            alpha = 0.5 - 0.5 * float(np.cos(np.pi * alpha))
+            action = ((1.0 - alpha) * start + alpha * closed).astype(np.float32)
+            _obs, _reward, terminated, truncated, _info = env.step(np.asarray(action, dtype=float))
+            if bool(terminated) or bool(truncated):
+                break
+        value, geom_name = _minimum_gripper_floor_clearance(env, clearance_geoms)
+        if value < minimum:
+            minimum = float(value)
+            minimum_geom = geom_name
+    finally:
+        _restore_sim_state(env, snapshot)
+    return float(minimum), minimum_geom
 
 
 def _policy_camera_visibility(env: Any, renderers: dict[str, Any]) -> dict[str, dict[str, Any]]:

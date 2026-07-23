@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +58,13 @@ POLICY_CAMERA_NAMES = SIM_POLICY_CAMERA_NAMES
 DEBUG_CAMERA_NAMES = SIM_DEBUG_CAMERA_NAMES
 DEFAULT_VIRTUAL_CAMERA_NAMES = ("egocentric_cam", "top_down")
 EGOCENTRIC_IMAGE_ROTATION_DEGREES = 90
+WRIST_CAMERA_OVER_FIXED_JAW_POSE = {
+    "name": "over_fixed_jaw_rear_3cm",
+    "position": [-0.0026, 0.054, 0.001],
+    "fixed_jaw_top_y": 0.024,
+    "surface_clearance_m": 0.03,
+    "preserve_original_orientation": True,
+}
 EGOCENTRIC_CAMERA1_POSE = {
     "type": "free",
     "lookat": [0.245, 0.11, 0.035],
@@ -64,6 +73,23 @@ EGOCENTRIC_CAMERA1_POSE = {
     "elevation": -82,
     "rotation_degrees": EGOCENTRIC_IMAGE_ROTATION_DEGREES,
 }
+
+
+def configure_wrist_camera_over_fixed_jaw(env: Any) -> None:
+    """Move wrist_cam above the fixed-jaw rear without changing its angle."""
+    import mujoco
+    import numpy as np
+
+    model = env.unwrapped.model
+    data = env.unwrapped.data
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_cam")
+    if camera_id < 0:
+        raise ValueError("SO101 model does not define wrist_cam")
+
+    model.cam_pos[camera_id] = np.asarray(
+        WRIST_CAMERA_OVER_FIXED_JAW_POSE["position"], dtype=np.float64
+    )
+    mujoco.mj_forward(model, data)
 
 
 def inspect_so101_camera_specs(env_ids: tuple[str, ...] = DEFAULT_SO101_ENV_IDS) -> list[SO101CameraSpec]:
@@ -242,6 +268,15 @@ def _make_camera(env: Any, camera_name: str) -> Any:
 
     import mujoco
 
+    if camera_name == "egocentric_cam":
+        named_camera_id = mujoco.mj_name2id(
+            env.unwrapped.model,
+            mujoco.mjtObj.mjOBJ_CAMERA,
+            camera_name,
+        )
+        if named_camera_id >= 0:
+            return camera_name
+
     camera = mujoco.MjvCamera()
     camera.type = mujoco.mjtCamera.mjCAMERA_FREE
     if camera_name == "egocentric_cam":
@@ -261,16 +296,146 @@ def _egocentric_lookat(env: Any) -> list[float]:
     return [float(value) for value in EGOCENTRIC_CAMERA1_POSE["lookat"]]
 
 
-def postprocess_camera_frame(camera_name: str, pixels: Any) -> Any:
-    if camera_name != "egocentric_cam" or EGOCENTRIC_IMAGE_ROTATION_DEGREES == 0:
+def postprocess_camera_frame(
+    camera_name: str,
+    pixels: Any,
+    *,
+    egocentric_rotation_degrees: int = EGOCENTRIC_IMAGE_ROTATION_DEGREES,
+) -> Any:
+    if camera_name != "egocentric_cam" or egocentric_rotation_degrees == 0:
         return pixels
 
     import numpy as np
 
-    quarter_turns = (EGOCENTRIC_IMAGE_ROTATION_DEGREES // 90) % 4
+    quarter_turns = (egocentric_rotation_degrees // 90) % 4
     if quarter_turns == 0:
         return pixels
     return np.rot90(pixels, k=-quarter_turns).copy()
+
+
+def brown_conrady_overscan_fovy(
+    *,
+    width: int,
+    height: int,
+    target_fovy_degrees: float,
+    coefficients: tuple[float, float, float, float, float],
+) -> float:
+    """Return the pinhole FOV needed to synthesize a distorted target frame."""
+    import cv2
+    import numpy as np
+
+    _validate_distortion_inputs(width, height, target_fovy_degrees, coefficients)
+    target_focal = 0.5 * height / math.tan(math.radians(target_fovy_degrees) / 2.0)
+    target_matrix = np.array(
+        [
+            [target_focal, 0.0, width / 2.0],
+            [0.0, target_focal, height / 2.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    border = np.array(
+        [
+            [[0.0, 0.0]],
+            [[width - 1.0, 0.0]],
+            [[0.0, height - 1.0]],
+            [[width - 1.0, height - 1.0]],
+            [[width / 2.0, 0.0]],
+            [[width / 2.0, height - 1.0]],
+            [[0.0, height / 2.0]],
+            [[width - 1.0, height / 2.0]],
+        ],
+        dtype=np.float64,
+    )
+    rays = cv2.undistortPoints(
+        border,
+        target_matrix,
+        np.asarray(coefficients, dtype=np.float64),
+    ).reshape(-1, 2)
+    source_focal = min(
+        (width / 2.0 - 1.0) / float(np.max(np.abs(rays[:, 0]))),
+        (height / 2.0 - 1.0) / float(np.max(np.abs(rays[:, 1]))),
+    )
+    source_fovy = math.degrees(2.0 * math.atan((height / 2.0) / source_focal))
+    return max(float(target_fovy_degrees), source_fovy)
+
+
+def apply_brown_conrady_distortion(
+    pixels: Any,
+    *,
+    target_fovy_degrees: float,
+    source_fovy_degrees: float,
+    coefficients: tuple[float, float, float, float, float],
+) -> Any:
+    """Map an overscanned pinhole render into an OpenCV distorted frame."""
+    import cv2
+    import numpy as np
+
+    image = np.asarray(pixels)
+    height, width = image.shape[:2]
+    _validate_distortion_inputs(width, height, target_fovy_degrees, coefficients)
+    map_x, map_y = _brown_conrady_remap(
+        width,
+        height,
+        float(target_fovy_degrees),
+        float(source_fovy_degrees),
+        tuple(float(value) for value in coefficients),
+    )
+    return cv2.remap(
+        image,
+        map_x,
+        map_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
+
+
+@lru_cache(maxsize=4)
+def _brown_conrady_remap(
+    width: int,
+    height: int,
+    target_fovy_degrees: float,
+    source_fovy_degrees: float,
+    coefficients: tuple[float, float, float, float, float],
+) -> tuple[Any, Any]:
+    import cv2
+    import numpy as np
+
+    target_focal = 0.5 * height / math.tan(math.radians(target_fovy_degrees) / 2.0)
+    source_focal = 0.5 * height / math.tan(math.radians(source_fovy_degrees) / 2.0)
+    target_matrix = np.array(
+        [
+            [target_focal, 0.0, width / 2.0],
+            [0.0, target_focal, height / 2.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    yy, xx = np.indices((height, width), dtype=np.float32)
+    output_pixels = np.stack((xx, yy), axis=-1).reshape(-1, 1, 2)
+    rays = cv2.undistortPoints(
+        output_pixels,
+        target_matrix,
+        np.asarray(coefficients, dtype=np.float64),
+    ).reshape(height, width, 2)
+    return (
+        (rays[..., 0] * source_focal + width / 2.0).astype(np.float32),
+        (rays[..., 1] * source_focal + height / 2.0).astype(np.float32),
+    )
+
+
+def _validate_distortion_inputs(
+    width: int,
+    height: int,
+    fovy_degrees: float,
+    coefficients: tuple[float, float, float, float, float],
+) -> None:
+    if width <= 1 or height <= 1:
+        raise ValueError("lens distortion requires an image larger than 1x1")
+    if not 0.0 < float(fovy_degrees) < 180.0:
+        raise ValueError("camera vertical FOV must be between 0 and 180 degrees")
+    if len(coefficients) != 5:
+        raise ValueError("Brown-Conrady coefficients must be (k1, k2, p1, p2, k3)")
 
 
 def _top_down_lookat(env: Any) -> list[float]:

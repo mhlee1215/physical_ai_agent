@@ -22,6 +22,7 @@ import pyarrow.parquet as pq
 from physical_ai_agent.so101_dataset_registry import (
     DATASET_RECIPE_DIR,
     registered_dataset_roots,
+    scan_dataset_registry,
 )
 
 
@@ -340,33 +341,56 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
         for split, root in skill_roots.items()
         if _resolve_dataset_path(repo_root, root) not in recipe_paths
     ]
+    photoreal_items = [
+        _so101_photoreal_dataset_catalog_item(repo_root, split, path)
+        for split, path in _discover_so101_photoreal_datasets(repo_root).items()
+        if _resolve_dataset_path(repo_root, path) not in recipe_paths
+    ]
+    photoreal_items.extend(
+        _dataset_catalog_item(repo_root, split, path, category="photoreal")
+        for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()
+        if _resolve_dataset_path(repo_root, path) not in recipe_paths
+    )
     generated_items: list[dict[str, Any]] = []
+    closed_loop_items: list[dict[str, Any]] = []
     official_paths = {_resolve_dataset_path(repo_root, root) for root in official_roots.values()}
     skill_paths = {_resolve_dataset_path(repo_root, root) for root in skill_roots.values()}
     for split, root in recipe_roots.items():
         resolved = _resolve_dataset_path(repo_root, root)
-        category = "official" if resolved in official_paths else "skill" if resolved in skill_paths else "generated"
+        if (resolved / "photoreal_lerobot_manifest.json").is_file():
+            category = "photoreal"
+        else:
+            category = (
+                "official"
+                if resolved in official_paths
+                else "skill"
+                if resolved in skill_paths
+                else "generated"
+            )
         item = _dataset_catalog_item(repo_root, split, root, category=category)
         if category == "official":
             official_items.append(item)
         elif category == "skill":
             skill_items.append(item)
+        elif category == "photoreal":
+            photoreal_items.append(item)
         else:
             generated_items.append(item)
+    for split, view in _generation_closed_loop_views(repo_root).items():
+        closed_loop_items.append(
+            _dataset_catalog_item(
+                repo_root,
+                split,
+                Path(view["root"]),
+                category="closed_loop",
+            )
+        )
     archived_items = [_dataset_catalog_item(repo_root, split, DATASETS[split], category="archived") for split in ARCHIVED_DATASET_SPLITS]
     archived_visible_items = [item for item in archived_items if item["status"] == "available"]
     temporary_items = [
         _dataset_catalog_item(repo_root, split, path, category="temporary")
         for split, path in _discover_temporary_datasets(repo_root).items()
     ]
-    photoreal_items = [
-        _so101_photoreal_dataset_catalog_item(repo_root, split, path)
-        for split, path in _discover_so101_photoreal_datasets(repo_root).items()
-    ]
-    photoreal_items.extend(
-        _dataset_catalog_item(repo_root, split, path, category="photoreal")
-        for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()
-    )
     mycobot_items = [
         _mycobot_dataset_catalog_item(repo_root, split, path)
         for split, path in _discover_mycobot_datasets(repo_root).items()
@@ -375,6 +399,7 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
         *official_items,
         *skill_items,
         *generated_items,
+        *closed_loop_items,
         *archived_items,
         *temporary_items,
         *photoreal_items,
@@ -402,6 +427,12 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
                 "title": "Generated / recipe-backed",
                 "description": "Completed datasets declared by reproducible dataset-generation recipes.",
                 "items": generated_items,
+            },
+            {
+                "id": "closed_loop",
+                "title": "Closed-loop test cases",
+                "description": "Validation-derived episode starts used by closed-loop evaluation.",
+                "items": closed_loop_items,
             },
             {
                 "id": "temporary",
@@ -889,6 +920,25 @@ def _generation_recipe_dataset_roots(repo_root: Path) -> dict[str, Path]:
     return registered_dataset_roots(repo_root, existing_only=True)
 
 
+def _generation_closed_loop_views(repo_root: Path) -> dict[str, dict[str, Path]]:
+    views: dict[str, dict[str, Path]] = {}
+    registry = scan_dataset_registry(repo_root, inspect_artifacts=True)
+    for entry in registry.entries:
+        if entry.status != "available" or not entry.closed_loop_start:
+            continue
+        report = _resolve_dataset_path(repo_root, Path(entry.closed_loop_start))
+        if not report.is_file():
+            continue
+        name = f"{entry.dataset_id}_loop_test"
+        if name in views:
+            name = f"{entry.dataset_id}_{entry.split}_loop_test"
+        views[name] = {
+            "root": Path(entry.absolute_root),
+            "report": report,
+        }
+    return views
+
+
 def _discover_mycobot_datasets(repo_root: Path) -> dict[str, Path]:
     discovered = _parse_dataset_env("MYCOBOT_TEMP_DATASETS")
     seen_paths = {path.resolve() for path in discovered.values()}
@@ -1252,6 +1302,23 @@ def _dataset_metadata(repo_root: Path, split: str) -> dict[str, Any]:
     episode_files = sorted((root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
     episodes_table = pq.read_table([str(path) for path in episode_files])
     episodes = _rows(episodes_table.to_pydict())
+    closed_loop_view = _generation_closed_loop_views(repo_root).get(split)
+    if closed_loop_view is not None:
+        selection = json.loads(Path(closed_loop_view["report"]).read_text(encoding="utf-8"))
+        source_indices = [
+            int(row["source_validation_episode_index"])
+            for row in selection.get("episodes", [])
+        ]
+        if not source_indices:
+            raise ValueError(f"closed-loop view has no selected episodes: {split}")
+        if len(source_indices) != len(set(source_indices)):
+            raise ValueError(f"closed-loop view repeats source episodes: {split}")
+        if min(source_indices) < 0 or max(source_indices) >= len(episodes):
+            raise ValueError(f"closed-loop view source episode is out of range: {split}")
+        episodes = [episodes[index] for index in source_indices]
+        info = dict(info)
+        info["total_episodes"] = len(episodes)
+        info["total_frames"] = sum(int(row["length"]) for row in episodes)
     return {
         "root": root,
         "info": info,
@@ -1282,6 +1349,12 @@ def _dataset_roots(repo_root: Path) -> dict[str, Path]:
     roots.update(_official_dataset_roots(repo_root))
     roots.update({split: _resolve_dataset_path(repo_root, root) for split, root in _skill_dataset_roots(repo_root).items()})
     roots.update({split: _resolve_dataset_path(repo_root, root) for split, root in _generation_recipe_dataset_roots(repo_root).items()})
+    roots.update(
+        {
+            split: Path(view["root"]).resolve()
+            for split, view in _generation_closed_loop_views(repo_root).items()
+        }
+    )
     roots.update({split: path.resolve() for split, path in _discover_temporary_datasets(repo_root).items()})
     roots.update({split: path.resolve() for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()})
     return roots
@@ -2556,7 +2629,7 @@ def _index_html() -> str:
 	      };
 	      if (!datasetNamesByKind.train.length) datasetNamesByKind.train = orderedNames;
 	      if (!datasetNamesByKind.valid.length) datasetNamesByKind.valid = orderedNames.filter(name => !isTrainDataset(name));
-	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !isTrainDataset(name) && !name.endsWith("_val") && !name.endsWith("_valid") && !isPhotorealDataset(name) && datasetCategoryByName[name] !== "closed_loop");
+	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !isTrainDataset(name) && !name.endsWith("_val") && !name.endsWith("_valid") && !name.includes("_validation") && !isPhotorealDataset(name) && datasetCategoryByName[name] !== "closed_loop");
 	      syncViewKind();
 	    }
 

@@ -99,5 +99,43 @@ def build_source_lookup(
     }
 
 
+def build_spawn_catalog(
+    *,
+    catalog_id: str,
+    source_reports: list[Path],
+    grid_size: int,
+    resolution: int,
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+    bins: list[int],
+) -> dict:
+    """Extract only reusable world-XY spawn candidates from source reports."""
+    source = build_source_lookup(
+        source_reports=source_reports,
+        grid_size=grid_size,
+        resolution=resolution,
+        x_range=x_range,
+        y_range=y_range,
+        bins=bins,
+    )
+    lookup = {
+        key: [[float(candidate[0]), float(candidate[1])] for candidate in candidates]
+        for key, candidates in source["lookup"].items()
+    }
+    return {
+        "format": "so101_spawn_catalog_v1",
+        "catalog_id": str(catalog_id),
+        "coordinate_frame": "mujoco_world_xy",
+        "grid_size": int(grid_size),
+        "resolution": int(resolution),
+        "x_range": [float(value) for value in x_range],
+        "y_range": [float(value) for value in y_range],
+        "lookup": lookup,
+        "candidate_counts": {
+            key: len(candidates) for key, candidates in sorted(lookup.items())
+        },
+    }
+
+
 if __name__ == "__main__":
     main()

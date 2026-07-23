@@ -165,7 +165,31 @@ Durable SO101 fine-tuning contract:
   against protected datasets pass when requested; `/api/datasets` lists every
   intended split; and `/api/frame` succeeds for at least episode 0/frame 0 of
   each split. Report the root, episode/frame count, size, sidecar status, and
-  viewer URL. A raw directory alone is not a completed handoff;
+  viewer URLs as one verified localhost, same-Wi-Fi mobile, and external access
+  set. A raw directory alone is not a completed handoff;
+- every recipe run must retain the generator's final
+  `completion:registry-viewer` stage. That stage invokes
+  `scripts/verify_so101_dataset_completion.py`, restarts the existing
+  launchctl-managed Robot Experiment Manager to evict stale schema code, and
+  fails unless each selected split is listed by `/api/datasets` and its first
+  frame exposes prompt, camera1, and camera2 through `/api/frame`. Do not bypass
+  it with `--no-restart-viewer` outside an explicitly labeled unit/debug test;
+- author every new SO101 recipe with Pydantic `schema_version: 2`. Select
+  `source.mode=from_scratch` when simulator state and trajectories are newly
+  constructed without reusable placement inputs. Select
+  `source.mode=from_spawn_catalog` when only object placement is reused; the
+  checked-in catalog must contain only seed-free `bin -> world [x, y]`
+  candidates, and generated splits create new state, trajectories, images, and
+  seeds. Select `source.mode=from_existing_dataset` with exact roots and
+  `operation=regenerate_teacher`, `render_derivative`, or `episode_subset` only
+  when the dataset itself is an input. An episode subset writes a new append-only
+  root while preserving retained frame/action/state values and source episode
+  provenance. For new `grip_the_cube_v1` recipes, require one typed
+  `geometry_contact_alignment` entry in `common.inspection_gates`; allow at
+  most one `camera2_visual_alignment` entry and use
+  `constructive_refine_then_probe` before full episode export. Forward all
+  declared thresholds into exporter acceptance. Keep schema-v1 recipes
+  immutable and readable for reproduction;
 - the shared registry implementation is
   `src/physical_ai_agent/so101_dataset_registry.py`, and the only operator CLI
   is `scripts/so101_dataset_registry.py`. Run `list` for inventory,

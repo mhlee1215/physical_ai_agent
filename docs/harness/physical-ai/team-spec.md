@@ -197,9 +197,15 @@ Required phase order:
 5. Build a new image-only LeRobot derivative. Preserve episode boundaries,
    state, action, timestamps, indices, task prompts, and non-image features;
    replace only declared camera streams.
-6. Complete only after the recipe is declared, the training-ready registry gate
-   passes, the dataset appears through `/api/datasets`, one `/api/frame` request
-   succeeds, and mobile/full playback works in the existing viewer session.
+6. Complete only after the recipe is declared and the mandatory final
+   `completion:registry-viewer` stage runs
+   `scripts/verify_so101_dataset_completion.py`. The gate must pass the
+   training-ready registry, restart the existing launchctl-managed viewer to
+   load the current recipe/Pydantic schema, find every selected split through
+   `/api/datasets`, and load episode 0/frame 0 with prompt plus camera1/camera2
+   through `/api/frame`. A stale viewer process, empty response, missing split,
+   or incomplete frame payload fails the generation handoff. Mobile/full
+   playback is then checked in that same viewer session.
 
 Keep large raw renders and derivative datasets under `_workspace/`; commit code,
 recipe/config, tests, reports, and small representative images. MyCobot work
@@ -456,6 +462,12 @@ policy is:
   `_workspace/logs/`. This avoids Codex command cleanup reaping a background
   child process and making the server appear to die immediately after a
   successful `/api/datasets` response.
+- Whenever the Robot Experiment Manager / dataset viewer is started, opened,
+  or reported, provide all three access links together: localhost,
+  same-Wi-Fi mobile, and external access. Keep the external `cloudflared`
+  tunnel under `launchctl`, verify `/api/datasets` through that URL before
+  reporting it, and do not omit a link without explicitly reporting the
+  concrete failure.
 - SO101 training-time closed-loop validation must run exactly 10 episodes by
   default. Keep `--closed-loop-episodes 10` in both launcher and monitor
   command paths; use any other count only for an explicitly labeled one-off
@@ -593,6 +605,28 @@ policy is:
     Model, augmentation, schedule, and optimizer remain experiment-config
     choices; the registry manifest supplies the validated dataset inputs and
     must not guess those training settings.
+  - New recipes use `schema_version: 2` and an explicit Pydantic-discriminated
+    source contract. `from_scratch` forbids external inputs.
+    `from_spawn_catalog` consumes checked-in seed-free `bin -> world [x, y]`
+    placement candidates; it must not run lookup builders or carry source
+    frames/actions/states/seeds, and every generated split must point at a
+    declared catalog. Use it whenever only placement distribution is reused.
+    `from_existing_dataset` lists exact roots and chooses `regenerate_teacher`,
+    `render_derivative`, or `episode_subset` when the dataset itself is an actual
+    input. Episode subsets preserve retained frame/action/state values, record
+    source episode provenance, and rebuild metadata/audit/sampling sidecars in a
+    new append-only root. Source roots referenced by lookup builders, render
+    splits, or subset splits must exactly match the declared list.
+  - New `grip_the_cube_v1` recipes must declare typed
+    `common.inspection_gates`. Exactly one `geometry_contact_alignment` gate
+    with contract `jaw_line_vs_contact_face_normal_through_cube_center` is
+    required; at most one `camera2_visual_alignment` gate may be added.
+    Camera2 pre-close/close-25/close-50/close-75 limits are forwarded into the
+    exporter and are part of episode acceptance. Use
+    `constructive_refine_then_probe` so camera2 wrist-roll refinement and a
+    cheap close probe happen before full episode export. A post-export filter
+    is an audit or derivative tool,
+    not a substitute for constructive generation-time acceptance.
   - Temporary smoke roots may be exposed through `SO101_TEMP_DATASETS`, but
     temporary discovery is not registration and must not be used to sign off a
     durable dataset.

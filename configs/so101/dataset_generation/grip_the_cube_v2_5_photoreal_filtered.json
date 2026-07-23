@@ -1,0 +1,57 @@
+{
+  "schema_version": 2,
+  "name": "grip_the_cube_v2_5_photoreal_filtered",
+  "version": "v2.5_photoreal_filtered",
+  "description": "Photoreal episode subset matching the immutable grip_the_cube_v2_5 camera2 pre-close top-contact alignment decisions at or below 45 degrees.",
+  "source": {
+    "mode": "from_existing_dataset",
+    "operation": "episode_subset",
+    "datasets": [
+      "_workspace/so101_lerobot/grip_the_cube_v2_5_photoreal"
+    ]
+  },
+  "exporter_revision": "photoreal-camera2-top-contact-preclose-le45",
+  "exporter": "scripts/export_so101_teacher_rollouts_lerobot.py",
+  "subset_script": "scripts/filter_so101_lerobot_visual_alignment.py",
+  "merge_script": "scripts/merge_so101_lerobot_shards.py",
+  "sidecar_script": "scripts/build_so101_camera_grid_bins.py",
+  "audit_script": "scripts/audit_so101_dataset_splits.py",
+  "common": {
+    "fps": 12,
+    "width": 256,
+    "height": 256
+  },
+  "sidecar": {
+    "camera_key": "observation.images.camera1",
+    "grid_size": 4,
+    "frame_index": 0,
+    "min_area": 20,
+    "bin_source": "report"
+  },
+  "splits": {
+    "train": {
+      "kind": "episode_subset",
+      "output_root": "_workspace/so101_lerobot/grip_the_cube_v2_5_photoreal_filtered",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v2-5-photoreal-filtered",
+      "source_dataset_root": "_workspace/so101_lerobot/grip_the_cube_v2_5_photoreal",
+      "expected_episodes": 266,
+      "expected_bins": {
+        "5": 70,
+        "6": 70,
+        "9": 66,
+        "10": 60
+      },
+      "subset": {
+        "metric": "camera2_top_contact_alignment_error_deg",
+        "camera_key": "observation.images.camera2",
+        "edge_mode": "top-contact",
+        "max_angle_deg": 45.0,
+        "selection_source_root": "_workspace/so101_lerobot/grip_the_cube_v2_5"
+      }
+    }
+  },
+  "audit": {
+    "expected_prompt": "grip the green cube and lift",
+    "expected_resolution": [256, 256]
+  }
+}

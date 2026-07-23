@@ -135,6 +135,20 @@ def merge_shards(
     export_report_path = output_root / "so101_lerobot_export_report.json"
     export_report["report_path"] = str(export_report_path)
     export_report_path.write_text(json.dumps(export_report, indent=2, sort_keys=True), encoding="utf-8")
+    from physical_ai_agent.so101_render_replay import merge_render_replay_sidecars
+
+    replay_manifest = merge_render_replay_sidecars(shard_roots, output_root)
+    report["render_replay"] = (
+        {
+            "capture_mode": replay_manifest.get("capture_mode"),
+            "episodes": replay_manifest.get("source_episodes"),
+            "frames": replay_manifest.get("source_frames"),
+            "manifest": str(output_root / "render_replay" / "manifest.json"),
+        }
+        if replay_manifest is not None
+        else None
+    )
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     return report
 
 

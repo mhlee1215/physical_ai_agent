@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "status": "v6_simultaneous_live_camera1_robot_centroid_aligned_candidate",
+  "preset": "official_overhead_and_integrated_32x32_uvc",
+  "camera_contract": {
+    "observation.images.camera1": "egocentric_cam",
+    "observation.images.camera2": "wrist_cam"
+  },
+  "sensor": {
+    "model_name": "InnoMaker U20CAM-1080P (Amazon B0CNCSFQC1)",
+    "source_resolution": [1920, 1080],
+    "horizontal_fov_degrees": 130.0,
+    "vertical_fov_degrees": 103.0,
+    "reported_diagonal_fov_degrees": [120.0, 130.0],
+    "distortion": {
+      "model": "opencv_brown_conrady",
+      "coefficients": [-0.08, 0.01, 0.0, 0.0, 0.0],
+      "calibration_status": "uncalibrated_candidate"
+    },
+    "board_half_size_m": [0.016, 0.016, 0.0015],
+    "lens_size_m": [0.008, 0.005],
+    "board_distance_behind_pinhole_m": 0.0115,
+    "lens_distance_behind_pinhole_m": 0.005
+  },
+  "assets": {
+    "wrist_stl_path": "_workspace/so101_camera_mount_assets/Wrist_Cam_Mount_32x32_UVC_Module_SO101.stl",
+    "wrist_stl_sha256": "b4345ccf23f1f2ed3f4885c205cac5afbed6ddd1b183617c4801751e3bafb7b4",
+    "wrist_mesh_scale": [0.001, 0.001, 0.001],
+    "overhead_stl_dir": "_workspace/so101_camera_mount_assets/overhead_32x32_uvc",
+    "overhead_stl_sha256": {
+      "arm_base.stl": "169adfd40bcca689334efd1188c9b42cc03c914dc0afeaa98cb5431013610833",
+      "cam_mount_bottom.stl": "b3545b6cae437210e17b7dcfee2e12e00dc7a59ece9264f4b13ab9fd8ceb8088",
+      "cam_mount_middle.stl": "f6f3980df74777f74cf53a4697cbb63e4e000ab53f418de209559214f733f84b",
+      "cam_mount_top.stl": "206762be157918967741eb53665cac796485c4609ac64d4c9444d85c7fcb2c4c"
+    },
+    "overhead_mesh_scale": [0.001, 0.001, 0.001],
+    "generated_asset_dir": "_workspace/so101_camera_mount_assets/generated_config_v1"
+  },
+  "robot": {
+    "joint_names": [
+      "shoulder_pan",
+      "shoulder_lift",
+      "elbow_flex",
+      "wrist_flex",
+      "wrist_roll",
+      "gripper"
+    ],
+    "home_qpos": [
+      0.0,
+      -1.5707963267948966,
+      1.5707963267948966,
+      0.66,
+      1.5707963267948966,
+      -0.17453
+    ]
+  },
+  "environment": {
+    "seed": 50000000,
+    "target_object_color": "green",
+    "object_half_sizes_m": [0.015],
+    "spawn_center_xy_m": [0.15, 0.0],
+    "spawn_min_radius_m": 0.10,
+    "spawn_max_radius_m": 0.30,
+    "spawn_angle_half_range_degrees": 90.0
+  },
+  "camera1": {
+    "preset": "official_overhead_and_integrated_32x32_uvc",
+    "assembly_mode": "pcb_flush_lens_through_center_hole",
+    "rig_world_position_m": [0.04912092, 0.02656953, 0.0050],
+    "rig_quaternion_wxyz": [0.7071067811865476, 0.7071067811865475, 0.0, 0.0],
+    "robot_base_world_position_m": [-0.10983529374563218, 0.03, 0.0072],
+    "tower_position_cad_m": [-0.09392091755867003, -0.005, -0.2059750366210938],
+    "tower_quaternion_cad_wxyz": [1.0, 0.0, 0.0, 0.0],
+    "mesh_translation_cad_m": {
+      "arm_base.stl": [0.0, 0.0, 0.0],
+      "cam_mount_bottom.stl": [0.0, 0.0, 0.0],
+      "cam_mount_middle.stl": [0.0187, 0.1881, 0.0365125],
+      "cam_mount_top.stl": [0.0187, 0.1881, 0.0365125]
+    },
+    "mesh_quaternion_cad_wxyz": {
+      "arm_base.stl": [1.0, 0.0, 0.0, 0.0],
+      "cam_mount_bottom.stl": [1.0, 0.0, 0.0, 0.0],
+      "cam_mount_middle.stl": [1.0, 0.0, 0.0, 0.0],
+      "cam_mount_top.stl": [1.0, 0.0, 0.0, 0.0]
+    },
+    "camera_mount_face_center_top_part_cad_m": [0.029523, 0.362249, 0.0],
+    "upper_mast_translation_cad_m": [0.0187, 0.1881, 0.0365125],
+    "camera_mount_face_normal_cad": [0.42261826174069944, -0.9063077870366499, 0.0],
+    "camera_mount_quaternion_cad_wxyz": [0.5963678105290182, -0.37992819659091526, -0.5963678105290181, -0.37992819659091526],
+    "camera_quaternion_cad_wxyz": [0.5963678105290182, -0.37992819659091526, -0.5963678105290181, -0.37992819659091526],
+    "camera_downward_angle_degrees": 65.0,
+    "effective_vertical_fov_degrees": 70.533,
+    "camera_pinhole_protrusion_m": 0.010,
+    "connector_insertion_depth_m": 0.00785,
+    "arm_base_to_lower_mast_insertion_depth_m": 0.010,
+    "pixel_postprocess_rotation_degrees": 0
+  },
+  "camera2": {
+    "preset": "integrated_32x32_uvc",
+    "assembly_mode": "pcb_flush_lens_through_center_hole",
+    "camera_body": "gripper",
+    "collision_mesh": "wrist_roll_follower_so101_v1",
+    "mount_face_center_gripper_m": [0.00252405, -0.07205246128, 0.00415252001],
+    "lens_protrusion_m": 0.010,
+    "mount_downward_angle_degrees": 82.0,
+    "optical_downward_angle_degrees": 82.0,
+    "effective_vertical_fov_degrees": 130.0,
+    "optical_target_distance_m": 0.15060335474204708,
+    "source_center_mm": [2.52405, 71.83424728, -3.20281401],
+    "source_forward": [0.0, -0.42261826174069944, 0.9063077870366499],
+    "pixel_postprocess_rotation_degrees": 0
+  },
+  "render": {
+    "mode": "blender_cycles_live",
+    "output_dir": "_workspace/so101_camera_mount_preview/official_hardware_rig_v6_camera1_aligned_256spp",
+    "render_policy_inference_only": true,
+    "source_width": 912,
+    "source_height": 512,
+    "policy_size": 256,
+    "policy_resize": "center_crop_square_then_resize",
+    "samples": 256,
+    "denoise": false,
+    "cycles_seed": 98200,
+    "lighting_profile": "directional_key_fill_rim_v4",
+    "key_light_power": 0.0,
+    "fill_light_power": 0.0,
+    "world_strength": 0.015,
+    "hdri_rotation_degrees": 90.0,
+    "exposure": -1.6,
+    "color_management": "AgX",
+    "color_look": "AgX - Medium High Contrast",
+    "gamma": 1.0,
+    "output_format": "PNG",
+    "sample_clamp_indirect": 0.85,
+    "background_wall": false,
+    "stable_tabletop": true,
+    "scene_profile": "pbr_workshop_v4",
+    "robot_material": "matte_pla",
+    "material_profile": "configs/so101/render_profiles/black_arm_green_white_gripper_official_camera_rig_v4.json",
+    "material_profile_sha256": "218318477ab93fcfd4bef2cf77ae187bdceea66853f91600221837b33f7bc6a7",
+    "camera_lens_mm": 48.0,
+    "photoreal_asset_root": "_workspace/photoreal_assets",
+    "blender_bin": "blender",
+    "expected_blender_version": "Blender 5.1.2",
+    "compute_device_type": "METAL",
+    "max_mesh_geoms": 128,
+    "preserve_pinhole_renders": true,
+    "bevel_width_mm_range": [0.24, 0.32],
+    "bevel_segments": 3,
+    "scene_assets": [
+      {
+        "name": "polyhaven_plastic_thermos",
+        "blend": {
+          "path": "_workspace/photoreal_assets/polyhaven/models/plastic_thermos/plastic_thermos_1k.blend",
+          "sha256": "76950d447252958bfce853d987602d5c7d353bd78d2d06aa9f87afc1a5f27213"
+        },
+        "object_name": "plastic_thermos",
+        "dependencies": [
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/plastic_thermos/textures/plastic_thermos_diff_1k.jpg",
+            "sha256": "14cd6b03824ee4f4ec774aa6101d1eb3f75800c68de5e2e2304b4bb7a4447077"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/plastic_thermos/textures/plastic_thermos_nor_gl_1k.exr",
+            "sha256": "7891fde3b86c218b03ab633504c7582c6924f1b8256ac43a151a7f84b12dee5c"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/plastic_thermos/textures/plastic_thermos_rough_1k.exr",
+            "sha256": "32f496ae39d80d88822d23807f36449e05feefd52e8df3e760b1037c66f7f518"
+          }
+        ],
+        "position_m": [0.54, 0.28, 0.0],
+        "rotation_euler_degrees": [0.0, 0.0, -14.0],
+        "scale_xyz": [0.72, 0.72, 0.72]
+      },
+      {
+        "name": "polyhaven_screwdriver",
+        "blend": {
+          "path": "_workspace/photoreal_assets/polyhaven/models/screwdriver/screwdriver_1k.blend",
+          "sha256": "68ee754ee975f45b4cf2f04560edea2bb54e4c43d8d21869879e919827f2e35b"
+        },
+        "object_name": "screwdriver",
+        "dependencies": [
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/screwdriver/textures/screwdriver_diff_1k.jpg",
+            "sha256": "5d1fe3c88eedc61a1fdbd2abc8c77a857a5e804c79e2012bdce63988580fec08"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/screwdriver/textures/screwdriver_metal_1k.exr",
+            "sha256": "a516784609b0ac09d610fe6847be14de48d72ed69021988e5dac152d04e914cf"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/screwdriver/textures/screwdriver_nor_gl_1k.exr",
+            "sha256": "d58edfede3f797b3830fb6aa6ca6c0582511abc693e9a380bd4a47546874c1f0"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/screwdriver/textures/screwdriver_rough_1k.exr",
+            "sha256": "869b523c3d267f59a14e843765d2199c4363513f8bacd94939b7b62f8568f465"
+          }
+        ],
+        "position_m": [0.535, -0.085, 0.014],
+        "rotation_euler_degrees": [0.0, 90.0, -10.0],
+        "scale_xyz": [1.0, 1.0, 1.0]
+      },
+      {
+        "name": "polyhaven_workshop_shelf",
+        "blend": {
+          "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/Shelf_01_1k.blend",
+          "sha256": "5b7c97d8c1a9a0a64018e30fd6705afe774410ccc87d041ea9a8ffbf057a1fd2"
+        },
+        "object_name": "Shelf_01",
+        "dependencies": [
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/textures/Shelf_01_diff_1k.jpg",
+            "sha256": "875bb8110dec4f409d9127cba95f7c0ead02bdfeef6dd47232df939e4de35a5c"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/textures/Shelf_01_metallic_1k.exr",
+            "sha256": "3cd6acee16794ccbac8a3c81e1152511c76d018f108ff4687bae9dbf5112f300"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/textures/Shelf_01_nor_gl_1k.exr",
+            "sha256": "c331fe8ec54e9da701a0293a8f1ee8ea3102b1ed7335fdd46f1cfe53ab08f1ea"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/textures/Shelf_01_roughness_1k.jpg",
+            "sha256": "cdcbf1cbad05ac35ab4ed0bc636d5d486413e22dad5cbe9fc4314386c972388f"
+          }
+        ],
+        "position_m": [-0.405, 0.43, 0.0],
+        "rotation_euler_degrees": [0.0, 0.0, 90.0],
+        "scale_xyz": [0.32, 0.32, 0.32]
+      },
+      {
+        "name": "polyhaven_rear_workshop_shelf",
+        "blend": {
+          "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/Shelf_01_1k.blend",
+          "sha256": "5b7c97d8c1a9a0a64018e30fd6705afe774410ccc87d041ea9a8ffbf057a1fd2"
+        },
+        "object_name": "Shelf_01",
+        "dependencies": [
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/textures/Shelf_01_diff_1k.jpg",
+            "sha256": "875bb8110dec4f409d9127cba95f7c0ead02bdfeef6dd47232df939e4de35a5c"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/textures/Shelf_01_metallic_1k.exr",
+            "sha256": "3cd6acee16794ccbac8a3c81e1152511c76d018f108ff4687bae9dbf5112f300"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/textures/Shelf_01_nor_gl_1k.exr",
+            "sha256": "c331fe8ec54e9da701a0293a8f1ee8ea3102b1ed7335fdd46f1cfe53ab08f1ea"
+          },
+          {
+            "path": "_workspace/photoreal_assets/polyhaven/models/Shelf_01/textures/Shelf_01_roughness_1k.jpg",
+            "sha256": "cdcbf1cbad05ac35ab4ed0bc636d5d486413e22dad5cbe9fc4314386c972388f"
+          }
+        ],
+        "position_m": [0.88, 0.15, 0.0],
+        "rotation_euler_degrees": [0.0, 0.0, -90.0],
+        "scale_xyz": [0.30, 0.30, 0.30]
+      }
+    ],
+    "lights": [
+      {
+        "name": "v4_key",
+        "type": "AREA",
+        "position_m": [0.30, -0.42, 0.72],
+        "target_m": [0.15, 0.0, 0.08],
+        "power": 45.0,
+        "color_rgb": [1.0, 0.88, 0.76],
+        "size_m": 0.18,
+        "spot_size_degrees": 48.0,
+        "spot_blend": 0.35
+      },
+      {
+        "name": "v4_fill",
+        "type": "AREA",
+        "position_m": [-0.36, -0.06, 0.38],
+        "target_m": [0.15, 0.02, 0.08],
+        "power": 14.0,
+        "color_rgb": [0.72, 0.82, 1.0],
+        "size_m": 0.28,
+        "spot_size_degrees": 58.0,
+        "spot_blend": 0.45
+      },
+      {
+        "name": "v4_rim",
+        "type": "AREA",
+        "position_m": [0.30, 0.44, 0.56],
+        "target_m": [0.13, 0.02, 0.13],
+        "power": 28.0,
+        "color_rgb": [0.72, 0.86, 1.0],
+        "size_m": 0.14,
+        "spot_size_degrees": 42.0,
+        "spot_blend": 0.30
+      },
+      {
+        "name": "v4_background",
+        "type": "AREA",
+        "position_m": [1.20, 0.10, 1.20],
+        "target_m": [2.80, 0.10, 1.20],
+        "power": 35.0,
+        "color_rgb": [0.86, 0.91, 1.0],
+        "size_m": 1.80,
+        "spot_size_degrees": 65.0,
+        "spot_blend": 0.50
+      }
+    ],
+    "evidence_views": [
+      {
+        "kind": "free",
+        "name": "external_scene",
+        "filename": "external_camera_rig_photoreal.png",
+        "lookat_m": [0.0, 0.0, 0.29],
+        "distance_m": 0.82,
+        "azimuth_degrees": 180.0,
+        "elevation_degrees": -3.0,
+        "fovy_degrees": 45.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      },
+      {
+        "kind": "free",
+        "name": "base_joint_closeup",
+        "filename": "base_joint_closeup_photoreal.png",
+        "lookat_m": [-0.0261, 0.0745, 0.012],
+        "distance_m": 0.16,
+        "azimuth_degrees": -90.0,
+        "elevation_degrees": -18.0,
+        "fovy_degrees": 45.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      },
+      {
+        "kind": "free",
+        "name": "base_joint_topdown",
+        "filename": "base_joint_topdown_photoreal.png",
+        "lookat_m": [-0.0261, 0.0745, 0.004],
+        "distance_m": 0.13,
+        "azimuth_degrees": 180.0,
+        "elevation_degrees": -82.0,
+        "fovy_degrees": 45.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      },
+      {
+        "kind": "mounted_front",
+        "name": "camera_head_closeup",
+        "filename": "camera_head_closeup_photoreal.png",
+        "camera_name": "egocentric_cam",
+        "distance_m": 0.18,
+        "fovy_degrees": 35.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      },
+      {
+        "kind": "mounted_front",
+        "name": "wrist_camera_closeup",
+        "filename": "wrist_camera_closeup_photoreal.png",
+        "camera_name": "wrist_cam",
+        "distance_m": 0.11,
+        "fovy_degrees": 35.0,
+        "aperture_fstop": 10.0,
+        "use_depth_of_field": false,
+        "clip_start_m": 0.001
+      }
+    ],
+    "outputs": {
+      "photoreal_subdir": "photoreal",
+      "camera1_policy_filename": "camera1_policy_256.png",
+      "camera2_policy_filename": "camera2_policy_256.png",
+      "report_filename": "preview_report.json",
+      "contact_sheet": {
+        "filename": "official_32x32_camera_rig_photoreal_v4.png",
+        "tile_size": 512,
+        "header_height": 38,
+        "font_size": 18,
+        "background_rgb": [15, 23, 42],
+        "foreground_rgb": [241, 245, 249]
+      }
+    }
+  }
+}

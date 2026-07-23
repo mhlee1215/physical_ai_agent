@@ -39,6 +39,11 @@ def main() -> None:
     parser.add_argument("--repo-id", required=True)
     parser.add_argument("--camera-keys", default=",".join(DEFAULT_CAMERA_KEYS))
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Reuse an existing derivative only when its manifest matches the requested contract.",
+    )
     parser.add_argument("--duplicate-camera3-from-camera2", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--rewrite-color-task-prompts",
@@ -62,6 +67,7 @@ def main() -> None:
         env_id=args.env_id,
         env_source=args.env_source,
         overwrite=args.overwrite,
+        skip_existing=args.skip_existing,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 
@@ -79,6 +85,7 @@ def build_photoreal_lerobot_dataset(
     env_id: str = "MuJoCoPickLift-v1",
     env_source: str = "high_contrast_picklift",
     overwrite: bool = False,
+    skip_existing: bool = False,
 ) -> dict[str, Any]:
     source_dataset_root = source_dataset_root.resolve()
     rendered_dir = rendered_dir.resolve()
@@ -88,6 +95,15 @@ def build_photoreal_lerobot_dataset(
     if not rendered_dir.exists():
         raise FileNotFoundError(f"missing rendered frame directory: {rendered_dir}")
     if output_root.exists():
+        if skip_existing and not overwrite:
+            return _validate_existing_derivative(
+                output_root=output_root,
+                source_dataset_root=source_dataset_root,
+                rendered_dir=rendered_dir,
+                repo_id=repo_id,
+                camera_keys=camera_keys,
+                duplicate_camera3_from_camera2=duplicate_camera3_from_camera2,
+            )
         if not overwrite:
             raise FileExistsError(f"{output_root} exists; pass --overwrite")
         shutil.rmtree(output_root)
@@ -103,7 +119,11 @@ def build_photoreal_lerobot_dataset(
     replaced_frames = 0
     replaced_images = 0
 
-    shutil.copytree(source_dataset_root, output_root, ignore=shutil.ignore_patterns("photoreal_preview"))
+    shutil.copytree(
+        source_dataset_root,
+        output_root,
+        ignore=shutil.ignore_patterns("photoreal_preview", "render_replay"),
+    )
     data_files = sorted((output_root / "data").glob("chunk-*/file-*.parquet"))
     if not data_files:
         raise FileNotFoundError(f"missing parquet files under {output_root / 'data'}")
@@ -177,10 +197,15 @@ def build_photoreal_lerobot_dataset(
 def _rendered_index(rendered_dir: Path) -> dict[tuple[int, int, str], Path]:
     index: dict[tuple[int, int, str], Path] = {}
     patterns = (
-        re.compile(r"episode_(\d+)_frame_(\d+)_(camera\d)\.png$"),
-        re.compile(r"episode_(\d+)_frame_(\d+)_(observation_images_camera\d)\.png$"),
+        re.compile(r"episode_(\d+)_frame_(\d+)_(camera\d)\.(?:png|jpe?g)$", re.IGNORECASE),
+        re.compile(
+            r"episode_(\d+)_frame_(\d+)_(observation_images_camera\d)\.(?:png|jpe?g)$",
+            re.IGNORECASE,
+        ),
     )
-    for path in sorted(rendered_dir.rglob("*.png")):
+    for path in sorted(rendered_dir.rglob("*")):
+        if path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+            continue
         for pattern in patterns:
             match = pattern.fullmatch(path.name)
             if match is None:
@@ -341,6 +366,51 @@ def _write_manifest(
 
 def _read_manifest(output_root: Path) -> dict[str, Any]:
     return json.loads((output_root / "photoreal_lerobot_manifest.json").read_text(encoding="utf-8"))
+
+
+def _validate_existing_derivative(
+    *,
+    output_root: Path,
+    source_dataset_root: Path,
+    rendered_dir: Path,
+    repo_id: str,
+    camera_keys: tuple[str, ...],
+    duplicate_camera3_from_camera2: bool,
+) -> dict[str, Any]:
+    manifest_path = output_root / "photoreal_lerobot_manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"existing derivative has no manifest: {manifest_path}")
+    manifest = _read_manifest(output_root)
+    expected = {
+        "format": "so101_photoreal_lerobot_v1",
+        "source_dataset_root": str(source_dataset_root),
+        "rendered_dir": str(rendered_dir),
+        "repo_id": repo_id,
+        "camera_keys": list(camera_keys),
+        "duplicate_camera3_from_camera2": duplicate_camera3_from_camera2,
+        "training_ready": True,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": manifest.get(key)}
+        for key, value in expected.items()
+        if manifest.get(key) != value
+    }
+    if not (output_root / "data").is_dir() or not (output_root / "meta" / "info.json").is_file():
+        mismatches["dataset_layout"] = {"expected": "data/ and meta/info.json", "actual": "incomplete"}
+    frames = int(manifest.get("frames") or 0)
+    replaced_frames = int(manifest.get("replaced_frames") or 0)
+    replaced_images = int(manifest.get("replaced_images") or 0)
+    if frames <= 0 or replaced_frames != frames or replaced_images != frames * len(camera_keys):
+        mismatches["replacement_counts"] = {
+            "expected": {"replaced_frames": frames, "replaced_images": frames * len(camera_keys)},
+            "actual": {"replaced_frames": replaced_frames, "replaced_images": replaced_images},
+        }
+    if mismatches:
+        raise ValueError(
+            "existing photoreal derivative does not match the requested contract: "
+            + json.dumps(mismatches, sort_keys=True)
+        )
+    return {**manifest, "skipped_existing": True}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
