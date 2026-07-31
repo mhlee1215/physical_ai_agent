@@ -126,6 +126,37 @@ The pose-diverse canary then proved the next contract on CUDA:
 See `docs/research/2026_07_30/mycobot280_smolvla_readiness_evidence.md` for
 exact metrics and artifact paths.
 
+## Full Readiness Status - 2026-07-31
+
+The frozen full baseline passed end to end:
+
+- generated and validated 50 train plus 10 validation episodes and 31,800 frames
+- reused one MuJoCo environment/renderer for the full dataset run
+- hard-linked all 31,800 intermediate adapter images
+- converted native LeRobot splits with 26,500 train and 5,300 validation frames
+- performed two CUDA optimizer steps, with loss `0.9219151 -> 0.5983112`
+- saved and reloaded the complete local checkpoint on held-out validation
+- reduced same-batch held-out loss from `0.8851919` to `0.5125332` versus the
+  unfine-tuned base policy
+
+This remains a smoke comparison, not a learned-policy claim. Exact evidence is
+in `docs/research/2026_07_31/mycobot280_smolvla_full_readiness_evidence.md`.
+
+For offline runs, pin `HF_HOME=_workspace/local_envs/hf_home`; the successful
+run used the already-downloaded cache and installed no packages. Before long
+WSL generation, check free space on the Windows drive backing `ext4.vhdx`,
+not only WSL `df`. Start with at least 10 GB of host headroom and pass a
+10-episode stability gate. Keep adapter output on the source filesystem so
+hard-link materialization avoids duplicate image blocks.
+
+The lifecycle regression gate is:
+
+```bash
+MYCOBOT_PYTHON=_workspace/worktrees/mycobot-280pi-adaptive/_workspace/venvs/mycobot-mujoco-py312/bin/python
+PYTHONPATH=src:. "$MYCOBOT_PYTHON" -B -m unittest \
+  tests.test_mycobot_280_ground_pickup_teacher_dataset_lifecycle
+```
+
 ## Verification
 
 No-dependency verification:

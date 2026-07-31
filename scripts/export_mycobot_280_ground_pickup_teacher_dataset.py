@@ -152,46 +152,61 @@ def export_dataset(
     total_rows = 0
     split_schedule = _split_schedule(train_episodes, val_episodes)
 
-    for attempt_index, yaw_delta in enumerate(_candidate_yaws(max_attempts=max_attempts, yaw_min=yaw_min, yaw_max=yaw_max)):
-        if len(accepted_summaries) >= requested:
-            break
-        split = split_schedule[len(accepted_summaries)]
-        split_episode_index = split_counts[split]
-        try:
-            summary = _export_attempt(
-                output_dir=output_dir,
-                split=split,
-                split_episode_index=split_episode_index,
-                global_episode_index=len(accepted_summaries),
-                attempt_index=attempt_index,
-                seed=seed + attempt_index,
-                yaw_delta=float(yaw_delta),
-                asset_root=asset_root,
-                official_gripper_root=official_gripper_root,
-                width=width,
-                height=height,
-                fps=fps,
-                render_every=render_every,
-            )
-        except Exception as exc:  # noqa: BLE001
-            rejected_attempts.append(
-                {
-                    "attempt_index": attempt_index,
-                    "split_target": split,
-                    "seed": seed + attempt_index,
-                    "yaw_delta_rad": float(yaw_delta),
-                    "success": False,
-                    "reason": f"exception: {exc}",
-                }
-            )
-            continue
-        if not summary["success"]:
-            rejected_attempts.append(_rejection_from_summary(summary))
-            continue
-        split_counts[split] += 1
-        split_episode_summaries[split].append(summary)
-        accepted_summaries.append(summary)
-        total_rows += int(summary["frames"])
+    shared_scene_cache = output_dir / "scene_cache" / "shared"
+    env = _make_env(
+        asset_root=asset_root,
+        official_gripper_root=official_gripper_root,
+        work_dir=shared_scene_cache,
+        width=width,
+        height=height,
+    )
+    try:
+        for attempt_index, yaw_delta in enumerate(
+            _candidate_yaws(max_attempts=max_attempts, yaw_min=yaw_min, yaw_max=yaw_max)
+        ):
+            if len(accepted_summaries) >= requested:
+                break
+            split = split_schedule[len(accepted_summaries)]
+            split_episode_index = split_counts[split]
+            try:
+                summary = _export_attempt(
+                    output_dir=output_dir,
+                    split=split,
+                    split_episode_index=split_episode_index,
+                    global_episode_index=len(accepted_summaries),
+                    attempt_index=attempt_index,
+                    seed=seed + attempt_index,
+                    yaw_delta=float(yaw_delta),
+                    asset_root=asset_root,
+                    official_gripper_root=official_gripper_root,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    render_every=render_every,
+                    env=env,
+                )
+            except Exception as exc:  # noqa: BLE001
+                rejected_attempts.append(
+                    {
+                        "attempt_index": attempt_index,
+                        "split_target": split,
+                        "seed": seed + attempt_index,
+                        "yaw_delta_rad": float(yaw_delta),
+                        "success": False,
+                        "reason": f"exception: {exc}",
+                    }
+                )
+                continue
+            if not summary["success"]:
+                rejected_attempts.append(_rejection_from_summary(summary))
+                continue
+            split_counts[split] += 1
+            split_episode_summaries[split].append(summary)
+            accepted_summaries.append(summary)
+            total_rows += int(summary["frames"])
+    finally:
+        env.close()
+        shutil.rmtree(shared_scene_cache, ignore_errors=True)
 
     failed_episodes = [
         {
@@ -336,6 +351,27 @@ def _split_schedule(train_episodes: int, val_episodes: int) -> list[str]:
     return schedule
 
 
+def _make_env(
+    *,
+    asset_root: Path,
+    official_gripper_root: Path,
+    work_dir: Path,
+    width: int,
+    height: int,
+) -> nexus.MyCobotNexusEnv:
+    return nexus.MyCobotNexusEnv(
+        nexus.MyCobotNexusConfig(
+            asset_root=asset_root,
+            work_dir=work_dir,
+            official_gripper_root=official_gripper_root,
+            model_profile=nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+            width=width,
+            height=height,
+            teacher_grasp_attachment_enabled=False,
+        )
+    )
+
+
 def _export_attempt(
     *,
     output_dir: Path,
@@ -351,6 +387,7 @@ def _export_attempt(
     height: int,
     fps: int,
     render_every: int,
+    env: nexus.MyCobotNexusEnv | None = None,
 ) -> dict[str, Any]:
     episode_path = output_dir / "splits" / split / "episodes" / f"episode_{split_episode_index:04d}.jsonl"
     final_frame_dir = output_dir / "splits" / split / "frames" / f"episode_{split_episode_index:04d}"
@@ -359,17 +396,15 @@ def _export_attempt(
     attempt_frame_dir.mkdir(parents=True, exist_ok=True)
     scene_cache = output_dir / "scene_cache" / f"attempt_{attempt_index:04d}"
     pickup_qpos, lift_qpos = _candidate_qpos(yaw_delta)
-    env = nexus.MyCobotNexusEnv(
-        nexus.MyCobotNexusConfig(
+    owns_env = env is None
+    if env is None:
+        env = _make_env(
             asset_root=asset_root,
             work_dir=scene_cache,
             official_gripper_root=official_gripper_root,
-            model_profile=nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
             width=width,
             height=height,
-            teacher_grasp_attachment_enabled=False,
         )
-    )
     try:
         env.reset(seed=seed)
         env._diagnostic_cube_half_size = CUBE_HALF_SIZE
@@ -444,8 +479,9 @@ def _export_attempt(
                 }
             )
     finally:
-        env.close()
-        shutil.rmtree(scene_cache, ignore_errors=True)
+        if owns_env:
+            env.close()
+            shutil.rmtree(scene_cache, ignore_errors=True)
 
     records = [row["info"]["ground_pickup"] for row in rows]
     lift_records = [record for record in records if record["phase"] == "lift_from_mat"]

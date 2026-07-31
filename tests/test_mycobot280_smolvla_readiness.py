@@ -128,6 +128,14 @@ class MyCobot280SmolVLAReadinessTest(unittest.TestCase):
             self.assertEqual([item["episode_index"] for item in all_episodes], [0, 1])
             self.assertEqual([item["source_episode_index"] for item in all_episodes], [0, 0])
             self.assertEqual({item["episode_index"] for item in all_frames}, {0, 1})
+            for frame in all_frames:
+                source_image = dataset_root / frame["metadata"]["source_image"]
+                target_image = all_output_root / frame["observation.images.camera1"]
+                self.assertEqual(frame["metadata"]["image_materialization"], "hardlink")
+                self.assertEqual(
+                    (source_image.stat().st_dev, source_image.stat().st_ino),
+                    (target_image.stat().st_dev, target_image.stat().st_ino),
+                )
 
     def test_eval_stub_blocks_without_policy_and_plans_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

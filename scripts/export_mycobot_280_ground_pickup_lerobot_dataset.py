@@ -263,7 +263,7 @@ def _convert_row(
         raise FileNotFoundError(f"missing source image: {source_image}")
     image_name = f"frame_{global_frame_index:06d}{source_image.suffix.lower()}"
     image_target = output_root / "images" / "camera1" / image_name
-    shutil.copy2(source_image, image_target)
+    image_materialization = _link_or_copy_image(source_image, image_target)
     source_state = _float_list(observation.get("state"), "observation.state")
     action = _float_list(row.get("action"), "action")
     if len(source_state) < len(JOINT_NAMES):
@@ -284,6 +284,8 @@ def _convert_row(
         "action": action,
         "metadata": {
             "phase": row.get("phase"),
+            "source_image": render,
+            "image_materialization": image_materialization,
             "source_episode_index": int(row.get("episode_index", episode_index)),
             "cube_lift_m": ground.get("cube_lift_m"),
             "cube_position_m": source_state[len(JOINT_NAMES) :],
@@ -291,6 +293,16 @@ def _convert_row(
             "max_pad_cube_penetration_m": _nested_float(ground, ["pad_cube_contact_depth", "max_penetration_m"]),
         },
     }
+
+
+def _link_or_copy_image(source: Path, target: Path) -> str:
+    try:
+        target.hardlink_to(source)
+        return "hardlink"
+    except OSError:
+        target.unlink(missing_ok=True)
+        shutil.copy2(source, target)
+        return "copy"
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:

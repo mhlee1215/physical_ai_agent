@@ -119,3 +119,8 @@ The next data-producing sequence is:
 3. Run a bounded fine-tune with a held-out loss curve.
 4. Compare unfine-tuned and fine-tuned policies in closed-loop simulation.
 5. Add the verifier/retry condition only after the policy-only baseline exists.
+
+The full 50-train/10-validation generation, native conversion, two-step CUDA
+smoke, and held-out checkpoint reload completed on 2026-07-31. See
+`docs/research/2026_07_31/mycobot280_smolvla_full_readiness_evidence.md` for
+the full metrics, storage-failure diagnosis, and updated claim boundary.
