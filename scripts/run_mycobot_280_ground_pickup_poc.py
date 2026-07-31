@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,13 @@ WORLD_GRAVITY = (0.0, 0.0, -9.81)
 WORK_MAT_CENTER = (-0.12, -0.12, -0.03433)
 WORK_MAT_HALF_SIZE = (0.46, 0.26, 0.004)
 WORK_MAT_TOP_Z = WORK_MAT_CENTER[2] + WORK_MAT_HALF_SIZE[2]
+WORK_MAT_FIDUCIAL_PREFIX = "ground_pickup_mat_fiducial"
+WORK_MAT_FIDUCIAL_GEOMS_ENABLED = False
+WORK_MAT_FIDUCIAL_SPACING_M = 0.05
+WORK_MAT_FIDUCIAL_LINE_HALF_WIDTH_M = 0.00045
+WORK_MAT_FIDUCIAL_LINE_HALF_HEIGHT_M = 0.00012
+WORK_MAT_FIDUCIAL_INSET_CENTER_XY = (0.15, 0.02)
+WORK_MAT_FIDUCIAL_INSET_HALF_SIZE_XY = (0.045, 0.045)
 MAT_GUARD_TOLERANCE_M = 0.001
 PAD_MAT_GUARD_TOLERANCE_M = 0.001
 GRIPPER_VISUAL_MAT_GUARD_TOLERANCE_M = 0.001
@@ -115,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cube-axis-offset", type=float, default=CUBE_AXIS_OFFSET)
     parser.add_argument("--cube-side-offset", type=float, default=CUBE_SIDE_OFFSET)
     parser.add_argument("--cube-pos-xy", type=str, default=None, help="Experimental absolute cube x,y placement on the work mat.")
+    parser.add_argument("--work-mat-fiducials", action="store_true", help="Add visual-only fixed grid/fiducial geoms on the mat for PR/debug rendering.")
     parser.add_argument("--pickup-qpos", type=str, default=None)
     parser.add_argument("--approach-qpos", type=str, default=None)
     parser.add_argument("--lift-qpos", type=str, default=None)
@@ -123,9 +132,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    global CUBE_HALF_SIZE, CUBE_MASS, CONTACT_COMMAND, PAD_FRICTION, PAD_SIZE_OVERRIDE, PAD_SOLREF_OVERRIDE, PAD_SOLIMP_OVERRIDE, CUBE_SOLREF_OVERRIDE, CUBE_SOLIMP_OVERRIDE, CUBE_AXIS_OFFSET, CUBE_SIDE_OFFSET, PICKUP_QPOS, APPROACH_QPOS, LIFT_QPOS, WORK_MAT_CENTER, WORK_MAT_TOP_Z, APPROACH_STEPS, CLOSE_STEPS, HOLD_STEPS, LIFT_STEPS, POST_LIFT_HOLD_STEPS, MAX_PAD_CUBE_PENETRATION_M
+    global CUBE_HALF_SIZE, CUBE_MASS, CONTACT_COMMAND, PAD_FRICTION, PAD_SIZE_OVERRIDE, PAD_SOLREF_OVERRIDE, PAD_SOLIMP_OVERRIDE, CUBE_SOLREF_OVERRIDE, CUBE_SOLIMP_OVERRIDE, CUBE_AXIS_OFFSET, CUBE_SIDE_OFFSET, PICKUP_QPOS, APPROACH_QPOS, LIFT_QPOS, WORK_MAT_CENTER, WORK_MAT_TOP_Z, WORK_MAT_FIDUCIAL_GEOMS_ENABLED, APPROACH_STEPS, CLOSE_STEPS, HOLD_STEPS, LIFT_STEPS, POST_LIFT_HOLD_STEPS, MAX_PAD_CUBE_PENETRATION_M
     CUBE_HALF_SIZE = float(args.cube_half_size)
     CUBE_MASS = float(args.cube_mass)
+    WORK_MAT_FIDUCIAL_GEOMS_ENABLED = bool(args.work_mat_fiducials)
     if args.mat_top_z is not None:
         WORK_MAT_TOP_Z = float(args.mat_top_z)
         WORK_MAT_CENTER = (WORK_MAT_CENTER[0], WORK_MAT_CENTER[1], WORK_MAT_TOP_Z - WORK_MAT_HALF_SIZE[2])
@@ -320,10 +330,78 @@ def _patch_nexus_work_mat_scene_nodes() -> None:
             elif node.attrib.get("name") == "nexus_floor":
                 floor_z = min(-0.006, WORK_MAT_TOP_Z - 0.12)
                 node.attrib["pos"] = f"0 0 {floor_z:.10g}"
+        if WORK_MAT_FIDUCIAL_GEOMS_ENABLED:
+            nodes.extend(_mat_fiducial_scene_nodes())
         return nodes
 
     setattr(patched_nodes, "_ground_pickup_patched", True)
     nexus._nexus_scene_nodes = patched_nodes
+
+
+def _mat_fiducial_scene_nodes() -> list[ET.Element]:
+    """Visual-only fixed mat grid for PR/debug evidence; it has no contact."""
+    nodes: list[ET.Element] = []
+    cx, cy, _ = WORK_MAT_CENTER
+    hx, hy, _ = WORK_MAT_HALF_SIZE
+    z = WORK_MAT_TOP_Z + WORK_MAT_FIDUCIAL_LINE_HALF_HEIGHT_M * 1.8
+    x_values = _grid_values(cx - hx, cx + hx, WORK_MAT_FIDUCIAL_SPACING_M)
+    y_values = _grid_values(cy - hy, cy + hy, WORK_MAT_FIDUCIAL_SPACING_M)
+    for index, x in enumerate(x_values):
+        is_center = abs(x - cx) < WORK_MAT_FIDUCIAL_SPACING_M * 0.25
+        nodes.append(
+            _fiducial_box(
+                name=f"{WORK_MAT_FIDUCIAL_PREFIX}_x_{index:02d}",
+                pos=(x, cy, z),
+                size=(WORK_MAT_FIDUCIAL_LINE_HALF_WIDTH_M * (2.4 if is_center else 1.0), hy, WORK_MAT_FIDUCIAL_LINE_HALF_HEIGHT_M),
+                rgba="0.92 0.96 0.90 0.75" if is_center else "0.86 0.95 0.88 0.42",
+            )
+        )
+    for index, y in enumerate(y_values):
+        is_center = abs(y - cy) < WORK_MAT_FIDUCIAL_SPACING_M * 0.25
+        nodes.append(
+            _fiducial_box(
+                name=f"{WORK_MAT_FIDUCIAL_PREFIX}_y_{index:02d}",
+                pos=(cx, y, z),
+                size=(hx, WORK_MAT_FIDUCIAL_LINE_HALF_WIDTH_M * (2.4 if is_center else 1.0), WORK_MAT_FIDUCIAL_LINE_HALF_HEIGHT_M),
+                rgba="0.92 0.96 0.90 0.75" if is_center else "0.86 0.95 0.88 0.42",
+            )
+        )
+    for index, (x, y) in enumerate(((cx - hx, cy - hy), (cx - hx, cy + hy), (cx + hx, cy - hy), (cx + hx, cy + hy))):
+        nodes.append(
+            _fiducial_box(
+                name=f"{WORK_MAT_FIDUCIAL_PREFIX}_corner_{index}",
+                pos=(x, y, z + WORK_MAT_FIDUCIAL_LINE_HALF_HEIGHT_M * 1.8),
+                size=(0.008, 0.008, WORK_MAT_FIDUCIAL_LINE_HALF_HEIGHT_M),
+                rgba="0.96 0.78 0.18 0.78",
+            )
+        )
+    return nodes
+
+
+def _grid_values(min_value: float, max_value: float, spacing: float) -> list[float]:
+    start = np.ceil(min_value / spacing) * spacing
+    values = []
+    value = start
+    while value <= max_value + 1e-9:
+        values.append(float(value))
+        value += spacing
+    return values
+
+
+def _fiducial_box(*, name: str, pos: tuple[float, float, float], size: tuple[float, float, float], rgba: str) -> ET.Element:
+    return ET.Element(
+        "geom",
+        {
+            "name": name,
+            "type": "box",
+            "pos": _float_sequence(pos),
+            "size": _float_sequence(size),
+            "rgba": rgba,
+            "contype": "0",
+            "conaffinity": "0",
+            "group": "5",
+        },
+    )
 
 
 def _float_sequence(values: tuple[float, ...]) -> str:
@@ -447,6 +525,7 @@ def _record(env: nexus.MyCobotNexusEnv, *, step: int, phase: str, command: float
         "jaw_gap_mm": float(metrics["jaw_gap_mm"]),
         "surface_clearance_mm": float(metrics["surface_clearance_mm"]),
         "cube_pos": [float(x) for x in cube],
+        "initial_cube_pos": [float(x) for x in np.asarray(initial_cube, dtype=float)],
         "mat_guard": _cube_mat_guard(cube),
         "pad_mat_guard": _pad_mat_guard(env),
         "gripper_visual_mat_guard": _gripper_visual_mat_guard(env),
@@ -654,10 +733,12 @@ def _render_bgr(env: nexus.MyCobotNexusEnv, renderer: Any, record: dict[str, Any
     mat_id = env._mujoco.mj_name2id(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, "nexus_work_mat")
     if mat_id >= 0:
         env.model.geom_rgba[mat_id, :] = [0.25, 0.45, 0.42, 0.92]
+    _show_mat_fiducials(env)
     renderer.update_scene(env.data, camera=camera)
     frame = cv2.cvtColor(renderer.render().astype(np.uint8), cv2.COLOR_RGB2BGR)
     _draw_header(frame, record)
     _draw_legend(frame)
+    _draw_mat_xy_inset(frame, record)
     return frame
 
 
@@ -670,10 +751,85 @@ def _write_frame(env: nexus.MyCobotNexusEnv, renderer: Any, output_dir: Path, re
 def _draw_header(frame: np.ndarray, record: dict[str, Any]) -> None:
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 126), (255, 255, 255), -1)
     cv2.putText(frame, f"280 raw cube-from-mat pickup | {record['phase']} | step={record['step']}", (18, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.68, (20, 20, 20), 2, cv2.LINE_AA)
-    cv2.putText(frame, "cube starts on work mat; terminal pad contact only; teacher attachment off", (18, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
+    fiducial_text = "fixed mat fiducials are visual-only" if WORK_MAT_FIDUCIAL_GEOMS_ENABLED else "mat XY inset is visual-only"
+    cv2.putText(frame, f"cube starts on work mat; {fiducial_text}; teacher attachment off", (18, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
     color = (0, 120, 0) if int(record["pad_cube_contacted_pads"]) >= 2 else (0, 0, 190)
     cv2.putText(frame, f"cmd={record['command']:+.3f}; pads={record['pad_cube_contacted_pads']}; contacts={record['pad_cube_contacts']}; lift={record['cube_lift_m']*1000.0:.1f}mm", (18, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
     cv2.putText(frame, f"mat top={WORK_MAT_TOP_Z*1000:.1f}mm; cube half={CUBE_HALF_SIZE*1000:.1f}mm", (18, 116), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (45, 45, 45), 1, cv2.LINE_AA)
+
+
+def _show_mat_fiducials(env: nexus.MyCobotNexusEnv) -> None:
+    for geom_id in range(env.model.ngeom):
+        name = env._mujoco.mj_id2name(env.model, env._mujoco.mjtObj.mjOBJ_GEOM, geom_id) or ""
+        if name.startswith(WORK_MAT_FIDUCIAL_PREFIX):
+            env.model.geom_rgba[geom_id, 3] = max(float(env.model.geom_rgba[geom_id, 3]), 0.42)
+
+
+def _draw_mat_xy_inset(frame: np.ndarray, record: dict[str, Any]) -> None:
+    height, width = frame.shape[:2]
+    inset_w = min(230, max(150, width // 4))
+    inset_h = int(inset_w * 0.62)
+    margin = 16
+    x0 = width - inset_w - margin
+    y0 = 140
+    x1 = x0 + inset_w
+    y1 = y0 + inset_h
+    if x0 <= 0 or y1 >= height - margin:
+        return
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x0, y0), (x1, y1), (248, 248, 244), -1)
+    cv2.addWeighted(overlay, 0.78, frame, 0.22, 0.0, frame)
+    cv2.rectangle(frame, (x0, y0), (x1, y1), (70, 80, 76), 1, cv2.LINE_AA)
+    inset_title = "pose-band XY zoom" if WORK_MAT_FIDUCIAL_GEOMS_ENABLED else "mat XY overview"
+    cv2.putText(frame, inset_title, (x0 + 8, y0 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (45, 45, 45), 1, cv2.LINE_AA)
+
+    plot_margin = 20
+    px0, py0 = x0 + plot_margin, y0 + 28
+    px1, py1 = x1 - 12, y1 - 14
+    cv2.rectangle(frame, (px0, py0), (px1, py1), (82, 128, 118), 1, cv2.LINE_AA)
+    for frac in (0.25, 0.5, 0.75):
+        gx = int(round(px0 + (px1 - px0) * frac))
+        gy = int(round(py0 + (py1 - py0) * frac))
+        cv2.line(frame, (gx, py0), (gx, py1), (170, 196, 188), 1, cv2.LINE_AA)
+        cv2.line(frame, (px0, gy), (px1, gy), (170, 196, 188), 1, cv2.LINE_AA)
+
+    start_xy = np.asarray(record.get("initial_cube_pos", record["cube_pos"]), dtype=float)[:2]
+    current_xy = np.asarray(record["cube_pos"], dtype=float)[:2]
+    min_xy, max_xy = _mat_xy_inset_bounds()
+    sx, sy = _mat_xy_to_inset(start_xy, px0, py0, px1, py1, min_xy=min_xy, max_xy=max_xy)
+    cx, cy = _mat_xy_to_inset(current_xy, px0, py0, px1, py1, min_xy=min_xy, max_xy=max_xy)
+    cv2.drawMarker(frame, (sx, sy), (0, 130, 255), markerType=cv2.MARKER_TILTED_CROSS, markerSize=13, thickness=2, line_type=cv2.LINE_AA)
+    cv2.circle(frame, (cx, cy), 5, (0, 40, 220), -1, cv2.LINE_AA)
+    cv2.putText(frame, f"x={current_xy[0]:+.3f}", (x0 + 8, y1 - 28), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (45, 45, 45), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"y={current_xy[1]:+.3f}", (x0 + 8, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (45, 45, 45), 1, cv2.LINE_AA)
+
+
+def _mat_xy_inset_bounds() -> tuple[np.ndarray, np.ndarray]:
+    if WORK_MAT_FIDUCIAL_GEOMS_ENABLED:
+        center = np.asarray(WORK_MAT_FIDUCIAL_INSET_CENTER_XY, dtype=float)
+        half = np.asarray(WORK_MAT_FIDUCIAL_INSET_HALF_SIZE_XY, dtype=float)
+    else:
+        mat_center = np.asarray(WORK_MAT_CENTER, dtype=float)
+        mat_half = np.asarray(WORK_MAT_HALF_SIZE, dtype=float)
+        center = mat_center[:2]
+        half = mat_half[:2]
+    return center - half, center + half
+
+
+def _mat_xy_to_inset(
+    xy: np.ndarray,
+    px0: int,
+    py0: int,
+    px1: int,
+    py1: int,
+    *,
+    min_xy: np.ndarray,
+    max_xy: np.ndarray,
+) -> tuple[int, int]:
+    u = float(np.clip((xy[0] - min_xy[0]) / max(max_xy[0] - min_xy[0], 1e-9), 0.0, 1.0))
+    v = float(np.clip((xy[1] - min_xy[1]) / max(max_xy[1] - min_xy[1], 1e-9), 0.0, 1.0))
+    return int(round(px0 + u * (px1 - px0))), int(round(py1 - v * (py1 - py0)))
 
 
 def _geom_pos(env: nexus.MyCobotNexusEnv, name: str) -> np.ndarray:
