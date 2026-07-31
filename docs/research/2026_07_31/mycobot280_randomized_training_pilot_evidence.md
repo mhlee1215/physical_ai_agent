@@ -27,7 +27,8 @@ In this one-training-seed pilot, yes:
 
 This is promising pilot evidence. It is not a publication-level robustness
 estimate because there is one policy-training seed and 11 evaluation seeds per
-regime.
+regime. The accepted demonstrations are also teacher-success-conditioned rather
+than uniformly distributed over the declared physics ranges.
 
 ![Randomized-training pilot](mycobot280_randomized_training_pilot.png)
 
@@ -60,6 +61,7 @@ The consumed corpus contains:
 - close policy camera `ground_pickup_closeup`;
 - 73 unique attempted seeds: 60 accepted and 13 rejected;
 - no train/validation seed, pose, factor, or trajectory overlap;
+- 60 accepted episodes from 73 attempted candidates (82.2% overall);
 - cube yaw in `[-0.2, 0.2]` radians;
 - cube mass in `[0.028, 0.036]` kg;
 - cube friction in `[3.4, 4.0]`;
@@ -70,6 +72,24 @@ The consumed corpus contains:
 Source QA reported a minimum sampled red-cube occupancy of 2.571%, zero border
 touches, a minimum final lift of 57.13 mm, a minimum post-hold height of
 47.67 mm, a 300-step two-pad hold, and maximum penetration of 2.841 mm.
+
+### Source Selection Bias
+
+The merged source checker now reports accepted, rejected, train, and validation
+coverage in equal-width factor quartiles. These are advisory diagnostics, not
+dataset validity failures.
+
+Yaw is reasonably balanced, but mass is not. All 13 rejected attempts are in
+the highest cube-mass quartile, 0.034-0.036 kg. Only 2/15 attempts in that
+quartile were accepted (13.3%), and validation contains zero accepted examples
+there. Validation also has no accepted examples in the first two cube-friction
+quartiles.
+
+Therefore, the training corpus represents demonstrations conditional on this
+teacher succeeding. It must not be described as uniform coverage of the full
+declared mass/friction range. The fresh randomized evaluator still uses direct,
+unfiltered draws across the declared ranges, which makes its result useful as a
+stress pilot, but 11 seeds cannot resolve sparse factor cells.
 
 Native LeRobot conversion preserved one camera and exact 7D state/action:
 
@@ -179,8 +199,8 @@ metrics.
 
 ## What This Proves
 
-- The audited randomized corpus can be converted to native LeRobot format and
-  loaded with exact 7D myCobot features.
+- The audited, teacher-success-conditioned randomized corpus can be converted
+  to native LeRobot format and loaded with exact 7D myCobot features.
 - A complete randomized-data SmolVLA checkpoint can train, save, and execute in
   closed-loop MuJoCo simulation.
 - The evaluator can reproduce the source randomization contract on fresh,
@@ -194,6 +214,9 @@ metrics.
 ## What This Does Not Prove
 
 - a statistically reliable randomization benefit across policy-training seeds;
+- uniform demonstration coverage across the declared mass/friction ranges;
+- learned high-mass robustness, because only two high-mass demonstrations were
+  accepted and validation has none;
 - convergence or optimality after 100 optimizer steps;
 - robustness beyond the narrow yaw, mass, and friction ranges used here;
 - robustness to unseen cube size, translation, camera perturbation, clutter, or
@@ -237,6 +260,8 @@ Local generated artifacts:
 Open this result as a dependent PR after the camera-ablation PR. The next
 highest-value experiment is replication, not a longer single run: use at least
 three policy-training seeds for deterministic-close and randomized-close, then
-evaluate each on 20-30 matched fresh-randomized seeds. Preserve separate strict
-and pickup/hold metrics. Wait for materially more physical host storage before
-launching those checkpoints.
+evaluate each on 20-30 matched fresh-randomized seeds. Before that replication,
+generate a stratified or deliberately oversampled high-mass source extension
+and require accepted validation examples in every mass and friction quartile.
+Preserve separate strict and pickup/hold metrics. Wait for materially more
+physical host storage before launching those datasets or checkpoints.

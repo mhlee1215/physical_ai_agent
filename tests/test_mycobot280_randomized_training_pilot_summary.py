@@ -105,6 +105,9 @@ class RandomizedTrainingPilotSummaryTests(unittest.TestCase):
         self.assertEqual(paired["added_strict_success_seeds"], [10])
         self.assertAlmostEqual(summary["heldout_supervised"]["loss_relative_change"], -1 / 6)
         self.assertAlmostEqual(summary["heldout_supervised"]["action_rmse_relative_change"], 0.1)
+        source_caveat = summary["source_distribution_caveat"]
+        self.assertEqual(source_caveat["highest_mass_quartile_accepted"], 2)
+        self.assertEqual(source_caveat["highest_mass_quartile_validation_examples"], 0)
 
     def test_rejects_mismatched_randomized_candidates(self) -> None:
         reports = copy.deepcopy(self.reports)

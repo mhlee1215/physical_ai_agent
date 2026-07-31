@@ -142,10 +142,22 @@ def summarize_pilot(
             "post_lift_hold_min_cube_lift_m_min": 0.045,
             "penetration_gate_excluded": True,
         },
+        "source_distribution_caveat": {
+            "distribution": "teacher_success_conditioned_not_uniform",
+            "accepted_attempts": 60,
+            "total_attempts": 73,
+            "highest_mass_quartile_kg": [0.034, 0.036],
+            "highest_mass_quartile_accepted": 2,
+            "highest_mass_quartile_attempted": 15,
+            "highest_mass_quartile_acceptance_rate": 2.0 / 15.0,
+            "highest_mass_quartile_validation_examples": 0,
+            "validation_empty_friction_quartiles": [1, 2],
+        },
         "claim_boundary": (
             "Matched 11-seed pilot evidence from one 100-step randomized-policy training "
-            "seed. Repeat policy-training seeds and use larger held-out randomized schedules "
-            "before publication-level robustness claims."
+            "seed and a teacher-success-conditioned source corpus. Establish stratified "
+            "source coverage, repeat policy-training seeds, and use larger held-out "
+            "randomized schedules before publication-level robustness claims."
         ),
     }
 
@@ -223,7 +235,7 @@ def render_figure(summary: dict[str, Any], output_path: Path) -> None:
             f'{supervised["base_postprocessed_action_rmse_mean"]:.4f} -> '
             f'{supervised["randomized_finetuned_postprocessed_action_rmse_mean"]:.4f}.'
         ),
-        "Pilot only: repeat training seeds and enlarge unseen randomized schedules.",
+        "Pilot only: teacher-conditioned source; stratify coverage and repeat training seeds.",
     ]
     for index, line in enumerate(lines):
         cv2.putText(

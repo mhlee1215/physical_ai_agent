@@ -1,5 +1,5 @@
 {
-  "claim_boundary": "Matched 11-seed pilot evidence from one 100-step randomized-policy training seed. Repeat policy-training seeds and use larger held-out randomized schedules before publication-level robustness claims.",
+  "claim_boundary": "Matched 11-seed pilot evidence from one 100-step randomized-policy training seed and a teacher-success-conditioned source corpus. Establish stratified source coverage, repeat policy-training seeds, and use larger held-out randomized schedules before publication-level robustness claims.",
   "fresh_randomized_schedule_contract": {
     "candidate_selection": "direct_unfiltered_draws_without_teacher_rejection",
     "contact_calibration": {
@@ -259,6 +259,23 @@
       ],
       "strict_successes": 7
     }
+  },
+  "source_distribution_caveat": {
+    "accepted_attempts": 60,
+    "distribution": "teacher_success_conditioned_not_uniform",
+    "highest_mass_quartile_acceptance_rate": 0.13333333333333333,
+    "highest_mass_quartile_accepted": 2,
+    "highest_mass_quartile_attempted": 15,
+    "highest_mass_quartile_kg": [
+      0.034,
+      0.036
+    ],
+    "highest_mass_quartile_validation_examples": 0,
+    "total_attempts": 73,
+    "validation_empty_friction_quartiles": [
+      1,
+      2
+    ]
   },
   "status": "passed"
 }

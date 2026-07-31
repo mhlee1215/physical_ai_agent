@@ -141,7 +141,24 @@
       "scripts/check_mycobot_280_ground_pickup_randomized_dataset.py",
       "--existing-dataset-root",
       "_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_randomized_v1_50train_10val_allframes_verified_20260731"
-    ]
+    ],
+    "selection_caveat": {
+      "distribution": "teacher_success_conditioned_not_uniform",
+      "accepted_attempts": 60,
+      "total_attempts": 73,
+      "highest_mass_quartile_kg": [
+        0.034,
+        0.036
+      ],
+      "highest_mass_quartile_accepted": 2,
+      "highest_mass_quartile_attempted": 15,
+      "highest_mass_quartile_validation_examples": 0,
+      "validation_empty_friction_quartiles": [
+        1,
+        2
+      ],
+      "claim_boundary": "Accepted demonstrations do not establish uniform coverage or policy robustness across the declared mass and friction ranges."
+    }
   },
   "lerobot_conversion": {
     "output_root": "_workspace/mycobot280_lerobot/ground_pickup_randomized_closecam_v1_train",
@@ -157,7 +174,7 @@
     "validation_repo_id": "physical-ai-agent/mycobot-280-ground-pickup-randomized-closecam-v1-validation",
     "converter_script": "scripts/export_mycobot_280_ground_pickup_lerobot_dataset.py",
     "native_converter_script": "scripts/convert_mycobot_280_pi_adaptive_jsonl_to_lerobot.py",
-    "claim_boundary": "Randomized-source training pilot with the same close camera and optimizer recipe as the deterministic close-camera condition."
+    "claim_boundary": "Teacher-success-conditioned randomized-source training pilot with the same close camera and optimizer recipe as the deterministic close-camera condition."
   },
   "training_smoke": {
     "policy_path": "lerobot/smolvla_base",
@@ -170,7 +187,7 @@
     "device": "cuda",
     "tensorboard_dir": "_workspace/mycobot280_training/ground_pickup_randomized_closecam_v1_100step_seed20260731/tensorboard",
     "checkpoint_dir": "_workspace/mycobot280_training/ground_pickup_randomized_closecam_v1_100step_seed20260731/checkpoints",
-    "claim_boundary": "One matched 100-step engineering run; publication estimates require multiple training seeds and a fresh randomized test schedule."
+    "claim_boundary": "One matched 100-step engineering run on a teacher-success-conditioned corpus; publication estimates require stratified source coverage, multiple training seeds, and a fresh randomized test schedule."
   },
   "closed_loop_stub": {
     "script": "scripts/evaluate_mycobot280_smolvla_policy.py",
