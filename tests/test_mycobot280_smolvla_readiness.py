@@ -71,6 +71,64 @@ class MyCobot280SmolVLAReadinessTest(unittest.TestCase):
             self.assertEqual(report["features"]["action"]["names"], JOINT_NAMES)
             self.assertFalse(report["source_quality"]["teacher_attachment_enabled"])
 
+    def test_split_manifest_validates_and_exports_selected_train_split(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            dataset_root = _write_split_fixture_dataset(tmp_path / "dataset")
+            config_path = _write_config(tmp_path / "config.json", dataset_root)
+            config = json.loads(config_path.read_text())
+            config["source_dataset"]["expected_generation_mode"] = (
+                "deterministic_pose_diverse_teacher_aligned"
+            )
+            config["source_dataset"]["expected_splits"] = {"train": 1, "validation": 1}
+            config["source_dataset"]["expected_all_frames_rendered"] = True
+            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+            validation = validate_config(config_path=config_path)
+            output_root = tmp_path / "lerobot_train"
+            report = export_plan(
+                source_root=dataset_root,
+                output_root=output_root,
+                repo_id="physical-ai-agent/test-mycobot280-train",
+                split="train",
+                dry_run=False,
+                overwrite=False,
+            )
+            episodes = [
+                json.loads(line)
+                for line in (output_root / "data" / "episodes.jsonl").read_text().splitlines()
+            ]
+            all_output_root = tmp_path / "lerobot_all"
+            export_plan(
+                source_root=dataset_root,
+                output_root=all_output_root,
+                repo_id="physical-ai-agent/test-mycobot280-all",
+                split="all",
+                dry_run=False,
+                overwrite=False,
+            )
+            all_episodes = [
+                json.loads(line)
+                for line in (all_output_root / "data" / "episodes.jsonl").read_text().splitlines()
+            ]
+            all_frames = [
+                json.loads(line)
+                for line in (all_output_root / "data" / "frames.jsonl").read_text().splitlines()
+            ]
+
+            self.assertEqual(validation["status"], "passed")
+            self.assertEqual(
+                validation["dataset_report"]["split_counts"],
+                {"train": 1, "validation": 1},
+            )
+            self.assertEqual(report["source_split"], "train")
+            self.assertEqual(report["episodes"], 1)
+            self.assertEqual(report["exported_frames"], 2)
+            self.assertEqual(episodes[0]["split"], "train")
+            self.assertEqual([item["episode_index"] for item in all_episodes], [0, 1])
+            self.assertEqual([item["source_episode_index"] for item in all_episodes], [0, 0])
+            self.assertEqual({item["episode_index"] for item in all_frames}, {0, 1})
+
     def test_eval_stub_blocks_without_policy_and_plans_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -195,6 +253,30 @@ def _write_fixture_dataset(root: Path) -> Path:
         "failed_episodes": [],
     }
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return root
+
+
+def _write_split_fixture_dataset(root: Path) -> Path:
+    _write_fixture_dataset(root)
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    summaries = manifest.pop("episode_summaries")
+    train_summary = {**summaries[0], "split": "train"}
+    validation_summary = {**summaries[1], "episode_index": 0, "split": "validation"}
+    manifest["generation_mode"] = "deterministic_pose_diverse_teacher_aligned"
+    manifest["splits"] = {
+        "train": {
+            "requested_episodes": 1,
+            "accepted_episodes": 1,
+            "episode_summaries": [train_summary],
+        },
+        "validation": {
+            "requested_episodes": 1,
+            "accepted_episodes": 1,
+            "episode_summaries": [validation_summary],
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return root
 
 

@@ -53,7 +53,14 @@ def build_dry_run_report(
     robot = config["robot"]
     closed_loop = config["closed_loop_stub"]
     dataset_root = Path(str(dataset_root_override or source["root"]))
-    native_root = Path(str(conversion["output_root"]))
+    split_output_roots = conversion.get("split_output_roots")
+    split_output_roots = split_output_roots if isinstance(split_output_roots, dict) else {}
+    native_root = Path(str(split_output_roots.get("train", conversion["output_root"])))
+    validation_root = (
+        Path(str(split_output_roots["validation"]))
+        if "validation" in split_output_roots
+        else None
+    )
     output_dir = Path(str(smoke["output_dir"]))
 
     status = "ready" if validation["status"] == "passed" else "blocked"
@@ -84,6 +91,7 @@ def build_dry_run_report(
             "camera_contract": feature["camera_contract"],
             "dataset_root": str(dataset_root),
             "native_lerobot_root": str(native_root),
+            "validation_lerobot_root": str(validation_root) if validation_root else None,
             "training_output_dir": str(output_dir),
             "tensorboard_dir": smoke["tensorboard_dir"],
             "checkpoint_dir": smoke["checkpoint_dir"],
@@ -108,7 +116,7 @@ def build_dry_run_report(
                 "--repo-id",
                 str(conversion["repo_id"]),
                 "--dry-run",
-            ],
+            ] + (["--split", "train"] if validation_root else []),
             "native_lerobot_conversion_when_runtime_available": [
                 "PYTHONPATH=src:.",
                 "python3",
@@ -168,6 +176,39 @@ def build_dry_run_report(
         ),
         "claim_boundary": "Dry-run readiness only; no policy-performance claim.",
     }
+    if validation_root is not None:
+        validation_repo_id = str(
+            conversion.get("validation_repo_id", str(conversion["repo_id"]) + "-validation")
+        )
+        report["commands"]["plan_validation_lerobot_conversion"] = [
+            "PYTHONPATH=src:.",
+            "python3",
+            str(conversion["converter_script"]),
+            "--source-root",
+            str(dataset_root),
+            "--output-root",
+            str(validation_root),
+            "--repo-id",
+            validation_repo_id,
+            "--split",
+            "validation",
+            "--dry-run",
+        ]
+        report["commands"]["native_validation_lerobot_conversion_when_runtime_available"] = [
+            "PYTHONPATH=src:.",
+            "python3",
+            str(conversion["native_converter_script"]),
+            "--source-root",
+            str(validation_root),
+            "--output-root",
+            str(validation_root) + "_native",
+            "--repo-id",
+            validation_repo_id,
+            "--require-lerobot",
+        ]
+        report["artifact_plan"]["validation_conversion_report"] = str(
+            validation_root / "mycobot280_ground_pickup_lerobot_plan.json"
+        )
     return report
 
 

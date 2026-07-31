@@ -37,11 +37,15 @@ camera mapping in config before training.
 
 ## Dataset Contract
 
-The first readiness dataset is the deterministic ground-pickup teacher POC:
+The readiness lane has two config-first datasets:
 
 ```text
 configs/mycobot280/training_datasets/ground_pickup_tiny_smoke.json
+configs/mycobot280/training_datasets/ground_pickup_pose_diverse_v1.json
 ```
+
+The pose-diverse baseline freezes 50 train and 10 validation episodes before
+the later object-suite randomization condition.
 
 The source dataset must report:
 
@@ -55,7 +59,10 @@ The source dataset must report:
 - per-episode pass/fail summaries
 - aggregate contact/lift/hold/penetration metrics
 
-The future randomized dataset should keep the same schema and change only the
+For split manifests, the adapter and validator read
+`splits.<name>.episode_summaries`; train and validation conversion commands must
+select their split explicitly. The future randomized dataset should keep the
+same schema and change only the
 generation mode, split declarations, and object/pose randomization metadata.
 
 ## Readiness Milestones
@@ -92,7 +99,7 @@ approval before installing or downloading.
 
 ## Smoke Runtime Status
 
-As of 2026-07-15, the repo-local WSL runtime `_workspace/local_envs/lerobot_py312`
+As of 2026-07-30, the repo-local WSL runtime `_workspace/local_envs/lerobot_py312`
 passed the myCobot 280 tiny smoke path with:
 
 - `torch==2.11.0+cu129`
@@ -108,12 +115,25 @@ and wrote `_workspace/mycobot280_training/ground_pickup_tiny_smoke/tiny_smoke.js
 This is still a plumbing result only, not a learned-policy or closed-loop
 success claim.
 
+The pose-diverse canary then proved the next contract on CUDA:
+
+- generated one train and one validation episode with all 1,060 frames rendered
+- converted each split into a native LeRobot dataset with 7D state/action
+- performed one real optimizer step from cached `lerobot/smolvla_base` weights
+- saved policy weights, optimizer state, logs, TensorBoard, preprocessor, and postprocessor
+- reloaded the saved checkpoint and evaluated one held-out validation batch
+
+See `docs/research/2026_07_30/mycobot280_smolvla_readiness_evidence.md` for
+exact metrics and artifact paths.
+
 ## Verification
 
 No-dependency verification:
 
 ```bash
-PYTHONPATH=src:. python3 -B -m unittest tests.test_mycobot280_smolvla_readiness
+PYTHONPATH=src:. python3 -B -m unittest \
+  tests.test_mycobot280_smolvla_readiness \
+  tests.test_mycobot280_smolvla_tiny_finetune
 PYTHONPATH=src:. python3 scripts/validate_mycobot280_training_dataset.py \
   --config configs/mycobot280/training_datasets/ground_pickup_tiny_smoke.json
 PYTHONPATH=src:. python3 scripts/plan_mycobot280_smolvla_training.py \

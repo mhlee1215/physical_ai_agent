@@ -154,8 +154,10 @@ def _validate_source_dataset(*, config: dict[str, Any], dataset_root: Path) -> d
     errors: list[str] = []
 
     expected_episodes = int(source.get("expected_episodes", 0))
+    expected_splits = _dict(source.get("expected_splits"))
     required_success = _dict(source.get("required_success_criteria"))
     aggregate = _dict(manifest.get("aggregate_metrics"))
+    episode_summaries = _manifest_episode_summaries(manifest)
 
     _expect_equal(errors, "format", manifest.get("format"), source.get("format"))
     _expect_equal(errors, "generation_mode", manifest.get("generation_mode"), source.get("expected_generation_mode"))
@@ -168,10 +170,17 @@ def _validate_source_dataset(*, config: dict[str, Any], dataset_root: Path) -> d
         errors.append(f"manifest passed_episodes {manifest.get('passed_episodes')} != expected {expected_episodes}")
     if manifest.get("failed_episodes") not in ([], None):
         errors.append(f"manifest failed_episodes must be empty, got {manifest.get('failed_episodes')}")
+    split_counts = _manifest_split_counts(manifest)
+    for split_name, expected_count in expected_splits.items():
+        actual_count = split_counts.get(str(split_name), -1)
+        if actual_count != int(expected_count):
+            errors.append(
+                f"manifest split {split_name!r} episodes {actual_count} != expected {expected_count}"
+            )
     if int(manifest.get("frames", 0)) < int(source.get("expected_min_frames", 0)):
         errors.append(f"manifest frames {manifest.get('frames')} below expected_min_frames {source.get('expected_min_frames')}")
     if source.get("expected_all_frames_rendered") is True:
-        rendered = sum(int(item.get("rendered_frames", 0)) for item in manifest.get("episode_summaries", []) if isinstance(item, dict))
+        rendered = sum(int(item.get("rendered_frames", 0)) for item in episode_summaries)
         if rendered != int(manifest.get("frames", -1)):
             errors.append(f"rendered frame count {rendered} must equal manifest frames {manifest.get('frames')}")
     if _str_list(manifest.get("joint_names")) != _str_list(_dict(config.get("robot")).get("joint_names")):
@@ -191,8 +200,8 @@ def _validate_source_dataset(*, config: dict[str, Any], dataset_root: Path) -> d
         errors.append("aggregate max_pad_cube_penetration_m exceeds threshold")
 
     episode_paths = []
-    for summary in manifest.get("episode_summaries", []):
-        if isinstance(summary, dict) and summary.get("path"):
+    for summary in episode_summaries:
+        if summary.get("path"):
             episode_paths.append(dataset_root / str(summary["path"]))
     missing_episodes = [str(path) for path in episode_paths if not path.exists()]
     if missing_episodes:
@@ -213,6 +222,7 @@ def _validate_source_dataset(*, config: dict[str, Any], dataset_root: Path) -> d
         "episodes": manifest.get("episodes"),
         "passed_episodes": manifest.get("passed_episodes"),
         "frames": manifest.get("frames"),
+        "split_counts": split_counts,
         "aggregate_metrics": aggregate,
         "episode_files_checked": len(episode_paths),
         "row_report": row_report,
@@ -296,6 +306,33 @@ def _validate_episode_rows(*, dataset_root: Path, episode_paths: list[Path], con
         "info_joint_name_aliases": sorted(info_joint_name_aliases),
         "state_mapping": "source observation.state may include robot 7D plus cube-position metadata; converter exports the first 7 robot-control entries",
         "errors": errors,
+    }
+
+
+def _manifest_episode_summaries(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    splits = manifest.get("splits")
+    if isinstance(splits, dict):
+        summaries: list[dict[str, Any]] = []
+        for split_name, payload in splits.items():
+            if not isinstance(payload, dict):
+                continue
+            for item in payload.get("episode_summaries", []):
+                if isinstance(item, dict):
+                    summaries.append({**item, "split": item.get("split", split_name)})
+        return summaries
+    return [item for item in manifest.get("episode_summaries", []) if isinstance(item, dict)]
+
+
+def _manifest_split_counts(manifest: dict[str, Any]) -> dict[str, int]:
+    splits = manifest.get("splits")
+    if not isinstance(splits, dict):
+        return {}
+    return {
+        str(name): len(
+            [item for item in payload.get("episode_summaries", []) if isinstance(item, dict)]
+        )
+        for name, payload in splits.items()
+        if isinstance(payload, dict)
     }
 
 

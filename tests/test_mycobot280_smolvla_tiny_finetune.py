@@ -5,10 +5,39 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.train_mycobot280_smolvla_tiny import run_mycobot280_smolvla_tiny_finetune
+from scripts.train_mycobot280_smolvla_tiny import (
+    _save_policy_checkpoint,
+    run_mycobot280_smolvla_tiny_finetune,
+)
 
 
 class MyCobot280SmolVLATinyFineTuneTest(unittest.TestCase):
+    def test_checkpoint_saves_policy_and_processor_configs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_dir = Path(tmp) / "pretrained_model"
+
+            class FakePolicy:
+                def save_pretrained(self, root: Path) -> None:
+                    (root / "model.safetensors").write_bytes(b"weights")
+
+            class FakeProcessor:
+                def __init__(self, filename: str) -> None:
+                    self.filename = filename
+
+                def save_pretrained(self, root: Path) -> None:
+                    (root / self.filename).write_text("{}", encoding="utf-8")
+
+            _save_policy_checkpoint(
+                FakePolicy(),
+                checkpoint_dir,
+                preprocessor=FakeProcessor("policy_preprocessor.json"),
+                postprocessor=FakeProcessor("policy_postprocessor.json"),
+            )
+
+            self.assertTrue((checkpoint_dir / "model.safetensors").is_file())
+            self.assertTrue((checkpoint_dir / "policy_preprocessor.json").is_file())
+            self.assertTrue((checkpoint_dir / "policy_postprocessor.json").is_file())
+
     def test_incomplete_native_dataset_writes_blocked_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

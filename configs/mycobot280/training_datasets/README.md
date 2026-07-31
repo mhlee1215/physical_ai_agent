@@ -36,3 +36,21 @@ PYTHONPATH=src:. python3 scripts/validate_mycobot280_training_dataset.py \
 PYTHONPATH=src:. python3 scripts/plan_mycobot280_smolvla_training.py \
   --config configs/mycobot280/training_datasets/ground_pickup_tiny_smoke.json
 ```
+
+Pose-diverse controlled baseline:
+
+```bash
+PYTHONPATH=src:. python3 scripts/validate_mycobot280_training_dataset.py \
+  --config configs/mycobot280/training_datasets/ground_pickup_pose_diverse_v1.json
+
+PYTHONPATH=src:. python3 scripts/plan_mycobot280_smolvla_training.py \
+  --config configs/mycobot280/training_datasets/ground_pickup_pose_diverse_v1.json \
+  --output _workspace/mycobot280_training/ground_pickup_pose_diverse_v1/dry_run.json
+```
+
+`ground_pickup_pose_diverse_v1.json` freezes a 50-train/10-validation
+deterministic pose-diverse baseline. The planner emits separate train and
+validation conversion commands. The validator is expected to report `blocked`
+until the source dataset exists, then requires all 60 episodes, 31,800 rendered
+frames, non-overlapping split membership, and the configured contact/lift/hold/
+penetration gates.

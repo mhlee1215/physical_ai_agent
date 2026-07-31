@@ -210,7 +210,7 @@ def _run_actual_tiny_finetune(
             policy.to(selected_device)
     policy.train()
 
-    preprocessor, _postprocessor = make_pre_post_processors(
+    preprocessor, postprocessor = make_pre_post_processors(
         policy.config,
         pretrained_path=str(policy_path),
         preprocessor_overrides={"device_processor": {"device": selected_device}},
@@ -294,7 +294,24 @@ def _run_actual_tiny_finetune(
         writer.flush()
         writer.close()
 
-    _save_policy_checkpoint(policy, checkpoint_model_dir)
+    _save_policy_checkpoint(
+        policy,
+        checkpoint_model_dir,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+    )
+    preprocessor_config_path = checkpoint_model_dir / "policy_preprocessor.json"
+    postprocessor_config_path = checkpoint_model_dir / "policy_postprocessor.json"
+    missing_processor_configs = [
+        str(path)
+        for path in (preprocessor_config_path, postprocessor_config_path)
+        if not path.is_file()
+    ]
+    if missing_processor_configs:
+        raise RuntimeError(
+            "Checkpoint is not reloadable because processor configs are missing: "
+            + ", ".join(missing_processor_configs)
+        )
     torch.save(
         {
             "optimizer_state_dict": optimizer.state_dict(),
@@ -311,6 +328,8 @@ def _run_actual_tiny_finetune(
         "loss_final": float(losses[-1]),
         "losses": losses,
         "checkpoint_model_dir": str(checkpoint_model_dir),
+        "preprocessor_config_path": str(preprocessor_config_path),
+        "postprocessor_config_path": str(postprocessor_config_path),
         "optimizer_state_path": str(optimizer_state_path),
         "train_log": str(log_path),
         "tensorboard_dir": str(tensorboard_dir),
@@ -330,16 +349,32 @@ def _run_actual_tiny_finetune(
     }
 
 
-def _save_policy_checkpoint(policy: Any, checkpoint_model_dir: Path) -> None:
+def _save_policy_checkpoint(
+    policy: Any,
+    checkpoint_model_dir: Path,
+    *,
+    preprocessor: Any | None = None,
+    postprocessor: Any | None = None,
+) -> None:
     checkpoint_model_dir.mkdir(parents=True, exist_ok=True)
     save_pretrained = getattr(policy, "save_pretrained", None)
     if callable(save_pretrained):
         save_pretrained(checkpoint_model_dir)
-        return
+    else:
+        import torch
 
-    import torch
+        torch.save(policy.state_dict(), checkpoint_model_dir / "pytorch_model.bin")
 
-    torch.save(policy.state_dict(), checkpoint_model_dir / "pytorch_model.bin")
+    for processor_name, processor in (
+        ("preprocessor", preprocessor),
+        ("postprocessor", postprocessor),
+    ):
+        if processor is None:
+            continue
+        save_processor = getattr(processor, "save_pretrained", None)
+        if not callable(save_processor):
+            raise RuntimeError(f"SmolVLA {processor_name} cannot be saved with save_pretrained()")
+        save_processor(checkpoint_model_dir)
 
 
 def _try_summary_writer(tensorboard_dir: Path) -> tuple[Any | None, str | None]:

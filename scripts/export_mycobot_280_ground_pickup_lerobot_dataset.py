@@ -30,6 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--repo-id", default="physical-ai-agent/mycobot-280-ground-pickup-tiny-smoke")
+    parser.add_argument(
+        "--split",
+        choices=["all", "train", "validation"],
+        default="all",
+        help="Select one finalized source split or export all episodes.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser
@@ -41,6 +47,7 @@ def main() -> None:
         source_root=args.source_root,
         output_root=args.output_root,
         repo_id=args.repo_id,
+        split=args.split,
         dry_run=args.dry_run,
         overwrite=args.overwrite,
     )
@@ -55,6 +62,7 @@ def export_plan(
     repo_id: str,
     dry_run: bool,
     overwrite: bool,
+    split: str = "all",
 ) -> dict[str, Any]:
     source_root = source_root.resolve()
     output_root = output_root.resolve()
@@ -69,7 +77,9 @@ def export_plan(
     if list(manifest.get("joint_names", [])) != JOINT_NAMES:
         raise ValueError("source manifest joint_names do not match myCobot 280 training contract")
 
-    episode_summaries = [item for item in manifest.get("episode_summaries", []) if isinstance(item, dict)]
+    episode_summaries = _manifest_episode_summaries(manifest, split=split)
+    if not episode_summaries:
+        raise ValueError(f"source manifest has no episodes for split={split!r}")
     frame_count = 0
     rendered_frame_count = 0
     missing_episode_paths = []
@@ -105,6 +115,7 @@ def export_plan(
             manifest=manifest,
             repo_id=repo_id,
             features=features,
+            episode_summaries=episode_summaries,
         )
 
     report = {
@@ -114,10 +125,12 @@ def export_plan(
         "source_root": str(source_root),
         "output_root": str(output_root),
         "repo_id": repo_id,
+        "source_split": split,
+        "source_split_counts": _manifest_split_counts(manifest),
         "source_format": manifest.get("format"),
         "source_dataset_id": manifest.get("dataset_id"),
-        "episodes": manifest.get("episodes"),
-        "passed_episodes": manifest.get("passed_episodes"),
+        "episodes": len(episode_summaries),
+        "passed_episodes": sum(bool(item.get("success", False)) for item in episode_summaries),
         "frames": frame_count,
         "rendered_frames": rendered_frame_count,
         "exported_frames": len(exported_frames),
@@ -166,6 +179,7 @@ def _write_intermediate_dataset(
     manifest: dict[str, Any],
     repo_id: str,
     features: dict[str, dict[str, Any]],
+    episode_summaries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     (output_root / "data").mkdir(parents=True, exist_ok=True)
     (output_root / "meta").mkdir(parents=True, exist_ok=True)
@@ -173,10 +187,9 @@ def _write_intermediate_dataset(
     frames: list[dict[str, Any]] = []
     episodes: list[dict[str, Any]] = []
     next_frame_index = 0
-    for episode_summary in manifest.get("episode_summaries", []):
-        if not isinstance(episode_summary, dict):
-            continue
-        episode_index = int(episode_summary["episode_index"])
+    for episode_index, episode_summary in enumerate(episode_summaries):
+        source_episode_index = int(episode_summary["episode_index"])
+        split = episode_summary.get("split")
         source_episode = source_root / str(episode_summary["path"])
         episode_rows = _load_jsonl(source_episode)
         first = next_frame_index
@@ -186,15 +199,19 @@ def _write_intermediate_dataset(
                 source_root=source_root,
                 output_root=output_root,
                 global_frame_index=next_frame_index,
+                episode_index=episode_index,
+                split=str(split) if split is not None else None,
             )
             frames.append(frame)
             next_frame_index += 1
         episodes.append(
             {
                 "episode_index": episode_index,
+                "source_episode_index": source_episode_index,
                 "from_frame": first,
                 "to_frame": next_frame_index - 1,
                 "length": next_frame_index - first,
+                "split": episode_summary.get("split"),
                 "task": manifest.get("task"),
                 "success": bool(episode_summary.get("success", False)),
                 "source_episode": str(source_episode),
@@ -215,6 +232,7 @@ def _write_intermediate_dataset(
         "features": features,
         "source_format": manifest.get("format"),
         "source_dataset_id": manifest.get("dataset_id"),
+        "source_splits": _manifest_split_counts(manifest),
         "claim_boundary": "Intermediate SmolVLA-loadable JSONL export; native LeRobotDataset parquet writing is a separate runtime step.",
     }
     (output_root / "meta" / "info.json").write_text(json.dumps(info, indent=2, sort_keys=True), encoding="utf-8")
@@ -226,7 +244,15 @@ def _write_intermediate_dataset(
     return frames
 
 
-def _convert_row(*, row: dict[str, Any], source_root: Path, output_root: Path, global_frame_index: int) -> dict[str, Any]:
+def _convert_row(
+    *,
+    row: dict[str, Any],
+    source_root: Path,
+    output_root: Path,
+    global_frame_index: int,
+    episode_index: int,
+    split: str | None,
+) -> dict[str, Any]:
     observation = row.get("observation") if isinstance(row.get("observation"), dict) else {}
     images = observation.get("images") if isinstance(observation.get("images"), dict) else {}
     render = str(images.get("render", ""))
@@ -248,15 +274,17 @@ def _convert_row(*, row: dict[str, Any], source_root: Path, output_root: Path, g
     info = row.get("info") if isinstance(row.get("info"), dict) else {}
     ground = info.get("ground_pickup") if isinstance(info.get("ground_pickup"), dict) else {}
     return {
-        "episode_index": int(row.get("episode_index", 0)),
+        "episode_index": episode_index,
         "frame_index": int(row.get("frame_index", global_frame_index)),
         "timestamp": float(row.get("timestamp", 0.0)),
+        "split": split or row.get("split"),
         "task": str(row.get("task", "")),
         "observation.state": state,
         "observation.images.camera1": str(image_target.relative_to(output_root)),
         "action": action,
         "metadata": {
             "phase": row.get("phase"),
+            "source_episode_index": int(row.get("episode_index", episode_index)),
             "cube_lift_m": ground.get("cube_lift_m"),
             "cube_position_m": source_state[len(JOINT_NAMES) :],
             "pad_cube_contacted_pads": ground.get("pad_cube_contacted_pads"),
@@ -290,6 +318,40 @@ def _nested_float(payload: dict[str, Any], keys: list[str]) -> float | None:
             return None
         value = value.get(key)
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def _manifest_episode_summaries(manifest: dict[str, Any], *, split: str) -> list[dict[str, Any]]:
+    splits = manifest.get("splits")
+    if isinstance(splits, dict):
+        selected = list(splits) if split == "all" else [split]
+        summaries: list[dict[str, Any]] = []
+        for split_name in selected:
+            split_payload = splits.get(split_name)
+            if not isinstance(split_payload, dict):
+                continue
+            for item in split_payload.get("episode_summaries", []):
+                if not isinstance(item, dict):
+                    continue
+                summaries.append({**item, "split": item.get("split", split_name)})
+        return summaries
+
+    summaries = [item for item in manifest.get("episode_summaries", []) if isinstance(item, dict)]
+    if split == "all":
+        return summaries
+    return [item for item in summaries if item.get("split") == split]
+
+
+def _manifest_split_counts(manifest: dict[str, Any]) -> dict[str, int]:
+    splits = manifest.get("splits")
+    if not isinstance(splits, dict):
+        return {}
+    return {
+        str(name): len(
+            [item for item in payload.get("episode_summaries", []) if isinstance(item, dict)]
+        )
+        for name, payload in splits.items()
+        if isinstance(payload, dict)
+    }
 
 
 def _stats(frames: list[dict[str, Any]]) -> dict[str, Any]:
