@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import scripts.export_mycobot_280_ground_pickup_teacher_dataset as teacher
 from scripts.check_mycobot_280_ground_pickup_randomized_dataset import (
+    validate_existing_dataset,
     validate_randomized_manifest,
 )
 from scripts.export_mycobot_280_ground_pickup_randomized_dataset import (
@@ -142,13 +144,9 @@ class MyCobot280GroundPickupRandomizedDatasetTest(unittest.TestCase):
             manifest = _manifest(train, validation)
             _write_episode(root, train, split="train")
             _write_episode(root, validation, split="validation")
+            (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-            report = validate_randomized_manifest(
-                manifest,
-                dataset_root=root,
-                train_episodes=1,
-                val_episodes=1,
-            )
+            report = validate_existing_dataset(root)
 
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["errors"], [])
@@ -200,9 +198,14 @@ class MyCobot280GroundPickupRandomizedDatasetTest(unittest.TestCase):
             _write_episode(root, train, split="train")
             _write_episode(root, validation, split="validation")
             (root / str(train["path"])).write_text("null\n", encoding="utf-8")
-            validation_row = json.loads((root / str(validation["path"])).read_text(encoding="utf-8"))
-            validation_row["split"] = "train"
-            (root / str(validation["path"])).write_text(json.dumps(validation_row) + "\n", encoding="utf-8")
+            validation_path = root / str(validation["path"])
+            validation_rows = [
+                json.loads(line) for line in validation_path.read_text(encoding="utf-8").splitlines()
+            ]
+            validation_rows[0]["split"] = "train"
+            validation_path.write_text(
+                "\n".join(json.dumps(row) for row in validation_rows) + "\n", encoding="utf-8"
+            )
 
             report = validate_randomized_manifest(
                 manifest, dataset_root=root, train_episodes=1, val_episodes=1,
@@ -211,6 +214,79 @@ class MyCobot280GroundPickupRandomizedDatasetTest(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertTrue(any("must be a JSON object" in error for error in report["errors"]))
         self.assertTrue(any("does not match summary" in error for error in report["errors"]))
+
+    def test_manifest_validator_rejects_wrong_randomized_camera_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            train = _summary(
+                index=0, seed=2800, xy=(0.10, 0.20), trajectory_hash="train",
+                path="splits/train/episodes/episode_0000.jsonl",
+            )
+            validation = _summary(
+                index=1, seed=2801, xy=(0.11, 0.22), trajectory_hash="validation",
+                path="splits/validation/episodes/episode_0000.jsonl",
+            )
+            manifest = _manifest(train, validation)
+            manifest["observation_camera"]["distance_m"] = 1.0
+            _write_episode(root, train, split="train")
+            _write_episode(root, validation, split="validation")
+
+            report = validate_randomized_manifest(
+                manifest, dataset_root=root, train_episodes=1, val_episodes=1,
+            )
+
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(any("observation_camera.distance_m" in error for error in report["errors"]))
+
+    def test_manifest_validator_rejects_tiny_or_missing_cube_visibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            train = _summary(
+                index=0, seed=2800, xy=(0.10, 0.20), trajectory_hash="train",
+                path="splits/train/episodes/episode_0000.jsonl",
+            )
+            validation = _summary(
+                index=1, seed=2801, xy=(0.11, 0.22), trajectory_hash="validation",
+                path="splits/validation/episodes/episode_0000.jsonl",
+            )
+            manifest = _manifest(train, validation)
+            _write_episode(root, train, split="train")
+            _write_episode(root, validation, split="validation")
+            hidden_cube = root / "splits/train/frames/episode_0000/frame_0000.bmp"
+            _write_bmp(hidden_cube, red_box=None)
+
+            report = validate_randomized_manifest(
+                manifest, dataset_root=root, train_episodes=1, val_episodes=1,
+            )
+
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(any("cube occupancy" in error for error in report["errors"]))
+
+    def test_manifest_validator_rejects_row_level_guard_regression(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            train = _summary(
+                index=0, seed=2800, xy=(0.10, 0.20), trajectory_hash="train",
+                path="splits/train/episodes/episode_0000.jsonl",
+            )
+            validation = _summary(
+                index=1, seed=2801, xy=(0.11, 0.22), trajectory_hash="validation",
+                path="splits/validation/episodes/episode_0000.jsonl",
+            )
+            manifest = _manifest(train, validation)
+            _write_episode(root, train, split="train")
+            _write_episode(root, validation, split="validation")
+            episode_path = root / str(train["path"])
+            rows = [json.loads(line) for line in episode_path.read_text(encoding="utf-8").splitlines()]
+            rows[2]["info"]["ground_pickup"]["pad_mat_guard"]["passed"] = False
+            episode_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+            report = validate_randomized_manifest(
+                manifest, dataset_root=root, train_episodes=1, val_episodes=1,
+            )
+
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(any("failing pad_mat source guards" in error for error in report["errors"]))
 
 
 def _summary(
@@ -222,15 +298,29 @@ def _summary(
     path: str = "episode.jsonl",
 ) -> dict[str, object]:
     return {
+        "attempt_index": index,
         "episode_index": index,
         "seed": seed,
         "initial_cube_xy": list(xy),
         "trajectory_hash": trajectory_hash,
         "path": path,
         "success": True,
-        "frames": 1,
-        "rendered_frames": 1,
+        "frames": 5,
+        "rendered_frames": 5,
+        "first_frame_pad_cube_contacted_pads": 0,
+        "first_contact_step": 1,
+        "initial_cube_mat_guard": {"passed": True},
+        "cube_bottom_on_or_above_mat_all_steps": True,
+        "pad_mat_guard_passed_all_steps": True,
+        "gripper_visual_mat_guard_passed_all_steps": True,
+        "final_cube_lift_m": 0.055,
+        "final_gripper_cube_contact_pads": 2,
+        "lift_best_sustained_two_pad_steps": 60,
+        "post_lift_hold_best_sustained_two_pad_steps": 300,
+        "post_lift_hold_min_cube_lift_m": 0.046,
+        "max_pad_cube_penetration_m": 0.0028,
         "candidate": {
+            "spawn_seed": seed,
             "cube_mass_kg": 0.030 + index * 0.002,
             "cube_friction": 3.5 + index * 0.5,
             "cube_axis_offset_m": 0.001 + index * 0.0002,
@@ -238,6 +328,8 @@ def _summary(
             "yaw_delta_rad": -0.1 + index * 0.2,
             "support_friction": 4.0,
             "pad_friction": 640.0,
+            "object_id": "cube_030",
+            "object_color": "red",
         },
     }
 
@@ -257,11 +349,29 @@ def _manifest(train: dict[str, object], validation: dict[str, object]) -> dict[s
         "requested_episodes": 2,
         "accepted_episodes": 2,
         "failed_episodes": [],
+        "attempt_count": 2,
         "acceptance_rate": 1.0,
         "randomized_contact_calibration": {"lift_scale": 1.05, "pad_cube_solref": [0.01, 1.0]},
         "render_every": 1,
+        "image_mime_type": "image/bmp",
+        "object_suite": {"object_id": "cube_030", "object_color": "red"},
+        "observation_camera": {
+            "profile": "ground_pickup_closeup",
+            "target": "initial_cube_plus_35mm_z",
+            "distance_m": 0.24,
+            "azimuth_deg": 215.0,
+            "elevation_deg": -10.0,
+            "width_px": 32,
+            "height_px": 32,
+        },
         "joint_names": [f"joint_{index}" for index in range(7)],
         "action_names": [f"joint_{index}" for index in range(7)],
+        "success_criteria": {
+            "final_cube_lift_m": 0.05,
+            "final_gripper_cube_contact_pads": 2,
+            "post_lift_hold_min_cube_lift_m": 0.045,
+            "max_pad_cube_penetration_m": 0.003,
+        },
         "randomization": {
             "yaw_delta_rad": {"min": -0.2, "max": 0.2},
             "cube_mass_kg": {"min": 0.028, "max": 0.036},
@@ -295,26 +405,72 @@ def _manifest(train: dict[str, object], validation: dict[str, object]) -> dict[s
 
 def _write_episode(root: Path, summary: dict[str, object], *, split: str) -> None:
     episode_path = root / str(summary["path"])
-    image_path = f"splits/{split}/frames/episode_0000/frame_0000.bmp"
     episode_path.parent.mkdir(parents=True, exist_ok=True)
-    frame_path = root / image_path
-    frame_path.parent.mkdir(parents=True, exist_ok=True)
-    frame_path.write_bytes(b"BM")
-    row = {
-        "episode_index": summary["episode_index"],
-        "split": split,
-        "split_episode_index": 0,
-        "frame_index": 0,
-        "timestamp": 0.0,
-        "phase": "approach_down_to_cube_on_mat",
-        "task": "pick up the cube",
-        "observation": {"state": [0.0] * 10, "images": {"render": image_path}},
-        "action": [0.0] * 7,
-        "reward": 0.0,
-        "done": False,
-        "info": {"candidate": dict(summary["candidate"])},
-    }
-    episode_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    phases = [
+        "approach_down_to_cube_on_mat",
+        "close_on_cube_on_mat",
+        "hold_before_lift",
+        "lift_from_mat",
+        "post_lift_hold",
+    ]
+    pad_counts = [0, 1, 2, 2, 2]
+    lift_values = [0.0, 0.01, 0.05, 0.055, 0.055]
+    rows = []
+    for frame_index, (phase, pad_count, cube_lift) in enumerate(zip(phases, pad_counts, lift_values)):
+        image_path = f"splits/{split}/frames/episode_0000/frame_{frame_index:04d}.bmp"
+        frame_path = root / image_path
+        _write_bmp(frame_path, red_box=(8, 8, 24, 24))
+        ground_pickup = {
+            "step": frame_index,
+            "phase": phase,
+            "pad_cube_contacted_pads": pad_count,
+            "cube_lift_m": cube_lift,
+            "mat_guard": {"passed": True, "bottom_on_or_above_mat": True},
+            "pad_mat_guard": {"passed": True},
+            "gripper_visual_mat_guard": {"passed": True},
+            "pad_cube_contact_depth": {"max_penetration_m": 0.0028},
+        }
+        rows.append(
+            {
+                "episode_index": summary["episode_index"],
+                "split": split,
+                "split_episode_index": 0,
+                "frame_index": frame_index,
+                "timestamp": frame_index / 30.0,
+                "phase": phase,
+                "task": "pick up the cube",
+                "observation": {"state": [0.0] * 10, "images": {"render": image_path}},
+                "action": [0.0] * 7,
+                "reward": 0.0,
+                "done": False,
+                "info": {
+                    "candidate": dict(summary["candidate"]),
+                    "grasp_attached": False,
+                    "ground_pickup": ground_pickup,
+                },
+            }
+        )
+    episode_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+
+def _write_bmp(path: Path, *, red_box: tuple[int, int, int, int] | None) -> None:
+    width = height = 32
+    row_stride = ((width * 3 + 3) // 4) * 4
+    pixels = bytearray(row_stride * height)
+    if red_box is not None:
+        x0, y0, x1, y1 = red_box
+        for display_y in range(y0, y1):
+            source_y = height - 1 - display_y
+            for x in range(x0, x1):
+                offset = source_y * row_stride + x * 3
+                pixels[offset : offset + 3] = bytes((20, 20, 220))
+    pixel_offset = 54
+    file_size = pixel_offset + len(pixels)
+    header = bytearray(b"BM")
+    header.extend(struct.pack("<IHHI", file_size, 0, 0, pixel_offset))
+    header.extend(struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0, len(pixels), 0, 0, 0, 0))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(header) + bytes(pixels))
 
 
 class _FakeObj:

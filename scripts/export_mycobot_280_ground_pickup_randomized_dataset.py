@@ -365,6 +365,8 @@ def export_randomized_dataset(
             "distance_m": 0.24,
             "azimuth_deg": 215.0,
             "elevation_deg": -10.0,
+            "width_px": int(width),
+            "height_px": int(height),
         },
         "joint_names": teacher.JOINT_NAMES,
         "action_names": teacher.JOINT_NAMES,
