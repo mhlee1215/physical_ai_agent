@@ -2216,6 +2216,58 @@ PYTHONPATH=src:. .venv/bin/python scripts/real_so100_jaw_readiness.py --image _w
 PYTHONPATH=src:. .venv/bin/python scripts/real_so100_next_action_gate.py --pregrasp-probe _workspace/real_so100/<new_observe_dir>/pregrasp_probe_frame_000001.json --jaw-readiness _workspace/real_so100/<new_observe_dir>/camera_0_jaw_readiness_frame_000001.json --object-view-camera 1 --jaw-camera 0 --grasp-outcome _workspace/real_so100/gripper_close_minus120_contact_probe_001/grasp_outcome.json --output _workspace/real_so100/<new_observe_dir>/next_action_gate.json
 ```
 
+## myCobot 280 SmolVLA Readiness Verification
+
+The myCobot 280 fine-tuning lane uses a 7D state/action contract and must not
+inherit SO101's 6D embodiment assumptions. Its config-first pose-diverse
+baseline is:
+
+```text
+configs/mycobot280/training_datasets/ground_pickup_pose_diverse_v1.json
+```
+
+Run this focused no-dependency gate before merging readiness changes:
+
+```bash
+PYTHONPATH=src:. python3 -B -m unittest \
+  tests.test_mycobot280_smolvla_readiness \
+  tests.test_mycobot_280_pi_smolvla_tiny_smoke \
+  tests.test_mycobot280_smolvla_tiny_finetune \
+  tests.test_mycobot_280_pi_lerobot_native_converter
+```
+
+Then validate and plan from the config:
+
+```bash
+PYTHONPATH=src:. python3 scripts/validate_mycobot280_training_dataset.py \
+  --config configs/mycobot280/training_datasets/ground_pickup_pose_diverse_v1.json
+PYTHONPATH=src:. python3 scripts/plan_mycobot280_smolvla_training.py \
+  --config configs/mycobot280/training_datasets/ground_pickup_pose_diverse_v1.json
+```
+
+A tiny fine-tune passes only when it performs an optimizer step and writes
+policy weights, optimizer state, train logs, TensorBoard events, and both
+`policy_preprocessor.json` and `policy_postprocessor.json`. Load that saved
+checkpoint on the held-out validation split before claiming checkpoint
+readiness. This gate proves plumbing only; closed-loop policy success remains a
+separate experiment.
+
+The full frozen baseline completed on 2026-07-31: 50 train plus 10 validation
+episodes, 31,800 rendered frames, split-aware native LeRobot conversion, two
+CUDA optimizer steps, and held-out reload. The same-batch validation loss was
+`0.8851919` for the unfine-tuned base and `0.5125332` for the two-step
+checkpoint. Treat this only as readiness evidence. The next scientific gate is
+a bounded multi-step curve and matched-seed closed-loop simulation comparison.
+See `docs/research/2026_07_31/mycobot280_smolvla_full_readiness_evidence.md`.
+
+Long WSL generation also requires a Windows-host storage gate. Check the drive
+backing `ext4.vhdx`, not only WSL `df`; the previous `SIGBUS`/`EIO` failure
+occurred when host `C:` reached 0 bytes free. Reuse one MuJoCo renderer per
+dataset run, pass a 10-episode stability gate, and keep adapter images on the
+same filesystem so hard-link materialization avoids duplicate image blocks.
+The focused lifecycle test is
+`tests.test_mycobot_280_ground_pickup_teacher_dataset_lifecycle`.
+
 ## SO101 Training Data Sampling Policy
 
 SO101 SmolVLA training must use camera1 object-position 4x4 grid-bin balanced
