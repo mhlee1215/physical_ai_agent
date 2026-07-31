@@ -11,6 +11,7 @@ from scripts.evaluate_mycobot280_smolvla_policy import (
     _clip_policy_action,
     _failed_gates,
     _failure_reason,
+    _randomized_schedule_from_manifest,
     _resolve_render_camera_profile,
     _yaw_schedule,
     build_eval_report,
@@ -220,6 +221,78 @@ class MyCobot280SmolVLAReadinessTest(unittest.TestCase):
         self.assertTrue(
             any("render_camera_profile must match" in item for item in report["errors"])
         )
+
+    def test_randomized_schedule_is_fresh_deterministic_and_manifest_bounded(self) -> None:
+        manifest = {
+            "dataset_id": "fixture-randomized-source",
+            "randomization_enabled": True,
+            "randomization": {
+                "sampler": "numpy_pcg64_seeded_per_attempt",
+                "yaw_delta_rad": {"min": -0.2, "max": 0.2},
+                "cube_axis_offset_m": {
+                    "center": 0.0015,
+                    "jitter_min": -0.0,
+                    "jitter_max": 0.0,
+                },
+                "cube_side_offset_m": {
+                    "center": 0.005,
+                    "jitter_min": -0.0,
+                    "jitter_max": 0.0,
+                },
+                "cube_mass_kg": {"min": 0.028, "max": 0.036},
+                "cube_friction": {"min": 3.4, "max": 4.0},
+                "support_friction": {"fixed": 4.0},
+                "pad_friction": {"fixed": 640.0},
+            },
+            "randomized_contact_calibration": {
+                "lift_scale": 1.05,
+                "pad_cube_solref": [0.01, 1.0],
+            },
+            "splits": {
+                "train": {"episode_summaries": [{"seed": 2800}]},
+                "validation": {"episode_summaries": [{"seed": 2802}]},
+            },
+            "rejected_attempts": [{"seed": 2801}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            schedule, contract = _randomized_schedule_from_manifest(
+                manifest_path=manifest_path,
+                episodes=3,
+                seed_start=92000,
+                torch_seed=20260731,
+            )
+            repeated, _ = _randomized_schedule_from_manifest(
+                manifest_path=manifest_path,
+                episodes=3,
+                seed_start=92000,
+                torch_seed=20260731,
+            )
+            with self.assertRaisesRegex(ValueError, "overlaps source seeds"):
+                _randomized_schedule_from_manifest(
+                    manifest_path=manifest_path,
+                    episodes=2,
+                    seed_start=2800,
+                    torch_seed=20260731,
+                )
+
+        self.assertEqual(schedule, repeated)
+        self.assertEqual([item["seed"] for item in schedule], [92000, 92001, 92002])
+        self.assertEqual(contract["source_seed_overlap_count"], 0)
+        self.assertEqual(
+            contract["candidate_selection"],
+            "direct_unfiltered_draws_without_teacher_rejection",
+        )
+        for item in schedule:
+            candidate = item["candidate"]
+            self.assertGreaterEqual(candidate["yaw_delta_rad"], -0.2)
+            self.assertLessEqual(candidate["yaw_delta_rad"], 0.2)
+            self.assertGreaterEqual(candidate["cube_mass_kg"], 0.028)
+            self.assertLessEqual(candidate["cube_mass_kg"], 0.036)
+            self.assertGreaterEqual(candidate["cube_friction"], 3.4)
+            self.assertLessEqual(candidate["cube_friction"], 4.0)
+            self.assertEqual(item["contact_solref"], [0.01, 1.0])
 
     def test_closed_loop_helpers_enforce_matched_schedule_and_action_bounds(self) -> None:
         schedule = _yaw_schedule(3, -0.2, 0.2)

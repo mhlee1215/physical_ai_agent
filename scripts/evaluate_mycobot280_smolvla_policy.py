@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -28,6 +29,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--torch-seed", type=int, default=20260731)
     parser.add_argument("--yaw-min", type=float, default=-0.20)
     parser.add_argument("--yaw-max", type=float, default=0.20)
+    parser.add_argument(
+        "--randomization-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Optional audited randomized source manifest. When supplied, draw fresh "
+            "unfiltered mass/friction/pose candidates from its exact seeded sampler."
+        ),
+    )
     parser.add_argument("--width", type=int, default=256)
     parser.add_argument("--height", type=int, default=256)
     parser.add_argument(
@@ -72,6 +82,7 @@ def main() -> None:
             torch_seed=args.torch_seed,
             yaw_min=args.yaw_min,
             yaw_max=args.yaw_max,
+            randomization_manifest=args.randomization_manifest,
             width=args.width,
             height=args.height,
             render_camera_profile=args.render_camera_profile,
@@ -153,6 +164,7 @@ def evaluate_closed_loop(
     torch_seed: int,
     yaw_min: float,
     yaw_max: float,
+    randomization_manifest: Path | None,
     width: int,
     height: int,
     render_camera_profile: str | None,
@@ -180,15 +192,14 @@ def evaluate_closed_loop(
         device=device,
         local_files_only=local_files_only,
     )
-    schedule = [
-        {
-            "episode": index,
-            "seed": int(seed_start) + index,
-            "torch_seed": int(torch_seed) + index,
-            "yaw_delta_rad": yaw,
-        }
-        for index, yaw in enumerate(_yaw_schedule(episode_count, yaw_min, yaw_max))
-    ]
+    schedule, schedule_contract = _build_schedule(
+        episodes=episode_count,
+        seed_start=seed_start,
+        torch_seed=torch_seed,
+        yaw_min=yaw_min,
+        yaw_max=yaw_max,
+        randomization_manifest=randomization_manifest,
+    )
     episode_summaries = _execute_schedule(
         policy=policy,
         preprocessor=preprocessor,
@@ -218,11 +229,13 @@ def evaluate_closed_loop(
         "episodes_requested": episode_count,
         "steps_per_episode": int(steps),
         "schedule": schedule,
+        "schedule_contract": schedule_contract,
         "episode_summaries": episode_summaries,
         "aggregate": _aggregate_episode_summaries(episode_summaries),
         "policy_runtime": policy_metadata,
         "environment": {
-            "object_physics": "fixed",
+            "object_physics": schedule_contract["object_physics"],
+            "randomization_manifest": schedule_contract.get("manifest_path"),
             "teacher_attachment_enabled": False,
             "object_teleport_during_rollout": False,
             "gravity_schedule": "zero for steps 0-119; normal for steps 120-529",
@@ -235,7 +248,11 @@ def evaluate_closed_loop(
         },
         "duration_s": round(perf_counter() - started, 4),
         "claim_boundary": (
-            "This report executes policy-only closed-loop simulation. A pilot or small "
+            "This report executes policy-only closed-loop simulation on a fresh, matched "
+            "randomized schedule. One schedule is engineering evidence; publication-level "
+            "robustness requires multiple policy-training seeds and larger held-out schedules."
+            if randomization_manifest is not None
+            else "This report executes policy-only closed-loop simulation. A pilot or small "
             "episode count is engineering evidence, not a publication-level success estimate."
         ),
     }
@@ -301,7 +318,10 @@ def _execute_schedule(
     render_camera_profile: str,
     record_representative_frames: bool,
 ) -> list[dict[str, Any]]:
-    from scripts.export_mycobot_280_ground_pickup_teacher_dataset import _make_env
+    from scripts.export_mycobot_280_ground_pickup_teacher_dataset import (
+        _apply_candidate_physics,
+        _make_env,
+    )
     from scripts.run_mycobot_280_ground_pickup_poc import (
         CUBE_HALF_SIZE,
         _apply_physics_overrides,
@@ -324,6 +344,21 @@ def _execute_schedule(
             env._diagnostic_cube_half_size = CUBE_HALF_SIZE
             _size_audit_cube(env, half_size=CUBE_HALF_SIZE)
             _apply_physics_overrides(env)
+            candidate = item.get("candidate")
+            if isinstance(candidate, dict):
+                contact_solref = item.get("contact_solref")
+                _apply_candidate_physics(
+                    env,
+                    cube_mass=float(candidate["cube_mass_kg"]),
+                    cube_friction=float(candidate["cube_friction"]),
+                    support_friction=float(candidate["support_friction"]),
+                    pad_friction=float(candidate["pad_friction"]),
+                    contact_solref=(
+                        tuple(float(value) for value in contact_solref)
+                        if isinstance(contact_solref, list)
+                        else None
+                    ),
+                )
             summaries.append(
                 _run_episode(
                     env=env,
@@ -337,6 +372,7 @@ def _execute_schedule(
                     seed=int(item["seed"]),
                     torch_seed=int(item["torch_seed"]),
                     yaw_delta=float(item["yaw_delta_rad"]),
+                    candidate=candidate if isinstance(candidate, dict) else None,
                     steps=steps,
                     render_camera_profile=render_camera_profile,
                     record_frames=record_representative_frames and int(item["episode"]) == 0,
@@ -360,6 +396,7 @@ def _run_episode(
     seed: int,
     torch_seed: int,
     yaw_delta: float,
+    candidate: dict[str, Any] | None,
     steps: int,
     render_camera_profile: str,
     record_frames: bool,
@@ -394,7 +431,15 @@ def _run_episode(
         policy.reset()
 
     pickup_qpos, lift_qpos = _candidate_qpos(yaw_delta)
-    cube_pos, cube_quat = _initial_cube_pose_for_qpos(env, pickup_qpos)
+    if candidate is None:
+        cube_pos, cube_quat = _initial_cube_pose_for_qpos(env, pickup_qpos)
+    else:
+        cube_pos, cube_quat = _initial_cube_pose_for_qpos(
+            env,
+            pickup_qpos,
+            cube_axis_offset=float(candidate["cube_axis_offset_m"]),
+            cube_side_offset=float(candidate["cube_side_offset_m"]),
+        )
     env._set_gripper(command=START_COMMAND)
     _set_cube_pose(env, cube_pos, cube_quat)
     env._mujoco.mj_forward(env.model, env.data)
@@ -410,6 +455,7 @@ def _run_episode(
             yaw_delta=yaw_delta,
             reason="cube_placement_guard_failed",
             detail=json.dumps(placement_guard, sort_keys=True),
+            candidate=candidate,
         )
 
     initial_setup_record = _record(
@@ -508,6 +554,7 @@ def _run_episode(
             detail=inference_error or f"completed {len(records)} of {steps} steps",
             trace_path=str(trace_path),
             steps=len(records),
+            candidate=candidate,
         )
 
     lift_records = [record for record in records if record["phase"] == "lift_from_mat"]
@@ -551,6 +598,7 @@ def _run_episode(
         "seed": seed,
         "torch_seed": torch_seed,
         "yaw_delta_rad": yaw_delta,
+        "candidate": candidate,
         "success": success,
         "failed_gates": failed_gates,
         "failure_reason": failure_reason,
@@ -706,6 +754,7 @@ def _runtime_failure_summary(
     yaw_delta: float,
     reason: str,
     detail: str,
+    candidate: dict[str, Any] | None = None,
     trace_path: str | None = None,
     steps: int = 0,
 ) -> dict[str, Any]:
@@ -714,6 +763,7 @@ def _runtime_failure_summary(
         "seed": seed,
         "torch_seed": torch_seed,
         "yaw_delta_rad": yaw_delta,
+        "candidate": candidate,
         "success": False,
         "failure_reason": reason,
         "failure_detail": detail,
@@ -775,6 +825,178 @@ def _yaw_schedule(episodes: int, yaw_min: float, yaw_max: float) -> list[float]:
         float(yaw_min) + (float(yaw_max) - float(yaw_min)) * index / (episodes - 1)
         for index in range(episodes)
     ]
+
+
+def _build_schedule(
+    *,
+    episodes: int,
+    seed_start: int,
+    torch_seed: int,
+    yaw_min: float,
+    yaw_max: float,
+    randomization_manifest: Path | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if randomization_manifest is None:
+        schedule = [
+            {
+                "episode": index,
+                "seed": int(seed_start) + index,
+                "torch_seed": int(torch_seed) + index,
+                "yaw_delta_rad": yaw,
+            }
+            for index, yaw in enumerate(_yaw_schedule(episodes, yaw_min, yaw_max))
+        ]
+        return schedule, {
+            "mode": "fixed_physics_yaw_sweep",
+            "object_physics": "fixed",
+            "seed_start": int(seed_start),
+            "source_seed_overlap_count": 0,
+        }
+    return _randomized_schedule_from_manifest(
+        manifest_path=randomization_manifest,
+        episodes=episodes,
+        seed_start=seed_start,
+        torch_seed=torch_seed,
+    )
+
+
+def _randomized_schedule_from_manifest(
+    *,
+    manifest_path: Path,
+    episodes: int,
+    seed_start: int,
+    torch_seed: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from scripts.export_mycobot_280_ground_pickup_randomized_dataset import (
+        CUBE_AXIS_OFFSET,
+        CUBE_SIDE_OFFSET,
+        randomized_candidates,
+    )
+
+    manifest_path = manifest_path.resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("randomization_enabled") is not True:
+        raise ValueError("randomization manifest must have randomization_enabled=true")
+    randomization = manifest.get("randomization")
+    if not isinstance(randomization, dict):
+        raise ValueError("randomization manifest is missing its randomization contract")
+    if randomization.get("sampler") != "numpy_pcg64_seeded_per_attempt":
+        raise ValueError(
+            f"unsupported randomization sampler: {randomization.get('sampler')!r}"
+        )
+
+    calibration = manifest.get("randomized_contact_calibration")
+    if not isinstance(calibration, dict):
+        raise ValueError("randomization manifest is missing contact calibration")
+    contact_solref = calibration.get("pad_cube_solref")
+    if not isinstance(contact_solref, list) or len(contact_solref) != 2:
+        raise ValueError("randomization manifest pad_cube_solref must have two values")
+
+    yaw = _required_range(randomization, "yaw_delta_rad")
+    mass = _required_range(randomization, "cube_mass_kg")
+    friction = _required_range(randomization, "cube_friction")
+    axis = _required_centered_jitter(randomization, "cube_axis_offset_m")
+    side = _required_centered_jitter(randomization, "cube_side_offset_m")
+    if not math.isclose(axis[0], float(CUBE_AXIS_OFFSET), abs_tol=1e-12):
+        raise ValueError("cube_axis_offset_m center does not match the source sampler")
+    if not math.isclose(side[0], float(CUBE_SIDE_OFFSET), abs_tol=1e-12):
+        raise ValueError("cube_side_offset_m center does not match the source sampler")
+
+    candidates = list(
+        randomized_candidates(
+            seed=int(seed_start),
+            max_attempts=int(episodes),
+            yaw_min=yaw[0],
+            yaw_max=yaw[1],
+            axis_jitter_m=axis[1],
+            side_jitter_m=side[1],
+            mass_min_kg=mass[0],
+            mass_max_kg=mass[1],
+            cube_friction_min=friction[0],
+            cube_friction_max=friction[1],
+        )
+    )
+    source_seeds = _manifest_source_seeds(manifest)
+    candidate_seeds = {candidate.spawn_seed for candidate in candidates}
+    overlap = sorted(source_seeds.intersection(candidate_seeds))
+    if overlap:
+        raise ValueError(f"fresh randomized schedule overlaps source seeds: {overlap}")
+
+    schedule = [
+        {
+            "episode": index,
+            "seed": candidate.spawn_seed,
+            "torch_seed": int(torch_seed) + index,
+            "yaw_delta_rad": candidate.yaw_delta_rad,
+            "candidate": asdict(candidate),
+            "contact_solref": [float(value) for value in contact_solref],
+        }
+        for index, candidate in enumerate(candidates)
+    ]
+    return schedule, {
+        "mode": "fresh_manifest_randomized_direct_draws",
+        "object_physics": "randomized_from_audited_source_manifest",
+        "manifest_path": str(manifest_path),
+        "source_dataset_id": manifest.get("dataset_id"),
+        "sampler": randomization["sampler"],
+        "candidate_selection": "direct_unfiltered_draws_without_teacher_rejection",
+        "seed_start": int(seed_start),
+        "source_seed_overlap_count": 0,
+        "source_seed_count": len(source_seeds),
+        "randomization": randomization,
+        "contact_calibration": calibration,
+    }
+
+
+def _required_range(
+    contract: dict[str, Any], key: str
+) -> tuple[float, float]:
+    value = contract.get(key)
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("min"), (int, float))
+        or not isinstance(value.get("max"), (int, float))
+    ):
+        raise ValueError(
+            f"randomization contract {key!r} must declare numeric min/max"
+        )
+    minimum = float(value["min"])
+    maximum = float(value["max"])
+    if minimum >= maximum:
+        raise ValueError(f"randomization contract {key!r} must have min < max")
+    return minimum, maximum
+
+
+def _required_centered_jitter(
+    contract: dict[str, Any], key: str
+) -> tuple[float, float]:
+    value = contract.get(key)
+    if not isinstance(value, dict) or not isinstance(
+        value.get("center"), (int, float)
+    ):
+        raise ValueError(f"randomization contract {key!r} must declare a center")
+    jitter_min = float(value.get("jitter_min", 0.0))
+    jitter_max = float(value.get("jitter_max", 0.0))
+    if not math.isclose(abs(jitter_min), abs(jitter_max), abs_tol=1e-12):
+        raise ValueError(f"randomization contract {key!r} must use symmetric jitter")
+    return float(value["center"]), max(abs(jitter_min), abs(jitter_max))
+
+
+def _manifest_source_seeds(manifest: dict[str, Any]) -> set[int]:
+    seeds: set[int] = set()
+    splits = manifest.get("splits")
+    if isinstance(splits, dict):
+        for payload in splits.values():
+            if not isinstance(payload, dict):
+                continue
+            for summary in payload.get("episode_summaries", []):
+                if isinstance(summary, dict) and isinstance(summary.get("seed"), int):
+                    seeds.add(int(summary["seed"]))
+    for field in ("rejected_attempts", "rejections"):
+        for rejection in manifest.get(field, []):
+            if isinstance(rejection, dict) and isinstance(rejection.get("seed"), int):
+                seeds.add(int(rejection["seed"]))
+    return seeds
 
 
 def _write_rgb_image(pixels: Any, path: Path) -> None:
