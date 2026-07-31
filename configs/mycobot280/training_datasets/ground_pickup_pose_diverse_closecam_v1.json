@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "name": "ground_pickup_pose_diverse_v1",
-  "description": "Controlled 50-train/10-validation myCobot 280 SmolVLA wide-camera baseline using deterministic teacher-aligned pose diversity.",
+  "name": "ground_pickup_pose_diverse_closecam_v1",
+  "description": "Camera-matched deterministic control for the myCobot 280 SmolVLA ground-pickup ablation.",
   "robot": {
     "name": "myCobot 280 Pi + adaptive gripper",
     "model_profile": "mycobot_280_pi_adaptive_gripper",
@@ -25,7 +25,7 @@
     "profile": "cube_from_mat_medium",
     "cube_half_size_m": 0.015,
     "cube_mass_kg": 0.032,
-    "note": "This controlled baseline freezes object properties; object_suite_v0 randomization is a later comparison condition."
+    "note": "Object physics are fixed and identical to the wide-camera deterministic control."
   },
   "feature_contract": {
     "base_checkpoint": "lerobot/smolvla_base",
@@ -34,9 +34,12 @@
     "action_key": "action",
     "camera_contract": {
       "observation.images.camera1": {
-        "profile": "full_robot",
+        "profile": "ground_pickup_closeup",
         "resolution_hw": [256, 256],
-        "provenance": "legacy deterministic source manifest predates explicit camera metadata"
+        "target": "initial_cube_xyz_plus_[0,0,0.035]_m",
+        "distance_m": 0.24,
+        "azimuth_deg": 215.0,
+        "elevation_deg": -10.0
       }
     },
     "state_names": [
@@ -60,7 +63,7 @@
   },
   "source_dataset": {
     "format": "mycobot_jsonl_v1",
-    "root": "_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_pose_diverse_v1_50train_10val_20260730",
+    "root": "_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_pose_diverse_closecam_v1_50train_10val_png_20260731",
     "expected_episodes": 60,
     "expected_splits": {
       "train": 50,
@@ -71,6 +74,16 @@
     "expected_randomization_enabled": false,
     "expected_teacher_attachment_enabled": false,
     "expected_object_teleport_during_pickup_lift": false,
+    "expected_image_mime_type": "image/png",
+    "expected_observation_camera": {
+      "profile": "ground_pickup_closeup",
+      "resolution_hw": [256, 256],
+      "mode": "free_camera",
+      "target": "initial_cube_xyz_plus_[0,0,0.035]_m",
+      "distance_m": 0.24,
+      "azimuth_deg": 215.0,
+      "elevation_deg": -10.0
+    },
     "required_success_criteria": {
       "final_cube_lift_m": 0.05,
       "final_gripper_cube_contact_pads": 2,
@@ -89,7 +102,7 @@
       "--official-gripper-root",
       "_workspace/worktrees/mycobot-280pi-adaptive/_vendor/mycobot_ros",
       "--output-dir",
-      "_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_pose_diverse_v1_50train_10val_20260730",
+      "_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_pose_diverse_closecam_v1_50train_10val_png_20260731",
       "--train-episodes",
       "50",
       "--val-episodes",
@@ -101,38 +114,48 @@
       "--height",
       "256",
       "--render-every",
-      "1"
+      "1",
+      "--render-camera-profile",
+      "ground_pickup_closeup",
+      "--image-format",
+      "png"
     ],
     "expected_all_frames_rendered": true
   },
   "lerobot_conversion": {
-    "output_root": "_workspace/mycobot280_lerobot/ground_pickup_pose_diverse_v1_train",
+    "output_root": "_workspace/mycobot280_lerobot/ground_pickup_pose_diverse_closecam_v1_train",
     "split_output_roots": {
-      "train": "_workspace/mycobot280_lerobot/ground_pickup_pose_diverse_v1_train",
-      "validation": "_workspace/mycobot280_lerobot/ground_pickup_pose_diverse_v1_validation"
+      "train": "_workspace/mycobot280_lerobot/ground_pickup_pose_diverse_closecam_v1_train",
+      "validation": "_workspace/mycobot280_lerobot/ground_pickup_pose_diverse_closecam_v1_validation"
     },
-    "repo_id": "physical-ai-agent/mycobot-280-ground-pickup-pose-diverse-v1-train",
-    "validation_repo_id": "physical-ai-agent/mycobot-280-ground-pickup-pose-diverse-v1-validation",
+    "native_output_roots": {
+      "train": "_workspace/mycobot280_lerobot/ground_pickup_pose_diverse_closecam_v1_train_native",
+      "validation": "_workspace/mycobot280_lerobot/ground_pickup_pose_diverse_closecam_v1_validation_native"
+    },
+    "repo_id": "physical-ai-agent/mycobot-280-ground-pickup-pose-diverse-closecam-v1-train",
+    "validation_repo_id": "physical-ai-agent/mycobot-280-ground-pickup-pose-diverse-closecam-v1-validation",
     "converter_script": "scripts/export_mycobot_280_ground_pickup_lerobot_dataset.py",
     "native_converter_script": "scripts/convert_mycobot_280_pi_adaptive_jsonl_to_lerobot.py",
-    "claim_boundary": "Deterministic pose-diverse controlled baseline; no robustness or policy-success claim."
+    "claim_boundary": "Camera-only deterministic control; object physics, trajectories, split sizes, and training recipe match the wide condition."
   },
   "training_smoke": {
     "policy_path": "lerobot/smolvla_base",
-    "output_dir": "_workspace/mycobot280_training/ground_pickup_pose_diverse_v1",
+    "output_dir": "_workspace/mycobot280_training/ground_pickup_pose_diverse_closecam_v1_100step_seed20260731",
     "batch_size": 1,
-    "steps": 2,
-    "max_batches": 1,
+    "steps": 100,
+    "learning_rate": 0.00001,
+    "torch_seed": 20260731,
+    "max_batches": 100,
     "device": "cuda",
-    "tensorboard_dir": "_workspace/mycobot280_training/ground_pickup_pose_diverse_v1/tensorboard",
-    "checkpoint_dir": "_workspace/mycobot280_training/ground_pickup_pose_diverse_v1/checkpoints",
-    "claim_boundary": "Integration smoke only until a longer run and closed-loop evaluation complete."
+    "tensorboard_dir": "_workspace/mycobot280_training/ground_pickup_pose_diverse_closecam_v1_100step_seed20260731/tensorboard",
+    "checkpoint_dir": "_workspace/mycobot280_training/ground_pickup_pose_diverse_closecam_v1_100step_seed20260731/checkpoints",
+    "claim_boundary": "One matched 100-step engineering run; publication estimates still require multiple training seeds."
   },
   "closed_loop_stub": {
     "script": "scripts/evaluate_mycobot280_smolvla_policy.py",
-    "output_dir": "_workspace/mycobot280_eval/ground_pickup_pose_diverse_v1",
-    "render_camera_profile": "full_robot",
-    "episodes": 10,
+    "output_dir": "_workspace/mycobot280_eval/ground_pickup_pose_diverse_closecam_v1",
+    "render_camera_profile": "ground_pickup_closeup",
+    "episodes": 11,
     "metrics": [
       "success",
       "final_cube_lift_m",
@@ -142,10 +165,10 @@
       "failure_reason"
     ],
     "future_comparison_rows": [
-      "unfinetuned_baseline",
-      "deterministic_pose_diverse_finetuned_policy",
-      "randomized_object_suite_finetuned_policy",
-      "finetuned_policy_plus_verifier_retry"
+      "unfinetuned_wide_camera",
+      "finetuned_wide_camera",
+      "unfinetuned_close_camera",
+      "finetuned_close_camera"
     ]
   }
 }

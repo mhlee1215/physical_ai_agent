@@ -91,6 +91,17 @@ def validate_config(
         warnings.append("base checkpoint is not lerobot/smolvla_base")
     if not _dict(feature.get("camera_contract")):
         errors.append("feature_contract.camera_contract must declare at least one camera")
+    expected_camera = _dict(source.get("expected_observation_camera"))
+    render_camera_profile = closed_loop.get("render_camera_profile")
+    if expected_camera and render_camera_profile != expected_camera.get("profile"):
+        errors.append(
+            "closed_loop_stub.render_camera_profile must match "
+            "source_dataset.expected_observation_camera.profile"
+        )
+    if render_camera_profile not in (None, "full_robot", "ground_pickup_closeup"):
+        errors.append(
+            f"unsupported closed-loop render camera profile: {render_camera_profile!r}"
+        )
     if not str(config.get("task_prompt", "")).strip():
         errors.append("task_prompt is required")
     if source.get("expected_teacher_attachment_enabled") is not False:
@@ -130,6 +141,7 @@ def validate_config(
             "action_dim": action_dim,
             "joint_names": joint_names,
             "camera_keys": sorted(_dict(feature.get("camera_contract")).keys()),
+            "render_camera_profile": render_camera_profile,
             "conversion_output_root": conversion.get("output_root"),
             "training_output_dir": smoke.get("output_dir"),
             "closed_loop_script": closed_loop.get("script"),
@@ -164,6 +176,20 @@ def _validate_source_dataset(*, config: dict[str, Any], dataset_root: Path) -> d
     _expect_equal(errors, "randomization_enabled", manifest.get("randomization_enabled"), source.get("expected_randomization_enabled"))
     _expect_equal(errors, "teacher_attachment_enabled", manifest.get("teacher_attachment_enabled"), source.get("expected_teacher_attachment_enabled"))
     _expect_equal(errors, "object_teleport_during_pickup_lift", manifest.get("object_teleport_during_pickup_lift"), source.get("expected_object_teleport_during_pickup_lift"))
+    if "expected_observation_camera" in source:
+        _expect_equal(
+            errors,
+            "observation_camera",
+            manifest.get("observation_camera"),
+            source.get("expected_observation_camera"),
+        )
+    if "expected_image_mime_type" in source:
+        _expect_equal(
+            errors,
+            "image_mime_type",
+            manifest.get("image_mime_type"),
+            source.get("expected_image_mime_type"),
+        )
     if int(manifest.get("episodes", -1)) != expected_episodes:
         errors.append(f"manifest episodes {manifest.get('episodes')} != expected {expected_episodes}")
     if int(manifest.get("passed_episodes", -1)) != expected_episodes:

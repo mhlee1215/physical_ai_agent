@@ -11,6 +11,7 @@ from scripts.evaluate_mycobot280_smolvla_policy import (
     _clip_policy_action,
     _failed_gates,
     _failure_reason,
+    _resolve_render_camera_profile,
     _yaw_schedule,
     build_eval_report,
 )
@@ -82,6 +83,11 @@ class MyCobot280SmolVLAReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             dataset_root = _write_split_fixture_dataset(tmp_path / "dataset")
+            manifest_path = dataset_root / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["observation_camera"] = _close_camera_contract()
+            manifest["image_mime_type"] = "image/png"
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             config_path = _write_config(tmp_path / "config.json", dataset_root)
             config = json.loads(config_path.read_text())
             config["source_dataset"]["expected_generation_mode"] = (
@@ -129,6 +135,8 @@ class MyCobot280SmolVLAReadinessTest(unittest.TestCase):
                 {"train": 1, "validation": 1},
             )
             self.assertEqual(report["source_split"], "train")
+            self.assertEqual(report["observation_camera"], _close_camera_contract())
+            self.assertEqual(report["image_mime_type"], "image/png")
             self.assertEqual(report["episodes"], 1)
             self.assertEqual(report["exported_frames"], 2)
             self.assertEqual(episodes[0]["split"], "train")
@@ -172,6 +180,46 @@ class MyCobot280SmolVLAReadinessTest(unittest.TestCase):
             self.assertEqual(planned["status"], "planned")
             self.assertEqual(planned["episodes"], 2)
             self.assertIn("max_pad_cube_penetration_m", planned["metrics"])
+
+    def test_camera_profile_resolves_from_config_and_allows_explicit_override(self) -> None:
+        config = {
+            "closed_loop_stub": {
+                "render_camera_profile": "ground_pickup_closeup",
+            }
+        }
+
+        self.assertEqual(
+            _resolve_render_camera_profile(config, None),
+            "ground_pickup_closeup",
+        )
+        self.assertEqual(
+            _resolve_render_camera_profile(config, "full_robot"),
+            "full_robot",
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported render camera profile"):
+            _resolve_render_camera_profile(
+                {"closed_loop_stub": {"render_camera_profile": "unknown"}},
+                None,
+            )
+
+    def test_validator_rejects_source_and_evaluator_camera_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            dataset_root = _write_fixture_dataset(tmp_path / "dataset")
+            config_path = _write_config(tmp_path / "config.json", dataset_root)
+            config = json.loads(config_path.read_text())
+            config["source_dataset"]["expected_observation_camera"] = (
+                _close_camera_contract()
+            )
+            config["closed_loop_stub"]["render_camera_profile"] = "full_robot"
+            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+            report = validate_config(config_path=config_path)
+
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(
+            any("render_camera_profile must match" in item for item in report["errors"])
+        )
 
     def test_closed_loop_helpers_enforce_matched_schedule_and_action_bounds(self) -> None:
         schedule = _yaw_schedule(3, -0.2, 0.2)
@@ -368,6 +416,18 @@ def _write_split_fixture_dataset(root: Path) -> Path:
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return root
+
+
+def _close_camera_contract() -> dict[str, object]:
+    return {
+        "profile": "ground_pickup_closeup",
+        "resolution_hw": [256, 256],
+        "mode": "free_camera",
+        "target": "initial_cube_xyz_plus_[0,0,0.035]_m",
+        "distance_m": 0.24,
+        "azimuth_deg": 215.0,
+        "elevation_deg": -10.0,
+    }
 
 
 if __name__ == "__main__":

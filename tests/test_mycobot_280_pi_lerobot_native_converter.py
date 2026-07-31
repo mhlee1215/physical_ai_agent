@@ -106,6 +106,8 @@ class MyCobot280PiLeRobotNativeConverterTest(unittest.TestCase):
 
             self.assertEqual(report["status"], "passed")
             self.assertEqual(report["source_schema"], "ground_pickup_intermediate_v1")
+            self.assertEqual(report["observation_camera"], _close_camera_contract())
+            self.assertEqual(report["image_mime_type"], "image/png")
             self.assertEqual(report["exported_frames"], 2)
             instance = FakeLeRobotDataset.instances[-1]
             self.assertIn("observation.images.camera1", instance.features)
@@ -257,7 +259,16 @@ def _write_ground_pickup_intermediate(tmp_path: Path) -> Path:
         json.dumps({"episode_index": 0, "from_frame": 0, "to_frame": 1, "length": 2}, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    (source_root / "meta" / "info.json").write_text(json.dumps({"fps": 30}), encoding="utf-8")
+    (source_root / "meta" / "info.json").write_text(
+        json.dumps(
+            {
+                "fps": 30,
+                "observation_camera": _close_camera_contract(),
+                "image_mime_type": "image/png",
+            }
+        ),
+        encoding="utf-8",
+    )
     return source_root
 
 
@@ -279,6 +290,18 @@ def _trace_record(index: int, *, z: float, contacts: int) -> dict[str, object]:
 def _write_tiny_ppm(path: Path, *, tint: int) -> None:
     pixels = bytes((tint, 30, 90, tint, 40, 100, tint, 50, 110, tint, 60, 120))
     path.write_bytes(b"P6\n2 2\n255\n" + pixels)
+
+
+def _close_camera_contract() -> dict[str, object]:
+    return {
+        "profile": "ground_pickup_closeup",
+        "resolution_hw": [256, 256],
+        "mode": "free_camera",
+        "target": "initial_cube_xyz_plus_[0,0,0.035]_m",
+        "distance_m": 0.24,
+        "azimuth_deg": 215.0,
+        "elevation_deg": -10.0,
+    }
 
 
 if __name__ == "__main__":

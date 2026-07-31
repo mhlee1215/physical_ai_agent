@@ -88,6 +88,8 @@ def convert_mycobot_280_pi_adaptive_jsonl_to_lerobot(
                 fps=resolved_fps,
                 features=features,
                 source_schema=source_schema,
+                observation_camera=info.get("observation_camera"),
+                image_mime_type=info.get("image_mime_type"),
                 reason=f"lerobot import failed: {exc}",
             )
             _write_report(output_root, report, overwrite=overwrite)
@@ -144,6 +146,8 @@ def convert_mycobot_280_pi_adaptive_jsonl_to_lerobot(
         "exported_frames": exported_frames,
         "features": features,
         "source_schema": source_schema,
+        "observation_camera": info.get("observation_camera"),
+        "image_mime_type": info.get("image_mime_type"),
         "source_episodes": episodes,
         "claim_boundary": (
             "This proves conversion through the native LeRobotDataset API. It does not prove "
@@ -162,6 +166,8 @@ def _blocked_report(
     fps: int,
     features: dict[str, dict[str, Any]],
     source_schema: str,
+    observation_camera: Any,
+    image_mime_type: Any,
     reason: str,
 ) -> dict[str, Any]:
     return {
@@ -174,6 +180,8 @@ def _blocked_report(
         "fps": fps,
         "features": features,
         "source_schema": source_schema,
+        "observation_camera": observation_camera,
+        "image_mime_type": image_mime_type,
         "blocker": reason,
         "install_command": "sh scripts/install/local_install.sh --checkpoint 05-06",
         "approval_required": True,

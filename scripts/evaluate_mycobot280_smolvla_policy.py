@@ -30,6 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yaw-max", type=float, default=0.20)
     parser.add_argument("--width", type=int, default=256)
     parser.add_argument("--height", type=int, default=256)
+    parser.add_argument(
+        "--render-camera-profile",
+        choices=("full_robot", "ground_pickup_closeup"),
+        default=None,
+    )
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--record-representative-frames", action="store_true")
@@ -48,6 +53,7 @@ def main() -> None:
             episodes=args.episodes,
             dry_run=True,
             require_policy=args.require_policy,
+            render_camera_profile=args.render_camera_profile,
         )
     else:
         if args.dataset_root is None:
@@ -68,6 +74,7 @@ def main() -> None:
             yaw_max=args.yaw_max,
             width=args.width,
             height=args.height,
+            render_camera_profile=args.render_camera_profile,
             device=args.device,
             local_files_only=args.local_files_only,
             record_representative_frames=args.record_representative_frames,
@@ -91,8 +98,10 @@ def build_eval_report(
     episodes: int | None,
     dry_run: bool,
     require_policy: bool,
+    render_camera_profile: str | None = None,
 ) -> dict[str, Any]:
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    resolved_camera_profile = _resolve_render_camera_profile(config, render_camera_profile)
     validation = validate_config(config_path=config_path, require_present=False)
     closed_loop = config["closed_loop_stub"]
     requested_episodes = int(episodes if episodes is not None else closed_loop.get("episodes", 3))
@@ -119,6 +128,7 @@ def build_eval_report(
             "robot": config["robot"]["name"],
             "state_dim": config["robot"]["state_dim"],
             "action_dim": config["robot"]["action_dim"],
+            "render_camera_profile": resolved_camera_profile,
             "success_source": "myCobot 280 ground-pickup contact/lift/hold verifier",
         },
         "claim_boundary": (
@@ -145,6 +155,7 @@ def evaluate_closed_loop(
     yaw_max: float,
     width: int,
     height: int,
+    render_camera_profile: str | None,
     device: str,
     local_files_only: bool,
     record_representative_frames: bool,
@@ -153,6 +164,7 @@ def evaluate_closed_loop(
         raise ValueError("--steps must be positive")
     config = json.loads(config_path.read_text(encoding="utf-8"))
     closed_loop = config["closed_loop_stub"]
+    resolved_camera_profile = _resolve_render_camera_profile(config, render_camera_profile)
     episode_count = int(episodes if episodes is not None else closed_loop.get("episodes", 3))
     if episode_count <= 0:
         raise ValueError("--episodes must be positive")
@@ -190,6 +202,7 @@ def evaluate_closed_loop(
         steps=steps,
         width=width,
         height=height,
+        render_camera_profile=resolved_camera_profile,
         record_representative_frames=record_representative_frames,
     )
     return {
@@ -214,7 +227,10 @@ def evaluate_closed_loop(
             "object_teleport_during_rollout": False,
             "gravity_schedule": "zero for steps 0-119; normal for steps 120-529",
             "state_input": "7D arm qpos plus gripper command",
-            "camera_input": f"observation.images.camera1 rendered at {width}x{height} RGB",
+            "camera_input": (
+                f"observation.images.camera1 rendered at {width}x{height} RGB"
+            ),
+            "render_camera_profile": resolved_camera_profile,
             "excluded_policy_inputs": ["cube pose", "contact metrics", "MuJoCo state"],
         },
         "duration_s": round(perf_counter() - started, 4),
@@ -282,6 +298,7 @@ def _execute_schedule(
     steps: int,
     width: int,
     height: int,
+    render_camera_profile: str,
     record_representative_frames: bool,
 ) -> list[dict[str, Any]]:
     from scripts.export_mycobot_280_ground_pickup_teacher_dataset import _make_env
@@ -321,6 +338,7 @@ def _execute_schedule(
                     torch_seed=int(item["torch_seed"]),
                     yaw_delta=float(item["yaw_delta_rad"]),
                     steps=steps,
+                    render_camera_profile=render_camera_profile,
                     record_frames=record_representative_frames and int(item["episode"]) == 0,
                 )
             )
@@ -343,6 +361,7 @@ def _run_episode(
     torch_seed: int,
     yaw_delta: float,
     steps: int,
+    render_camera_profile: str,
     record_frames: bool,
 ) -> dict[str, Any]:
     import numpy as np
@@ -350,7 +369,9 @@ def _run_episode(
 
     from scripts.export_mycobot_280_ground_pickup_teacher_dataset import (
         _candidate_qpos,
+        _dataset_render_camera,
         _initial_cube_pose_for_qpos,
+        _render_observation,
         _scripted_state_for_qpos,
     )
     from scripts.run_mycobot_280_ground_pickup_poc import (
@@ -379,6 +400,7 @@ def _run_episode(
     env._mujoco.mj_forward(env.model, env.data)
     initial_cube = np.asarray(env._cube_position(), dtype=float)
     env._cube_initial_pos = [float(value) for value in initial_cube]
+    render_camera = _dataset_render_camera(env, initial_cube, render_camera_profile)
     placement_guard = _cube_mat_guard(initial_cube)
     if not placement_guard["passed"]:
         return _runtime_failure_summary(
@@ -420,7 +442,7 @@ def _run_episode(
                 env.model.opt.gravity[:] = [0.0, 0.0, 0.0]
             else:
                 env.model.opt.gravity[:] = WORLD_GRAVITY
-            pixels = env.render()
+            pixels = _render_observation(env, render_camera)
             if record_frames and step in key_steps:
                 _write_rgb_image(pixels, episode_frame_dir / f"step_{step:04d}_{phase}.png")
             try:
@@ -473,7 +495,9 @@ def _run_episode(
         trace_file.close()
 
     if record_frames:
-        _write_rgb_image(env.render(), episode_frame_dir / "final.png")
+        _write_rgb_image(
+            _render_observation(env, render_camera), episode_frame_dir / "final.png"
+        )
     if inference_error is not None or len(records) != steps:
         return _runtime_failure_summary(
             episode=episode,
@@ -724,6 +748,22 @@ def _aggregate_episode_summaries(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "max_pad_cube_penetration_m": max(penetrations) if penetrations else None,
         "failure_reason_counts": failure_counts,
     }
+
+
+def _resolve_render_camera_profile(
+    config: dict[str, Any],
+    override: str | None,
+) -> str:
+    closed_loop = config.get("closed_loop_stub", {})
+    configured = (
+        closed_loop.get("render_camera_profile")
+        if isinstance(closed_loop, dict)
+        else None
+    )
+    profile = override or configured or "full_robot"
+    if profile not in {"full_robot", "ground_pickup_closeup"}:
+        raise ValueError(f"unsupported render camera profile: {profile}")
+    return str(profile)
 
 
 def _yaw_schedule(episodes: int, yaw_min: float, yaw_max: float) -> list[float]:

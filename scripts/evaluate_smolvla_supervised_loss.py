@@ -30,6 +30,15 @@ def main() -> None:
     parser.add_argument("--policy-path", required=True)
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--dataset-repo-id", required=True)
+    parser.add_argument(
+        "--processor-dataset-root",
+        type=Path,
+        help="Optional dataset root supplying training-split normalization statistics.",
+    )
+    parser.add_argument(
+        "--processor-dataset-repo-id",
+        help="Repo id paired with --processor-dataset-root.",
+    )
     parser.add_argument("--output-path", type=Path, required=True)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -50,6 +59,8 @@ def main() -> None:
         device=args.device,
         local_files_only=args.local_files_only,
         torch_seed=args.torch_seed,
+        processor_dataset_root=args.processor_dataset_root,
+        processor_dataset_repo_id=args.processor_dataset_repo_id,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 
@@ -66,6 +77,8 @@ def evaluate_supervised_loss(
     device: str,
     local_files_only: bool,
     torch_seed: int,
+    processor_dataset_root: Path | None = None,
+    processor_dataset_repo_id: str | None = None,
 ) -> dict[str, Any]:
     started = perf_counter()
     torch.manual_seed(int(torch_seed))
@@ -73,6 +86,16 @@ def evaluate_supervised_loss(
         torch.cuda.manual_seed_all(int(torch_seed))
 
     metadata = LeRobotDatasetMetadata(dataset_repo_id, root=dataset_root)
+    if (processor_dataset_root is None) != (processor_dataset_repo_id is None):
+        raise ValueError(
+            "--processor-dataset-root and --processor-dataset-repo-id must be provided together"
+        )
+    processor_metadata = metadata
+    if processor_dataset_root is not None and processor_dataset_repo_id is not None:
+        processor_metadata = LeRobotDatasetMetadata(
+            processor_dataset_repo_id,
+            root=processor_dataset_root,
+        )
     policy = _load_pretrained_policy(
         model_id=policy_path,
         local_files_only=local_files_only,
@@ -87,7 +110,7 @@ def evaluate_supervised_loss(
     policy.eval()
     preprocessor, _postprocessor, contract_report = make_mycobot280_pre_post_processors(
         policy=policy,
-        dataset_meta=metadata,
+        dataset_meta=processor_metadata,
         policy_path=policy_path,
         selected_device=selected_device,
     )
@@ -153,6 +176,8 @@ def evaluate_supervised_loss(
         "policy_path": policy_path,
         "dataset_root": str(dataset_root),
         "dataset_repo_id": dataset_repo_id,
+        "processor_dataset_root": str(processor_dataset_root or dataset_root),
+        "processor_dataset_repo_id": processor_dataset_repo_id or dataset_repo_id,
         "dataset_num_frames": int(dataset.num_frames),
         "dataset_num_episodes": int(dataset.num_episodes),
         "batch_size": int(batch_size),
