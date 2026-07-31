@@ -28,6 +28,7 @@ from scripts.run_mycobot_280_ground_pickup_poc import (  # noqa: E402
     LIFT_QPOS,
     LIFT_STEPS,
     MAT_FRICTION,
+    MAX_PAD_CUBE_PENETRATION_M,
     PAD_FRICTION,
     PICKUP_QPOS,
     POST_LIFT_HOLD_STEPS,
@@ -351,6 +352,17 @@ def _export_attempt(
     height: int,
     fps: int,
     render_every: int,
+    cube_axis_offset: float = CUBE_AXIS_OFFSET,
+    cube_side_offset: float = CUBE_SIDE_OFFSET,
+    cube_mass: float = CUBE_MASS,
+    cube_friction: float = MAT_FRICTION,
+    support_friction: float = MAT_FRICTION,
+    pad_friction: float = PAD_FRICTION,
+    candidate_metadata: dict[str, Any] | None = None,
+    render_camera_profile: str = "full_robot",
+    refresh_model_constants: bool = False,
+    lift_scale: float = 1.0,
+    contact_solref: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
     episode_path = output_dir / "splits" / split / "episodes" / f"episode_{split_episode_index:04d}.jsonl"
     final_frame_dir = output_dir / "splits" / split / "frames" / f"episode_{split_episode_index:04d}"
@@ -359,6 +371,19 @@ def _export_attempt(
     attempt_frame_dir.mkdir(parents=True, exist_ok=True)
     scene_cache = output_dir / "scene_cache" / f"attempt_{attempt_index:04d}"
     pickup_qpos, lift_qpos = _candidate_qpos(yaw_delta)
+    if float(lift_scale) <= 0.0:
+        raise ValueError("lift_scale must be positive")
+    lift_qpos = pickup_qpos + (lift_qpos - pickup_qpos) * float(lift_scale)
+    candidate = {
+        "yaw_delta_rad": float(yaw_delta),
+        "cube_axis_offset_m": float(cube_axis_offset),
+        "cube_side_offset_m": float(cube_side_offset),
+        "cube_mass_kg": float(cube_mass),
+        "cube_friction": float(cube_friction),
+        "support_friction": float(support_friction),
+        "pad_friction": float(pad_friction),
+        **(candidate_metadata or {}),
+    }
     env = nexus.MyCobotNexusEnv(
         nexus.MyCobotNexusConfig(
             asset_root=asset_root,
@@ -375,12 +400,27 @@ def _export_attempt(
         env._diagnostic_cube_half_size = CUBE_HALF_SIZE
         _size_audit_cube(env, half_size=CUBE_HALF_SIZE)
         _apply_physics_overrides(env)
+        _apply_candidate_physics(
+            env,
+            cube_mass=cube_mass,
+            cube_friction=cube_friction,
+            support_friction=support_friction,
+            pad_friction=pad_friction,
+            refresh_model_constants=refresh_model_constants,
+            contact_solref=contact_solref,
+        )
         env.model.opt.gravity[:] = WORLD_GRAVITY
-        cube_pos, cube_quat = _initial_cube_pose_for_qpos(env, pickup_qpos)
+        cube_pos, cube_quat = _initial_cube_pose_for_qpos(
+            env,
+            pickup_qpos,
+            cube_axis_offset=cube_axis_offset,
+            cube_side_offset=cube_side_offset,
+        )
         env._set_gripper(command=START_COMMAND)
         _set_cube_pose(env, cube_pos, cube_quat)
         env._mujoco.mj_forward(env.model, env.data)
         initial_cube = env._cube_position()
+        render_camera = _dataset_render_camera(env, initial_cube, render_camera_profile)
         placement_guard = _cube_mat_guard(initial_cube)
         if not placement_guard["passed"]:
             return _failed_attempt_summary(
@@ -395,6 +435,7 @@ def _export_attempt(
                 cube_pos=initial_cube,
                 reason="cube_placement_guard_failed",
                 placement_guard=placement_guard,
+                candidate=candidate,
             )
 
         rows: list[dict[str, Any]] = []
@@ -416,7 +457,7 @@ def _export_attempt(
             if step_index % max(1, render_every) == 0:
                 final_image_path = final_frame_dir / f"frame_{step_index:04d}.bmp"
                 attempt_image_path = attempt_frame_dir / f"frame_{step_index:04d}.bmp"
-                _write_bmp(attempt_image_path, env.render())
+                _write_bmp(attempt_image_path, _render_observation(env, render_camera))
                 image = str(final_image_path.relative_to(output_dir))
             rows.append(
                 {
@@ -436,7 +477,7 @@ def _export_attempt(
                         **_json_safe_info(info),
                         "ground_pickup": record,
                         "candidate": {
-                            "yaw_delta_rad": float(yaw_delta),
+                            **candidate,
                             "pickup_qpos": [float(x) for x in pickup_qpos],
                             "lift_qpos": [float(x) for x in lift_qpos],
                         },
@@ -451,7 +492,11 @@ def _export_attempt(
     lift_records = [record for record in records if record["phase"] == "lift_from_mat"]
     post_lift_hold_records = [record for record in records if record["phase"] == "post_lift_hold"]
     final = records[-1]
-    success = _passes(records, lift_records, post_lift_hold_records, final)
+    max_penetration = max(float(record["pad_cube_contact_depth"]["max_penetration_m"]) for record in records)
+    success = (
+        _passes(records, lift_records, post_lift_hold_records, final)
+        and max_penetration <= MAX_PAD_CUBE_PENETRATION_M
+    )
     summary = _episode_summary(
         split=split,
         split_episode_index=split_episode_index,
@@ -469,6 +514,7 @@ def _export_attempt(
         post_lift_hold_records=post_lift_hold_records,
         final=final,
         success=success,
+        candidate=candidate,
     )
     if success:
         shutil.rmtree(final_frame_dir, ignore_errors=True)
@@ -480,6 +526,33 @@ def _export_attempt(
     return summary
 
 
+def _dataset_render_camera(env: Any, initial_cube: list[float], profile: str) -> Any | None:
+    if profile == "full_robot":
+        return None
+    if profile != "ground_pickup_closeup":
+        raise ValueError(f"unsupported render camera profile: {profile}")
+    camera = env._mujoco.MjvCamera()
+    camera.type = env._mujoco.mjtCamera.mjCAMERA_FREE
+    camera.lookat[:] = np.asarray(initial_cube, dtype=float) + np.asarray([0.0, 0.0, 0.035])
+    camera.distance = 0.24
+    camera.azimuth = 215.0
+    camera.elevation = -10.0
+    return camera
+
+
+def _render_observation(env: Any, camera: Any | None) -> Any:
+    if camera is None:
+        return env.render()
+    if env._renderer is None:
+        env._renderer = env._mujoco.Renderer(
+            env.model,
+            height=env.config.height,
+            width=env.config.width,
+        )
+    env._renderer.update_scene(env.data, camera=camera)
+    return env._renderer.render()
+
+
 def _candidate_qpos(yaw_delta: float) -> tuple[np.ndarray, np.ndarray]:
     pickup = np.asarray(PICKUP_QPOS, dtype=float).copy()
     lift = np.asarray(LIFT_QPOS, dtype=float).copy()
@@ -488,7 +561,13 @@ def _candidate_qpos(yaw_delta: float) -> tuple[np.ndarray, np.ndarray]:
     return pickup, lift
 
 
-def _initial_cube_pose_for_qpos(env: nexus.MyCobotNexusEnv, pickup_qpos: np.ndarray) -> tuple[np.ndarray, list[float]]:
+def _initial_cube_pose_for_qpos(
+    env: nexus.MyCobotNexusEnv,
+    pickup_qpos: np.ndarray,
+    *,
+    cube_axis_offset: float = CUBE_AXIS_OFFSET,
+    cube_side_offset: float = CUBE_SIDE_OFFSET,
+) -> tuple[np.ndarray, list[float]]:
     nexus._set_adaptive_gate_arm_pose(env, tuple(float(x) for x in pickup_qpos))
     env._set_gripper(command=START_COMMAND)
     env._mujoco.mj_forward(env.model, env.data)
@@ -499,9 +578,59 @@ def _initial_cube_pose_for_qpos(env: nexus.MyCobotNexusEnv, pickup_qpos: np.ndar
     side_axis = np.cross(np.asarray([0.0, 0.0, 1.0]), unit_axis)
     side_axis = side_axis / max(float(np.linalg.norm(side_axis)), 1e-9)
     pos = (left + right) * 0.5
-    xy_offset = CUBE_AXIS_OFFSET * unit_axis[:2] + CUBE_SIDE_OFFSET * side_axis[:2]
+    xy_offset = float(cube_axis_offset) * unit_axis[:2] + float(cube_side_offset) * side_axis[:2]
     pos = np.asarray([pos[0] + xy_offset[0], pos[1] + xy_offset[1], WORK_MAT_TOP_Z + CUBE_HALF_SIZE], dtype=float)
     return pos, _quat_align_x_to_vector(axis)
+
+
+def _apply_candidate_physics(
+    env: nexus.MyCobotNexusEnv,
+    *,
+    cube_mass: float,
+    cube_friction: float,
+    support_friction: float,
+    pad_friction: float,
+    refresh_model_constants: bool = False,
+    contact_solref: tuple[float, float] | None = None,
+) -> None:
+    mujoco = env._mujoco
+    cube_body = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, nexus.TASK_CUBE_BODY)
+    cube_geom = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_GEOM, nexus.TASK_CUBE_GEOM)
+    if cube_body < 0 or cube_geom < 0:
+        raise RuntimeError("randomized dataset scene is missing the required task cube body or geom")
+    env.model.body_mass[cube_body] = float(cube_mass)
+    inertia = (1.0 / 6.0) * float(cube_mass) * (2.0 * CUBE_HALF_SIZE) ** 2
+    env.model.body_inertia[cube_body, :] = [inertia, inertia, inertia]
+    env.model.geom_friction[cube_geom, :3] = _friction_triplet(cube_friction)
+    if contact_solref is not None:
+        env.model.geom_solref[cube_geom, :2] = _solref_pair(contact_solref)
+    for name in ("nexus_work_mat", "nexus_floor"):
+        geom_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        if geom_id < 0:
+            raise RuntimeError(f"randomized dataset scene is missing required support geom {name!r}")
+        env.model.geom_friction[geom_id, :3] = _friction_triplet(support_friction)
+    for name in (ROBOT_LEFT_PAD, ROBOT_RIGHT_PAD):
+        geom_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        if geom_id < 0:
+            raise RuntimeError(f"randomized dataset scene is missing required fingertip pad {name!r}")
+        env.model.geom_friction[geom_id, :3] = _friction_triplet(pad_friction)
+        if contact_solref is not None:
+            env.model.geom_solref[geom_id, :2] = _solref_pair(contact_solref)
+    if refresh_model_constants:
+        mujoco.mj_setConst(env.model, env.data)
+
+
+def _solref_pair(values: tuple[float, float]) -> list[float]:
+    if len(values) != 2 or float(values[0]) <= 0.0 or float(values[1]) <= 0.0:
+        raise ValueError("contact_solref must contain two positive values")
+    return [float(values[0]), float(values[1])]
+
+
+def _friction_triplet(sliding: float) -> list[float]:
+    value = float(sliding)
+    if value <= 0.0:
+        raise ValueError("friction values must be positive")
+    return [value, value * 0.1, value * 0.1]
 
 
 def _scripted_state_for_qpos(step: int, *, pickup_qpos: np.ndarray, lift_qpos: np.ndarray) -> tuple[np.ndarray, float, str]:
@@ -531,6 +660,7 @@ def _failed_attempt_summary(
     cube_pos: Any,
     reason: str,
     placement_guard: dict[str, Any],
+    candidate: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "split": split,
@@ -545,6 +675,7 @@ def _failed_attempt_summary(
         "success": False,
         "reason": reason,
         "initial_cube_mat_guard": placement_guard,
+        "candidate": candidate,
     }
 
 
@@ -566,6 +697,7 @@ def _episode_summary(
     post_lift_hold_records: list[dict[str, Any]],
     final: dict[str, Any],
     success: bool,
+    candidate: dict[str, Any],
 ) -> dict[str, Any]:
     action_hash = _trajectory_hash([row["action"] for row in rows])
     initial_cube = np.asarray(records[0]["cube_pos"], dtype=float)
@@ -584,6 +716,7 @@ def _episode_summary(
         "rendered_frames": sum(1 for row in rows if row["observation"]["images"].get("render")),
         "success": success,
         "trajectory_hash": action_hash,
+        "candidate": candidate,
         "first_frame_pad_cube_contacted_pads": records[0]["pad_cube_contacted_pads"],
         "first_contact_step": next((record["step"] for record in records if record["pad_cube_contacted_pads"] > 0), None),
         "initial_cube_mat_guard": records[0]["mat_guard"],
@@ -625,6 +758,7 @@ def _rejection_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "seed": summary.get("seed"),
         "yaw_delta_rad": summary.get("yaw_delta_rad"),
         "initial_cube_xy": summary.get("initial_cube_xy"),
+        "candidate": summary.get("candidate"),
         "success": False,
         "reason": "success_criteria_failed",
         "checks": checks,
@@ -638,6 +772,7 @@ def _aggregate_metrics(summaries: list[dict[str, Any]], rejected_attempts: list[
     ys = [float(summary["initial_cube_xy"][1]) for summary in summaries]
     yaws = [float(summary["yaw_delta_rad"]) for summary in summaries]
     hashes = [summary["trajectory_hash"] for summary in summaries]
+    candidate_values = [summary.get("candidate", {}) for summary in summaries]
     return {
         "passed_episodes": len(summaries),
         "rejected_attempts": len(rejected_attempts),
@@ -660,7 +795,22 @@ def _aggregate_metrics(summaries: list[dict[str, Any]], rejected_attempts: list[
             "yaw_span_rad": max(yaws) - min(yaws),
             "unique_trajectory_hashes": len(set(hashes)),
         },
+        "factor_coverage": {
+            "cube_mass_kg": _numeric_range(candidate_values, "cube_mass_kg"),
+            "cube_friction": _numeric_range(candidate_values, "cube_friction"),
+            "support_friction": _numeric_range(candidate_values, "support_friction"),
+            "pad_friction": _numeric_range(candidate_values, "pad_friction"),
+            "cube_axis_offset_m": _numeric_range(candidate_values, "cube_axis_offset_m"),
+            "cube_side_offset_m": _numeric_range(candidate_values, "cube_side_offset_m"),
+        },
     }
+
+
+def _numeric_range(items: list[dict[str, Any]], key: str) -> dict[str, float] | None:
+    values = [float(item[key]) for item in items if isinstance(item.get(key), (int, float))]
+    if not values:
+        return None
+    return {"min": min(values), "max": max(values), "span": max(values) - min(values)}
 
 
 if __name__ == "__main__":
