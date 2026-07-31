@@ -34,6 +34,7 @@ EXPECTED_CAMERA = {
     "elevation_deg": -10.0,
 }
 MIN_RED_CUBE_FRACTION = 0.02
+FACTOR_BIN_COUNT = 4
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -315,11 +316,13 @@ def validate_randomized_manifest(
         summaries=summaries,
         randomization=randomization,
     )
+    factor_audit, factor_warnings = _factor_acceptance_audit(manifest, summaries)
     source_audit = _aggregate_episode_audits(errors, episode_audits, expected=expected)
 
     return {
         "status": "failed" if errors else "passed",
         "errors": errors,
+        "warnings": factor_warnings,
         "accepted_episodes": manifest.get("accepted_episodes"),
         "rejected_attempt_count": len(manifest.get("rejected_attempts", [])),
         "acceptance_rate": manifest.get("acceptance_rate"),
@@ -328,6 +331,7 @@ def validate_randomized_manifest(
         "camera_contract": camera,
         "source_episode_audit": source_audit,
         "attempt_provenance_audit": rejection_audit,
+        "factor_acceptance_audit": factor_audit,
     }
 
 
@@ -683,6 +687,90 @@ def _aggregate_episode_audits(
             default=0.0,
         ),
     }
+
+
+def _factor_acceptance_audit(
+    manifest: dict[str, Any],
+    summaries: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[str]]:
+    """Describe rejection-conditioned factor coverage without failing valid source data."""
+    randomization = manifest.get("randomization", {})
+    raw_rejected = manifest.get("rejected_attempts", [])
+    rejected = [
+        item for item in raw_rejected if isinstance(item, dict)
+    ] if isinstance(raw_rejected, list) else []
+    warnings: list[str] = []
+    factors: dict[str, Any] = {}
+    for factor in ("yaw_delta_rad", "cube_mass_kg", "cube_friction"):
+        declaration = randomization.get(factor, {}) if isinstance(randomization, dict) else {}
+        try:
+            minimum = float(declaration["min"])
+            maximum = float(declaration["max"])
+        except (KeyError, TypeError, ValueError):
+            warnings.append(f"{factor} has no auditable declared min/max range")
+            continue
+        if maximum <= minimum:
+            warnings.append(f"{factor} has an invalid declared range [{minimum}, {maximum}]")
+            continue
+
+        width = (maximum - minimum) / FACTOR_BIN_COUNT
+        bins = [
+            {
+                "index": index,
+                "min": minimum + index * width,
+                "max": minimum + (index + 1) * width,
+                "attempts": 0,
+                "accepted": 0,
+                "rejected": 0,
+                "train": 0,
+                "validation": 0,
+                "acceptance_rate": None,
+            }
+            for index in range(FACTOR_BIN_COUNT)
+        ]
+        for item, outcome in [
+            *((summary, "accepted") for summary in summaries),
+            *((attempt, "rejected") for attempt in rejected),
+        ]:
+            candidate = item.get("candidate")
+            if not isinstance(candidate, dict):
+                continue
+            try:
+                value = float(candidate[factor])
+            except (KeyError, TypeError, ValueError):
+                continue
+            normalized = (value - minimum) / (maximum - minimum)
+            bin_index = min(FACTOR_BIN_COUNT - 1, max(0, int(normalized * FACTOR_BIN_COUNT)))
+            factor_bin = bins[bin_index]
+            factor_bin["attempts"] += 1
+            factor_bin[outcome] += 1
+            split = item.get("split")
+            if outcome == "accepted" and split in ("train", "validation"):
+                factor_bin[str(split)] += 1
+
+        for factor_bin in bins:
+            attempts = int(factor_bin["attempts"])
+            accepted = int(factor_bin["accepted"])
+            rate = accepted / attempts if attempts else None
+            factor_bin["acceptance_rate"] = rate
+            label = f"{factor} bin {int(factor_bin['index']) + 1}/{FACTOR_BIN_COUNT}"
+            if attempts >= 5 and rate is not None and rate < 0.5:
+                warnings.append(
+                    f"{label} accepted {accepted}/{attempts} attempts ({rate:.1%}); "
+                    "source coverage is rejection-conditioned"
+                )
+            if accepted == 0:
+                warnings.append(f"{label} has no accepted episodes")
+            for split in ("train", "validation"):
+                if accepted > 0 and int(factor_bin[split]) == 0:
+                    warnings.append(f"{label} has accepted episodes but no {split} examples")
+
+        factors[factor] = {
+            "declared_min": minimum,
+            "declared_max": maximum,
+            "bins": bins,
+        }
+    return {"bin_count": FACTOR_BIN_COUNT, "factors": factors}, warnings
 
 
 def _check_attempt_provenance(
