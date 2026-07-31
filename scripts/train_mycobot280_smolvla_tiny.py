@@ -179,8 +179,11 @@ def _run_actual_tiny_finetune(
     from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
     from lerobot.datasets.factory import resolve_delta_timestamps
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    from lerobot.policies.factory import make_pre_post_processors
 
+    from physical_ai_agent.policies.mycobot280_smolvla_contract import (
+        CONTRACT_FILENAME,
+        make_mycobot280_pre_post_processors,
+    )
     from physical_ai_agent.policies.smolvla_real import (
         _load_pretrained_policy,
         _policy_device_metadata,
@@ -196,6 +199,7 @@ def _run_actual_tiny_finetune(
     checkpoint_model_dir = checkpoint_root / "pretrained_model"
     optimizer_state_path = checkpoint_root / "optimizer_state.pt"
     training_state_path = checkpoint_root / "training_state.json"
+    metadata = LeRobotDatasetMetadata(dataset_repo_id, root=dataset_root)
 
     policy = _load_pretrained_policy(
         model_id=policy_path,
@@ -210,12 +214,12 @@ def _run_actual_tiny_finetune(
             policy.to(selected_device)
     policy.train()
 
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy.config,
-        pretrained_path=str(policy_path),
-        preprocessor_overrides={"device_processor": {"device": selected_device}},
+    preprocessor, postprocessor, contract_report = make_mycobot280_pre_post_processors(
+        policy=policy,
+        dataset_meta=metadata,
+        policy_path=policy_path,
+        selected_device=selected_device,
     )
-    metadata = LeRobotDatasetMetadata(dataset_repo_id, root=dataset_root)
     delta_timestamps = resolve_delta_timestamps(policy.config, metadata)
     dataset = LeRobotDataset(
         dataset_repo_id,
@@ -226,13 +230,16 @@ def _run_actual_tiny_finetune(
     if int(dataset.num_frames) <= 0:
         raise RuntimeError("Native LeRobotDataset has no frames")
 
+    data_generator = torch.Generator()
+    data_generator.manual_seed(int(torch_seed))
     dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=False,
+        shuffle=True,
         num_workers=num_workers,
         pin_memory=False,
         drop_last=False,
+        generator=data_generator,
     )
     trainable_params = [param for param in policy.parameters() if param.requires_grad]
     if not trainable_params:
@@ -300,11 +307,16 @@ def _run_actual_tiny_finetune(
         preprocessor=preprocessor,
         postprocessor=postprocessor,
     )
+    contract_config_path = checkpoint_model_dir / CONTRACT_FILENAME
+    contract_config_path.write_text(
+        json.dumps(contract_report, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     preprocessor_config_path = checkpoint_model_dir / "policy_preprocessor.json"
     postprocessor_config_path = checkpoint_model_dir / "policy_postprocessor.json"
     missing_processor_configs = [
         str(path)
-        for path in (preprocessor_config_path, postprocessor_config_path)
+        for path in (preprocessor_config_path, postprocessor_config_path, contract_config_path)
         if not path.is_file()
     ]
     if missing_processor_configs:
@@ -330,6 +342,9 @@ def _run_actual_tiny_finetune(
         "checkpoint_model_dir": str(checkpoint_model_dir),
         "preprocessor_config_path": str(preprocessor_config_path),
         "postprocessor_config_path": str(postprocessor_config_path),
+        "contract": contract_report,
+        "contract_config_path": str(contract_config_path),
+        "dataloader_shuffle": True,
         "optimizer_state_path": str(optimizer_state_path),
         "train_log": str(log_path),
         "tensorboard_dir": str(tensorboard_dir),

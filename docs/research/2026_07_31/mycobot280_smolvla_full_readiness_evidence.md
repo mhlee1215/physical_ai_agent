@@ -6,6 +6,20 @@ split-aware LeRobot conversion, two real CUDA optimizer steps, checkpoint
 reload, and a same-batch held-out comparison against the unfine-tuned base
 policy.
 
+## 2026-07-31 Exact-7D Correction
+
+The original smoke in this note was later found to have loaded the base
+checkpoint's six-dimensional state/action processors. The dataset was 7D, but
+the RMSE helper silently compared only the first six action dimensions. The
+original loss and RMSE numbers are therefore superseded and are not evidence
+for myCobot gripper adaptation.
+
+The pipeline now binds SmolVLA to exactly 7D myCobot state/action features,
+uses only `observation.images.camera1`, derives normalization from the training
+dataset, shuffles training frames deterministically, rejects mismatched action
+dimensions, and requires a saved myCobot feature-contract marker when reloading
+a local checkpoint. The corrected evidence is recorded below.
+
 ## Storage Failure Diagnosis And Fix
 
 The earlier full generation failures were not teacher-task failures. Windows
@@ -77,7 +91,7 @@ _workspace/mycobot280_lerobot/
 Both native reports declare 7D `observation.state`, 7D `action`, and
 256 x 256 RGB `observation.images.camera1` features.
 
-## Full-Data Fine-Tune Smoke
+## Corrected Exact-7D Fine-Tune Smoke
 
 The existing approved LeRobot Python environment and cached model weights were
 used. No package installation or model download was required. The run pinned:
@@ -91,17 +105,25 @@ HF_HOME=_workspace/local_envs/hf_home
 | Device | CUDA |
 | Training episodes / frames visible | 50 / 26,500 |
 | Optimizer steps | 2 |
-| Step 1 loss | 0.9219151 |
-| Step 2 loss | 0.5983112 |
-| Step 1 / step 2 clipped gradient norm | 29.8893 / 25.6728 |
-| Training duration | 38.1971 s |
+| State / action dimensions | 7 / 7 |
+| Camera inputs | `observation.images.camera1` only |
+| Training sampling | deterministic shuffle, seed `20260731` |
+| Step 1 loss | 0.7260140 |
+| Step 2 loss | 0.6760505 |
+| Step 1 / step 2 clipped gradient norm | 21.0531 / 21.6424 |
+| Training duration | 33.1435 s |
 | TensorBoard error | none |
+
+One constant arm-action dimension had serialized `std=0` and a mean about
+`9.5e-7` away from its observed value. The adapter centers zero-variance
+dimensions on their observed value before mean/std normalization and records
+that adjustment in the checkpoint marker.
 
 The run wrote policy weights, optimizer state, training state, logs,
 TensorBoard events, and both saved processor configs:
 
 ```text
-_workspace/mycobot280_training/ground_pickup_pose_diverse_v1/
+_workspace/mycobot280_training/ground_pickup_pose_diverse_v1_7d_stable_stats_smoke_20260731/
   tiny_finetune.json
   train.log
   tensorboard/events.out.tfevents.*
@@ -110,6 +132,7 @@ _workspace/mycobot280_training/ground_pickup_pose_diverse_v1/
   checkpoints/latest/pretrained_model/model.safetensors
   checkpoints/latest/pretrained_model/policy_preprocessor.json
   checkpoints/latest/pretrained_model/policy_postprocessor.json
+  checkpoints/latest/pretrained_model/mycobot280_feature_contract.json
 ```
 
 ## Held-Out Reload Comparison
@@ -118,28 +141,32 @@ The saved local checkpoint and processor configs reloaded successfully against
 the separate 10-episode validation dataset. One held-out batch was evaluated
 with the same seed for the base and two-step policies:
 
-| Metric | Unfine-tuned base | Two-step checkpoint | Relative reduction |
-| --- | ---: | ---: | ---: |
-| Supervised loss | 0.8851919 | 0.5125332 | 42.10% |
-| Mean postprocessed action RMSE | 0.6035341 | 0.5174604 | 14.26% |
-| Step-0 postprocessed action RMSE | 0.4902216 | 0.4284150 | 12.61% |
+| Metric | Unfine-tuned base | Two-step checkpoint | Direction |
+| --- | ---: | ---: | --- |
+| Supervised loss | 7.0737000 | 7.2547622 | slightly worse |
+| Mean postprocessed action RMSE | 0.1066802 | 0.1075550 | slightly worse |
+| Step-0 postprocessed action RMSE | 0.1183773 | 0.1187070 | slightly worse |
+| Compared action dimensions | 7 | 7 | exact match |
 
 Reports:
 
 ```text
-_workspace/mycobot280_training/ground_pickup_pose_diverse_v1/
-  validation_supervised_loss_unfinetuned.json
-  validation_supervised_loss.json
+_workspace/mycobot280_training/ground_pickup_pose_diverse_v1_7d_stable_stats_smoke_20260731/
+  validation_base_1batch.json
+  validation_finetuned_2step_1batch.json
 ```
+
+The slightly worse two-step result is expected to be inconclusive. It proves
+reload and exact-7D comparison plumbing, not a learning gain.
 
 ## Claim Boundary And Next Gate
 
 This evidence proves the complete readiness path: validated teacher data,
 split-aware adaptation, native LeRobot loading, real optimizer updates,
-complete checkpoint writing, local checkpoint reload, and a favorable
-same-batch smoke comparison. Two steps and one validation batch do not prove a
-learned policy, generalization, closed-loop task success, randomized-object
-robustness, or an agentic-method gain.
+exact-7D dataset-derived processors, complete checkpoint writing, and strict
+local checkpoint reload. Two steps and one validation batch do not prove a
+learned policy, a favorable supervised change, generalization, closed-loop task
+success, randomized-object robustness, or an agentic-method gain.
 
 The next publication-value experiment is a bounded multi-step training run with
 a multi-batch held-out loss curve, followed by matched-seed closed-loop
