@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import scripts.export_mycobot_280_ground_pickup_teacher_dataset as teacher
 from scripts.check_mycobot_280_ground_pickup_randomized_dataset import (
+    _factor_acceptance_audit,
     validate_existing_dataset,
     validate_randomized_manifest,
 )
@@ -92,6 +93,36 @@ class MyCobot280GroundPickupRandomizedDatasetTest(unittest.TestCase):
 
         self.assertEqual(audit["seed_overlap_count"], 0)
         self.assertEqual(audit["factor_overlap_count"], 1)
+
+    def test_factor_acceptance_audit_warns_on_high_mass_rejection_bias(self) -> None:
+        train = _summary(index=0, seed=10, xy=(0.1, 0.2), trajectory_hash="train")
+        validation = _summary(index=1, seed=20, xy=(0.2, 0.3), trajectory_hash="validation")
+        manifest = _manifest(train, validation)
+        manifest["rejected_attempts"] = []
+        for offset in range(5):
+            rejected = _summary(
+                index=offset + 2,
+                seed=offset + 30,
+                xy=(0.3 + offset * 0.01, 0.4),
+                trajectory_hash=f"rejected-{offset}",
+            )
+            rejected["success"] = False
+            rejected["candidate"]["cube_mass_kg"] = 0.0355
+            manifest["rejected_attempts"].append(rejected)
+
+        audit, warnings = _factor_acceptance_audit(manifest, [train, validation])
+
+        high_mass_bin = audit["factors"]["cube_mass_kg"]["bins"][-1]
+        self.assertEqual(high_mass_bin["attempts"], 5)
+        self.assertEqual(high_mass_bin["accepted"], 0)
+        self.assertEqual(high_mass_bin["rejected"], 5)
+        self.assertEqual(high_mass_bin["acceptance_rate"], 0.0)
+        self.assertTrue(
+            any(
+                "cube_mass_kg bin 4/4 accepted 0/5 attempts" in warning
+                for warning in warnings
+            )
+        )
 
     def test_candidate_physics_refreshes_mujoco_constants_and_requires_scene_geoms(self) -> None:
         env = _FakeEnv()
