@@ -6,7 +6,14 @@ import unittest
 from pathlib import Path
 
 from scripts.export_mycobot_280_ground_pickup_lerobot_dataset import export_plan
-from scripts.evaluate_mycobot280_smolvla_policy import build_eval_report
+from scripts.evaluate_mycobot280_smolvla_policy import (
+    _aggregate_episode_summaries,
+    _clip_policy_action,
+    _failed_gates,
+    _failure_reason,
+    _yaw_schedule,
+    build_eval_report,
+)
 from scripts.plan_mycobot280_smolvla_training import build_dry_run_report
 from scripts.validate_mycobot280_training_dataset import validate_config
 
@@ -165,6 +172,81 @@ class MyCobot280SmolVLAReadinessTest(unittest.TestCase):
             self.assertEqual(planned["status"], "planned")
             self.assertEqual(planned["episodes"], 2)
             self.assertIn("max_pad_cube_penetration_m", planned["metrics"])
+
+    def test_closed_loop_helpers_enforce_matched_schedule_and_action_bounds(self) -> None:
+        schedule = _yaw_schedule(3, -0.2, 0.2)
+        action, clipped = _clip_policy_action(
+            [2.0, -2.0, 0.0, 0.0, 0.0, 0.0, 3.0],
+            arm_low=[-1.0] * 6,
+            arm_high=[1.0] * 6,
+        )
+        aggregate = _aggregate_episode_summaries(
+            [
+                {
+                    "success": True,
+                    "failure_reason": "passed",
+                    "final_cube_lift_m": 0.06,
+                    "max_pad_cube_penetration_m": 0.002,
+                },
+                {
+                    "success": False,
+                    "failure_reason": "final_cube_lift_below_threshold",
+                    "final_cube_lift_m": 0.01,
+                    "max_pad_cube_penetration_m": 0.001,
+                },
+            ]
+        )
+        reason = _failure_reason(
+            success=False,
+            placement_guard={"passed": True},
+            max_penetration=0.001,
+            final_lift=0.01,
+            final_contact_pads=0,
+            lift_contact_steps=0,
+            post_contact_steps=0,
+            post_min_lift=0.0,
+        )
+        failed_gates = _failed_gates(
+            placement_guard={"passed": True},
+            max_penetration=0.0031,
+            final_lift=0.01,
+            final_contact_pads=2,
+            lift_contact_steps=80,
+            post_contact_steps=300,
+            post_min_lift=0.01,
+        )
+        hidden_canonical_gate = _failed_gates(
+            placement_guard={"passed": True},
+            max_penetration=0.002,
+            final_lift=0.06,
+            final_contact_pads=2,
+            lift_contact_steps=80,
+            post_contact_steps=300,
+            post_min_lift=0.05,
+            initial_contact_pads=1,
+        )
+
+        self.assertEqual(schedule, [-0.2, 0.0, 0.2])
+        self.assertEqual(action, [1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+        self.assertEqual(clipped, 3)
+        self.assertEqual(aggregate["success_rate"], 0.5)
+        self.assertEqual(
+            aggregate["failure_reason_counts"],
+            {"passed": 1, "final_cube_lift_below_threshold": 1},
+        )
+        self.assertEqual(reason, "final_cube_lift_below_threshold")
+        self.assertEqual(
+            failed_gates,
+            [
+                "max_pad_cube_penetration_exceeded",
+                "final_cube_lift_below_threshold",
+                "post_lift_height_below_threshold",
+            ],
+        )
+        self.assertEqual(
+            hidden_canonical_gate,
+            ["initial_pad_cube_contact_present"],
+        )
 
 
 def _write_config(path: Path, dataset_root: Path) -> Path:
