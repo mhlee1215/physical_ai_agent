@@ -1,0 +1,278 @@
+{
+  "schema_version": 2,
+  "name": "black_arm_green_white_gripper_white_mount_locked_v1",
+  "default_material": "black_matte_pla",
+  "materials": {
+    "black_matte_pla": {
+      "base_color": [0.025, 0.03, 0.035],
+      "roughness": 0.82,
+      "metallic": 0.0,
+      "roughness_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_Roughness.jpg",
+      "normal_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_NormalGL.jpg",
+      "wear_mask_texture": "_workspace/photoreal_assets/ambientcg/Scratches005_1K-JPG/Scratches005_1K-JPG_Opacity.jpg",
+      "fingerprint_mask_texture": "_workspace/photoreal_assets/ambientcg/Fingerprints009_1K-JPG/Fingerprints009_1K-JPG_Opacity.jpg",
+      "texture_sha256": {
+        "roughness_texture": "2e1713c864352c21e39337c733273b145cdabbf459ab085a207c0486462eb960",
+        "normal_texture": "95a71f9d06f46a349f187ab8ced8cdc09319964c16023a82281839f5b1f6d3f4",
+        "wear_mask_texture": "fddafa55d0a7a46b8061b6dd7ec28e57263b20924e6c6b9fe49c394a3df8c92a",
+        "fingerprint_mask_texture": "49063011fca6bc0a342dd483ea3992becb6b7f0f399ac84743a01ebfa87e359e"
+      },
+      "texture_scale": 1.8,
+      "normal_strength": 0.18,
+      "wear_strength": 0.24,
+      "wear_roughness": 0.34,
+      "wear_color": [0.055, 0.060, 0.065],
+      "fingerprint_strength": 0.18,
+      "fingerprint_roughness": 0.25
+    },
+    "white_matte_pla": {
+      "base_color": [0.82, 0.84, 0.80],
+      "roughness": 0.76,
+      "metallic": 0.0,
+      "roughness_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_Roughness.jpg",
+      "normal_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_NormalGL.jpg",
+      "wear_mask_texture": "_workspace/photoreal_assets/ambientcg/Scratches005_1K-JPG/Scratches005_1K-JPG_Opacity.jpg",
+      "fingerprint_mask_texture": "_workspace/photoreal_assets/ambientcg/Fingerprints009_1K-JPG/Fingerprints009_1K-JPG_Opacity.jpg",
+      "texture_sha256": {
+        "roughness_texture": "2e1713c864352c21e39337c733273b145cdabbf459ab085a207c0486462eb960",
+        "normal_texture": "95a71f9d06f46a349f187ab8ced8cdc09319964c16023a82281839f5b1f6d3f4",
+        "wear_mask_texture": "fddafa55d0a7a46b8061b6dd7ec28e57263b20924e6c6b9fe49c394a3df8c92a",
+        "fingerprint_mask_texture": "49063011fca6bc0a342dd483ea3992becb6b7f0f399ac84743a01ebfa87e359e"
+      },
+      "texture_scale": 1.8,
+      "normal_strength": 0.16,
+      "wear_strength": 0.20,
+      "wear_roughness": 0.38,
+      "wear_color": [0.68, 0.70, 0.66],
+      "fingerprint_strength": 0.16,
+      "fingerprint_roughness": 0.28
+    },
+    "green_matte_pla": {
+      "base_color": [0.035, 0.52, 0.11],
+      "roughness": 0.72,
+      "metallic": 0.0,
+      "roughness_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_Roughness.jpg",
+      "normal_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_NormalGL.jpg",
+      "wear_mask_texture": "_workspace/photoreal_assets/ambientcg/Scratches005_1K-JPG/Scratches005_1K-JPG_Opacity.jpg",
+      "fingerprint_mask_texture": "_workspace/photoreal_assets/ambientcg/Fingerprints009_1K-JPG/Fingerprints009_1K-JPG_Opacity.jpg",
+      "texture_sha256": {
+        "roughness_texture": "2e1713c864352c21e39337c733273b145cdabbf459ab085a207c0486462eb960",
+        "normal_texture": "95a71f9d06f46a349f187ab8ced8cdc09319964c16023a82281839f5b1f6d3f4",
+        "wear_mask_texture": "fddafa55d0a7a46b8061b6dd7ec28e57263b20924e6c6b9fe49c394a3df8c92a",
+        "fingerprint_mask_texture": "49063011fca6bc0a342dd483ea3992becb6b7f0f399ac84743a01ebfa87e359e"
+      },
+      "texture_scale": 1.8,
+      "normal_strength": 0.18,
+      "wear_strength": 0.22,
+      "wear_roughness": 0.35,
+      "wear_color": [0.055, 0.40, 0.095],
+      "fingerprint_strength": 0.17,
+      "fingerprint_roughness": 0.26
+    },
+    "yellow_matte_pla": {
+      "base_color": [0.68, 0.76, 0.025],
+      "roughness": 0.74,
+      "metallic": 0.0,
+      "roughness_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_Roughness.jpg",
+      "normal_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_NormalGL.jpg",
+      "wear_mask_texture": "_workspace/photoreal_assets/ambientcg/Scratches005_1K-JPG/Scratches005_1K-JPG_Opacity.jpg",
+      "fingerprint_mask_texture": "_workspace/photoreal_assets/ambientcg/Fingerprints009_1K-JPG/Fingerprints009_1K-JPG_Opacity.jpg",
+      "texture_sha256": {
+        "roughness_texture": "2e1713c864352c21e39337c733273b145cdabbf459ab085a207c0486462eb960",
+        "normal_texture": "95a71f9d06f46a349f187ab8ced8cdc09319964c16023a82281839f5b1f6d3f4",
+        "wear_mask_texture": "fddafa55d0a7a46b8061b6dd7ec28e57263b20924e6c6b9fe49c394a3df8c92a",
+        "fingerprint_mask_texture": "49063011fca6bc0a342dd483ea3992becb6b7f0f399ac84743a01ebfa87e359e"
+      },
+      "texture_scale": 1.8,
+      "normal_strength": 0.18,
+      "wear_strength": 0.22,
+      "wear_roughness": 0.36,
+      "wear_color": [0.58, 0.62, 0.035],
+      "fingerprint_strength": 0.17,
+      "fingerprint_roughness": 0.27
+    },
+    "camera_pcb_black": {
+      "base_color": [0.012, 0.018, 0.016],
+      "roughness": 0.52,
+      "metallic": 0.0,
+      "roughness_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_Roughness.jpg",
+      "normal_texture": "_workspace/photoreal_assets/ambientcg/Plastic013A_1K-JPG/Plastic013A_1K-JPG_NormalGL.jpg",
+      "texture_sha256": {
+        "roughness_texture": "2e1713c864352c21e39337c733273b145cdabbf459ab085a207c0486462eb960",
+        "normal_texture": "95a71f9d06f46a349f187ab8ced8cdc09319964c16023a82281839f5b1f6d3f4"
+      },
+      "texture_scale": 2.4,
+      "normal_strength": 0.10
+    },
+    "camera_lens_black": {
+      "base_color": [0.004, 0.006, 0.010],
+      "roughness": 0.16,
+      "metallic": 0.05
+    }
+  },
+  "parts": {
+    "base_mounting_plate": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["base"], "mesh_names": ["waveshare_mounting_plate_so101_v2"]}
+      ]
+    },
+    "base_shell": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["base"], "mesh_names": ["base_so101_v2"]}
+      ]
+    },
+    "base_motor_holder": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["base"], "mesh_names": ["base_motor_holder_so101_v1"]}
+      ]
+    },
+    "base_servo": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["base"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "shoulder_motor_holder": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["shoulder"], "mesh_names": ["motor_holder_so101_base_v1"]}
+      ]
+    },
+    "shoulder_rotation_bracket": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["shoulder"], "mesh_names": ["rotation_pitch_so101_v1"]}
+      ]
+    },
+    "shoulder_servos": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["shoulder"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "upper_arm_link": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["upper_arm"], "mesh_names": ["upper_arm_so101_v1"]}
+      ]
+    },
+    "upper_arm_servos": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["upper_arm"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "forearm_link": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["lower_arm"], "mesh_names": ["under_arm_so101_v1"]}
+      ]
+    },
+    "wrist_motor_holder": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["lower_arm"], "mesh_names": ["motor_holder_so101_wrist_v1"]}
+      ]
+    },
+    "lower_arm_servos": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["lower_arm"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "wrist_servo": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["wrist"], "mesh_names": ["sts3215_03a_no_horn_v1"]}
+      ]
+    },
+    "wrist_roll_bracket": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["wrist"], "mesh_names": ["wrist_roll_pitch_so101_v2"]}
+      ]
+    },
+    "gripper_servo": {
+      "material": "black_matte_pla",
+      "selectors": [
+        {"body_names": ["gripper"], "mesh_names": ["sts3215_03a_v1"]}
+      ]
+    },
+    "fixed_jaw": {
+      "material": "green_matte_pla",
+      "selectors": [
+        {"body_names": ["gripper"], "mesh_names": ["wrist_roll_follower_so101_v1"]},
+        {"body_names": ["gripper"], "mesh_names": ["wrist_cam_mount_32x32_uvc"]}
+      ]
+    },
+    "fixed_finger_pad": {
+      "material": "green_matte_pla",
+      "selectors": [
+        {"body_names": ["gripper"], "primitive_names": ["static_finger_pad"]}
+      ]
+    },
+    "moving_jaw": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["moving_jaw_so101_v1"], "mesh_names": ["moving_jaw_so101_v1"]}
+      ]
+    },
+    "moving_finger_pad": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["moving_jaw_so101_v1"], "primitive_names": ["moving_finger_pad"]}
+      ]
+    },
+    "wrist_camera_board": {
+      "material": "camera_pcb_black",
+      "selectors": [
+        {"body_names": ["gripper"], "primitive_names": ["wrist_camera_board"]}
+      ]
+    },
+    "wrist_camera_lens": {
+      "material": "camera_lens_black",
+      "selectors": [
+        {"body_names": ["gripper"], "primitive_names": ["wrist_camera_lens"]}
+      ]
+    },
+    "overhead_arm_base": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["overhead_camera_mount"], "mesh_names": ["overhead_arm_base_32x32_uvc"]}
+      ]
+    },
+    "overhead_mount_bottom": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["overhead_camera_tower"], "mesh_names": ["overhead_cam_mount_bottom_32x32_uvc"]}
+      ]
+    },
+    "overhead_mount_middle": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["overhead_camera_tower"], "mesh_names": ["overhead_cam_mount_middle_32x32_uvc"]}
+      ]
+    },
+    "overhead_mount_top": {
+      "material": "white_matte_pla",
+      "selectors": [
+        {"body_names": ["overhead_camera_tower"], "mesh_names": ["overhead_cam_mount_top_32x32_uvc"]}
+      ]
+    },
+    "overhead_camera_board": {
+      "material": "camera_pcb_black",
+      "selectors": [
+        {"body_names": ["overhead_camera_tower"], "primitive_names": ["overhead_camera_board"]}
+      ]
+    },
+    "overhead_camera_lens": {
+      "material": "camera_lens_black",
+      "selectors": [
+        {"body_names": ["overhead_camera_tower"], "primitive_names": ["overhead_camera_lens"]}
+      ]
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "name": "hardware_home_camera_aligned_v2",
+  "status": "live_camera_image_compared_canary_candidate",
+  "joint_order": [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper"
+  ],
+  "hardware_anchor": {
+    "readback_artifact": "_workspace/real_so101/all_motor_wide_validation_20260721/postflight.json",
+    "calibration_artifact": "_workspace/real_so100/calibration/so100_local.json",
+    "raw_positions": [2047, 2049, 2048, 2038, 2050, 2054],
+    "lerobot_positions": [
+      -13.23076923076923,
+      -88.74725274725274,
+      69.14285714285714,
+      77.0989010989011,
+      0.21978021978021978,
+      2.3001095290251916
+    ]
+  },
+  "sim_qpos": [
+    0.0,
+    -1.5707963267948966,
+    1.5707963267948966,
+    0.66,
+    1.5707963267948966,
+    -0.17453
+  ],
+  "alignment": {
+    "method": "manual_multiview_silhouette_alignment",
+    "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v5_camera_matched.json",
+    "camera1_reference": "_workspace/real_so101/home_pose_camera_alignment_20260722/camera_0_egocentric_cam.jpg",
+    "camera2_reference": "_workspace/real_so101/home_pose_camera_alignment_20260722/camera_1_wrist_cam.jpg",
+    "camera1_reference_pose": "live 2026-07-22 hardware home frame",
+    "camera2_reference_pose": "simultaneous live 2026-07-22 hardware home wrist frame",
+    "comparison_artifact": "_workspace/so101_camera_mount_preview/official_hardware_rig_v5_camera_matched_256spp/real_vs_sim_policy_inputs.png",
+    "policy_preprocess": "center_crop_square_then_resize_256",
+    "observed_contract": {
+      "camera1": "wrist-camera assembly remains at the lower-center edge with the arm folded out of the workspace",
+      "camera2": "white moving finger is left and green fixed finger is right, with only the distal fingers entering from the lower frame"
+    }
+  },
+  "notes": [
+    "The calibrated LeRobot motor coordinates are retained as the hardware anchor.",
+    "The MuJoCo home uses the hardware-shaped canonical folded pose and is validated against simultaneous live camera1/camera2 frames.",
+    "The earlier camera2 reference was captured at wrist_flex=1690 rather than the home wrist_flex near 2038 and is not used by this candidate.",
+    "The previous v1 image-aligned dataset remains immutable for provenance."
+  ]
+}

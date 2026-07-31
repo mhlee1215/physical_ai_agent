@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "name": "grip_the_cube_v2_1",
+  "description": "Additional 500-episode SO101 grip/lift training set with the v2 contract and spawn-disjoint deterministic lookup coordinates.",
+  "exporter_revision": "c0e32f3a0",
+  "exporter": "scripts/export_so101_teacher_rollouts_lerobot.py",
+  "merge_script": "scripts/merge_so101_lerobot_shards.py",
+  "sidecar_script": "scripts/build_so101_camera_grid_bins.py",
+  "audit_script": "scripts/audit_so101_dataset_splits.py",
+  "lookup_cache": "_workspace/cache/so101_grip_the_cube_v2_1_camera1_lookup_241_shifted.json",
+  "common": {
+    "fps": 12,
+    "width": 256,
+    "height": 256,
+    "teacher_style": "staged",
+    "approach_steps": 34,
+    "settle_steps": 10,
+    "close_steps": 42,
+    "lift_steps": 58,
+    "trajectory_variant": "standard",
+    "start_mode": "home",
+    "grip_the_cube_start_profile": "home",
+    "close_alignment_gate_mode": "geometry_only",
+    "skill_mode": "grip_the_cube_v1",
+    "terminal_hold_steps": 12,
+    "edge_contact_xy_success_threshold": 0.012,
+    "edge_contact_parallel_success_threshold_deg": 3.0,
+    "max_attempt_multiplier": 30,
+    "grid_balance_size": 4,
+    "grid_balance_spawn_lookup": true,
+    "grid_lookup_x_min": -0.099,
+    "grid_lookup_x_max": 0.551,
+    "grid_lookup_y_min": -0.449,
+    "grid_lookup_y_max": 0.451,
+    "grid_lookup_resolution": 241,
+    "deterministic_camera_bin_lookup": true,
+    "target_object_color": "green"
+  },
+  "sidecar": {
+    "camera_key": "observation.images.camera1",
+    "grid_size": 4,
+    "frame_index": 0,
+    "min_area": 20
+  },
+  "splits": {
+    "train": {
+      "output_root": "_workspace/so101_lerobot/grip_the_cube_v2_1",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v2-1",
+      "bins": [
+        {"id": 5, "episodes": 125, "seed": 30000000, "lookup_start_index": 0},
+        {"id": 6, "episodes": 125, "seed": 30000000, "lookup_start_index": 0},
+        {"id": 9, "episodes": 125, "seed": 30000000, "lookup_start_index": 0},
+        {"id": 10, "shard": "bin10_part0", "episodes": 25, "seed": 30000000, "lookup_start_index": 0},
+        {"id": 10, "shard": "bin10_part1", "episodes": 25, "seed": 30010000, "lookup_start_index": 234},
+        {"id": 10, "shard": "bin10_part2", "episodes": 25, "seed": 30020000, "lookup_start_index": 468},
+        {"id": 10, "shard": "bin10_part3", "episodes": 25, "seed": 30030000, "lookup_start_index": 702},
+        {"id": 10, "shard": "bin10_part4", "episodes": 25, "seed": 30040000, "lookup_start_index": 936}
+      ]
+    }
+  },
+  "audit": {
+    "expected_prompt": "grip the green cube and lift",
+    "expected_resolution": [256, 256]
+  },
+  "overlap_audits": [
+    {
+      "name": "grip_the_cube_v2_train",
+      "reference_root": "_workspace/so101_lerobot/grip_the_cube_v2",
+      "reference_bins": {"5": 75, "6": 75, "9": 75, "10": 75},
+      "output": "meta/overlap_audit_grip_the_cube_v2_train.json"
+    },
+    {
+      "name": "grip_the_cube_v2_validation",
+      "reference_root": "_workspace/so101_lerobot/grip_the_cube_v2_validation",
+      "reference_bins": {"5": 13, "6": 13, "9": 12, "10": 12},
+      "output": "meta/overlap_audit_grip_the_cube_v2_validation.json"
+    }
+  ]
+}

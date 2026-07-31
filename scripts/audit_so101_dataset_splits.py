@@ -22,6 +22,9 @@ def main() -> None:
     parser.add_argument("--expected-train-bins", required=True)
     parser.add_argument("--expected-validation-bins", required=True)
     parser.add_argument("--expected-terminal-hold-steps", type=int, required=True)
+    parser.add_argument("--expected-min-lift-height", type=float, default=0.0)
+    parser.add_argument("--expected-min-lift-steps", type=int, default=0)
+    parser.add_argument("--terminal-hold-action-tolerance", type=float)
     parser.add_argument("--max-pre-close-alignment-deg", type=float, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -34,6 +37,9 @@ def main() -> None:
         expected_train_bins=_parse_bin_counts(args.expected_train_bins),
         expected_validation_bins=_parse_bin_counts(args.expected_validation_bins),
         expected_terminal_hold_steps=args.expected_terminal_hold_steps,
+        expected_min_lift_height=args.expected_min_lift_height,
+        expected_min_lift_steps=args.expected_min_lift_steps,
+        terminal_hold_action_tolerance=args.terminal_hold_action_tolerance,
         max_pre_close_alignment_deg=args.max_pre_close_alignment_deg,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -51,12 +57,18 @@ def audit_splits(
     expected_validation_bins: dict[int, int],
     expected_terminal_hold_steps: int,
     max_pre_close_alignment_deg: float,
+    expected_min_lift_height: float = 0.0,
+    expected_min_lift_steps: int = 0,
+    terminal_hold_action_tolerance: float | None = None,
 ) -> dict[str, Any]:
     common = {
         "expected_prompt": expected_prompt,
         "expected_resolution": expected_resolution,
         "expected_terminal_hold_steps": expected_terminal_hold_steps,
         "max_pre_close_alignment_deg": max_pre_close_alignment_deg,
+        "expected_min_lift_height": expected_min_lift_height,
+        "expected_min_lift_steps": expected_min_lift_steps,
+        "terminal_hold_action_tolerance": terminal_hold_action_tolerance,
     }
     train = _split_facts(train_root, expected_bins=expected_train_bins, **common)
     validation = _split_facts(
@@ -80,6 +92,9 @@ def audit_splits(
         "expected_resolution": list(expected_resolution),
         "expected_terminal_hold_steps": expected_terminal_hold_steps,
         "max_pre_close_alignment_deg": max_pre_close_alignment_deg,
+        "expected_min_lift_height": expected_min_lift_height,
+        "expected_min_lift_steps": expected_min_lift_steps,
+        "terminal_hold_action_tolerance": terminal_hold_action_tolerance,
     }
 
 
@@ -91,6 +106,9 @@ def _split_facts(
     expected_bins: dict[int, int],
     expected_terminal_hold_steps: int,
     max_pre_close_alignment_deg: float,
+    expected_min_lift_height: float,
+    expected_min_lift_steps: int,
+    terminal_hold_action_tolerance: float | None,
 ) -> dict[str, Any]:
     report_path = root / "so101_lerobot_export_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -104,6 +122,22 @@ def _split_facts(
         hold_steps = int((row.get("phase_counts") or {}).get("terminal_hold", 0))
         if hold_steps != expected_terminal_hold_steps:
             raise ValueError(f"terminal hold mismatch at {root}: seed={row.get('seed')} hold={hold_steps}")
+        lift_steps = int((row.get("phase_counts") or {}).get("lift", 0))
+        if lift_steps < expected_min_lift_steps:
+            raise ValueError(
+                f"lift phase too short at {root}: seed={row.get('seed')} "
+                f"lift_steps={lift_steps} < {expected_min_lift_steps}"
+            )
+        final_info = row.get("final_info") or {}
+        lift_height = float(final_info.get("lift_height", 0.0))
+        if expected_min_lift_height > 0.0 and (
+            not bool(final_info.get("is_grasped", False))
+            or lift_height < expected_min_lift_height
+        ):
+            raise ValueError(
+                f"grasp/lift contract failed at {root}: seed={row.get('seed')} "
+                f"grasped={final_info.get('is_grasped')} lift_height={lift_height}"
+            )
         alignment = float(row["pre_close_cube_face_normal_parallel_error_deg"])
         if alignment > max_pre_close_alignment_deg:
             raise ValueError(f"pre-close alignment exceeds limit at {root}: seed={row.get('seed')}")
@@ -124,6 +158,13 @@ def _split_facts(
         raise ValueError(f"camera1 resolution mismatch at {root}: {actual_resolution}")
 
     trajectory_hashes, task_indexes = _trajectory_hashes_and_task_indexes(root)
+    if terminal_hold_action_tolerance is not None:
+        _validate_terminal_hold_actions(
+            root,
+            episodes=episodes,
+            hold_steps=expected_terminal_hold_steps,
+            tolerance=float(terminal_hold_action_tolerance),
+        )
     task_table = pd.read_parquet(root / "meta" / "tasks.parquet").reset_index()
     task_by_index = {int(row.task_index): str(row.task) for row in task_table.itertuples()}
     if not task_indexes.issubset(task_by_index):
@@ -161,6 +202,30 @@ def _trajectory_hashes_and_task_indexes(root: Path) -> tuple[list[str], set[int]
         digest.update(np.stack(episode["observation.state"].to_numpy()).astype(np.float32).tobytes())
         hashes.append(digest.hexdigest())
     return hashes, {int(value) for value in table["task_index"].unique()}
+
+
+def _validate_terminal_hold_actions(
+    root: Path,
+    *,
+    episodes: list[dict[str, Any]],
+    hold_steps: int,
+    tolerance: float,
+) -> None:
+    frames = [
+        pd.read_parquet(path, columns=["episode_index", "action"])
+        for path in sorted((root / "data").glob("chunk-*/*.parquet"))
+    ]
+    table = pd.concat(frames, ignore_index=True)
+    reports = {index: row for index, row in enumerate(episodes)}
+    for episode_index, episode in table.groupby("episode_index", sort=True):
+        report = reports[int(episode_index)]
+        q_lift = np.asarray(report["q_lift"], dtype=np.float32)
+        tail = np.stack(episode.tail(hold_steps)["action"].to_numpy()).astype(np.float32)
+        if len(tail) != hold_steps or not np.allclose(tail, q_lift[None, :], atol=tolerance, rtol=0.0):
+            error = float(np.max(np.abs(tail - q_lift[None, :]))) if len(tail) else float("inf")
+            raise ValueError(
+                f"terminal hold action mismatch at {root}: episode={episode_index} max_abs_error={error}"
+            )
 
 
 def _public_facts(facts: dict[str, Any]) -> dict[str, Any]:

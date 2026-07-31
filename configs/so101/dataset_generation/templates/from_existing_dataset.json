@@ -1,0 +1,106 @@
+{
+  "schema_version": 2,
+  "name": "replace_me_from_existing_v1",
+  "version": "v1",
+  "description": "Template that reuses declared source spawn reports and regenerates teacher trajectories.",
+  "source": {
+    "mode": "from_existing_dataset",
+    "operation": "regenerate_teacher",
+    "datasets": ["_workspace/so101_lerobot/source_dataset"]
+  },
+  "exporter_revision": "replace-with-git-revision",
+  "exporter": "scripts/export_so101_teacher_rollouts_lerobot.py",
+  "lookup_builder_script": "scripts/build_so101_source_episode_spawn_lookup.py",
+  "merge_script": "scripts/merge_so101_lerobot_shards.py",
+  "sidecar_script": "scripts/build_so101_camera_grid_bins.py",
+  "closed_loop_script": "scripts/build_so101_closed_loop_start_report.py",
+  "audit_script": "scripts/audit_so101_dataset_splits.py",
+  "lookup_cache": "_workspace/cache/replace_me_from_existing_v1_train.json",
+  "lookup_builders": [
+    {
+      "name": "source_spawns",
+      "output": "_workspace/cache/replace_me_from_existing_v1_train.json",
+      "source_reports": [
+        "_workspace/so101_lerobot/source_dataset/so101_lerobot_export_report.json"
+      ],
+      "grid_size": 4,
+      "resolution": 161,
+      "x_range": [-0.1, 0.55],
+      "y_range": [-0.45, 0.45],
+      "bins": [5]
+    }
+  ],
+  "common": {
+    "fps": 12,
+    "width": 256,
+    "height": 256,
+    "teacher_style": "staged",
+    "approach_steps": 34,
+    "settle_steps": 10,
+    "close_steps": 42,
+    "lift_steps": 70,
+    "lift_target_height": 0.065,
+    "lift_controller_z_error": 0.015,
+    "trajectory_variant": "standard",
+    "start_mode": "home",
+    "grip_the_cube_start_profile": "home",
+    "move_target_z_offset": 0.075,
+    "skill_mode": "grip_the_cube_v1",
+    "terminal_hold_steps": 12,
+    "edge_contact_xy_success_threshold": 0.012,
+    "inspection_gates": [
+      {
+        "kind": "geometry_contact_alignment",
+        "contract": "jaw_line_vs_contact_face_normal_through_cube_center",
+        "max_pre_close_error_deg": 3.0
+      },
+      {
+        "kind": "camera2_visual_alignment",
+        "camera_key": "observation.images.camera2",
+        "edge_mode": "top_contact",
+        "strategy": "constructive_refine_then_probe",
+        "mode": "preclose_and_early_trace",
+        "pre_close_max_deg": 8.0,
+        "close_25_max_deg": 8.0,
+        "close_50_max_deg": 8.0
+      }
+    ],
+    "max_attempt_multiplier": 30,
+    "grid_balance_size": 4,
+    "grid_balance_spawn_lookup": true,
+    "grid_lookup_preserve_order": true,
+    "grid_lookup_resolution": 161,
+    "deterministic_camera_bin_lookup": true,
+    "target_object_color": "green"
+  },
+  "sidecar": {
+    "camera_key": "observation.images.camera1",
+    "grid_size": 4,
+    "frame_index": 0,
+    "min_area": 20,
+    "bin_source": "report"
+  },
+  "splits": {
+    "train": {
+      "output_root": "_workspace/so101_lerobot/replace_me_from_existing_v1",
+      "repo_id": "physical-ai-agent/replace-me-from-existing-v1",
+      "bins": [
+        {"id": 5, "episodes": 1, "seed": 120000000, "lookup_start_index": 0}
+      ]
+    },
+    "validation": {
+      "output_root": "_workspace/so101_lerobot/replace_me_from_existing_v1_validation",
+      "repo_id": "physical-ai-agent/replace-me-from-existing-v1-validation",
+      "bins": [
+        {"id": 5, "episodes": 1, "seed": 130000000, "lookup_start_index": 64}
+      ]
+    }
+  },
+  "audit": {
+    "expected_prompt": "grip the green cube and lift",
+    "expected_resolution": [256, 256],
+    "expected_min_lift_height": 0.06,
+    "expected_min_lift_steps": 20,
+    "terminal_hold_action_tolerance": 0.00001
+  }
+}

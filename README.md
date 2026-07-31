@@ -155,6 +155,7 @@ PYTHONPATH=src .venv/bin/python scripts/serve_loop_test_analyzer.py --help
 SO101 dataset generation and management is script-driven. Important entrypoints:
 
 ```bash
+PYTHONPATH=src .venv/bin/python scripts/generate_so101_dataset_recipe.py --help
 PYTHONPATH=src .venv/bin/python scripts/export_so101_training_datasets.py --help
 PYTHONPATH=src .venv/bin/python scripts/export_so101_teacher_rollouts_lerobot.py --help
 PYTHONPATH=src .venv/bin/python scripts/export_so101_pickplace_teacher_rollouts_lerobot.py --help
@@ -166,8 +167,13 @@ PYTHONPATH=src .venv/bin/python scripts/write_so101_dataset_checksums.py --help
 Dataset contracts live under:
 
 ```text
-configs/so101/training_datasets/
+configs/so101/dataset_generation/
 ```
+
+Recipe JSON is validated by the strict Pydantic contract in
+`src/physical_ai_agent/so101_dataset_generation_schema.py`. New renderer-independent
+datasets may enable `render_replay` and declare a `render_derivative` split; see
+`docs/so101_renderer_independent_dataset_pipeline.md`.
 
 Training configs reference datasets from:
 

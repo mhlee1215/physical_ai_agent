@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-07-09
+Last updated: 2026-07-16
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -34,6 +34,30 @@ lightweight VLA policy.
   the implementation on that evidence and record the source-backed rationale in
   the work note, PR, or code comment as appropriate. Do not invent architecture
   changes from scratch when comparable public implementations exist.
+- Deterministic photoreal robot dataset work is routed through
+  `.agents/skills/robot-photoreal-dataset-rendering/SKILL.md`. The immutable
+  contract is the source dataset identity, trajectory, episode timeline,
+  simulator state, world assets, and recorded camera calibration. Render
+  engine, samples, lighting, and material JSON are mutable only in a new
+  append-only derivative. A full render is blocked until an all-episode replay
+  preflight and representative-frame canary pass; probe renders and partial
+  sidecars are diagnostics, not training datasets.
+- Current `v2_5` replay audit is not full-rerender ready. All 300 episodes have
+  snapshots and the source contains 50,456 frames, but the default renderer
+  exposes 9 RGB object slots while the recorded report expects 3 green cubes,
+  296 episode starts match exactly, episodes 2, 41, 96, and 295 have invalid
+  start snapshots, and the recorded model dimensions differ from snapshot
+  dimensions (`69/60` versus `27/24`). Seed `31010278` therefore requires a
+  version-matched environment or explicit state-recovery path before a full
+  deterministic render can proceed.
+- New schema-v2 SO101 generation recipes use typed
+  `common.inspection_gates`. Grip generation requires one authoritative
+  `geometry_contact_alignment` gate and may add one
+  `camera2_visual_alignment` gate. Camera2 acceptance uses constructive wrist
+  roll refinement followed by a pre-close/early-close probe; a failed probe
+  skips the expensive full trajectory. `grip_the_cube_v3` and
+  `grip_the_cube_v3_align` are the first recipes using both gates and exact
+  teacher-time render-replay capture.
 
 The immediate collaboration goal is to produce manuscript-table experiment data
 as quickly and efficiently as possible. Research and orchestration choices should
@@ -151,6 +175,15 @@ paper-facing concepts:
   run logdir. Closed-loop tests must be invoked from the training process after
   checkpoint/evaluation events through `scripts/run_so101_training_loop_test.py`,
   not by a separate polling monitor.
+- User policy: whenever TensorBoard is started or reported, provide both the
+  local URL and the same-Wi-Fi mobile TensorBoard URL.
+- User policy: local dataset/viewer dashboards must reuse the current
+  user-visible server and port. If the user is viewing
+  `http://127.0.0.1:8769/`, update or restart that same `8769` server rather
+  than starting another viewer on a fallback port. Starting extra viewer
+  servers or changing ports is allowed only when the user explicitly asks for a
+  separate server or the original port is owned by an unrelated process and the
+  exception is reported clearly.
 - User policy: SO101 Live Training Process Safety Contract. Read-only status
   and root-cause checks may inspect `status --json`, `ps`, `tail`, TensorBoard
   events, `stat`, `find`, `du`, `rg`, and `sed` without another confirmation.
@@ -216,6 +249,11 @@ paper-facing concepts:
   reap that child process after the tool call, which looks like a silent
   server death even when the app did not crash. The durable LaunchAgent label is
   `com.physical-ai-agent.dataset-viewer`; logs live under `_workspace/logs/`.
+- User policy: whenever the Robot Experiment Manager / dataset viewer is
+  started, opened, or reported, provide the access set together: localhost,
+  same-Wi-Fi mobile, and external URL. Keep the external `cloudflared` tunnel
+  under `launchctl`, verify its `/api/datasets` response before reporting it,
+  and never silently omit one of the three links.
 - User policy: Qwen-chain SO101 loop tests must use the valid-mask termination
   head, not fixed-length primitive execution. Provide
   `closed_loop.valid_mask_checkpoint` in dataset config or
@@ -258,6 +296,45 @@ paper-facing concepts:
   `scripts/export_so101_training_datasets.py`. Raw datasets remain local
   `_workspace` artifacts; regenerate them from the recipe and refresh
   `configs/so101/training_datasets/checksums.json` before RunPod upload.
+- SO101 dataset lifecycle is append-only by default. Unless the user explicitly
+  requests replacement or cleanup in the current turn, every changed dataset
+  gets a new versioned recipe, local root, and HF path; existing datasets are
+  never overwritten, renamed, repointed, or deleted. Completed datasets are
+  registered through `configs/so101/dataset_generation/*.json`
+  `splits.<name>.output_root`, not through per-dataset edits to the viewer's
+  static training-config list. Sign-off requires export/merge/audit evidence,
+  required sidecars/loop starts, presence in `/api/datasets`, and a successful
+  sample `/api/frame` response for every intended split.
+- SO101 dataset inventory and training readiness now use the shared registry
+  `src/physical_ai_agent/so101_dataset_registry.py` through
+  `scripts/so101_dataset_registry.py`. The recipe directory is the only
+  registry, the generator and viewer share its resolver, and generation is
+  complete only when `validate --require-training-ready` passes. Use
+  `training-manifest --dataset-id <id>` to retrieve validated train/validation
+  roots, episode/frame counts, camera-grid sidecar, and validation loop-start
+  before selecting the dataset in a training experiment config.
+- User policy: every recipe-backed dataset generation must finish with the
+  generator's mandatory `completion:registry-viewer` stage. It runs
+  `scripts/verify_so101_dataset_completion.py`, restarts the existing
+  launchctl-managed Robot Experiment Manager so no stale Pydantic schema remains
+  loaded, and rejects completion unless every selected split is present in
+  `/api/datasets` and episode 0/frame 0 returns prompt plus camera1/camera2 from
+  `/api/frame`. A registry-only pass is not a completed dataset handoff.
+- User policy: all newly authored SO101 generation recipes use Pydantic recipe
+  schema v2. They explicitly choose `source.mode=from_scratch`,
+  `source.mode=from_spawn_catalog`, or `source.mode=from_existing_dataset`.
+  `from_spawn_catalog` is the default when only object placement is reused: its
+  checked-in catalog contains seed-free `bin -> world [x, y]` candidates, and
+  the new export creates new simulator state, trajectories, images, and seeds.
+  `from_existing_dataset` additionally chooses `operation=regenerate_teacher`,
+  `render_derivative`, or `episode_subset` and lists every source dataset root.
+  Episode subsets materialize retained episodes unchanged into a new append-only
+  root and rebuild metadata, audit, and sampling sidecars. New
+  `grip_the_cube_v1` recipes must configure the exact
+  jaw-line versus contacted-face-normal alignment gate. The generator forwards
+  geometry and camera2 close-trace limits into teacher episode acceptance, so a
+  dataset cannot be declared aligned only by a later filtering pass. Existing
+  schema-v1 recipes stay immutable and readable for historical reproduction.
 
 ### What We Have Learned
 

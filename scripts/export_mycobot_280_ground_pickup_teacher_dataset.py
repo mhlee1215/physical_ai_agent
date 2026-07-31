@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -17,24 +20,30 @@ from scripts.run_mycobot_280_ground_pickup_poc import (  # noqa: E402
     APPROACH_STEPS,
     CLOSE_STEPS,
     CONTACT_COMMAND,
+    CUBE_AXIS_OFFSET,
     CUBE_HALF_SIZE,
     CUBE_MASS,
+    CUBE_SIDE_OFFSET,
     HOLD_STEPS,
+    LIFT_QPOS,
     LIFT_STEPS,
-    POST_LIFT_HOLD_STEPS,
     MAT_FRICTION,
     PAD_FRICTION,
+    PICKUP_QPOS,
+    POST_LIFT_HOLD_STEPS,
+    ROBOT_LEFT_PAD,
+    ROBOT_RIGHT_PAD,
     START_COMMAND,
     WORK_MAT_TOP_Z,
     WORLD_GRAVITY,
-    _cube_mat_guard,
-    _patch_nexus_work_mat_scene_nodes,
     _apply_physics_overrides,
     _best_sustained_two_pad,
-    _initial_cube_pose,
+    _cube_mat_guard,
+    _geom_pos,
     _passes,
+    _patch_nexus_work_mat_scene_nodes,
+    _quat_align_x_to_vector,
     _record,
-    _scripted_state,
 )
 from scripts.render_mycobot_280_cube_contact_sequence import _set_cube_pose, _size_audit_cube  # noqa: E402
 
@@ -48,18 +57,29 @@ JOINT_NAMES = [
     "gripper_controller",
 ]
 TASK = "pick up the cube from the work mat with the myCobot 280 Pi adaptive gripper"
+DEFAULT_TRAIN_EPISODES = 50
+DEFAULT_VALIDATION_EPISODES = 10
+DEFAULT_YAW_MIN = -0.20
+DEFAULT_YAW_MAX = 0.20
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Export a myCobot 280 Pi adaptive-gripper cube-from-mat teacher POC dataset."
+        description="Export a deterministic pose-diverse myCobot 280 Pi cube-from-mat teacher dataset."
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("_workspace/mycobot_teacher_datasets/mycobot_280_pi_ground_pickup_poc_10eps"),
+        default=Path("_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_pose_diverse_v1"),
     )
-    parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=None,
+        help="Legacy shortcut: export this many train episodes and no validation split.",
+    )
+    parser.add_argument("--train-episodes", type=int, default=DEFAULT_TRAIN_EPISODES)
+    parser.add_argument("--val-episodes", type=int, default=DEFAULT_VALIDATION_EPISODES)
     parser.add_argument("--seed", type=int, default=200)
     parser.add_argument("--asset-root", type=Path, default=Path("_vendor/mycobot_mujoco"))
     parser.add_argument("--official-gripper-root", type=Path, default=Path("_vendor/mycobot_ros"))
@@ -67,14 +87,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--height", type=int, default=240)
     parser.add_argument("--render-every", type=int, default=4)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--max-attempts", type=int, default=0)
+    parser.add_argument("--yaw-min", type=float, default=DEFAULT_YAW_MIN)
+    parser.add_argument("--yaw-max", type=float, default=DEFAULT_YAW_MAX)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    train_episodes = int(args.episodes) if args.episodes is not None else int(args.train_episodes)
+    val_episodes = 0 if args.episodes is not None else int(args.val_episodes)
     report = export_dataset(
         output_dir=args.output_dir,
-        episodes=args.episodes,
+        train_episodes=train_episodes,
+        val_episodes=val_episodes,
         seed=args.seed,
         asset_root=args.asset_root,
         official_gripper_root=args.official_gripper_root,
@@ -82,16 +108,20 @@ def main() -> None:
         height=args.height,
         fps=args.fps,
         render_every=args.render_every,
+        max_attempts=args.max_attempts,
+        yaw_min=args.yaw_min,
+        yaw_max=args.yaw_max,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
-    if report["episodes"] != args.episodes or report["failed_episodes"]:
+    if report["accepted_episodes"] != report["requested_episodes"] or report["failed_episodes"]:
         raise SystemExit(1)
 
 
 def export_dataset(
     *,
     output_dir: Path,
-    episodes: int,
+    train_episodes: int,
+    val_episodes: int,
     seed: int,
     asset_root: Path,
     official_gripper_root: Path,
@@ -99,54 +129,89 @@ def export_dataset(
     height: int,
     fps: int,
     render_every: int,
+    max_attempts: int,
+    yaw_min: float,
+    yaw_max: float,
 ) -> dict[str, Any]:
+    if train_episodes < 0 or val_episodes < 0:
+        raise ValueError("episode counts must be non-negative")
+    requested = train_episodes + val_episodes
+    if requested <= 0:
+        raise ValueError("at least one train or validation episode is required")
+    if max_attempts <= 0:
+        max_attempts = max(requested * 3, requested)
+
     _patch_nexus_work_mat_scene_nodes()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    shutil.rmtree(output_dir / "episodes", ignore_errors=True)
-    shutil.rmtree(output_dir / "frames", ignore_errors=True)
-    shutil.rmtree(output_dir / "scene_cache", ignore_errors=True)
-    (output_dir / "episodes").mkdir(exist_ok=True)
-    (output_dir / "frames").mkdir(exist_ok=True)
+    _prepare_output_root(output_dir)
 
-    episode_summaries = []
+    split_targets = {"train": train_episodes, "validation": val_episodes}
+    split_counts = {"train": 0, "validation": 0}
+    split_episode_summaries: dict[str, list[dict[str, Any]]] = {"train": [], "validation": []}
+    accepted_summaries: list[dict[str, Any]] = []
+    rejected_attempts: list[dict[str, Any]] = []
     total_rows = 0
-    failed_episodes = []
-    for episode_index in range(episodes):
-        summary = _export_episode(
-            output_dir=output_dir,
-            episode_index=episode_index,
-            seed=seed + episode_index,
-            asset_root=asset_root,
-            official_gripper_root=official_gripper_root,
-            width=width,
-            height=height,
-            fps=fps,
-            render_every=render_every,
-        )
-        episode_summaries.append(summary)
-        total_rows += int(summary["frames"])
+    split_schedule = _split_schedule(train_episodes, val_episodes)
+
+    for attempt_index, yaw_delta in enumerate(_candidate_yaws(max_attempts=max_attempts, yaw_min=yaw_min, yaw_max=yaw_max)):
+        if len(accepted_summaries) >= requested:
+            break
+        split = split_schedule[len(accepted_summaries)]
+        split_episode_index = split_counts[split]
+        try:
+            summary = _export_attempt(
+                output_dir=output_dir,
+                split=split,
+                split_episode_index=split_episode_index,
+                global_episode_index=len(accepted_summaries),
+                attempt_index=attempt_index,
+                seed=seed + attempt_index,
+                yaw_delta=float(yaw_delta),
+                asset_root=asset_root,
+                official_gripper_root=official_gripper_root,
+                width=width,
+                height=height,
+                fps=fps,
+                render_every=render_every,
+            )
+        except Exception as exc:  # noqa: BLE001
+            rejected_attempts.append(
+                {
+                    "attempt_index": attempt_index,
+                    "split_target": split,
+                    "seed": seed + attempt_index,
+                    "yaw_delta_rad": float(yaw_delta),
+                    "success": False,
+                    "reason": f"exception: {exc}",
+                }
+            )
+            continue
         if not summary["success"]:
-            failed_episodes.append(episode_index)
+            rejected_attempts.append(_rejection_from_summary(summary))
+            continue
+        split_counts[split] += 1
+        split_episode_summaries[split].append(summary)
+        accepted_summaries.append(summary)
+        total_rows += int(summary["frames"])
 
-    passed_episodes = [summary for summary in episode_summaries if summary["success"]]
-    aggregate_metrics = {
-        "passed_episodes": len(passed_episodes),
-        "failed_episodes": len(failed_episodes),
-        "min_final_cube_lift_m": min((float(summary["final_cube_lift_m"]) for summary in passed_episodes), default=0.0),
-        "min_lift_best_sustained_two_pad_steps": min((int(summary["lift_best_sustained_two_pad_steps"]) for summary in passed_episodes), default=0),
-        "min_post_lift_hold_sustained_two_pad_steps": min((int(summary["post_lift_hold_best_sustained_two_pad_steps"]) for summary in passed_episodes), default=0),
-        "min_post_lift_hold_cube_lift_m": min((float(summary["post_lift_hold_min_cube_lift_m"]) for summary in passed_episodes), default=0.0),
-        "max_pad_cube_penetration_m": max((float(summary["max_pad_cube_penetration_m"]) for summary in passed_episodes), default=0.0),
-        "max_lift_pad_cube_penetration_m": max((float(summary["max_lift_pad_cube_penetration_m"]) for summary in passed_episodes), default=0.0),
-    }
-
+    failed_episodes = [
+        {
+            "split": split,
+            "missing": target - split_counts[split],
+            "target": target,
+            "accepted": split_counts[split],
+        }
+        for split, target in split_targets.items()
+        if split_counts[split] != target
+    ]
+    aggregate_metrics = _aggregate_metrics(accepted_summaries, rejected_attempts)
     manifest = {
         "format": "mycobot_jsonl_v1",
         "dataset_id": output_dir.name,
         "robot": "myCobot 280 Pi + adaptive gripper",
         "model_profile": nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
         "task": TASK,
-        "generation_mode": "deterministic_fixed_task",
+        "dataset_kind": "deterministic_pose_diverse_jsonl",
+        "generation_mode": "deterministic_pose_diverse_teacher_aligned",
         "randomization_enabled": False,
         "trajectory": "true_cube_from_work_mat_open_align_close_grasp_lift_post_lift_hold",
         "teacher_attachment_enabled": False,
@@ -167,29 +232,52 @@ def export_dataset(
             "post_lift_hold_min_cube_lift_m": 0.045,
             "max_pad_cube_penetration_m": 0.003,
         },
-        "episodes": episodes,
-        "passed_episodes": len(passed_episodes),
+        "pose_generation": {
+            "method": "deterministic_van_der_corput_base_yaw_delta",
+            "yaw_min_rad": float(yaw_min),
+            "yaw_max_rad": float(yaw_max),
+            "max_attempts": int(max_attempts),
+            "base_pickup_qpos": [float(x) for x in PICKUP_QPOS],
+            "base_lift_qpos": [float(x) for x in LIFT_QPOS],
+            "cube_axis_offset_m": CUBE_AXIS_OFFSET,
+            "cube_side_offset_m": CUBE_SIDE_OFFSET,
+        },
+        "requested_episodes": requested,
+        "accepted_episodes": len(accepted_summaries),
+        "episodes": len(accepted_summaries),
+        "passed_episodes": len(accepted_summaries),
         "frames": total_rows,
         "aggregate_metrics": aggregate_metrics,
+        "splits": {
+            split: {
+                "requested_episodes": split_targets[split],
+                "accepted_episodes": split_counts[split],
+                "episode_summaries": split_episode_summaries[split],
+            }
+            for split in ("train", "validation")
+        },
+        "rejected_attempts": rejected_attempts,
+        "failed_episodes": failed_episodes,
         "fps": fps,
         "render_every": render_every,
         "image_mime_type": "image/bmp",
         "joint_names": JOINT_NAMES,
         "action_names": JOINT_NAMES,
-        "episode_summaries": episode_summaries,
-        "failed_episodes": failed_episodes,
         "viewer": {
             "type": "mycobot_jsonl",
             "serve_script": "scripts/serve_so101_dataset_viewer.py",
             "env": f"MYCOBOT_TEMP_DATASETS={output_dir.name}={output_dir}",
         },
         "notes": (
-            "Cube-from-mat teacher POC. The cube is placed on the work mat only at episode "
-            "initialization; pickup and lift use raw MuJoCo gripper/cube contact with no "
-            "teacher attachment or object teleporting during pickup/lift. Fingertip pads, "
-            "cube, mat, and floor use MuJoCo contact; visible gripper geoms are guarded "
-            "against mat-plane overlap, while broader arm/table collision remains visual-only. "
-            "Gravity is disabled during approach/close only and restored for hold/lift/post-lift hold."
+            "Pose-diverse cube-from-mat teacher dataset POC. Candidate episodes vary the "
+            "reachable teacher-aligned base yaw deterministically, derive the cube XY pose "
+            "from the visible terminal pads, and include only successful raw-contact pickup "
+            "episodes. The cube is placed on the work mat only at episode initialization; "
+            "pickup and lift use raw MuJoCo gripper/cube contact with no teacher attachment "
+            "or object teleporting during pickup/lift. Fingertip pads, cube, mat, and floor "
+            "use MuJoCo contact; visible gripper geoms are guarded against mat-plane overlap, "
+            "while broader arm/table collision remains visual-only. Gravity is disabled during "
+            "approach/close only and restored for hold/lift/post-lift hold."
         ),
     }
     manifest_path = output_dir / "manifest.json"
@@ -197,11 +285,66 @@ def export_dataset(
     return manifest
 
 
-def _export_episode(
+def _prepare_output_root(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("splits", "episodes", "frames", "_attempt_frames", "scene_cache"):
+        shutil.rmtree(output_dir / name, ignore_errors=True)
+    for split in ("train", "validation"):
+        (output_dir / "splits" / split / "episodes").mkdir(parents=True, exist_ok=True)
+        (output_dir / "splits" / split / "frames").mkdir(parents=True, exist_ok=True)
+    (output_dir / "_attempt_frames").mkdir(exist_ok=True)
+
+
+def _candidate_yaws(*, max_attempts: int, yaw_min: float, yaw_max: float) -> list[float]:
+    if max_attempts <= 1:
+        return [(yaw_min + yaw_max) * 0.5]
+    span = yaw_max - yaw_min
+    return [yaw_min + span * _van_der_corput(index + 1, base=2) for index in range(max_attempts)]
+
+
+def _van_der_corput(index: int, *, base: int) -> float:
+    value = 0.0
+    denom = 1.0
+    while index:
+        index, remainder = divmod(index, base)
+        denom *= base
+        value += remainder / denom
+    return value
+
+
+def _split_schedule(train_episodes: int, val_episodes: int) -> list[str]:
+    total = train_episodes + val_episodes
+    if val_episodes <= 0:
+        return ["train"] * total
+    val_positions = {
+        min(total - 1, int(round((index + 0.5) * total / val_episodes - 0.5)))
+        for index in range(val_episodes)
+    }
+    schedule = []
+    train_remaining = train_episodes
+    val_remaining = val_episodes
+    for position in range(total):
+        if position in val_positions and val_remaining > 0:
+            schedule.append("validation")
+            val_remaining -= 1
+        elif train_remaining > 0:
+            schedule.append("train")
+            train_remaining -= 1
+        else:
+            schedule.append("validation")
+            val_remaining -= 1
+    return schedule
+
+
+def _export_attempt(
     *,
     output_dir: Path,
-    episode_index: int,
+    split: str,
+    split_episode_index: int,
+    global_episode_index: int,
+    attempt_index: int,
     seed: int,
+    yaw_delta: float,
     asset_root: Path,
     official_gripper_root: Path,
     width: int,
@@ -209,10 +352,13 @@ def _export_episode(
     fps: int,
     render_every: int,
 ) -> dict[str, Any]:
-    episode_path = output_dir / "episodes" / f"episode_{episode_index:04d}.jsonl"
-    frame_dir = output_dir / "frames" / f"episode_{episode_index:04d}"
-    frame_dir.mkdir(parents=True, exist_ok=True)
-    scene_cache = output_dir / "scene_cache" / f"episode_{episode_index:04d}"
+    episode_path = output_dir / "splits" / split / "episodes" / f"episode_{split_episode_index:04d}.jsonl"
+    final_frame_dir = output_dir / "splits" / split / "frames" / f"episode_{split_episode_index:04d}"
+    attempt_frame_dir = output_dir / "_attempt_frames" / f"attempt_{attempt_index:04d}"
+    shutil.rmtree(attempt_frame_dir, ignore_errors=True)
+    attempt_frame_dir.mkdir(parents=True, exist_ok=True)
+    scene_cache = output_dir / "scene_cache" / f"attempt_{attempt_index:04d}"
+    pickup_qpos, lift_qpos = _candidate_qpos(yaw_delta)
     env = nexus.MyCobotNexusEnv(
         nexus.MyCobotNexusConfig(
             asset_root=asset_root,
@@ -230,19 +376,32 @@ def _export_episode(
         _size_audit_cube(env, half_size=CUBE_HALF_SIZE)
         _apply_physics_overrides(env)
         env.model.opt.gravity[:] = WORLD_GRAVITY
-        cube_pos, cube_quat = _initial_cube_pose(env)
+        cube_pos, cube_quat = _initial_cube_pose_for_qpos(env, pickup_qpos)
         env._set_gripper(command=START_COMMAND)
         _set_cube_pose(env, cube_pos, cube_quat)
         env._mujoco.mj_forward(env.model, env.data)
         initial_cube = env._cube_position()
         placement_guard = _cube_mat_guard(initial_cube)
         if not placement_guard["passed"]:
-            raise RuntimeError(f"cube does not start fully on the work mat: {placement_guard}")
+            return _failed_attempt_summary(
+                split=split,
+                split_episode_index=split_episode_index,
+                global_episode_index=global_episode_index,
+                attempt_index=attempt_index,
+                seed=seed,
+                yaw_delta=yaw_delta,
+                pickup_qpos=pickup_qpos,
+                lift_qpos=lift_qpos,
+                cube_pos=initial_cube,
+                reason="cube_placement_guard_failed",
+                placement_guard=placement_guard,
+            )
+
         rows: list[dict[str, Any]] = []
         total_steps = APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS + POST_LIFT_HOLD_STEPS
         contact_stop_command: float | None = None
         for step_index in range(total_steps):
-            arm, command, phase = _scripted_state(step_index)
+            arm, command, phase = _scripted_state_for_qpos(step_index, pickup_qpos=pickup_qpos, lift_qpos=lift_qpos)
             if contact_stop_command is not None and phase in {"close_on_cube_on_mat", "hold_before_lift", "lift_from_mat", "post_lift_hold"}:
                 command = contact_stop_command
             if phase in {"approach_down_to_cube_on_mat", "close_on_cube_on_mat"}:
@@ -255,12 +414,16 @@ def _export_episode(
                 contact_stop_command = max(-1.0, min(1.0, float(command)))
             image = ""
             if step_index % max(1, render_every) == 0:
-                image_path = frame_dir / f"frame_{step_index:04d}.bmp"
-                _write_bmp(image_path, env.render())
-                image = str(image_path.relative_to(output_dir))
+                final_image_path = final_frame_dir / f"frame_{step_index:04d}.bmp"
+                attempt_image_path = attempt_frame_dir / f"frame_{step_index:04d}.bmp"
+                _write_bmp(attempt_image_path, env.render())
+                image = str(final_image_path.relative_to(output_dir))
             rows.append(
                 {
-                    "episode_index": episode_index,
+                    "episode_index": global_episode_index,
+                    "split": split,
+                    "split_episode_index": split_episode_index,
+                    "attempt_index": attempt_index,
                     "frame_index": step_index,
                     "timestamp": step_index / float(fps),
                     "phase": phase,
@@ -269,25 +432,158 @@ def _export_episode(
                     "action": [*tuple(float(x) for x in arm), float(command)],
                     "reward": reward,
                     "done": bool(terminated or truncated),
-                    "info": {**_json_safe_info(info), "ground_pickup": record},
+                    "info": {
+                        **_json_safe_info(info),
+                        "ground_pickup": record,
+                        "candidate": {
+                            "yaw_delta_rad": float(yaw_delta),
+                            "pickup_qpos": [float(x) for x in pickup_qpos],
+                            "lift_qpos": [float(x) for x in lift_qpos],
+                        },
+                    },
                 }
             )
     finally:
         env.close()
         shutil.rmtree(scene_cache, ignore_errors=True)
 
-    episode_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
     records = [row["info"]["ground_pickup"] for row in rows]
     lift_records = [record for record in records if record["phase"] == "lift_from_mat"]
     post_lift_hold_records = [record for record in records if record["phase"] == "post_lift_hold"]
     final = records[-1]
     success = _passes(records, lift_records, post_lift_hold_records, final)
+    summary = _episode_summary(
+        split=split,
+        split_episode_index=split_episode_index,
+        global_episode_index=global_episode_index,
+        attempt_index=attempt_index,
+        seed=seed,
+        yaw_delta=yaw_delta,
+        pickup_qpos=pickup_qpos,
+        lift_qpos=lift_qpos,
+        episode_path=episode_path,
+        output_dir=output_dir,
+        rows=rows,
+        records=records,
+        lift_records=lift_records,
+        post_lift_hold_records=post_lift_hold_records,
+        final=final,
+        success=success,
+    )
+    if success:
+        shutil.rmtree(final_frame_dir, ignore_errors=True)
+        if attempt_frame_dir.exists():
+            shutil.move(str(attempt_frame_dir), str(final_frame_dir))
+        episode_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+    else:
+        shutil.rmtree(attempt_frame_dir, ignore_errors=True)
+    return summary
+
+
+def _candidate_qpos(yaw_delta: float) -> tuple[np.ndarray, np.ndarray]:
+    pickup = np.asarray(PICKUP_QPOS, dtype=float).copy()
+    lift = np.asarray(LIFT_QPOS, dtype=float).copy()
+    pickup[0] += float(yaw_delta)
+    lift[0] += float(yaw_delta)
+    return pickup, lift
+
+
+def _initial_cube_pose_for_qpos(env: nexus.MyCobotNexusEnv, pickup_qpos: np.ndarray) -> tuple[np.ndarray, list[float]]:
+    nexus._set_adaptive_gate_arm_pose(env, tuple(float(x) for x in pickup_qpos))
+    env._set_gripper(command=START_COMMAND)
+    env._mujoco.mj_forward(env.model, env.data)
+    left = _geom_pos(env, ROBOT_LEFT_PAD)
+    right = _geom_pos(env, ROBOT_RIGHT_PAD)
+    axis = right - left
+    unit_axis = axis / max(float(np.linalg.norm(axis)), 1e-9)
+    side_axis = np.cross(np.asarray([0.0, 0.0, 1.0]), unit_axis)
+    side_axis = side_axis / max(float(np.linalg.norm(side_axis)), 1e-9)
+    pos = (left + right) * 0.5
+    xy_offset = CUBE_AXIS_OFFSET * unit_axis[:2] + CUBE_SIDE_OFFSET * side_axis[:2]
+    pos = np.asarray([pos[0] + xy_offset[0], pos[1] + xy_offset[1], WORK_MAT_TOP_Z + CUBE_HALF_SIZE], dtype=float)
+    return pos, _quat_align_x_to_vector(axis)
+
+
+def _scripted_state_for_qpos(step: int, *, pickup_qpos: np.ndarray, lift_qpos: np.ndarray) -> tuple[np.ndarray, float, str]:
+    if step < APPROACH_STEPS:
+        return pickup_qpos.copy(), START_COMMAND, "approach_down_to_cube_on_mat"
+    if step < APPROACH_STEPS + CLOSE_STEPS:
+        alpha = (step - APPROACH_STEPS) / max(CLOSE_STEPS - 1, 1)
+        return pickup_qpos.copy(), START_COMMAND + alpha * (CONTACT_COMMAND - START_COMMAND), "close_on_cube_on_mat"
+    if step < APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS:
+        return pickup_qpos.copy(), CONTACT_COMMAND, "hold_before_lift"
+    if step < APPROACH_STEPS + CLOSE_STEPS + HOLD_STEPS + LIFT_STEPS:
+        alpha = nexus._smoothstep((step - APPROACH_STEPS - CLOSE_STEPS - HOLD_STEPS) / max(LIFT_STEPS - 1, 1))
+        return pickup_qpos + (lift_qpos - pickup_qpos) * alpha, CONTACT_COMMAND, "lift_from_mat"
+    return lift_qpos.copy(), CONTACT_COMMAND, "post_lift_hold"
+
+
+def _failed_attempt_summary(
+    *,
+    split: str,
+    split_episode_index: int,
+    global_episode_index: int,
+    attempt_index: int,
+    seed: int,
+    yaw_delta: float,
+    pickup_qpos: np.ndarray,
+    lift_qpos: np.ndarray,
+    cube_pos: Any,
+    reason: str,
+    placement_guard: dict[str, Any],
+) -> dict[str, Any]:
     return {
-        "episode_index": episode_index,
+        "split": split,
+        "split_episode_index": split_episode_index,
+        "episode_index": global_episode_index,
+        "attempt_index": attempt_index,
+        "seed": seed,
+        "yaw_delta_rad": float(yaw_delta),
+        "pickup_qpos": [float(x) for x in pickup_qpos],
+        "lift_qpos": [float(x) for x in lift_qpos],
+        "initial_cube_xy": [float(x) for x in np.asarray(cube_pos, dtype=float)[:2]],
+        "success": False,
+        "reason": reason,
+        "initial_cube_mat_guard": placement_guard,
+    }
+
+
+def _episode_summary(
+    *,
+    split: str,
+    split_episode_index: int,
+    global_episode_index: int,
+    attempt_index: int,
+    seed: int,
+    yaw_delta: float,
+    pickup_qpos: np.ndarray,
+    lift_qpos: np.ndarray,
+    episode_path: Path,
+    output_dir: Path,
+    rows: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+    lift_records: list[dict[str, Any]],
+    post_lift_hold_records: list[dict[str, Any]],
+    final: dict[str, Any],
+    success: bool,
+) -> dict[str, Any]:
+    action_hash = _trajectory_hash([row["action"] for row in rows])
+    initial_cube = np.asarray(records[0]["cube_pos"], dtype=float)
+    return {
+        "split": split,
+        "split_episode_index": split_episode_index,
+        "episode_index": global_episode_index,
+        "attempt_index": attempt_index,
+        "seed": seed,
+        "yaw_delta_rad": float(yaw_delta),
+        "pickup_qpos": [float(x) for x in pickup_qpos],
+        "lift_qpos": [float(x) for x in lift_qpos],
+        "initial_cube_xy": [float(x) for x in initial_cube[:2]],
         "path": str(episode_path.relative_to(output_dir)),
         "frames": len(rows),
         "rendered_frames": sum(1 for row in rows if row["observation"]["images"].get("render")),
         "success": success,
+        "trajectory_hash": action_hash,
         "first_frame_pad_cube_contacted_pads": records[0]["pad_cube_contacted_pads"],
         "first_contact_step": next((record["step"] for record in records if record["pad_cube_contacted_pads"] > 0), None),
         "initial_cube_mat_guard": records[0]["mat_guard"],
@@ -305,6 +601,65 @@ def _export_episode(
         "post_lift_hold_min_cube_lift_m": min((float(record["cube_lift_m"]) for record in post_lift_hold_records), default=0.0),
         "max_pad_cube_penetration_m": max(float(record["pad_cube_contact_depth"]["max_penetration_m"]) for record in records),
         "max_lift_pad_cube_penetration_m": max((float(record["pad_cube_contact_depth"]["max_penetration_m"]) for record in lift_records), default=0.0),
+    }
+
+
+def _trajectory_hash(actions: list[list[float]]) -> str:
+    rounded = [[round(float(value), 7) for value in action] for action in actions]
+    payload = json.dumps(rounded, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _rejection_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    checks = {
+        "final_cube_lift_m": summary.get("final_cube_lift_m"),
+        "final_gripper_cube_contact_pads": summary.get("final_gripper_cube_contact_pads"),
+        "lift_best_sustained_two_pad_steps": summary.get("lift_best_sustained_two_pad_steps"),
+        "post_lift_hold_best_sustained_two_pad_steps": summary.get("post_lift_hold_best_sustained_two_pad_steps"),
+        "post_lift_hold_min_cube_lift_m": summary.get("post_lift_hold_min_cube_lift_m"),
+        "max_pad_cube_penetration_m": summary.get("max_pad_cube_penetration_m"),
+    }
+    return {
+        "attempt_index": summary.get("attempt_index"),
+        "split_target": summary.get("split"),
+        "seed": summary.get("seed"),
+        "yaw_delta_rad": summary.get("yaw_delta_rad"),
+        "initial_cube_xy": summary.get("initial_cube_xy"),
+        "success": False,
+        "reason": "success_criteria_failed",
+        "checks": checks,
+    }
+
+
+def _aggregate_metrics(summaries: list[dict[str, Any]], rejected_attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    if not summaries:
+        return {"passed_episodes": 0, "rejected_attempts": len(rejected_attempts), "pose_coverage": {}}
+    xs = [float(summary["initial_cube_xy"][0]) for summary in summaries]
+    ys = [float(summary["initial_cube_xy"][1]) for summary in summaries]
+    yaws = [float(summary["yaw_delta_rad"]) for summary in summaries]
+    hashes = [summary["trajectory_hash"] for summary in summaries]
+    return {
+        "passed_episodes": len(summaries),
+        "rejected_attempts": len(rejected_attempts),
+        "min_final_cube_lift_m": min(float(summary["final_cube_lift_m"]) for summary in summaries),
+        "min_lift_best_sustained_two_pad_steps": min(int(summary["lift_best_sustained_two_pad_steps"]) for summary in summaries),
+        "min_post_lift_hold_sustained_two_pad_steps": min(int(summary["post_lift_hold_best_sustained_two_pad_steps"]) for summary in summaries),
+        "min_post_lift_hold_cube_lift_m": min(float(summary["post_lift_hold_min_cube_lift_m"]) for summary in summaries),
+        "max_pad_cube_penetration_m": max(float(summary["max_pad_cube_penetration_m"]) for summary in summaries),
+        "max_lift_pad_cube_penetration_m": max(float(summary["max_lift_pad_cube_penetration_m"]) for summary in summaries),
+        "pose_coverage": {
+            "unique_pose_count": len({(round(x, 6), round(y, 6)) for x, y in zip(xs, ys)}),
+            "x_min_m": min(xs),
+            "x_max_m": max(xs),
+            "x_span_m": max(xs) - min(xs),
+            "y_min_m": min(ys),
+            "y_max_m": max(ys),
+            "y_span_m": max(ys) - min(ys),
+            "yaw_min_rad": min(yaws),
+            "yaw_max_rad": max(yaws),
+            "yaw_span_rad": max(yaws) - min(yaws),
+            "unique_trajectory_hashes": len(set(hashes)),
+        },
     }
 
 

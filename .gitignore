@@ -9,6 +9,8 @@
 !.agents/skills/harness/**
 !.agents/skills/physical-ai-orchestrator/
 !.agents/skills/physical-ai-orchestrator/**
+!.agents/skills/robot-photoreal-dataset-rendering/
+!.agents/skills/robot-photoreal-dataset-rendering/**
 .codex/*
 !.codex/skills/
 .codex/skills/*

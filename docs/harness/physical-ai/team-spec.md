@@ -21,6 +21,7 @@ Make the agentic physical AI workflow repeatable. Every implementation checkpoin
 | Role | Responsibility | Reusable skill | Writes |
 | --- | --- | --- | --- |
 | Orchestrator | Select the next checkpoint and enforce validation | `.agents/skills/physical-ai-orchestrator/SKILL.md` | final response or `_workspace/*` |
+| Photoreal Dataset Renderer | Preserve source trajectories and recorded cameras while producing deterministic Blender renders and training-ready image-only derivatives | `.agents/skills/robot-photoreal-dataset-rendering/SKILL.md` | repo config/tests/docs and `_workspace/so101_photoreal_*` artifacts |
 | Real SO-100 Agentic SmolVLA Specialist | Preserve real hardware camera routing, SmolVLA execution gates, observer evidence, and agentic-loop semantics | `.agents/skills/real-so100-agentic-smolvla/SKILL.md` | `_workspace/real_so100/*`, `docs/real_so100_*` |
 | Evaluation Results Manager | Classify paper-facing evaluation result packages as paper-ready, diagnostic-only, or blocked | n/a | result ledger summaries from researcher/reviewer packages |
 | Implementer | Add code, config, and tests for the checkpoint | n/a | repo files |
@@ -152,6 +153,72 @@ Required persistence targets:
 
 The postdoc should still notify PM and affected workers, but the file update is
 part of the orchestration change itself.
+
+### Local Dashboard Server Lifecycle
+
+Dataset viewers, Robot Experiment Manager, loop analyzers, TensorBoard-adjacent
+inspection surfaces, and other user-visible local servers must reuse the
+current user-visible server and port by default. Before starting a viewer or
+dashboard server, check whether the requested/current port is already serving
+the target surface. If it is, reuse it and refresh the data or restart that same
+server only when needed.
+
+Do not work around a live server by starting a second copy on a new port. A port
+change is allowed only when the user explicitly asks for a separate server, the
+original port is owned by an unrelated process and cannot be stopped safely, or
+the final report clearly labels the new port as a temporary exception. For the
+SO101/photoreal dataset viewer lane, the active browser port is the contract:
+if the user is looking at `http://127.0.0.1:8769/`, update or restart that
+server on `8769` instead of launching another viewer on `8768`, `8770`, or an
+ad hoc fallback.
+
+### Photoreal Dataset Orchestration
+
+All photoreal robot dataset generation and rerendering must use
+`.agents/skills/robot-photoreal-dataset-rendering/SKILL.md`. PM owns a phase
+board with source owner, replay-preflight verdict, canary verdict, full-render
+owner, derivative-builder owner, verifier, render profile, artifact root, and
+active dashboard port.
+
+Required phase order:
+
+1. Audit the immutable source identity and make the output append-only. Source
+   and output roots must differ.
+2. Run replay preflight across every episode. Record environment/version
+   manifest, snapshot compatibility, targets and collisions, action/timeline
+   completeness, and camera metadata. Any state or model-shape mismatch blocks
+   the full render.
+3. Render a canary containing episode start, contact/grasp, and terminal frames.
+   Verify recorded camera matrices, task prompt and cube color, gripper shape,
+   temporal continuity, noise stability, materials, lighting, table, and props.
+4. Render every declared camera for every frame. Reset once per episode, replay
+   pre-action state sequentially, and fail on missing frames. Partial sidecars
+   and sample probes remain diagnostic-only.
+5. Build a new image-only LeRobot derivative. Preserve episode boundaries,
+   state, action, timestamps, indices, task prompts, and non-image features;
+   replace only declared camera streams.
+6. Complete only after the recipe is declared and the mandatory final
+   `completion:registry-viewer` stage runs
+   `scripts/verify_so101_dataset_completion.py`. The gate must pass the
+   training-ready registry, restart the existing launchctl-managed viewer to
+   load the current recipe/Pydantic schema, find every selected split through
+   `/api/datasets`, and load episode 0/frame 0 with prompt plus camera1/camera2
+   through `/api/frame`. A stale viewer process, empty response, missing split,
+   or incomplete frame payload fails the generation handoff. Mobile/full
+   playback is then checked in that same viewer session.
+
+Keep large raw renders and derivative datasets under `_workspace/`; commit code,
+recipe/config, tests, reports, and small representative images. MyCobot work
+uses the official adaptive gripper profile by default unless the user explicitly
+requests a different end effector.
+
+The current SO101 `v2_5` source is blocked before phase 4: all 300 episodes have
+snapshots and the source has 50,456 frames, but 296 starts match exactly while
+episodes 2, 41, 96, and 295 contain invalid start snapshots; the renderer model
+dimensions are `69/60` while snapshots record `27/24`; and the renderer exposes
+9 RGB object slots while the source report expects 3 green cubes. Seed
+`31010278` requires a matching historical environment or explicit recovery and
+a fresh all-episode preflight before full rendering.
 
 ### Paper-Table Data Priority
 
@@ -395,6 +462,12 @@ policy is:
   `_workspace/logs/`. This avoids Codex command cleanup reaping a background
   child process and making the server appear to die immediately after a
   successful `/api/datasets` response.
+- Whenever the Robot Experiment Manager / dataset viewer is started, opened,
+  or reported, provide all three access links together: localhost,
+  same-Wi-Fi mobile, and external access. Keep the external `cloudflared`
+  tunnel under `launchctl`, verify `/api/datasets` through that URL before
+  reporting it, and do not omit a link without explicitly reporting the
+  concrete failure.
 - SO101 training-time closed-loop validation must run exactly 10 episodes by
   default. Keep `--closed-loop-episodes 10` in both launcher and monitor
   command paths; use any other count only for an explicitly labeled one-off
@@ -488,6 +561,75 @@ policy is:
   `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`.
   `top_down` remains teacher/debug evidence only and must not be exported as a
   SmolVLA student input.
+- SO101 Dataset Append-Only and Registration Contract:
+  - Existing local dataset roots, HF dataset paths, split identities, and
+    recipe files are protected by default. Without an explicit user request in
+    the current turn, agents may only add a new versioned recipe and new
+    versioned dataset roots. They must not pass `--overwrite`, call destructive
+    cleanup on an existing root, rename a dataset, replace an HF split, or
+    silently repoint an established dataset name.
+  - A semantics or quality change creates a new dataset version. It does not
+    mutate the prior version. Cleanup, consolidation, replacement, and HF
+    deletion are separate destructive operations that require an inventory and
+    explicit user approval immediately before execution.
+  - Every durable generated split must be declared under
+    `configs/so101/dataset_generation/<dataset>.json` as
+    `splits.<split>.output_root`. This recipe directory is the canonical viewer
+    registration source. `dataset_contract.json` and
+    `skill_dataset_contract.json` retain semantic contracts; files under
+    `configs/so101/training/` select active training inputs. Do not maintain a
+    fourth manual viewer-only registry or add each dataset to the viewer's
+    static `TRAINING_CONFIGS` list.
+  - The Robot Experiment Manager must auto-discover completed recipe-backed
+    roots and classify recipe train/validation splits into the corresponding
+    viewer tabs even when their names do not end in `_train` or `_val`.
+  - Dataset completion requires executable evidence: export/merge/audit report,
+    required camera-grid sidecar, requested overlap audit and loop-test starts,
+    `/api/datasets` visibility, and a successful `/api/frame` request for at
+    least episode 0/frame 0 of every intended split. Report episode/frame count,
+    disk size, prompt/camera contract, sidecar status, and viewer URL.
+  - The shared registry module is
+    `src/physical_ai_agent/so101_dataset_registry.py`; its operator CLI is
+    `scripts/so101_dataset_registry.py`. Generator and viewer must import this
+    module rather than reimplementing recipe discovery. The mandatory final
+    gate is:
+    `PYTHONPATH=src .venv/bin/python scripts/so101_dataset_registry.py validate --require-training-ready`.
+  - `training_ready=true` means the split has complete LeRobot parquet and
+    metadata, 256x256 RGB camera1/camera2, 6D observation.state/action,
+    prompt/tasks and normalization stats, export/merge reports, a passed audit,
+    a camera1 grid-bin sidecar for train, and the declared loop-start report for
+    validation. Dataset generation is not complete before this gate passes.
+  - Before starting a training experiment, obtain the machine-readable dataset
+    selection with
+    `scripts/so101_dataset_registry.py training-manifest --dataset-id <id>`.
+    Model, augmentation, schedule, and optimizer remain experiment-config
+    choices; the registry manifest supplies the validated dataset inputs and
+    must not guess those training settings.
+  - New recipes use `schema_version: 2` and an explicit Pydantic-discriminated
+    source contract. `from_scratch` forbids external inputs.
+    `from_spawn_catalog` consumes checked-in seed-free `bin -> world [x, y]`
+    placement candidates; it must not run lookup builders or carry source
+    frames/actions/states/seeds, and every generated split must point at a
+    declared catalog. Use it whenever only placement distribution is reused.
+    `from_existing_dataset` lists exact roots and chooses `regenerate_teacher`,
+    `render_derivative`, or `episode_subset` when the dataset itself is an actual
+    input. Episode subsets preserve retained frame/action/state values, record
+    source episode provenance, and rebuild metadata/audit/sampling sidecars in a
+    new append-only root. Source roots referenced by lookup builders, render
+    splits, or subset splits must exactly match the declared list.
+  - New `grip_the_cube_v1` recipes must declare typed
+    `common.inspection_gates`. Exactly one `geometry_contact_alignment` gate
+    with contract `jaw_line_vs_contact_face_normal_through_cube_center` is
+    required; at most one `camera2_visual_alignment` gate may be added.
+    Camera2 pre-close/close-25/close-50/close-75 limits are forwarded into the
+    exporter and are part of episode acceptance. Use
+    `constructive_refine_then_probe` so camera2 wrist-roll refinement and a
+    cheap close probe happen before full episode export. A post-export filter
+    is an audit or derivative tool,
+    not a substitute for constructive generation-time acceptance.
+  - Temporary smoke roots may be exposed through `SO101_TEMP_DATASETS`, but
+    temporary discovery is not registration and must not be used to sign off a
+    durable dataset.
 - SO101 export materials are source-controlled through
   `configs/so101/training_datasets/export_recipes.json` and
   `scripts/export_so101_training_datasets.py`. Raw `_workspace/so101_lerobot`

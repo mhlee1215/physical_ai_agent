@@ -1,0 +1,167 @@
+{
+  "schema_version": 2,
+  "name": "grip_the_cube_v3",
+  "version": "v3",
+  "description": "Hardware-home grip trajectories using the reviewed physical 32x32 UVC camera rig, constructive alignment gates, a 10mm gripper-floor clearance gate, and exact render replay.",
+  "source": {
+    "mode": "from_spawn_catalog",
+    "catalogs": [
+      "configs/so101/spawn_catalogs/grip_the_cube_v3_hardware_home_train.json",
+      "configs/so101/spawn_catalogs/grip_the_cube_v3_hardware_home_validation.json"
+    ]
+  },
+  "start_pose": {
+    "contract": "lerobot_calibrated_so101_position_to_mujoco_qpos",
+    "readback_artifact": "_workspace/real_so100/home_pose/canonical_home_pose_2026_06_07.json",
+    "calibration_artifact": "_workspace/real_so100/calibration/so100_local.json",
+    "joint_order": [
+      "shoulder_pan",
+      "shoulder_lift",
+      "elbow_flex",
+      "wrist_flex",
+      "wrist_roll",
+      "gripper"
+    ],
+    "raw_positions": [2042, 2049, 2046, 2028, 2052, 2033],
+    "lerobot_positions": [-13.67032967032967, -88.74725274725274, 68.96703296703296, 76.21978021978022, 0.3956043956043956, 0.0],
+    "sim_qpos": [-0.23859226258032373, -1.5489317625391434, 1.203701800606199, 1.330286119981612, 0.006904599238658886, -0.17453]
+  },
+  "exporter_revision": "v3-hardware-home-official-camera-rig-floor-clearance",
+  "exporter": "scripts/export_so101_teacher_rollouts_lerobot.py",
+  "merge_script": "scripts/merge_so101_lerobot_shards.py",
+  "sidecar_script": "scripts/build_so101_camera_grid_bins.py",
+  "closed_loop_script": "scripts/build_so101_closed_loop_start_report.py",
+  "audit_script": "scripts/audit_so101_dataset_splits.py",
+  "render_replay_script": "scripts/build_so101_render_replay_sidecar.py",
+  "lookup_cache": "configs/so101/spawn_catalogs/grip_the_cube_v3_hardware_home_train.json",
+  "common": {
+    "fps": 12,
+    "width": 256,
+    "height": 256,
+    "capture_render_replay": true,
+    "teacher_style": "staged",
+    "approach_steps": 34,
+    "settle_steps": 10,
+    "close_steps": 42,
+    "lift_steps": 70,
+    "lift_target_height": 0.065,
+    "lift_controller_z_error": 0.015,
+    "trajectory_variant": "standard",
+    "start_mode": "home",
+    "grip_the_cube_start_profile": "home",
+    "move_target_z_offset": 0.075,
+    "skill_mode": "grip_the_cube_v1",
+    "terminal_hold_steps": 12,
+    "edge_contact_xy_success_threshold": 0.012,
+    "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v4.json",
+    "inspection_gates": [
+      {
+        "kind": "geometry_contact_alignment",
+        "contract": "jaw_line_vs_contact_face_normal_through_cube_center",
+        "max_pre_close_error_deg": 3.0
+      },
+      {
+        "kind": "camera2_visual_alignment",
+        "camera_key": "observation.images.camera2",
+        "edge_mode": "top_contact",
+        "strategy": "constructive_refine_then_probe",
+        "mode": "preclose_and_early_trace",
+      "pre_close_max_deg": 25.0,
+      "close_25_max_deg": 25.0,
+      "close_50_max_deg": 25.0
+      },
+      {
+        "kind": "gripper_floor_clearance",
+        "min_clearance_m": 0.01,
+        "geom_scope": "all_gripper_collision_geoms"
+      }
+    ],
+    "max_attempt_multiplier": 30,
+    "grid_balance_size": 4,
+    "grid_balance_spawn_lookup": true,
+    "grid_lookup_preserve_order": true,
+    "grid_lookup_x_min": 0.2515,
+    "grid_lookup_x_max": 0.2545,
+    "grid_lookup_y_min": 0.106,
+    "grid_lookup_y_max": 0.129,
+    "grid_lookup_resolution": 161,
+    "deterministic_camera_bin_lookup": true,
+    "target_object_color": "green",
+    "spawn_center_x": 0.15,
+    "spawn_center_y": 0.0,
+    "spawn_min_radius": 0.1,
+    "spawn_max_radius": 0.3,
+    "spawn_angle_half_range_deg": 90.0,
+    "target_object_yaw_deg": -53.56697156720929,
+    "object_half_sizes": "0.015"
+  },
+  "sidecar": {
+    "camera_key": "observation.images.camera1",
+    "grid_size": 4,
+    "frame_index": 0,
+    "min_area": 20,
+    "bin_source": "report"
+  },
+  "render_replay": {
+    "enabled": true,
+    "output_dir": "render_replay",
+    "capture_mode": "teacher_time_exact",
+    "state_spec": "mjSTATE_INTEGRATION",
+    "store_geom_world_transforms": true,
+    "store_camera_world_transforms": true,
+    "environment": {
+      "factory": "make_high_contrast_picklift_env",
+      "target_object_color": "green",
+      "object_half_sizes": [0.015],
+      "spawn_center": [0.15, 0.0],
+      "spawn_min_radius": 0.1,
+      "spawn_max_radius": 0.3,
+      "spawn_angle_half_range_deg": 90.0,
+      "target_object_yaw_deg": -53.56697156720929,
+      "n_distractors": 0,
+      "action_repeat": 1,
+      "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v4.json",
+      "camera_rig_sha256": "5e0ac0a165ba84856fe9b60be3baf1508a67a89c46821bd52e3567fed5450c36",
+      "object_pool_order": [
+        {"slot": 0, "color": "green", "half_size": 0.015}
+      ]
+    }
+  },
+  "splits": {
+    "train": {
+      "output_root": "_workspace/so101_lerobot/grip_the_cube_v3",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v3",
+      "lookup_cache": "configs/so101/spawn_catalogs/grip_the_cube_v3_hardware_home_train.json",
+      "bins": [
+        {"id": 5, "episodes": 150, "seed": 130000000, "lookup_start_index": 0, "shard": "hw_home_floor1cm_fixed_yaw_bin5"},
+        {"id": 6, "episodes": 150, "seed": 130000000, "lookup_start_index": 0, "shard": "hw_home_floor1cm_fixed_yaw_bin6"}
+      ]
+    },
+    "validation": {
+      "output_root": "_workspace/so101_lerobot/grip_the_cube_v3_validation",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-validation",
+      "lookup_cache": "configs/so101/spawn_catalogs/grip_the_cube_v3_hardware_home_validation.json",
+      "bins": [
+        {"id": 5, "episodes": 25, "seed": 140000000, "lookup_start_index": 0, "shard": "hw_home_floor1cm_fixed_yaw_bin5"},
+        {"id": 6, "episodes": 25, "seed": 140000000, "lookup_start_index": 0, "shard": "hw_home_floor1cm_fixed_yaw_bin6"}
+      ],
+      "closed_loop": {
+        "episodes": 10,
+        "success_metric": "env_success",
+        "lift_success_height": 0.05,
+        "bins": [5, 6],
+        "exclude_source_reports": [
+          "_workspace/so101_lerobot/grip_the_cube_v3/so101_lerobot_export_report.json"
+        ],
+        "output": "meta/closed_loop/grip_the_cube_v3_validation_start10.json"
+      }
+    }
+  },
+  "audit": {
+    "expected_prompt": "grip the green cube and lift",
+    "expected_resolution": [256, 256],
+    "expected_min_lift_height": 0.06,
+    "expected_min_lift_steps": 20,
+    "terminal_hold_action_tolerance": 0.00001
+  }
+}

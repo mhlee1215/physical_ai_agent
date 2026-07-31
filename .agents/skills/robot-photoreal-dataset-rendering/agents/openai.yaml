@@ -1,0 +1,4 @@
+interface:
+  display_name: "Robot Photoreal Dataset Rendering"
+  short_description: "Deterministic photoreal robot dataset rerendering"
+  default_prompt: "Use $robot-photoreal-dataset-rendering to rerender an existing robot dataset deterministically and verify the training-ready derivative."

@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "name": "grip_the_cube_v2_5_align_trajectory",
+  "version": "v2.5_align_trajectory",
+  "description": "Near-target physical correction trajectories with visible mirrored local perturbations, followed by close, full lift, and lifted terminal hold.",
+  "source_datasets": [
+    "_workspace/so101_lerobot/grip_the_cube_v2_1",
+    "_workspace/so101_lerobot/grip_the_cube_v2_validation",
+    "_workspace/so101_lerobot/grip_the_cube_v2"
+  ],
+  "exporter_revision": "v2.5-lift-terminal-hold-fix",
+  "exporter": "scripts/export_so101_teacher_rollouts_lerobot.py",
+  "lookup_builder_script": "scripts/build_so101_source_episode_spawn_lookup.py",
+  "merge_script": "scripts/merge_so101_lerobot_shards.py",
+  "sidecar_script": "scripts/build_so101_camera_grid_bins.py",
+  "closed_loop_script": "scripts/build_so101_closed_loop_start_report.py",
+  "audit_script": "scripts/audit_so101_dataset_splits.py",
+  "lookup_cache": "_workspace/cache/so101_grip_the_cube_v2_5_align_train_sources.json",
+  "lookup_builders": [
+    {
+      "name": "train_sources",
+      "output": "_workspace/cache/so101_grip_the_cube_v2_5_align_train_sources.json",
+      "source_reports": [
+        "_workspace/so101_lerobot/grip_the_cube_v2_1/so101_lerobot_export_report.json"
+      ],
+      "grid_size": 4,
+      "resolution": 161,
+      "x_range": [-0.1, 0.55],
+      "y_range": [-0.45, 0.45],
+      "bins": [5, 6, 9, 10]
+    },
+    {
+      "name": "validation_sources",
+      "output": "_workspace/cache/so101_grip_the_cube_v2_5_align_validation_sources.json",
+      "source_reports": [
+        "_workspace/so101_lerobot/grip_the_cube_v2_validation/so101_lerobot_export_report.json",
+        "_workspace/so101_lerobot/grip_the_cube_v2/so101_lerobot_export_report.json"
+      ],
+      "grid_size": 4,
+      "resolution": 161,
+      "x_range": [-0.1, 0.55],
+      "y_range": [-0.45, 0.45],
+      "bins": [5, 6, 9, 10]
+    }
+  ],
+  "common": {
+    "fps": 12,
+    "width": 256,
+    "height": 256,
+    "teacher_style": "staged",
+    "approach_steps": 24,
+    "settle_steps": 10,
+    "close_steps": 42,
+    "lift_steps": 70,
+    "lift_target_height": 0.065,
+    "lift_controller_z_error": 0.015,
+    "trajectory_variant": "standard",
+    "start_mode": "home",
+    "grip_the_cube_start_profile": "correction",
+    "near_target_joint_std": 0.015,
+    "near_target_xy_std": 0.012,
+    "move_target_z_offset": 0.075,
+    "close_alignment_gate_mode": "geometry_only",
+    "skill_mode": "grip_the_cube_v1",
+    "terminal_hold_steps": 12,
+    "edge_contact_xy_success_threshold": 0.012,
+    "edge_contact_parallel_success_threshold_deg": 3.0,
+    "max_attempt_multiplier": 30,
+    "grid_balance_size": 4,
+    "grid_balance_spawn_lookup": true,
+    "grid_lookup_preserve_order": true,
+    "grid_lookup_x_min": -0.1,
+    "grid_lookup_x_max": 0.55,
+    "grid_lookup_y_min": -0.45,
+    "grid_lookup_y_max": 0.45,
+    "grid_lookup_resolution": 161,
+    "deterministic_camera_bin_lookup": true,
+    "target_object_color": "green"
+  },
+  "sidecar": {
+    "camera_key": "observation.images.camera1",
+    "grid_size": 4,
+    "frame_index": 0,
+    "min_area": 20,
+    "bin_source": "report"
+  },
+  "splits": {
+    "train": {
+      "output_root": "_workspace/so101_lerobot/grip_the_cube_v2_5_align_trajectory",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v2-5-align-trajectory",
+      "lookup_cache": "_workspace/cache/so101_grip_the_cube_v2_5_align_train_sources.json",
+      "bins": [
+        {"id": 5, "episodes": 55, "seed": 70000000, "lookup_start_index": 0},
+        {"id": 6, "episodes": 55, "seed": 70000000, "lookup_start_index": 0},
+        {"id": 9, "episodes": 55, "seed": 70000000, "lookup_start_index": 0},
+        {"id": 10, "episodes": 55, "seed": 70000000, "lookup_start_index": 0}
+      ]
+    },
+    "validation": {
+      "output_root": "_workspace/so101_lerobot/grip_the_cube_v2_5_align_trajectory_validation",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v2-5-align-trajectory-validation",
+      "lookup_cache": "_workspace/cache/so101_grip_the_cube_v2_5_align_validation_sources.json",
+      "bins": [
+        {"id": 5, "episodes": 25, "seed": 80000000, "lookup_start_index": 0},
+        {"id": 6, "episodes": 25, "seed": 80000000, "lookup_start_index": 0},
+        {"id": 9, "episodes": 25, "seed": 80000000, "lookup_start_index": 0},
+        {"id": 10, "episodes": 25, "seed": 80000000, "lookup_start_index": 0}
+      ],
+      "closed_loop": {
+        "episodes": 10,
+        "success_metric": "env_success",
+        "lift_success_height": 0.05,
+        "bins": [5, 6, 9, 10],
+        "output": "meta/closed_loop/grip_the_cube_v2_5_align_trajectory_validation_start10.json"
+      }
+    }
+  },
+  "audit": {
+    "expected_prompt": "grip the green cube and lift",
+    "expected_resolution": [256, 256],
+    "expected_min_lift_height": 0.06,
+    "expected_min_lift_steps": 20,
+    "terminal_hold_action_tolerance": 1e-5
+  }
+}

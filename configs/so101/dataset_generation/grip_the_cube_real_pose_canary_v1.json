@@ -1,0 +1,142 @@
+{
+  "schema_version": 2,
+  "name": "grip_the_cube_real_pose_canary_v1",
+  "version": "v1",
+  "description": "Five-episode append-only canary proving grip teacher feasibility from the calibrated 2026-07-21 real SO101 readback pose.",
+  "source": {
+    "mode": "from_spawn_catalog",
+    "catalogs": [
+      "configs/so101/spawn_catalogs/grip_the_cube_v3.json"
+    ]
+  },
+  "start_pose": {
+    "contract": "lerobot_calibrated_so101_position_to_mujoco_qpos",
+    "readback_artifact": "_workspace/real_so101/all_motor_wide_validation_20260721/postflight.json",
+    "calibration_artifact": "_workspace/real_so100/calibration/so100_local.json",
+    "joint_order": [
+      "shoulder_pan",
+      "shoulder_lift",
+      "elbow_flex",
+      "wrist_flex",
+      "wrist_roll",
+      "gripper"
+    ],
+    "raw_positions": [2047, 2049, 2048, 2038, 2050, 2054],
+    "lerobot_positions": [
+      -13.23076923076923,
+      -88.74725274725274,
+      69.14285714285714,
+      77.0989010989011,
+      0.21978021978021978,
+      2.3001095290251916
+    ],
+    "sim_qpos": [
+      -0.2309204856484805,
+      -1.5489317625391434,
+      1.2067705113789364,
+      1.3456296738452984,
+      0.0038358884659216034,
+      -0.1303739923176487
+    ]
+  },
+  "exporter_revision": "real-pose-exact-first-frame-v1",
+  "exporter": "scripts/export_so101_teacher_rollouts_lerobot.py",
+  "merge_script": "scripts/merge_so101_lerobot_shards.py",
+  "sidecar_script": "scripts/build_so101_camera_grid_bins.py",
+  "closed_loop_script": "scripts/build_so101_closed_loop_start_report.py",
+  "audit_script": "scripts/audit_so101_dataset_splits.py",
+  "render_replay_script": "scripts/build_so101_render_replay_sidecar.py",
+  "lookup_cache": "configs/so101/spawn_catalogs/grip_the_cube_v3.json",
+  "common": {
+    "fps": 12,
+    "width": 256,
+    "height": 256,
+    "capture_render_replay": true,
+    "teacher_style": "staged",
+    "approach_steps": 34,
+    "settle_steps": 10,
+    "close_steps": 42,
+    "lift_steps": 70,
+    "lift_target_height": 0.065,
+    "lift_controller_z_error": 0.015,
+    "trajectory_variant": "standard",
+    "start_mode": "home",
+    "grip_the_cube_start_profile": "home",
+    "move_target_z_offset": 0.075,
+    "skill_mode": "grip_the_cube_v1",
+    "terminal_hold_steps": 12,
+    "edge_contact_xy_success_threshold": 0.012,
+    "inspection_gates": [
+      {
+        "kind": "geometry_contact_alignment",
+        "contract": "jaw_line_vs_contact_face_normal_through_cube_center",
+        "max_pre_close_error_deg": 3.0
+      }
+    ],
+    "max_attempt_multiplier": 30,
+    "grid_balance_size": 4,
+    "grid_balance_spawn_lookup": true,
+    "grid_lookup_preserve_order": true,
+    "grid_lookup_x_min": -0.1,
+    "grid_lookup_x_max": 0.55,
+    "grid_lookup_y_min": -0.45,
+    "grid_lookup_y_max": 0.45,
+    "grid_lookup_resolution": 161,
+    "deterministic_camera_bin_lookup": true,
+    "target_object_color": "green",
+    "spawn_center_x": 0.15,
+    "spawn_center_y": 0.0,
+    "spawn_min_radius": 0.1,
+    "spawn_max_radius": 0.3,
+    "spawn_angle_half_range_deg": 90.0,
+    "object_half_sizes": "0.0125,0.015,0.0175"
+  },
+  "sidecar": {
+    "camera_key": "observation.images.camera1",
+    "grid_size": 4,
+    "frame_index": 0,
+    "min_area": 20,
+    "bin_source": "report"
+  },
+  "render_replay": {
+    "enabled": true,
+    "output_dir": "render_replay",
+    "capture_mode": "teacher_time_exact",
+    "state_spec": "mjSTATE_INTEGRATION",
+    "store_geom_world_transforms": true,
+    "store_camera_world_transforms": true,
+    "environment": {
+      "factory": "make_high_contrast_picklift_env",
+      "target_object_color": "green",
+      "object_half_sizes": [0.0125, 0.015, 0.0175],
+      "spawn_center": [0.15, 0.0],
+      "spawn_min_radius": 0.1,
+      "spawn_max_radius": 0.3,
+      "spawn_angle_half_range_deg": 90.0,
+      "n_distractors": 0,
+      "action_repeat": 1,
+      "object_pool_order": [
+        {"slot": 0, "color": "green", "half_size": 0.0125},
+        {"slot": 1, "color": "green", "half_size": 0.015},
+        {"slot": 2, "color": "green", "half_size": 0.0175}
+      ]
+    }
+  },
+  "splits": {
+    "train": {
+      "output_root": "_workspace/so101_lerobot/grip_the_cube_real_pose_canary_v1",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-real-pose-canary-v1",
+      "lookup_cache": "configs/so101/spawn_catalogs/grip_the_cube_v3.json",
+      "bins": [
+        {"id": 5, "episodes": 5, "seed": 171000000, "lookup_start_index": 0, "shard": "bin5"}
+      ]
+    }
+  },
+  "audit": {
+    "expected_prompt": "grip the green cube and lift",
+    "expected_resolution": [256, 256],
+    "expected_min_lift_height": 0.06,
+    "expected_min_lift_steps": 20,
+    "terminal_hold_action_tolerance": 0.00001
+  }
+}
