@@ -124,11 +124,13 @@ was 3.305 mm, only 0.305 mm above the cap; the median episode spent seven steps
 over the cap and the longest consecutive run was 12 steps.
 
 This is a systematic right-pad/approach signature, not evidence of cube-mat or
-self-collision. It does not yet distinguish policy closure, pad asymmetry,
-contact softness, or geometry calibration. The traces do not log normal force
-or impulse. Preserve 3 mm as the primary gate, inspect right-pad calibration,
-and add force/impulse only before contact tuning; threshold sensitivity remains
-secondary analysis.
+self-collision. Both deterministic and randomized contracts keep a fixed
+`cube_side_offset_m = +0.005` with zero side jitter, so the signature may be
+the expected result of placing the cube consistently toward one pad. Run a
+mirrored `+5 mm/-5 mm` development diagnostic first. Inspect right-pad
+actuation/contact calibration only if the peak side does not flip. The traces
+do not log normal force or impulse; preserve 3 mm as the primary gate and keep
+threshold sensitivity secondary.
 
 ## Fine-Tuning Baseline Scope
 
@@ -263,8 +265,9 @@ sandbox refresh error; this does not affect the underlying JSON validation.
 This replication is strong enough to include in the current PR and is more
 valuable than extending one checkpoint to more evaluation episodes. The next
 pre-PR action is to preserve this audit and no-fine-tuning control, not run more
-seeds. Contact work should first inspect the systematic right-pad approach
-signature without changing the 3 mm metric. Agentic verifier/retry integration
+seeds. Contact work should first run a mirrored `+5 mm/-5 mm` side-offset
+diagnostic without changing the 3 mm metric; inspect right-pad calibration only
+if the peak side does not flip. Agentic verifier/retry integration
 belongs on a separate `codex/mycobot280-agentic-readiness` branch with
 policy-only, blind-retry, and verifier-routed controls. The next data-heavy
 publication step remains a stratified or deliberately oversampled high-mass

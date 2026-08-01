@@ -5304,7 +5304,15 @@
     "not_logged": [
       "contact force",
       "contact impulse"
-    ]
+    ],
+    "placement_confound": {
+      "cube_side_jitter_m": [
+        0.0,
+        0.0
+      ],
+      "cube_side_offset_m": 0.005,
+      "interpretation": "the all-right-pad peak can reflect the fixed lateral cube placement; test mirrored offsets before pad-specific tuning"
+    }
   },
   "status": "passed"
 }

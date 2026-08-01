@@ -2289,8 +2289,9 @@ ownership surfaces:
 - Report strict success as primary, with pickup/hold and penetration-only
   outcomes secondary. A verifier decision is not task success.
 - Current penetration evidence points to a systematic right-pad peak during
-  `approach_down_to_cube_on_mat`; inspect geometry/contact calibration before
-  selecting a contact-quality intervention.
+  `approach_down_to_cube_on_mat`, but current placement fixes a +5 mm side
+  offset with zero jitter. Run a mirrored +/-5 mm development diagnostic before
+  selecting a pad-specific contact-quality intervention.
 
 The focused randomized-evaluation gate includes:
 

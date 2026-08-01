@@ -73,6 +73,14 @@ def audit_reports(
                 "robot self-collision",
                 "non-pad gripper geoms against cube",
             ],
+            "placement_confound": {
+                "cube_side_offset_m": 0.005,
+                "cube_side_jitter_m": [0.0, 0.0],
+                "interpretation": (
+                    "the all-right-pad peak can reflect the fixed lateral cube "
+                    "placement; test mirrored offsets before pad-specific tuning"
+                ),
+            },
             "available_trace_evidence": [
                 "contact side",
                 "rollout phase",
@@ -173,6 +181,12 @@ def render_markdown(audit: dict[str, Any]) -> str:
             "## Interpretation Boundary",
             "",
             "- The gate covers adaptive-gripper **pad-cube** contacts only.",
+            (
+                "- Current deterministic and randomized contracts keep the cube "
+                "at a fixed +5 mm side offset with zero side jitter. The all-right-"
+                "pad peak can therefore reflect placement; test mirrored offsets "
+                "before pad-specific tuning."
+            ),
             (
                 "- Cube-table/mat penetration and robot self-collision are not being "
                 "mislabeled by this metric."

@@ -21,6 +21,7 @@ Strict pad-cube penetration threshold: **3.0 mm**.
 ## Interpretation Boundary
 
 - The gate covers adaptive-gripper **pad-cube** contacts only.
+- Current deterministic and randomized contracts keep the cube at a fixed +5 mm side offset with zero side jitter. The all-right-pad peak can therefore reflect placement; test mirrored offsets before pad-specific tuning.
 - Cube-table/mat penetration and robot self-collision are not being mislabeled by this metric.
 - Penetration-only means pickup/lift/hold passed, but strict contact quality did not.
 - Saved traces identify side, phase, magnitude, and duration in simulation steps.

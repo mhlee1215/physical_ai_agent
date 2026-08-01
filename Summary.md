@@ -107,8 +107,9 @@ paper-facing concepts:
   91 were penetration-only. Every peak was on the right pad during
   `approach_down_to_cube_on_mat`; mean peak was 3.305 mm, median crossing
   duration seven steps, and maximum consecutive duration 12 steps.
-- Keep the 3 mm gate unchanged. Inspect right-pad geometry/contact calibration
-  before policy or simulator tuning; current traces do not log force/impulse.
+- Keep the 3 mm gate unchanged. Current placement fixes the cube at a +5 mm
+  side offset with zero jitter; run a mirrored +/-5 mm diagnostic before
+  right-pad geometry/contact tuning. Current traces do not log force/impulse.
 - Agentic changes are routed to a separate
   `codex/mycobot280-agentic-readiness` branch/worktree. The randomized-eval PR
   must not absorb retry orchestration or intervention code.
