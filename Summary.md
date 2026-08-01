@@ -131,8 +131,10 @@ paper-facing concepts:
   then compare policy-only, equal-budget blind retry, and verifier-routed retry.
   A routing smoke is readiness only; no agentic benefit may be claimed until a
   retry executes in closed loop on matched seeds.
-- PR-ready summary, figures, video, and statistics:
+- PR evidence package, figures, video, and statistics:
   `docs/research/2026_08_01/mycobot280_training_evaluation_pr_package.md`.
+- Copy-paste PR body with explicit `3 x 11` sample-count semantics:
+  `docs/research/2026_08_01/mycobot280_training_evaluation_pr_body.md`.
 - Explicit policy claim matrix and x/y paradigm figure:
   `docs/research/2026_08_01/mycobot280_policy_claims_evidence.md` and
   `docs/research/2026_08_01/mycobot280_policy_paradigm_claims.png`.

@@ -6,6 +6,8 @@
 
 **Suggested PR title:** myCobot 280 SmolVLA randomized-training replication and matched closed-loop evaluation
 
+**Copy-paste PR body:** [mycobot280_training_evaluation_pr_body.md](mycobot280_training_evaluation_pr_body.md)
+
 ## PR Summary
 
 This PR turns the myCobot 280 ground-pickup teacher pipeline into a complete
