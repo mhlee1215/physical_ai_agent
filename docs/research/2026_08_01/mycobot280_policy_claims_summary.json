@@ -1,0 +1,127 @@
+{
+  "claim_boundary": "The evidence supports scoped simulation claims only. It does not establish statistical significance, uniform physics coverage, real-robot transfer, or agentic retry benefit.",
+  "evaluation_contract": {
+    "camera": "ground_pickup_closeup",
+    "candidate_selection": "direct_unfiltered_draws_without_teacher_rejection",
+    "functional_definition": "pickup/lift/contact/hold gates with the penetration gate excluded",
+    "matched_environment_seeds": [
+      92000,
+      92001,
+      92002,
+      92003,
+      92004,
+      92005,
+      92006,
+      92007,
+      92008,
+      92009,
+      92010
+    ],
+    "physics": "randomized_from_audited_source_manifest",
+    "steps_per_episode": 530,
+    "strict_definition": "pickup/lift/contact/hold gates plus maximum pad-cube penetration at or below 3.0 mm"
+  },
+  "fresh_randomized_multiseed": {
+    "deterministic": {
+      "episodes": 33,
+      "penetration_only_failures": 28,
+      "pickup_hold_success_rate": 0.9696969696969697,
+      "pickup_hold_successes": 32,
+      "strict_success_rate": 0.12121212121212122,
+      "strict_successes": 4,
+      "strict_successes_per_training_seed": [
+        3,
+        1,
+        0
+      ]
+    },
+    "exact_two_sided_sign_test_p": 0.25,
+    "mean_paired_penetration_delta_mm": -0.08211413433013533,
+    "positive_training_seed_count": 3,
+    "randomized": {
+      "episodes": 33,
+      "penetration_only_failures": 19,
+      "pickup_hold_success_rate": 1.0,
+      "pickup_hold_successes": 33,
+      "strict_success_rate": 0.42424242424242425,
+      "strict_successes": 14,
+      "strict_successes_per_training_seed": [
+        5,
+        5,
+        4
+      ]
+    },
+    "strict_success_deltas_per_training_seed": [
+      2,
+      4,
+      4
+    ],
+    "training_seeds": [
+      20260731,
+      20260732,
+      20260733
+    ]
+  },
+  "matched_schedule_rows": {
+    "base": {
+      "episodes": 11,
+      "label": "No fine-tuning",
+      "penetration_only_failures": 0,
+      "pickup_hold_success_rate": 0.0,
+      "pickup_hold_successes": 0,
+      "strict_success_rate": 0.0,
+      "strict_successes": 0
+    },
+    "deterministic_finetuned": {
+      "episodes": 11,
+      "label": "Deterministic fine-tuning",
+      "penetration_only_failures": 8,
+      "pickup_hold_success_rate": 1.0,
+      "pickup_hold_successes": 11,
+      "strict_success_rate": 0.2727272727272727,
+      "strict_successes": 3
+    },
+    "randomized_finetuned": {
+      "episodes": 11,
+      "label": "Randomized fine-tuning",
+      "penetration_only_failures": 6,
+      "pickup_hold_success_rate": 1.0,
+      "pickup_hold_successes": 11,
+      "strict_success_rate": 0.45454545454545453,
+      "strict_successes": 5
+    }
+  },
+  "operation": "summarize_mycobot280_policy_claims",
+  "status": "passed",
+  "supported_claims": {
+    "fine_tuning_changes_task_behavior": {
+      "evidence": "base pickup+hold 0/11; deterministic and randomized fine-tuned policies each 11/11",
+      "status": "supported_on_one_matched_11_episode_schedule"
+    },
+    "randomized_improves_contact_quality": {
+      "evidence": "strict success is 4/33 versus 14/33 and mean paired maximum penetration changes by -0.082 mm",
+      "status": "supported_directionally_under_the_fixed_3mm_gate"
+    },
+    "randomized_improves_functional_success": {
+      "evidence": "penetration-excluded pickup+hold is 32/33 deterministic versus 33/33 randomized on fresh randomized physics",
+      "status": "not_supported_as_a_material_advantage"
+    },
+    "randomized_improves_strict_success_direction": {
+      "evidence": "randomized exceeds deterministic strict success in 3/3 paired training seeds on fresh randomized physics; exact sign-test p=0.25",
+      "status": "replicated_engineering_evidence_not_statistical_significance"
+    }
+  },
+  "teacher_filtering": {
+    "accepted_attempts": 60,
+    "applies_to": "randomized source demonstrations used for training and validation",
+    "does_not_apply_to": "closed-loop policy evaluation rollouts",
+    "highest_mass_quartile_accepted": 2,
+    "highest_mass_quartile_attempted": 15,
+    "highest_mass_quartile_validation_examples": 0,
+    "total_attempts": 73,
+    "validation_empty_friction_quartiles": [
+      1,
+      2
+    ]
+  }
+}

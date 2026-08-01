@@ -103,6 +103,16 @@ paper-facing concepts:
 - The matched unfine-tuned close-camera fresh-randomized control is 0/11 strict
   and 0/11 pickup/hold, versus 3/11 and 11/11 for deterministic fine-tuning and
   5/11 and 11/11 for randomized fine-tuning at seed 20260731.
+- Claim the comparison in two layers: fine-tuning changes functional task
+  behavior on the matched 11-episode schedule; randomized training improves
+  strict penetration-gated success directionally in 3/3 paired training seeds.
+  Without the penetration gate, fresh-randomized pickup/hold is nearly tied at
+  32/33 deterministic-trained versus 33/33 randomized-trained, so do not claim
+  a material randomized advantage in generic pickup-and-hold.
+- Randomized source demonstrations come from PR #33 commits `f9c7569`,
+  `1a2ac84`, and `5ddb73b` and are teacher-success-conditioned (60 accepted of
+  73 attempted). Closed-loop evaluation is different: it uses direct unfiltered
+  candidates and retains every policy rollout, including failures.
 - Trace audit over 143 episodes found 100 pad-cube penetration-cap crossings;
   91 were penetration-only. Every peak was on the right pad during
   `approach_down_to_cube_on_mat`; mean peak was 3.305 mm, median crossing
@@ -123,6 +133,9 @@ paper-facing concepts:
   retry executes in closed loop on matched seeds.
 - PR-ready summary, figures, video, and statistics:
   `docs/research/2026_08_01/mycobot280_training_evaluation_pr_package.md`.
+- Explicit policy claim matrix and x/y paradigm figure:
+  `docs/research/2026_08_01/mycobot280_policy_claims_evidence.md` and
+  `docs/research/2026_08_01/mycobot280_policy_paradigm_claims.png`.
 - Underlying dated evidence:
   `docs/research/2026_07_31/mycobot280_randomized_training_multiseed_evidence.md`
   and

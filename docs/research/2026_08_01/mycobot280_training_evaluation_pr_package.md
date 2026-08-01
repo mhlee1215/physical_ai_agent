@@ -13,7 +13,7 @@ SmolVLA training and policy-only evaluation result. It adds matched close-camera
 LeRobot datasets, exact-7D SmolVLA fine-tuning safeguards, reloadable
 checkpoints, held-out supervised diagnostics, camera-controlled closed-loop
 evaluation, three paired training-seed replications, penetration-failure audit,
-figures, and reproducible video capture.
+scoped claim attribution, figures, and reproducible video capture.
 
 The primary result is directional replication:
 
@@ -26,6 +26,23 @@ The primary result is directional replication:
 
 Agentic verifier, retry, and intervention code are intentionally excluded from
 this PR.
+
+## Dataset Dependency
+
+This work uses the randomized myCobot 280 generator, data contract, and source
+audits introduced in [PR #33](https://github.com/mhlee1215/physical_ai_agent/pull/33),
+`Codex/myCobot 280 ground pickup randomized dataset v0`.
+
+- source branch: `codex/mycobot-280-ground-pickup-randomized-dataset`;
+- source commits: `f9c7569`, `1a2ac84`, and `5ddb73b`;
+- accepted source corpus: 50 training and 10 validation episodes, or 31,800
+  all-frame observations before LeRobot conversion.
+
+PR #33 owns source generation, rejection sampling, manifests, provenance,
+camera checks, and physics-factor coverage. This PR builds on that source with
+LeRobot conversion, SmolVLA fine-tuning, checkpoint validation, and matched
+closed-loop evaluation. Merge PR #33 first so this PR remains a downstream
+training/evaluation change.
 
 ## Dataset Contract
 
@@ -44,6 +61,10 @@ all 13 rejected attempts occur in the highest cube-mass quartile
 (0.034-0.036 kg), where only 2/15 attempts were accepted. Validation contains no
 accepted high-mass examples and no accepted examples in the first two friction
 quartiles.
+
+Teacher-success filtering applies only to source demonstrations used for
+training and validation. Closed-loop evaluation uses direct, unfiltered draws
+and retains every rollout, including failures.
 
 ## Training Contract
 
@@ -100,6 +121,21 @@ is the three paired training seeds.
 Randomized training lowers mean maximum pad-cube penetration by 0.087 mm under
 nominal physics and 0.082 mm under fresh randomized physics.
 
+## Claim Matrix
+
+| Question | Result | Claim status |
+| --- | --- | --- |
+| Fine-tuning vs no fine-tuning | Matched seed `20260731`: base 0/11 pickup+hold; both fine-tuned policies 11/11 | Supported on this matched 11-episode schedule. |
+| Randomized vs deterministic, strict | Fresh randomized strict success 14/33 vs 4/33; randomized higher in 3/3 paired training seeds | Directionally replicated engineering evidence; not significant at `n=3` (`p=0.25`). |
+| Randomized vs deterministic, penetration excluded | Pickup+hold 33/33 vs 32/33 | No material functional-task advantage established. |
+| Contact quality | Penetration-only failures 19/33 vs 28/33; mean paired peak change -0.082 mm | Randomized advantage is principally cleaner contact under the fixed 3 mm gate. |
+
+Thus, `fine-tuning > no fine-tuning` is supported for functional pickup-and-hold
+on the matched control. `randomized > deterministic` is supported directionally
+for strict penetration-gated success, but not as a general task-success or
+statistically significant claim. The complete assumptions and non-claims are
+recorded in the [policy claim boundary](mycobot280_policy_claims_evidence.md).
+
 ## No-Fine-Tuning Attribution
 
 On the matched fresh-randomized schedule at training seed `20260731`:
@@ -149,6 +185,10 @@ stratified jaw-axis contract is required before agentic retry calibration.
 
 ## Figures
 
+### Policy-paradigm claim map
+
+![Policy paradigm comparison](mycobot280_policy_paradigm_claims.png)
+
 ### Matched camera ablation
 
 ![Matched camera ablation](../2026_07_31/mycobot280_camera_ablation.png)
@@ -161,7 +201,7 @@ stratified jaw-axis contract is required before agentic retry calibration.
 
 ![Randomized-training replication](../2026_07_31/mycobot280_randomized_training_multiseed.png)
 
-All three figures were visually inspected. Titles, legends, labels, annotations,
+All four figures were visually inspected. Titles, legends, labels, annotations,
 and caveat text are readable, and no elements overlap.
 
 ## Video Evidence
@@ -194,6 +234,8 @@ The uncommitted source videos and their evaluation reports remain under
 
 ## Machine-Readable Evidence
 
+- [Policy claim summary JSON](mycobot280_policy_claims_summary.json)
+- [Policy claim boundary](mycobot280_policy_claims_evidence.md)
 - [Multiseed summary JSON](../2026_07_31/mycobot280_randomized_training_multiseed_summary.json)
 - [Pilot summary JSON](../2026_07_31/mycobot280_randomized_training_pilot_summary.json)
 - [Penetration audit JSON](../2026_07_31/mycobot280_penetration_failure_audit.json)
@@ -203,7 +245,7 @@ The uncommitted source videos and their evaluation reports remain under
 
 ## Verification
 
-- `28` focused `test_mycobot280_*.py` tests pass.
+- `31` focused `test_mycobot280_*.py` tests pass.
 - `13` randomized-source contract tests pass.
 - The regenerated multiseed JSON matches the committed summary byte-for-byte.
 - The regenerated penetration audit passes over all 143 saved traces.
@@ -218,6 +260,8 @@ diagnostic, and policy-only closed-loop pipeline works across three paired
 training seeds, and that randomized-data training improves strict success in
 the tested direction in all three pairs.
 
-It does not prove statistical significance, uniform physics coverage, optimized
-training convergence, real-robot transfer, recovery from unseen states, or
-agentic verifier/retry benefit.
+It also shows that fine-tuning changes functional pickup-and-hold behavior on
+the matched 11-episode control. It does not show a material randomized-training
+advantage after excluding penetration, nor prove statistical significance,
+uniform physics coverage, optimized convergence, real-robot transfer, recovery
+from unseen states, or agentic verifier/retry benefit.
