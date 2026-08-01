@@ -129,6 +129,9 @@ class RandomizedTrainingMultiseedSummaryTests(unittest.TestCase):
         row = summary["aggregate_rows"]["deterministic_nominal"]
         self.assertEqual(row["strict_successes_per_training_seed"], [1, 0, 1])
         self.assertEqual(row["strict_successes_total"], 2)
+        self.assertEqual(row["penetration_only_failures_per_training_seed"], [1, 2, 1])
+        self.assertEqual(row["penetration_only_failures_total"], 4)
+        self.assertEqual(row["other_strict_failures_total"], 0)
         paired = summary["paired_comparisons"]["nominal_training_data_effect"]
         self.assertEqual(paired["strict_success_count_deltas"], [1, 2, 1])
         self.assertEqual(paired["positive_training_seed_count"], 3)

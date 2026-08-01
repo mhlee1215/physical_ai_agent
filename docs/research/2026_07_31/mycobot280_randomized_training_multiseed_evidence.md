@@ -89,12 +89,12 @@ statistical significance.
 Episode pooling is reported only as a descriptive summary. Episodes sharing a
 training checkpoint are not independent training replications.
 
-| Training data | Evaluation physics | Strict total | Mean per seed | Seed range | Pickup + hold |
+| Training data | Evaluation physics | Strict | Pickup + hold | Penetration-only | Other strict failure |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Deterministic close | Nominal fixed | 6/33 | 2.00/11 | 0-5 | 32/33 |
-| Randomized close | Nominal fixed | 14/33 | 4.67/11 | 3-7 | 32/33 |
-| Deterministic close | Fresh randomized | 4/33 | 1.33/11 | 0-3 | 32/33 |
-| Randomized close | Fresh randomized | 14/33 | 4.67/11 | 4-5 | 33/33 |
+| Deterministic close | Nominal fixed | 6/33 | 32/33 | 26/33 | 1/33 |
+| Randomized close | Nominal fixed | 14/33 | 32/33 | 18/33 | 1/33 |
+| Deterministic close | Fresh randomized | 4/33 | 32/33 | 28/33 | 1/33 |
+| Randomized close | Fresh randomized | 14/33 | 33/33 | 19/33 | 0/33 |
 
 Randomized training reduced mean maximum penetration on 27/33 paired nominal
 episodes and 25/33 paired fresh-randomized episodes. Mean paired deltas were
@@ -104,6 +104,37 @@ episodes and 25/33 paired fresh-randomized episodes. Mean paired deltas were
 final-lift, two-final-pad-contact, 60-step sustained-lift, 300-step post-lift
 hold, and 45 mm minimum post-hold height gates. It is shown beside strict
 success rather than replacing it.
+
+## Failure Taxonomy And Contact Scope
+
+The 3 mm cap remains the official strict-success gate. A penetration-only
+near-success is an episode that passes every pickup/hold gate and whose exact
+failed-gate list is only `max_pad_cube_penetration_exceeded`. It is therefore
+a physics-quality failure, not a missed pickup.
+
+The current metric is specifically `max_pad_cube_penetration`. It already
+narrows the offending contact class to gripper-pad versus cube and excludes
+cube-table/mat penetration and robot self-collision from this failure reason.
+The reports do not yet retain which pad geom produced the maximum, its peak
+step and duration, or the corresponding normal force/impulse. Those should be
+audited before changing pad geometry, contact softness, friction, closure speed,
+or solver settings. The 3 mm threshold must remain unchanged for the current
+comparison; threshold sensitivity can be reported only as a secondary analysis.
+
+## Fine-Tuning Baseline Scope
+
+The earlier one-seed deterministic camera ablation did compare the unfine-tuned
+base policy with deterministic fine-tuning: wide-camera strict success was
+`0/11 -> 3/11`, and close-camera strict success was `0/11 -> 5/11`.
+
+The three-seed experiment in this report is different. Every checkpoint is
+fine-tuned; it compares deterministic-close training with randomized-close
+training under matched close-camera evaluation. It does not contain a full
+11-seed unfine-tuned-base evaluation on the fresh-randomized schedule. The
+original randomized pilot's base comparison was held-out supervised loss/RMSE,
+not a full closed-loop task-success baseline. An unfine-tuned policy has no
+"deterministic dataset" or "randomized dataset" variant because it has
+consumed neither dataset.
 
 ## High-Mass Slice
 

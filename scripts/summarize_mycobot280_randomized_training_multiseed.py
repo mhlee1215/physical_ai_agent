@@ -84,6 +84,21 @@ def summarize_multiseed(
         episodes_per_seed = [int(row["episodes"]) for row in seed_rows]
         strict_counts = [int(row["strict_successes"]) for row in seed_rows]
         pickup_counts = [int(row["pickup_hold_successes"]) for row in seed_rows]
+        strict_failure_counts = [
+            episodes - successes
+            for episodes, successes in zip(
+                episodes_per_seed, strict_counts, strict=True
+            )
+        ]
+        penetration_only_counts = [
+            len(row["penetration_only_failure_seeds"]) for row in seed_rows
+        ]
+        other_strict_failure_counts = [
+            failures - penetration_only
+            for failures, penetration_only in zip(
+                strict_failure_counts, penetration_only_counts, strict=True
+            )
+        ]
         aggregate_rows[name] = {
             "label": spec["label"],
             "training_data": spec["training_data"],
@@ -99,6 +114,12 @@ def summarize_multiseed(
             "strict_success_rate_seed_std": _sample_std(
                 [row["strict_success_rate"] for row in seed_rows]
             ),
+            "strict_failures_per_training_seed": strict_failure_counts,
+            "strict_failures_total": sum(strict_failure_counts),
+            "penetration_only_failures_per_training_seed": penetration_only_counts,
+            "penetration_only_failures_total": sum(penetration_only_counts),
+            "other_strict_failures_per_training_seed": other_strict_failure_counts,
+            "other_strict_failures_total": sum(other_strict_failure_counts),
             "pickup_hold_successes_per_training_seed": pickup_counts,
             "pickup_hold_successes_total": sum(pickup_counts),
             "pooled_pickup_hold_success_rate": sum(pickup_counts)

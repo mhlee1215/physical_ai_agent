@@ -18,6 +18,18 @@
       "mean_final_cube_lift_mm": 61.1818713049345,
       "mean_max_pad_cube_penetration_mm": 3.2216242505920674,
       "mean_strict_successes_per_training_seed": 1.3333333333333333,
+      "other_strict_failures_per_training_seed": [
+        0,
+        1,
+        0
+      ],
+      "other_strict_failures_total": 1,
+      "penetration_only_failures_per_training_seed": [
+        8,
+        9,
+        11
+      ],
+      "penetration_only_failures_total": 28,
       "pickup_hold_successes_per_training_seed": [
         11,
         10,
@@ -26,6 +38,12 @@
       "pickup_hold_successes_total": 32,
       "pooled_pickup_hold_success_rate": 0.9696969696969697,
       "pooled_strict_success_rate": 0.12121212121212122,
+      "strict_failures_per_training_seed": [
+        8,
+        10,
+        11
+      ],
+      "strict_failures_total": 29,
       "strict_success_count_range": [
         0,
         3
@@ -56,6 +74,18 @@
       "mean_final_cube_lift_mm": 61.31969518353719,
       "mean_max_pad_cube_penetration_mm": 3.2300964125060116,
       "mean_strict_successes_per_training_seed": 2.0,
+      "other_strict_failures_per_training_seed": [
+        0,
+        0,
+        1
+      ],
+      "other_strict_failures_total": 1,
+      "penetration_only_failures_per_training_seed": [
+        6,
+        10,
+        10
+      ],
+      "penetration_only_failures_total": 26,
       "pickup_hold_successes_per_training_seed": [
         11,
         11,
@@ -64,6 +94,12 @@
       "pickup_hold_successes_total": 32,
       "pooled_pickup_hold_success_rate": 0.9696969696969697,
       "pooled_strict_success_rate": 0.18181818181818182,
+      "strict_failures_per_training_seed": [
+        6,
+        10,
+        11
+      ],
+      "strict_failures_total": 27,
       "strict_success_count_range": [
         0,
         5
@@ -100,6 +136,18 @@
       "mean_final_cube_lift_mm": 61.690626765583545,
       "mean_max_pad_cube_penetration_mm": 3.139510116261932,
       "mean_strict_successes_per_training_seed": 4.666666666666667,
+      "other_strict_failures_per_training_seed": [
+        0,
+        0,
+        0
+      ],
+      "other_strict_failures_total": 0,
+      "penetration_only_failures_per_training_seed": [
+        6,
+        6,
+        7
+      ],
+      "penetration_only_failures_total": 19,
       "pickup_hold_successes_per_training_seed": [
         11,
         11,
@@ -108,6 +156,12 @@
       "pickup_hold_successes_total": 33,
       "pooled_pickup_hold_success_rate": 1.0,
       "pooled_strict_success_rate": 0.42424242424242425,
+      "strict_failures_per_training_seed": [
+        6,
+        6,
+        7
+      ],
+      "strict_failures_total": 19,
       "strict_success_count_range": [
         4,
         5
@@ -138,6 +192,18 @@
       "mean_final_cube_lift_mm": 61.50242093229804,
       "mean_max_pad_cube_penetration_mm": 3.142982253328953,
       "mean_strict_successes_per_training_seed": 4.666666666666667,
+      "other_strict_failures_per_training_seed": [
+        0,
+        0,
+        1
+      ],
+      "other_strict_failures_total": 1,
+      "penetration_only_failures_per_training_seed": [
+        4,
+        7,
+        7
+      ],
+      "penetration_only_failures_total": 18,
       "pickup_hold_successes_per_training_seed": [
         11,
         11,
@@ -146,6 +212,12 @@
       "pickup_hold_successes_total": 32,
       "pooled_pickup_hold_success_rate": 0.9696969696969697,
       "pooled_strict_success_rate": 0.42424242424242425,
+      "strict_failures_per_training_seed": [
+        4,
+        7,
+        8
+      ],
+      "strict_failures_total": 19,
       "strict_success_count_range": [
         3,
         7
