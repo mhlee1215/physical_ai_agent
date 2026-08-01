@@ -115,11 +115,20 @@ a physics-quality failure, not a missed pickup.
 The current metric is specifically `max_pad_cube_penetration`. It already
 narrows the offending contact class to gripper-pad versus cube and excludes
 cube-table/mat penetration and robot self-collision from this failure reason.
-The reports do not yet retain which pad geom produced the maximum, its peak
-step and duration, or the corresponding normal force/impulse. Those should be
-audited before changing pad geometry, contact softness, friction, closure speed,
-or solver settings. The 3 mm threshold must remain unchanged for the current
-comparison; threshold sensitivity can be reported only as a secondary analysis.
+
+A trace-level audit now covers all 132 fine-tuned episodes plus the 11-episode
+unfine-tuned fresh-randomized control. Of 143 episodes, 100 crossed the cap and
+91 were penetration-only failures. Every peak occurred on the right pad during
+`approach_down_to_cube_on_mat`. Across crossing episodes, mean peak penetration
+was 3.305 mm, only 0.305 mm above the cap; the median episode spent seven steps
+over the cap and the longest consecutive run was 12 steps.
+
+This is a systematic right-pad/approach signature, not evidence of cube-mat or
+self-collision. It does not yet distinguish policy closure, pad asymmetry,
+contact softness, or geometry calibration. The traces do not log normal force
+or impulse. Preserve 3 mm as the primary gate, inspect right-pad calibration,
+and add force/impulse only before contact tuning; threshold sensitivity remains
+secondary analysis.
 
 ## Fine-Tuning Baseline Scope
 
@@ -127,14 +136,22 @@ The earlier one-seed deterministic camera ablation did compare the unfine-tuned
 base policy with deterministic fine-tuning: wide-camera strict success was
 `0/11 -> 3/11`, and close-camera strict success was `0/11 -> 5/11`.
 
-The three-seed experiment in this report is different. Every checkpoint is
-fine-tuned; it compares deterministic-close training with randomized-close
-training under matched close-camera evaluation. It does not contain a full
-11-seed unfine-tuned-base evaluation on the fresh-randomized schedule. The
-original randomized pilot's base comparison was held-out supervised loss/RMSE,
-not a full closed-loop task-success baseline. An unfine-tuned policy has no
-"deterministic dataset" or "randomized dataset" variant because it has
-consumed neither dataset.
+The missing close-camera fresh-randomized base control has now also been run on
+the exact seeds 92000-92010 and direct manifest candidate schedule:
+
+| Policy | Strict | Pickup + hold | Primary failure reasons |
+| --- | ---: | ---: | --- |
+| Unfine-tuned base | 0/11 | 0/11 | 6 penetration-cap, 5 final-lift |
+| Deterministic-close fine-tuned, seed 20260731 | 3/11 | 11/11 | 8 penetration-only |
+| Randomized-close fine-tuned, seed 20260731 | 5/11 | 11/11 | 6 penetration-only |
+
+All base episodes reached the 80-step sustained two-pad lift phase, but none
+met the complete final-lift/hold definition. This closes the no-fine-tuning
+attribution gap for this one matched schedule: both fine-tuned checkpoints
+improve task behavior over the base, and randomized fine-tuning improves strict
+success further. It is still one base run, not a multi-seed estimate. An
+unfine-tuned policy has no deterministic/randomized dataset variant because it
+has consumed neither dataset.
 
 ## High-Mass Slice
 
@@ -182,6 +199,9 @@ is a task-success proxy.
 - Randomized training reduced penetration slightly and consistently enough to
   move more episodes below the unchanged 3 mm strict cap.
 - Training-seed variance is material and must remain visible in future tables.
+- On the matched fresh-randomized schedule, the unfine-tuned base achieved
+  0/11 strict and 0/11 pickup/hold versus 3/11 and 11/11 for deterministic
+  fine-tuning and 5/11 and 11/11 for randomized fine-tuning at seed 20260731.
 
 ## What This Does Not Prove
 
@@ -214,9 +234,13 @@ Final measured state after the fourth checkpoint:
 Committed evidence:
 
 - `scripts/summarize_mycobot280_randomized_training_multiseed.py`
+- `scripts/audit_mycobot280_penetration_failures.py`
 - `tests/test_mycobot280_randomized_training_multiseed_summary.py`
+- `tests/test_mycobot280_penetration_audit.py`
 - `docs/research/2026_07_31/mycobot280_randomized_training_multiseed_summary.json`
 - `docs/research/2026_07_31/mycobot280_randomized_training_multiseed.png`
+- `docs/research/2026_07_31/mycobot280_penetration_failure_audit.json`
+- `docs/research/2026_07_31/mycobot280_penetration_failure_audit.md`
 
 Local generated artifacts:
 
@@ -224,6 +248,8 @@ Local generated artifacts:
   `_workspace/mycobot280_training/*_seed20260733/`;
 - new closed-loop reports:
   `_workspace/mycobot280_eval/multiseed_20260731/`;
+- matched unfine-tuned control:
+  `_workspace/mycobot280_eval/randomized_closecam_pilot_20260731/base_checkpoint_fresh_randomized/`;
 - held-out supervised reports in the same evaluation root plus the existing
   seed-one randomized report.
 
@@ -236,8 +262,11 @@ sandbox refresh error; this does not affect the underlying JSON validation.
 
 This replication is strong enough to include in the current PR and is more
 valuable than extending one checkpoint to more evaluation episodes. The next
-publication-value step should fix the source-distribution weakness: generate a
-small stratified or deliberately oversampled high-mass extension with accepted
-validation examples in every mass and friction quartile, then repeat this
-paired three-seed protocol on a larger fresh schedule. Preserve strict and
-pickup/hold metrics separately.
+pre-PR action is to preserve this audit and no-fine-tuning control, not run more
+seeds. Contact work should first inspect the systematic right-pad approach
+signature without changing the 3 mm metric. Agentic verifier/retry integration
+belongs on a separate `codex/mycobot280-agentic-readiness` branch with
+policy-only, blind-retry, and verifier-routed controls. The next data-heavy
+publication step remains a stratified or deliberately oversampled high-mass
+extension with accepted validation examples in every mass and friction
+quartile, followed by a larger fresh schedule.

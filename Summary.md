@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-07-16
+Last updated: 2026-07-31
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -89,6 +89,37 @@ paper-facing concepts:
 - oracle/proxy evaluation boundary
 
 ## Current Evidence State
+
+### myCobot 280 SmolVLA Evaluation
+
+- Branch `codex/mycobot280-randomized-smolvla-eval` owns the current
+  deterministic-close versus randomized-close fine-tuning comparison, matched
+  policy-only closed-loop evaluation, and penetration audit.
+- Three paired 100-step training seeds improved strict success with randomized
+  training in 3/3 seeds under nominal and fresh-randomized evaluation. Pooled
+  fresh-randomized strict success is 4/33 deterministic-trained versus 14/33
+  randomized-trained; this is replicated engineering evidence, not statistical
+  significance (`p=0.25` for the three paired signs).
+- The matched unfine-tuned close-camera fresh-randomized control is 0/11 strict
+  and 0/11 pickup/hold, versus 3/11 and 11/11 for deterministic fine-tuning and
+  5/11 and 11/11 for randomized fine-tuning at seed 20260731.
+- Trace audit over 143 episodes found 100 pad-cube penetration-cap crossings;
+  91 were penetration-only. Every peak was on the right pad during
+  `approach_down_to_cube_on_mat`; mean peak was 3.305 mm, median crossing
+  duration seven steps, and maximum consecutive duration 12 steps.
+- Keep the 3 mm gate unchanged. Inspect right-pad geometry/contact calibration
+  before policy or simulator tuning; current traces do not log force/impulse.
+- Agentic changes are routed to a separate
+  `codex/mycobot280-agentic-readiness` branch/worktree. The randomized-eval PR
+  must not absorb retry orchestration or intervention code.
+- The agentic branch must first adapt the myCobot verifier/failure taxonomy,
+  then compare policy-only, equal-budget blind retry, and verifier-routed retry.
+  A routing smoke is readiness only; no agentic benefit may be claimed until a
+  retry executes in closed loop on matched seeds.
+- Dated evidence:
+  `docs/research/2026_07_31/mycobot280_randomized_training_multiseed_evidence.md`
+  and
+  `docs/research/2026_07_31/mycobot280_penetration_failure_audit.md`.
 
 ### Active SO101 SmolVLA Fine-Tuning Lane
 

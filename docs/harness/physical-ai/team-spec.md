@@ -2268,6 +2268,37 @@ same filesystem so hard-link materialization avoids duplicate image blocks.
 The focused lifecycle test is
 `tests.test_mycobot_280_ground_pickup_teacher_dataset_lifecycle`.
 
+## myCobot 280 Evaluation And Agentic Branch Routing
+
+The randomized-training evidence lane and the agentic-retry lane are separate
+ownership surfaces:
+
+- `codex/mycobot280-randomized-smolvla-eval` owns native randomized conversion,
+  matched deterministic/randomized training, policy-only closed-loop controls,
+  base-versus-fine-tuned attribution, and reusable penetration trace audit.
+- `codex/mycobot280-agentic-readiness` owns the myCobot verifier adapter,
+  failure routing, retry orchestration, bounded intervention calibration, and
+  policy-only versus retry comparisons.
+- Use separate Git worktrees so these lanes can run concurrently. Do not add
+  agentic intervention code to the randomized-evaluation PR.
+- A saved-trace verifier/routing pass is readiness evidence only. Agentic
+  improvement requires a retry to execute in closed loop on matched seeds.
+- The minimum controlled comparison is policy-only, equal-budget blind retry,
+  and verifier-routed retry. Keep the same policy checkpoint, camera, physics,
+  seed schedule, total rollout budget, and unchanged 3 mm strict gate.
+- Report strict success as primary, with pickup/hold and penetration-only
+  outcomes secondary. A verifier decision is not task success.
+- Current penetration evidence points to a systematic right-pad peak during
+  `approach_down_to_cube_on_mat`; inspect geometry/contact calibration before
+  selecting a contact-quality intervention.
+
+The focused randomized-evaluation gate includes:
+
+```bash
+PYTHONPATH=src:. python3 -B -m unittest discover -s tests \
+  -p 'test_mycobot280_penetration_audit.py'
+```
+
 ## SO101 Training Data Sampling Policy
 
 SO101 SmolVLA training must use camera1 object-position 4x4 grid-bin balanced
