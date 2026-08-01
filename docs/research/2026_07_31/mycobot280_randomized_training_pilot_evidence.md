@@ -255,13 +255,14 @@ Local generated artifacts:
 - checkpoint: `_workspace/mycobot280_training/ground_pickup_randomized_closecam_v1_100step_seed20260731/`
 - supervised and closed-loop reports: `_workspace/mycobot280_eval/randomized_closecam_pilot_20260731/`
 
-## Recommended Next Step
+## Follow-Up Status
 
-Open this result as a dependent PR after the camera-ablation PR. The next
-highest-value experiment is replication, not a longer single run: use at least
-three policy-training seeds for deterministic-close and randomized-close, then
-evaluate each on 20-30 matched fresh-randomized seeds. Before that replication,
-generate a stratified or deliberately oversampled high-mass source extension
-and require accepted validation examples in every mass and friction quartile.
-Preserve separate strict and pickup/hold metrics. Wait for materially more
-physical host storage before launching those datasets or checkpoints.
+The three-training-seed replication is complete with 11 matched nominal and 11
+matched fresh-randomized episodes per checkpoint. Randomized training improved
+strict success in all three paired training seeds under both regimes. See
+`docs/research/2026_07_31/mycobot280_randomized_training_multiseed_evidence.md`.
+
+The remaining next step is a stratified or deliberately oversampled high-mass
+source extension with accepted validation examples in every mass and friction
+quartile, followed by a larger held-out schedule. Preserve separate strict and
+pickup/hold metrics.

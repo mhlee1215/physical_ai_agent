@@ -1,0 +1,675 @@
+{
+  "aggregate_rows": {
+    "deterministic_fresh_randomized": {
+      "episodes_per_training_seed": [
+        11,
+        11,
+        11
+      ],
+      "episodes_total": 33,
+      "evaluation_physics": "randomized_from_audited_source_manifest",
+      "high_mass_slice": {
+        "cube_mass_kg_min": 0.034,
+        "episodes": 9,
+        "strict_success_rate": 0.0,
+        "strict_successes": 0
+      },
+      "label": "Deterministic-trained / fresh randomized",
+      "mean_final_cube_lift_mm": 61.1818713049345,
+      "mean_max_pad_cube_penetration_mm": 3.2216242505920674,
+      "mean_strict_successes_per_training_seed": 1.3333333333333333,
+      "pickup_hold_successes_per_training_seed": [
+        11,
+        10,
+        11
+      ],
+      "pickup_hold_successes_total": 32,
+      "pooled_pickup_hold_success_rate": 0.9696969696969697,
+      "pooled_strict_success_rate": 0.12121212121212122,
+      "strict_success_count_range": [
+        0,
+        3
+      ],
+      "strict_success_rate_seed_std": 0.13886593015017695,
+      "strict_successes_per_training_seed": [
+        3,
+        1,
+        0
+      ],
+      "strict_successes_total": 4,
+      "training_data": "deterministic_close",
+      "training_seeds": [
+        20260731,
+        20260732,
+        20260733
+      ]
+    },
+    "deterministic_nominal": {
+      "episodes_per_training_seed": [
+        11,
+        11,
+        11
+      ],
+      "episodes_total": 33,
+      "evaluation_physics": "fixed",
+      "label": "Deterministic-trained / nominal",
+      "mean_final_cube_lift_mm": 61.31969518353719,
+      "mean_max_pad_cube_penetration_mm": 3.2300964125060116,
+      "mean_strict_successes_per_training_seed": 2.0,
+      "pickup_hold_successes_per_training_seed": [
+        11,
+        11,
+        10
+      ],
+      "pickup_hold_successes_total": 32,
+      "pooled_pickup_hold_success_rate": 0.9696969696969697,
+      "pooled_strict_success_rate": 0.18181818181818182,
+      "strict_success_count_range": [
+        0,
+        5
+      ],
+      "strict_success_rate_seed_std": 0.24052284646041733,
+      "strict_successes_per_training_seed": [
+        5,
+        1,
+        0
+      ],
+      "strict_successes_total": 6,
+      "training_data": "deterministic_close",
+      "training_seeds": [
+        20260731,
+        20260732,
+        20260733
+      ]
+    },
+    "randomized_fresh_randomized": {
+      "episodes_per_training_seed": [
+        11,
+        11,
+        11
+      ],
+      "episodes_total": 33,
+      "evaluation_physics": "randomized_from_audited_source_manifest",
+      "high_mass_slice": {
+        "cube_mass_kg_min": 0.034,
+        "episodes": 9,
+        "strict_success_rate": 0.3333333333333333,
+        "strict_successes": 3
+      },
+      "label": "Randomized-trained / fresh randomized",
+      "mean_final_cube_lift_mm": 61.690626765583545,
+      "mean_max_pad_cube_penetration_mm": 3.139510116261932,
+      "mean_strict_successes_per_training_seed": 4.666666666666667,
+      "pickup_hold_successes_per_training_seed": [
+        11,
+        11,
+        11
+      ],
+      "pickup_hold_successes_total": 33,
+      "pooled_pickup_hold_success_rate": 1.0,
+      "pooled_strict_success_rate": 0.42424242424242425,
+      "strict_success_count_range": [
+        4,
+        5
+      ],
+      "strict_success_rate_seed_std": 0.052486388108147784,
+      "strict_successes_per_training_seed": [
+        5,
+        5,
+        4
+      ],
+      "strict_successes_total": 14,
+      "training_data": "randomized_close",
+      "training_seeds": [
+        20260731,
+        20260732,
+        20260733
+      ]
+    },
+    "randomized_nominal": {
+      "episodes_per_training_seed": [
+        11,
+        11,
+        11
+      ],
+      "episodes_total": 33,
+      "evaluation_physics": "fixed",
+      "label": "Randomized-trained / nominal",
+      "mean_final_cube_lift_mm": 61.50242093229804,
+      "mean_max_pad_cube_penetration_mm": 3.142982253328953,
+      "mean_strict_successes_per_training_seed": 4.666666666666667,
+      "pickup_hold_successes_per_training_seed": [
+        11,
+        11,
+        10
+      ],
+      "pickup_hold_successes_total": 32,
+      "pooled_pickup_hold_success_rate": 0.9696969696969697,
+      "pooled_strict_success_rate": 0.42424242424242425,
+      "strict_success_count_range": [
+        3,
+        7
+      ],
+      "strict_success_rate_seed_std": 0.18924236358783025,
+      "strict_successes_per_training_seed": [
+        7,
+        4,
+        3
+      ],
+      "strict_successes_total": 14,
+      "training_data": "randomized_close",
+      "training_seeds": [
+        20260731,
+        20260732,
+        20260733
+      ]
+    }
+  },
+  "claim_boundary": "Three paired 100-step policy-training seeds and 11 matched evaluation episodes per seed and regime provide replicated engineering evidence, not a publication-level robustness estimate. The exact two-sided sign test has low power at n=3, and the randomized demonstrations are teacher-success-conditioned rather than uniformly sampled from the declared physics range.",
+  "operation": "summarize_mycobot280_randomized_training_multiseed",
+  "paired_comparisons": {
+    "fresh_randomized_training_data_effect": {
+      "exact_two_sided_sign_test_p": 0.25,
+      "left": "deterministic_fresh_randomized",
+      "lower_penetration_episode_count": 25,
+      "mean_paired_penetration_delta_mm": -0.08211413433013533,
+      "mean_strict_success_count_delta": 3.3333333333333335,
+      "mean_strict_success_rate_delta": 0.30303030303030304,
+      "negative_training_seed_count": 0,
+      "paired_episode_count": 33,
+      "per_training_seed": [
+        {
+          "left_strict_successes": 3,
+          "lower_penetration_episode_count": 9,
+          "mean_penetration_delta_mm": -0.07905617393774045,
+          "pickup_hold_success_count_delta": 0,
+          "right_strict_successes": 5,
+          "strict_success_count_delta": 2,
+          "training_seed": 20260731
+        },
+        {
+          "left_strict_successes": 1,
+          "lower_penetration_episode_count": 9,
+          "mean_penetration_delta_mm": -0.08248601973502358,
+          "pickup_hold_success_count_delta": 1,
+          "right_strict_successes": 5,
+          "strict_success_count_delta": 4,
+          "training_seed": 20260732
+        },
+        {
+          "left_strict_successes": 0,
+          "lower_penetration_episode_count": 7,
+          "mean_penetration_delta_mm": -0.08480020931764194,
+          "pickup_hold_success_count_delta": 0,
+          "right_strict_successes": 4,
+          "strict_success_count_delta": 4,
+          "training_seed": 20260733
+        }
+      ],
+      "pickup_hold_success_count_deltas": [
+        0,
+        1,
+        0
+      ],
+      "positive_training_seed_count": 3,
+      "right": "randomized_fresh_randomized",
+      "strict_success_count_deltas": [
+        2,
+        4,
+        4
+      ],
+      "zero_training_seed_count": 0
+    },
+    "nominal_training_data_effect": {
+      "exact_two_sided_sign_test_p": 0.25,
+      "left": "deterministic_nominal",
+      "lower_penetration_episode_count": 27,
+      "mean_paired_penetration_delta_mm": -0.08711415917705882,
+      "mean_strict_success_count_delta": 2.6666666666666665,
+      "mean_strict_success_rate_delta": 0.2424242424242424,
+      "negative_training_seed_count": 0,
+      "paired_episode_count": 33,
+      "per_training_seed": [
+        {
+          "left_strict_successes": 5,
+          "lower_penetration_episode_count": 9,
+          "mean_penetration_delta_mm": -0.08444557792540756,
+          "pickup_hold_success_count_delta": 0,
+          "right_strict_successes": 7,
+          "strict_success_count_delta": 2,
+          "training_seed": 20260731
+        },
+        {
+          "left_strict_successes": 1,
+          "lower_penetration_episode_count": 9,
+          "mean_penetration_delta_mm": -0.08357671355420283,
+          "pickup_hold_success_count_delta": 0,
+          "right_strict_successes": 4,
+          "strict_success_count_delta": 3,
+          "training_seed": 20260732
+        },
+        {
+          "left_strict_successes": 0,
+          "lower_penetration_episode_count": 9,
+          "mean_penetration_delta_mm": -0.09332018605156607,
+          "pickup_hold_success_count_delta": 0,
+          "right_strict_successes": 3,
+          "strict_success_count_delta": 3,
+          "training_seed": 20260733
+        }
+      ],
+      "pickup_hold_success_count_deltas": [
+        0,
+        0,
+        0
+      ],
+      "positive_training_seed_count": 3,
+      "right": "randomized_nominal",
+      "strict_success_count_deltas": [
+        2,
+        3,
+        3
+      ],
+      "zero_training_seed_count": 0
+    }
+  },
+  "per_training_seed": {
+    "20260731": {
+      "deterministic_fresh_randomized": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 8,
+          "passed": 3
+        },
+        "high_mass_slice": {
+          "cube_mass_kg_min": 0.034,
+          "episodes": 3,
+          "strict_successes": 0
+        },
+        "mean_final_cube_lift_mm": 62.84365507257866,
+        "mean_max_pad_cube_penetration_mm": 3.1466160785253985,
+        "penetration_only_failure_seeds": [
+          92000,
+          92001,
+          92002,
+          92003,
+          92004,
+          92006,
+          92008,
+          92009
+        ],
+        "pickup_hold_success_rate": 1.0,
+        "pickup_hold_successes": 11,
+        "strict_success_rate": 0.2727272727272727,
+        "strict_success_seeds": [
+          92005,
+          92007,
+          92010
+        ],
+        "strict_successes": 3
+      },
+      "deterministic_nominal": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 6,
+          "passed": 5
+        },
+        "mean_final_cube_lift_mm": 62.21968178268664,
+        "mean_max_pad_cube_penetration_mm": 3.1566019153227196,
+        "penetration_only_failure_seeds": [
+          91000,
+          91001,
+          91002,
+          91003,
+          91004,
+          91006
+        ],
+        "pickup_hold_success_rate": 1.0,
+        "pickup_hold_successes": 11,
+        "strict_success_rate": 0.45454545454545453,
+        "strict_success_seeds": [
+          91005,
+          91007,
+          91008,
+          91009,
+          91010
+        ],
+        "strict_successes": 5
+      },
+      "randomized_fresh_randomized": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 6,
+          "passed": 5
+        },
+        "high_mass_slice": {
+          "cube_mass_kg_min": 0.034,
+          "episodes": 3,
+          "strict_successes": 1
+        },
+        "mean_final_cube_lift_mm": 61.19147954839264,
+        "mean_max_pad_cube_penetration_mm": 3.067559904587658,
+        "penetration_only_failure_seeds": [
+          92000,
+          92001,
+          92002,
+          92004,
+          92008,
+          92009
+        ],
+        "pickup_hold_success_rate": 1.0,
+        "pickup_hold_successes": 11,
+        "strict_success_rate": 0.45454545454545453,
+        "strict_success_seeds": [
+          92003,
+          92005,
+          92006,
+          92007,
+          92010
+        ],
+        "strict_successes": 5
+      },
+      "randomized_nominal": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 4,
+          "passed": 7
+        },
+        "mean_final_cube_lift_mm": 60.478265169181455,
+        "mean_max_pad_cube_penetration_mm": 3.072156337397312,
+        "penetration_only_failure_seeds": [
+          91000,
+          91001,
+          91002,
+          91003
+        ],
+        "pickup_hold_success_rate": 1.0,
+        "pickup_hold_successes": 11,
+        "strict_success_rate": 0.6363636363636364,
+        "strict_success_seeds": [
+          91004,
+          91005,
+          91006,
+          91007,
+          91008,
+          91009,
+          91010
+        ],
+        "strict_successes": 7
+      }
+    },
+    "20260732": {
+      "deterministic_fresh_randomized": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 10,
+          "passed": 1
+        },
+        "high_mass_slice": {
+          "cube_mass_kg_min": 0.034,
+          "episodes": 3,
+          "strict_successes": 0
+        },
+        "mean_final_cube_lift_mm": 60.293119392241195,
+        "mean_max_pad_cube_penetration_mm": 3.261663664199541,
+        "penetration_only_failure_seeds": [
+          92000,
+          92002,
+          92003,
+          92004,
+          92005,
+          92006,
+          92007,
+          92008,
+          92009
+        ],
+        "pickup_hold_success_rate": 0.9090909090909091,
+        "pickup_hold_successes": 10,
+        "strict_success_rate": 0.09090909090909091,
+        "strict_success_seeds": [
+          92010
+        ],
+        "strict_successes": 1
+      },
+      "deterministic_nominal": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 10,
+          "passed": 1
+        },
+        "mean_final_cube_lift_mm": 61.36627625163364,
+        "mean_max_pad_cube_penetration_mm": 3.246181647874141,
+        "penetration_only_failure_seeds": [
+          91000,
+          91001,
+          91002,
+          91003,
+          91004,
+          91005,
+          91006,
+          91007,
+          91008,
+          91009
+        ],
+        "pickup_hold_success_rate": 1.0,
+        "pickup_hold_successes": 11,
+        "strict_success_rate": 0.09090909090909091,
+        "strict_success_seeds": [
+          91010
+        ],
+        "strict_successes": 1
+      },
+      "randomized_fresh_randomized": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 6,
+          "passed": 5
+        },
+        "high_mass_slice": {
+          "cube_mass_kg_min": 0.034,
+          "episodes": 3,
+          "strict_successes": 1
+        },
+        "mean_final_cube_lift_mm": 62.94093734157715,
+        "mean_max_pad_cube_penetration_mm": 3.1791776444645174,
+        "penetration_only_failure_seeds": [
+          92000,
+          92001,
+          92002,
+          92004,
+          92008,
+          92009
+        ],
+        "pickup_hold_success_rate": 1.0,
+        "pickup_hold_successes": 11,
+        "strict_success_rate": 0.45454545454545453,
+        "strict_success_seeds": [
+          92003,
+          92005,
+          92006,
+          92007,
+          92010
+        ],
+        "strict_successes": 5
+      },
+      "randomized_nominal": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 7,
+          "passed": 4
+        },
+        "mean_final_cube_lift_mm": 62.671899504858395,
+        "mean_max_pad_cube_penetration_mm": 3.1626049343199383,
+        "penetration_only_failure_seeds": [
+          91000,
+          91001,
+          91002,
+          91003,
+          91004,
+          91005,
+          91007
+        ],
+        "pickup_hold_success_rate": 1.0,
+        "pickup_hold_successes": 11,
+        "strict_success_rate": 0.36363636363636365,
+        "strict_success_seeds": [
+          91006,
+          91008,
+          91009,
+          91010
+        ],
+        "strict_successes": 4
+      }
+    },
+    "20260733": {
+      "deterministic_fresh_randomized": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 11
+        },
+        "high_mass_slice": {
+          "cube_mass_kg_min": 0.034,
+          "episodes": 3,
+          "strict_successes": 0
+        },
+        "mean_final_cube_lift_mm": 60.408839449983645,
+        "mean_max_pad_cube_penetration_mm": 3.256593009051263,
+        "penetration_only_failure_seeds": [
+          92000,
+          92001,
+          92002,
+          92003,
+          92004,
+          92005,
+          92006,
+          92007,
+          92008,
+          92009,
+          92010
+        ],
+        "pickup_hold_success_rate": 1.0,
+        "pickup_hold_successes": 11,
+        "strict_success_rate": 0.0,
+        "strict_success_seeds": [],
+        "strict_successes": 0
+      },
+      "deterministic_nominal": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 11
+        },
+        "mean_final_cube_lift_mm": 60.3731275162913,
+        "mean_max_pad_cube_penetration_mm": 3.287505674321174,
+        "penetration_only_failure_seeds": [
+          91001,
+          91002,
+          91003,
+          91004,
+          91005,
+          91006,
+          91007,
+          91008,
+          91009,
+          91010
+        ],
+        "pickup_hold_success_rate": 0.9090909090909091,
+        "pickup_hold_successes": 10,
+        "strict_success_rate": 0.0,
+        "strict_success_seeds": [],
+        "strict_successes": 0
+      },
+      "randomized_fresh_randomized": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 7,
+          "passed": 4
+        },
+        "high_mass_slice": {
+          "cube_mass_kg_min": 0.034,
+          "episodes": 3,
+          "strict_successes": 1
+        },
+        "mean_final_cube_lift_mm": 60.939463406780845,
+        "mean_max_pad_cube_penetration_mm": 3.171792799733621,
+        "penetration_only_failure_seeds": [
+          92000,
+          92001,
+          92002,
+          92004,
+          92006,
+          92008,
+          92009
+        ],
+        "pickup_hold_success_rate": 1.0,
+        "pickup_hold_successes": 11,
+        "strict_success_rate": 0.36363636363636365,
+        "strict_success_seeds": [
+          92003,
+          92005,
+          92007,
+          92010
+        ],
+        "strict_successes": 4
+      },
+      "randomized_nominal": {
+        "episodes": 11,
+        "failure_reason_counts": {
+          "max_pad_cube_penetration_exceeded": 8,
+          "passed": 3
+        },
+        "mean_final_cube_lift_mm": 61.35709812285427,
+        "mean_max_pad_cube_penetration_mm": 3.194185488269608,
+        "penetration_only_failure_seeds": [
+          91001,
+          91002,
+          91003,
+          91004,
+          91005,
+          91006,
+          91007
+        ],
+        "pickup_hold_success_rate": 0.9090909090909091,
+        "pickup_hold_successes": 10,
+        "strict_success_rate": 0.2727272727272727,
+        "strict_success_seeds": [
+          91008,
+          91009,
+          91010
+        ],
+        "strict_successes": 3
+      }
+    }
+  },
+  "pickup_hold_definition": {
+    "final_cube_lift_m_min": 0.05,
+    "final_pad_cube_contacted_pads_min": 2,
+    "lift_best_sustained_two_pad_steps_min": 60,
+    "penetration_gate_excluded": true,
+    "post_lift_hold_best_sustained_two_pad_steps_min": 300,
+    "post_lift_hold_min_cube_lift_m_min": 0.045
+  },
+  "source_distribution_caveat": {
+    "accepted_attempts": 60,
+    "distribution": "teacher_success_conditioned_not_uniform",
+    "highest_mass_quartile_acceptance_rate": 0.13333333333333333,
+    "highest_mass_quartile_accepted": 2,
+    "highest_mass_quartile_attempted": 15,
+    "highest_mass_quartile_kg": [
+      0.034,
+      0.036
+    ],
+    "highest_mass_quartile_validation_examples": 0,
+    "total_attempts": 73,
+    "validation_empty_friction_quartiles": [
+      1,
+      2
+    ]
+  },
+  "status": "passed",
+  "training_seed_count": 3,
+  "training_seeds": [
+    20260731,
+    20260732,
+    20260733
+  ]
+}
