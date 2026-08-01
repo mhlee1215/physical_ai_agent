@@ -2289,15 +2289,21 @@ ownership surfaces:
 - Report strict success as primary, with pickup/hold and penetration-only
   outcomes secondary. A verifier decision is not task success.
 - Current penetration evidence points to a systematic right-pad peak during
-  `approach_down_to_cube_on_mat`, but current placement fixes a +5 mm side
-  offset with zero jitter. Run a mirrored +/-5 mm development diagnostic before
-  selecting a pad-specific contact-quality intervention.
+  `approach_down_to_cube_on_mat`. The fixed +5 mm side offset is perpendicular
+  to the jaw axis and cannot diagnose right-versus-left pad bias. Freeze a
+  centered or explicitly stratified jaw-axis placement contract before
+  selecting or evaluating a pad-specific contact-quality intervention.
+- PR media may use evaluator `--record-video`, which records only the first
+  scheduled episode as a streaming MP4. Validate dimensions, FPS, decoded frame
+  count, and representative frames, and confirm the media rerun matches the
+  original candidate dictionary and key outcome fields before citing it.
+
 
 The focused randomized-evaluation gate includes:
 
 ```bash
 PYTHONPATH=src:. python3 -B -m unittest discover -s tests \
-  -p 'test_mycobot280_penetration_audit.py'
+  -p 'test_mycobot280_*.py'
 ```
 
 ## SO101 Training Data Sampling Policy

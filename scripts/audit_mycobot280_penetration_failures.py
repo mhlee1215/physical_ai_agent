@@ -74,11 +74,15 @@ def audit_reports(
                 "non-pad gripper geoms against cube",
             ],
             "placement_confound": {
+                "cube_axis_offset_m": 0.0015,
+                "cube_axis_jitter_m": [0.0, 0.0],
                 "cube_side_offset_m": 0.005,
                 "cube_side_jitter_m": [0.0, 0.0],
                 "interpretation": (
-                    "the all-right-pad peak can reflect the fixed lateral cube "
-                    "placement; test mirrored offsets before pad-specific tuning"
+                    "the +5 mm cube-side offset is perpendicular to the jaw axis "
+                    "and cannot explain a right-versus-left pad peak; the fixed "
+                    "+1.5 mm jaw-axis offset is the placement variable that must "
+                    "be controlled in a matched pad-side diagnostic"
                 ),
             },
             "available_trace_evidence": [
@@ -183,9 +187,12 @@ def render_markdown(audit: dict[str, Any]) -> str:
             "- The gate covers adaptive-gripper **pad-cube** contacts only.",
             (
                 "- Current deterministic and randomized contracts keep the cube "
-                "at a fixed +5 mm side offset with zero side jitter. The all-right-"
-                "pad peak can therefore reflect placement; test mirrored offsets "
-                "before pad-specific tuning."
+                "at fixed +1.5 mm jaw-axis and +5 mm side offsets with zero pose "
+                "jitter. The +5 mm side offset is perpendicular to the jaw axis "
+                "and therefore cannot explain a right-versus-left pad peak. Treat "
+                "the all-right-pad signature as placement/contact-sensitive, not "
+                "as a pad-specific root-cause result, until jaw-axis placement is "
+                "controlled in a matched diagnostic."
             ),
             (
                 "- Cube-table/mat penetration and robot self-collision are not being "

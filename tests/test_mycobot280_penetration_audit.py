@@ -66,6 +66,15 @@ class MyCobotPenetrationAuditTests(unittest.TestCase):
             audit["scope"]["included_contact_pair"],
             "myCobot adaptive-gripper pad geoms against cube geom",
         )
+        placement = audit["scope"]["placement_confound"]
+        self.assertEqual(placement["cube_axis_offset_m"], 0.0015)
+        self.assertEqual(placement["cube_axis_jitter_m"], [0.0, 0.0])
+        self.assertEqual(placement["cube_side_offset_m"], 0.005)
+        self.assertEqual(placement["cube_side_jitter_m"], [0.0, 0.0])
+        self.assertIn(
+            "perpendicular to the jaw axis", placement["interpretation"]
+        )
+        self.assertIn("jaw-axis offset", placement["interpretation"])
 
     def test_rejects_report_trace_peak_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

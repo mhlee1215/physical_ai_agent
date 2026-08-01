@@ -15,6 +15,7 @@ from scripts.evaluate_mycobot280_smolvla_policy import (
     _resolve_render_camera_profile,
     _yaw_schedule,
     build_eval_report,
+    build_parser,
 )
 from scripts.plan_mycobot280_smolvla_training import build_dry_run_report
 from scripts.validate_mycobot280_training_dataset import validate_config
@@ -32,6 +33,20 @@ JOINT_NAMES = [
 
 
 class MyCobot280SmolVLAReadinessTest(unittest.TestCase):
+    def test_eval_parser_exposes_opt_in_video_recording(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "--policy-path",
+                "checkpoint",
+                "--config",
+                "config.json",
+                "--output-dir",
+                "eval",
+                "--record-video",
+            ]
+        )
+        self.assertTrue(args.record_video)
+
     def test_repo_config_blocks_when_dataset_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = validate_config(

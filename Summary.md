@@ -107,9 +107,13 @@ paper-facing concepts:
   91 were penetration-only. Every peak was on the right pad during
   `approach_down_to_cube_on_mat`; mean peak was 3.305 mm, median crossing
   duration seven steps, and maximum consecutive duration 12 steps.
-- Keep the 3 mm gate unchanged. Current placement fixes the cube at a +5 mm
-  side offset with zero jitter; run a mirrored +/-5 mm diagnostic before
-  right-pad geometry/contact tuning. Current traces do not log force/impulse.
+- Keep the 3 mm gate unchanged. Current placement fixes the cube at +1.5 mm
+  along the jaw axis and +5 mm perpendicular to it, both with zero jitter. The
+  +5 mm side offset cannot explain right-versus-left pad identity. A separate
+  three-pair jaw-axis development diagnostic on the agentic branch produced
+  3/3 peak-side flips, so placement must be centered or explicitly stratified
+  before retry calibration. This is debugging evidence, not a benchmark or
+  agentic-improvement result. Current traces do not log force/impulse.
 - Agentic changes are routed to a separate
   `codex/mycobot280-agentic-readiness` branch/worktree. The randomized-eval PR
   must not absorb retry orchestration or intervention code.
@@ -117,7 +121,9 @@ paper-facing concepts:
   then compare policy-only, equal-budget blind retry, and verifier-routed retry.
   A routing smoke is readiness only; no agentic benefit may be claimed until a
   retry executes in closed loop on matched seeds.
-- Dated evidence:
+- PR-ready summary, figures, video, and statistics:
+  `docs/research/2026_08_01/mycobot280_training_evaluation_pr_package.md`.
+- Underlying dated evidence:
   `docs/research/2026_07_31/mycobot280_randomized_training_multiseed_evidence.md`
   and
   `docs/research/2026_07_31/mycobot280_penetration_failure_audit.md`.

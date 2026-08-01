@@ -5306,12 +5306,17 @@
       "contact impulse"
     ],
     "placement_confound": {
+      "cube_axis_jitter_m": [
+        0.0,
+        0.0
+      ],
+      "cube_axis_offset_m": 0.0015,
       "cube_side_jitter_m": [
         0.0,
         0.0
       ],
       "cube_side_offset_m": 0.005,
-      "interpretation": "the all-right-pad peak can reflect the fixed lateral cube placement; test mirrored offsets before pad-specific tuning"
+      "interpretation": "the +5 mm cube-side offset is perpendicular to the jaw axis and cannot explain a right-versus-left pad peak; the fixed +1.5 mm jaw-axis offset is the placement variable that must be controlled in a matched pad-side diagnostic"
     }
   },
   "status": "passed"

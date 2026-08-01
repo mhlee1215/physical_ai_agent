@@ -48,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--record-representative-frames", action="store_true")
+    parser.add_argument(
+        "--record-video",
+        action="store_true",
+        help="Record the first scheduled episode as a 30 FPS MP4.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--require-policy", action="store_true")
     return parser
@@ -89,6 +94,7 @@ def main() -> None:
             device=args.device,
             local_files_only=args.local_files_only,
             record_representative_frames=args.record_representative_frames,
+            record_video=args.record_video,
         )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     report_path = args.output_dir / "eval_report.json"
@@ -171,6 +177,7 @@ def evaluate_closed_loop(
     device: str,
     local_files_only: bool,
     record_representative_frames: bool,
+    record_video: bool,
 ) -> dict[str, Any]:
     if steps <= 0:
         raise ValueError("--steps must be positive")
@@ -215,6 +222,7 @@ def evaluate_closed_loop(
         height=height,
         render_camera_profile=resolved_camera_profile,
         record_representative_frames=record_representative_frames,
+        record_video=record_video,
     )
     return {
         "operation": "evaluate_mycobot280_smolvla_policy",
@@ -317,6 +325,7 @@ def _execute_schedule(
     height: int,
     render_camera_profile: str,
     record_representative_frames: bool,
+    record_video: bool,
 ) -> list[dict[str, Any]]:
     from scripts.export_mycobot_280_ground_pickup_teacher_dataset import (
         _apply_candidate_physics,
@@ -376,6 +385,7 @@ def _execute_schedule(
                     steps=steps,
                     render_camera_profile=render_camera_profile,
                     record_frames=record_representative_frames and int(item["episode"]) == 0,
+                    record_video=record_video and int(item["episode"]) == 0,
                 )
             )
     finally:
@@ -400,6 +410,7 @@ def _run_episode(
     steps: int,
     render_camera_profile: str,
     record_frames: bool,
+    record_video: bool,
 ) -> dict[str, Any]:
     import numpy as np
     import torch
@@ -472,6 +483,8 @@ def _run_episode(
     episode_frame_dir = output_dir / "representative_frames" / f"episode_{episode:03d}"
     if record_frames:
         episode_frame_dir.mkdir(parents=True, exist_ok=True)
+    video_path = output_dir / "videos" / f"episode_{episode:03d}_seed_{seed}.mp4"
+    video_writer = _open_video_writer(video_path) if record_video else None
     key_steps = {0, APPROACH_STEPS + CLOSE_STEPS - 1, 149, 229, steps - 1}
     trace_file = trace_path.open("w", encoding="utf-8")
     inference_error: str | None = None
@@ -489,6 +502,8 @@ def _run_episode(
             else:
                 env.model.opt.gravity[:] = WORLD_GRAVITY
             pixels = _render_observation(env, render_camera)
+            if video_writer is not None:
+                video_writer.append_data(np.asarray(pixels, dtype=np.uint8))
             if record_frames and step in key_steps:
                 _write_rgb_image(pixels, episode_frame_dir / f"step_{step:04d}_{phase}.png")
             try:
@@ -539,6 +554,8 @@ def _run_episode(
             )
     finally:
         trace_file.close()
+        if video_writer is not None:
+            video_writer.close()
 
     if record_frames:
         _write_rgb_image(
@@ -616,6 +633,7 @@ def _run_episode(
         "terminated_or_truncated_signals_ignored": int(terminated_ignored),
         "trace_path": str(trace_path),
         "representative_frame_dir": str(episode_frame_dir) if record_frames else None,
+        "video_path": str(video_path) if record_video else None,
     }
 
 
@@ -997,6 +1015,20 @@ def _manifest_source_seeds(manifest: dict[str, Any]) -> set[int]:
             if isinstance(rejection, dict) and isinstance(rejection.get("seed"), int):
                 seeds.add(int(rejection["seed"]))
     return seeds
+
+
+def _open_video_writer(path: Path, *, fps: int = 30) -> Any:
+    import imageio.v2 as imageio
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return imageio.get_writer(
+        str(path),
+        fps=int(fps),
+        codec="libx264",
+        quality=8,
+        macro_block_size=None,
+        ffmpeg_log_level="error",
+    )
 
 
 def _write_rgb_image(pixels: Any, path: Path) -> None:

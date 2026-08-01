@@ -124,12 +124,14 @@ was 3.305 mm, only 0.305 mm above the cap; the median episode spent seven steps
 over the cap and the longest consecutive run was 12 steps.
 
 This is a systematic right-pad/approach signature, not evidence of cube-mat or
-self-collision. Both deterministic and randomized contracts keep a fixed
-`cube_side_offset_m = +0.005` with zero side jitter, so the signature may be
-the expected result of placing the cube consistently toward one pad. Run a
-mirrored `+5 mm/-5 mm` development diagnostic first. Inspect right-pad
-actuation/contact calibration only if the peak side does not flip. The traces
-do not log normal force or impulse; preserve 3 mm as the primary gate and keep
+self-collision. Both deterministic and randomized contracts keep
+`cube_axis_offset_m = +0.0015` and `cube_side_offset_m = +0.005` fixed with
+zero pose jitter. The side-offset direction is perpendicular to the jaw axis,
+so mirroring it cannot test right-versus-left pad bias. This PR therefore
+treats the uniform peak side as a placement/contact-sensitive signature rather
+than a pad-specific root-cause result. Jaw-axis placement must be centered or
+explicitly stratified before calibrating a contact intervention. The traces do
+not log normal force or impulse; preserve 3 mm as the primary gate and keep
 threshold sensitivity secondary.
 
 ## Fine-Tuning Baseline Scope
@@ -256,20 +258,19 @@ Local generated artifacts:
   seed-one randomized report.
 
 The summarizer validates all 12 closed-loop reports before emitting the JSON or
-figure. The figure was generated at 1400 x 900. Manual visual inspection remains
-pending because the Codex Windows filesystem preview helper failed with a
-sandbox refresh error; this does not affect the underlying JSON validation.
+figure. The 1400 x 900 figure was visually inspected on 2026-08-01: titles,
+legends, seed labels, bar annotations, and caveat text are readable, the two
+evaluation regimes are visually distinct, and no elements overlap.
 
 ## Recommended Next Step
 
 This replication is strong enough to include in the current PR and is more
 valuable than extending one checkpoint to more evaluation episodes. The next
 pre-PR action is to preserve this audit and no-fine-tuning control, not run more
-seeds. Contact work should first run a mirrored `+5 mm/-5 mm` side-offset
-diagnostic without changing the 3 mm metric; inspect right-pad calibration only
-if the peak side does not flip. Agentic verifier/retry integration
-belongs on a separate `codex/mycobot280-agentic-readiness` branch with
-policy-only, blind-retry, and verifier-routed controls. The next data-heavy
-publication step remains a stratified or deliberately oversampled high-mass
-extension with accepted validation examples in every mass and friction
-quartile, followed by a larger fresh schedule.
+seeds. Freeze a centered or explicitly stratified jaw-axis placement contract
+before calibrating contact recovery. Agentic verifier/retry integration belongs
+on a separate `codex/mycobot280-agentic-readiness` branch with policy-only,
+blind-retry, and verifier-routed controls. The next data-heavy publication step
+remains a stratified or deliberately oversampled high-mass extension with
+accepted validation examples in every mass and friction quartile, followed by
+a larger fresh schedule.
