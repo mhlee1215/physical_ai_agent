@@ -135,6 +135,8 @@ paper-facing concepts:
   `docs/research/2026_08_01/mycobot280_training_evaluation_pr_package.md`.
 - Copy-paste PR body with explicit `3 x 11` sample-count semantics:
   `docs/research/2026_08_01/mycobot280_training_evaluation_pr_body.md`.
+- Main shared-base-to-fine-tuning progression figure:
+  `docs/research/2026_08_01/mycobot280_policy_progression_main.png`.
 - Explicit policy claim matrix and x/y paradigm figure:
   `docs/research/2026_08_01/mycobot280_policy_claims_evidence.md` and
   `docs/research/2026_08_01/mycobot280_policy_paradigm_claims.png`.

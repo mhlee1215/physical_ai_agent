@@ -187,6 +187,12 @@ stratified jaw-axis contract is required before agentic retry calibration.
 
 ## Figures
 
+### Main base-to-fine-tuning progression
+
+![Base to deterministic to randomized progression](mycobot280_policy_progression_main.png)
+
+The baseline is one shared unfine-tuned model, not three baseline checkpoints.
+
 ### Policy-paradigm claim map
 
 ![Policy paradigm comparison](mycobot280_policy_paradigm_claims.png)
@@ -203,7 +209,7 @@ stratified jaw-axis contract is required before agentic retry calibration.
 
 ![Randomized-training replication](../2026_07_31/mycobot280_randomized_training_multiseed.png)
 
-All four figures were visually inspected. Titles, legends, labels, annotations,
+All five figures were visually inspected. Titles, legends, labels, annotations,
 and caveat text are readable, and no elements overlap.
 
 ## Video Evidence
@@ -247,7 +253,7 @@ The uncommitted source videos and their evaluation reports remain under
 
 ## Verification
 
-- `31` focused `test_mycobot280_*.py` tests pass.
+- `34` focused `test_mycobot280_*.py` tests pass.
 - `13` randomized-source contract tests pass.
 - The regenerated multiseed JSON matches the committed summary byte-for-byte.
 - The regenerated penetration audit passes over all 143 saved traces.

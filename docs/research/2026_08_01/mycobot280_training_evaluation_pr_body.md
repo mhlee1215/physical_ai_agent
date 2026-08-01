@@ -131,6 +131,16 @@ so camera framing is not confounded with training-data randomization.
 
 ## Figures
 
+### Main policy-progression figure
+
+The shared unfine-tuned baseline appears once at `0/11`. Dotted segments connect
+that one baseline reference to each independently trained deterministic
+checkpoint; solid segments show each paired deterministic-to-randomized result.
+
+![Base to deterministic to randomized progression](https://github.com/mhlee1215/physical_ai_agent/blob/codex/mycobot280-randomized-smolvla-eval/docs/research/2026_08_01/mycobot280_policy_progression_main.png?raw=1)
+
+### Supporting task-versus-strict claim map
+
 The first panel of the policy-paradigm figure plots penetration-excluded
 pickup-and-hold on the x-axis and strict success on the y-axis for the matched
 11-episode control. Its second panel shows all three paired training-seed
@@ -169,7 +179,7 @@ that comparison.
 - [Three-seed evidence](https://github.com/mhlee1215/physical_ai_agent/blob/codex/mycobot280-randomized-smolvla-eval/docs/research/2026_07_31/mycobot280_randomized_training_multiseed_evidence.md)
 - [Machine-readable multiseed summary](https://github.com/mhlee1215/physical_ai_agent/blob/codex/mycobot280-randomized-smolvla-eval/docs/research/2026_07_31/mycobot280_randomized_training_multiseed_summary.json)
 - [Penetration audit](https://github.com/mhlee1215/physical_ai_agent/blob/codex/mycobot280-randomized-smolvla-eval/docs/research/2026_07_31/mycobot280_penetration_failure_audit.json)
-- 44 focused tests pass: 31 training/evaluation tests and 13 randomized-source
+- 47 focused tests pass: 34 training/evaluation tests and 13 randomized-source
   contract tests.
 - All checkpoints contain weights, optimizer state, feature contract,
   processors, logs, and TensorBoard events.
