@@ -1,0 +1,111 @@
+{
+  "schema_version": 2,
+  "name": "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1",
+  "version": "v1",
+  "description": "Append-only standalone approach phase datasets physically copied from the v3 hardware-locked photoreal teacher trajectories with a phase-specific prompt.",
+  "source": {
+    "mode": "from_existing_dataset",
+    "operation": "phase_subset",
+    "datasets": [
+      "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1",
+      "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1_validation"
+    ]
+  },
+  "exporter_revision": "v3-phase-subset-v1",
+  "exporter": "scripts/export_so101_teacher_rollouts_lerobot.py",
+  "phase_subset_script": "scripts/materialize_so101_phase_dataset.py",
+  "merge_script": "scripts/merge_so101_lerobot_shards.py",
+  "sidecar_script": "scripts/build_so101_camera_grid_bins.py",
+  "audit_script": "scripts/audit_so101_phase_dataset_splits.py",
+  "common": {
+    "fps": 12,
+    "width": 256,
+    "height": 256,
+    "target_object_color": "green",
+    "spawn_center_x": 0.146478375,
+    "spawn_center_y": 0.000005265,
+    "spawn_min_radius": 0.1,
+    "spawn_max_radius": 0.3,
+    "spawn_angle_half_range_deg": 90.0,
+    "object_half_sizes": "0.015",
+    "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json"
+  },
+  "sidecar": {
+    "camera_key": "observation.images.camera1",
+    "grid_size": 4,
+    "frame_index": 0,
+    "min_area": 20,
+    "bin_source": "image"
+  },
+  "splits": {
+    "train": {
+      "kind": "phase_subset",
+      "output_root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-approach-phase-v1",
+      "expected_episodes": 300,
+      "phase_subset": {
+        "phase_id": "approach",
+        "prompt": "Open the gripper and move it above the visible green cube.",
+        "reconstruct_sim_snapshots": true,
+        "entry_replay_qpos_rmse_max": 0.001,
+        "sources": [
+          {
+            "source_dataset_root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1",
+            "phase_order": [
+              "open_from_hardware_start",
+              "move_to_cube",
+              "roll_align_with_cube_edge",
+              "gripper_descend",
+              "settle_aligned",
+              "close",
+              "lift",
+              "terminal_hold"
+            ],
+            "phases": [
+              "open_from_hardware_start",
+              "move_to_cube"
+            ]
+          }
+        ]
+      }
+    },
+    "validation": {
+      "kind": "phase_subset",
+      "output_root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-approach-phase-v1-validation",
+      "expected_episodes": 50,
+      "phase_subset": {
+        "phase_id": "approach",
+        "prompt": "Open the gripper and move it above the visible green cube.",
+        "reconstruct_sim_snapshots": true,
+        "entry_replay_qpos_rmse_max": 0.001,
+        "sources": [
+          {
+            "source_dataset_root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1_validation",
+            "phase_order": [
+              "open_from_hardware_start",
+              "move_to_cube",
+              "roll_align_with_cube_edge",
+              "gripper_descend",
+              "settle_aligned",
+              "close",
+              "lift",
+              "terminal_hold"
+            ],
+            "phases": [
+              "open_from_hardware_start",
+              "move_to_cube"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "audit": {
+    "expected_prompt": "Open the gripper and move it above the visible green cube.",
+    "expected_resolution": [
+      256,
+      256
+    ]
+  }
+}

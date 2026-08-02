@@ -4,6 +4,7 @@ import argparse
 import dataclasses
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -49,6 +50,7 @@ from physical_ai_agent.policies.so101_valid_mask import (
     SO101ValidMaskHead,
     load_valid_mask_head,
     save_valid_mask_head,
+    valid_mask_boundary_metrics,
     valid_labels_from_action_is_pad,
 )
 from physical_ai_agent.policies.so101_visual_servo_head import (
@@ -65,6 +67,10 @@ from physical_ai_agent.so101_lerobot_concat import (
     validate_lerobot_dataset_infos,
 )
 from physical_ai_agent.so101_resolution_contract import require_lerobot_dataset_256
+from physical_ai_agent.so101_tensorboard_loss_layout import (
+    add_so101_loss_custom_scalars,
+    should_log_repeated_scalar_metric,
+)
 
 VAL_LOSS_TAG = "val/loss"
 IMPORTANT_VAL_LOSS_TAG = "important/val_loss"
@@ -87,6 +93,7 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
         add_help=False,
     )
     parser.add_argument("--so101-state-jitter-std", type=float, default=0.0)
+    parser.add_argument("--so101-state-jitter-prob", type=float, default=1.0)
     parser.add_argument("--so101-state-jitter-arm-only", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--so101-state-dropout-prob", type=float, default=0.0)
     parser.add_argument("--so101-state-dropout-keep-gripper", action=argparse.BooleanOptionalAction, default=True)
@@ -108,10 +115,19 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--so101-action-prefix-loss-weight", type=float, default=1.0)
     parser.add_argument("--so101-action-chunk-consistency-steps", type=int, default=0)
     parser.add_argument("--so101-action-chunk-consistency-weight", type=float, default=0.0)
+    parser.add_argument("--so101-action-overlap-consistency-offset", type=int, default=0)
+    parser.add_argument("--so101-action-overlap-consistency-horizon", type=int, default=0)
+    parser.add_argument("--so101-action-overlap-consistency-weight", type=float, default=0.0)
+    parser.add_argument("--so101-action-requery-consistency-offset", type=int, default=0)
+    parser.add_argument("--so101-action-requery-consistency-horizon", type=int, default=0)
+    parser.add_argument("--so101-action-requery-consistency-weight", type=float, default=0.0)
     parser.add_argument("--so101-action-delta-loss-weight", type=float, default=0.0)
     parser.add_argument("--so101-action-gripper-transition-loss-weight", type=float, default=0.0)
     parser.add_argument("--so101-action-terminal-loss-steps", type=int, default=0)
     parser.add_argument("--so101-action-terminal-loss-weight", type=float, default=1.0)
+    parser.add_argument("--so101-action-wrist-roll-circular-loss-weight", type=float, default=0.0)
+    parser.add_argument("--so101-action-wrist-roll-joint-index", type=int, default=4)
+    parser.add_argument("--so101-action-wrist-roll-period-radians", type=float, default=6.283185307179586)
     parser.add_argument("--so101-action-smoothness-loss-weight", type=float, default=0.0)
     parser.add_argument("--so101-action-smoothness-include-gripper", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--so101-valid-mask-loss-weight", type=float, default=0.05)
@@ -119,6 +135,10 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--so101-visual-servo-loss-weight", type=float, default=0.0)
     parser.add_argument("--so101-visual-servo-hidden-dim", type=int, default=128)
     parser.add_argument("--so101-image-cache-dir", type=Path)
+    parser.add_argument(
+        "--so101-active-image-features",
+        help="Comma-separated observation.images.* features presented to SmolVLA.",
+    )
     parser.add_argument("--train-grid-bin-sidecar", type=Path)
     parser.add_argument("--train-datasets-json")
     parser.add_argument("--train-dataset-source-spans-json")
@@ -151,10 +171,24 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
         ),
     )
     parser.add_argument(
+        "--so101-resume-peft-base-policy-path",
+        help=(
+            "Explicit base policy used when restoring a PEFT adapter checkpoint. "
+            "This avoids depending on an adapter's stale path to a deleted prior run."
+        ),
+    )
+    parser.add_argument(
         "--post-checkpoint-loop-command-json",
         help=(
             "JSON argv list to run inside the training loop immediately after "
             "a checkpoint is saved. Used for mandatory one-shot closed-loop tests."
+        ),
+    )
+    parser.add_argument(
+        "--post-training-loop-command-json",
+        help=(
+            "JSON argv list(s) to run once after the final checkpoint. "
+            "Used for full held-out closed-loop evaluation."
         ),
     )
     parser.add_argument(
@@ -206,6 +240,7 @@ def _parse_wrapper_args() -> tuple[argparse.Namespace, list[str]]:
 
 def _apply_augmentation_env(args: argparse.Namespace) -> None:
     os.environ["SO101_STATE_JITTER_STD"] = str(args.so101_state_jitter_std)
+    os.environ["SO101_STATE_JITTER_PROB"] = str(args.so101_state_jitter_prob)
     os.environ["SO101_STATE_JITTER_ARM_ONLY"] = "1" if args.so101_state_jitter_arm_only else "0"
     os.environ["SO101_STATE_DROPOUT_PROB"] = str(args.so101_state_dropout_prob)
     os.environ["SO101_STATE_DROPOUT_KEEP_GRIPPER"] = "1" if args.so101_state_dropout_keep_gripper else "0"
@@ -223,6 +258,10 @@ def _apply_augmentation_env(args: argparse.Namespace) -> None:
     os.environ["SO101_IMAGE_AFFINE_DEGREES"] = str(args.so101_image_affine_degrees)
     os.environ["SO101_IMAGE_AFFINE_TRANSLATE"] = str(args.so101_image_affine_translate)
     os.environ["SO101_GPU_IMAGE_AUGMENTATION"] = "1" if args.so101_gpu_image_augmentation else "0"
+    if args.so101_active_image_features:
+        os.environ["SO101_ACTIVE_IMAGE_FEATURES"] = str(args.so101_active_image_features)
+    else:
+        os.environ.pop("SO101_ACTIVE_IMAGE_FEATURES", None)
     if args.so101_image_cache_dir is not None:
         os.environ["SO101_IMAGE_CACHE_DIR"] = str(args.so101_image_cache_dir)
 
@@ -260,11 +299,29 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     torch.backends.cuda.matmul.allow_tf32 = True
 
     augmentation = SamplingAugmentationConfig.from_env()
+    _apply_active_image_features(cfg.policy, wrapper_args.so101_active_image_features)
     _require_training_datasets_256(cfg, wrapper_args)
     dataset = _make_dataset(cfg, augmentation, wrapper_args)
-    policy = make_policy(cfg=cfg.policy, ds_meta=dataset.meta, rename_map=cfg.rename_map)
-    if cfg.peft is not None:
+    wrist_roll_period_normalized = float(wrapper_args.so101_action_wrist_roll_period_radians)
+    if float(wrapper_args.so101_action_wrist_roll_circular_loss_weight) > 0.0:
+        wrist_roll_period_normalized = _normalized_action_period(
+            dataset,
+            joint_index=int(wrapper_args.so101_action_wrist_roll_joint_index),
+            period=float(wrapper_args.so101_action_wrist_roll_period_radians),
+        )
+    resume_checkpoint_path = _resolve_resume_checkpoint_path(cfg, wrapper_args) if cfg.resume else None
+    if resume_checkpoint_path is not None:
+        _prepare_policy_config_for_resume(cfg, resume_checkpoint_path)
+    policy = _make_training_policy(
+        cfg=cfg,
+        dataset=dataset,
+        resume_checkpoint_path=resume_checkpoint_path,
+        resume_peft_base_policy_path=wrapper_args.so101_resume_peft_base_policy_path,
+    )
+    if cfg.peft is not None and resume_checkpoint_path is None:
         policy = policy.wrap_with_peft(peft_cli_overrides=dataclasses.asdict(cfg.peft))
+    elif resume_checkpoint_path is not None and bool(cfg.policy.use_peft):
+        _activate_peft_adapter_for_training(policy)
     preprocessor, postprocessor = _make_processors(cfg, dataset, policy)
     valid_mask_head = _make_valid_mask_head(
         policy=policy,
@@ -285,14 +342,24 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     _add_valid_mask_head_to_optimizer(optimizer, valid_mask_head)
     _add_visual_servo_head_to_optimizer(optimizer, visual_servo_head)
     resume_step = 0
-    if cfg.resume:
-        checkpoint_path = _resolve_resume_checkpoint_path(cfg, wrapper_args)
-        resume_step, optimizer, scheduler = load_training_state(checkpoint_path, optimizer, scheduler)
-        _load_valid_mask_head_if_available(valid_mask_head, checkpoint_path)
+    if resume_checkpoint_path is not None:
+        resume_step, optimizer, scheduler = load_training_state(
+            resume_checkpoint_path,
+            optimizer,
+            scheduler,
+        )
+        _load_valid_mask_head_if_available(valid_mask_head, resume_checkpoint_path)
         if visual_servo_head is not None:
-            _load_visual_servo_head_if_available(visual_servo_head, checkpoint_path)
-        logging.info("Resumed LeRobot training state from %s at step %s", checkpoint_path, resume_step)
-        print(f"Resumed LeRobot training state from {checkpoint_path} at step {resume_step}", flush=True)
+            _load_visual_servo_head_if_available(visual_servo_head, resume_checkpoint_path)
+        logging.info(
+            "Resumed LeRobot training state from %s at step %s",
+            resume_checkpoint_path,
+            resume_step,
+        )
+        print(
+            f"Resumed LeRobot training state from {resume_checkpoint_path} at step {resume_step}",
+            flush=True,
+        )
 
     dataloader = _make_dataloader(cfg, dataset)
     validation_dataloader = _make_validation_dataloader(cfg, wrapper_args)
@@ -335,10 +402,21 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         action_prefix_loss_weight=float(wrapper_args.so101_action_prefix_loss_weight),
         action_chunk_consistency_steps=int(wrapper_args.so101_action_chunk_consistency_steps),
         action_chunk_consistency_weight=float(wrapper_args.so101_action_chunk_consistency_weight),
+        action_overlap_consistency_offset=int(wrapper_args.so101_action_overlap_consistency_offset),
+        action_overlap_consistency_horizon=int(wrapper_args.so101_action_overlap_consistency_horizon),
+        action_overlap_consistency_weight=float(wrapper_args.so101_action_overlap_consistency_weight),
+        action_requery_consistency_offset=int(wrapper_args.so101_action_requery_consistency_offset),
+        action_requery_consistency_horizon=int(wrapper_args.so101_action_requery_consistency_horizon),
+        action_requery_consistency_weight=float(wrapper_args.so101_action_requery_consistency_weight),
         action_delta_loss_weight=float(wrapper_args.so101_action_delta_loss_weight),
         action_gripper_transition_loss_weight=float(wrapper_args.so101_action_gripper_transition_loss_weight),
         action_terminal_loss_steps=int(wrapper_args.so101_action_terminal_loss_steps),
         action_terminal_loss_weight=float(wrapper_args.so101_action_terminal_loss_weight),
+        action_wrist_roll_circular_loss_weight=float(
+            wrapper_args.so101_action_wrist_roll_circular_loss_weight
+        ),
+        action_wrist_roll_joint_index=int(wrapper_args.so101_action_wrist_roll_joint_index),
+        action_wrist_roll_period_normalized=wrist_roll_period_normalized,
         action_smoothness_loss_weight=float(wrapper_args.so101_action_smoothness_loss_weight),
         action_smoothness_include_gripper=bool(wrapper_args.so101_action_smoothness_include_gripper),
         validation_dataloader=validation_dataloader,
@@ -354,6 +432,7 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
     )
     tb_log_dir = (wrapper_args.tensorboard_log_dir or cfg.output_dir / "tensorboard").resolve()
     logger = TensorBoardLogger(save_dir=str(tb_log_dir), name="", version="")
+    add_so101_loss_custom_scalars(logger.experiment)
     _log_training_run_texts(
         logger=logger,
         summary_path=wrapper_args.training_run_summary_path,
@@ -373,6 +452,7 @@ def _train_lightning(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace)
         enabled=bool(cfg.save_checkpoint),
         initial_step=resume_step,
         post_checkpoint_loop_commands=_post_checkpoint_loop_commands(wrapper_args),
+        post_training_loop_commands=_post_training_loop_commands(wrapper_args),
         retention_policy=str(wrapper_args.checkpoint_retention_policy),
     )
     callbacks.append(checkpoint_callback)
@@ -513,9 +593,13 @@ def _training_datasets_markdown(summary: dict[str, Any]) -> str:
         lines.append("#### Train Dataset")
         lines.extend(_dataset_table_lines([train_dataset]))
         lines.append("")
+    validation_datasets = dataset_config.get("validation_datasets")
     validation = _summary_mapping(dataset_config.get("validation_dataset"))
     validation_sources = validation.get("hf_resolved_sources") or validation.get("hf_merge_sources")
-    if isinstance(validation_sources, list):
+    if isinstance(validation_datasets, list):
+        lines.append("#### Validation Datasets")
+        lines.extend(_dataset_table_lines(validation_datasets))
+    elif isinstance(validation_sources, list):
         lines.append("#### Validation Datasets")
         lines.extend(_dataset_table_lines(validation_sources))
     elif validation:
@@ -708,12 +792,26 @@ def _post_checkpoint_loop_command(args: argparse.Namespace) -> list[str] | None:
 
 
 def _post_checkpoint_loop_commands(args: argparse.Namespace) -> list[list[str]]:
-    if not args.post_checkpoint_loop_command_json:
+    return _parse_loop_commands_json(
+        args.post_checkpoint_loop_command_json,
+        flag="--post-checkpoint-loop-command-json",
+    )
+
+
+def _post_training_loop_commands(args: argparse.Namespace) -> list[list[str]]:
+    return _parse_loop_commands_json(
+        args.post_training_loop_command_json,
+        flag="--post-training-loop-command-json",
+    )
+
+
+def _parse_loop_commands_json(raw: str | None, *, flag: str) -> list[list[str]]:
+    if not raw:
         return []
     try:
-        payload = json.loads(args.post_checkpoint_loop_command_json)
+        payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"--post-checkpoint-loop-command-json must be JSON: {exc}") from exc
+        raise SystemExit(f"{flag} must be JSON: {exc}") from exc
     if isinstance(payload, list) and payload and all(isinstance(part, str) for part in payload):
         return [list(payload)]
     if isinstance(payload, list) and all(
@@ -722,7 +820,7 @@ def _post_checkpoint_loop_commands(args: argparse.Namespace) -> list[list[str]]:
     ):
         return [list(command) for command in payload]
     raise SystemExit(
-        "--post-checkpoint-loop-command-json must be either one argv JSON list "
+        f"{flag} must be either one argv JSON list "
         "or a JSON list of argv lists"
     )
 
@@ -747,6 +845,84 @@ def _resolve_resume_checkpoint_path(cfg: TrainPipelineConfig, wrapper_args: argp
         "cfg.resume is true but no checkpoint path was provided and no checkpoint "
         f"was found under {checkpoint_root}"
     )
+
+
+def _prepare_policy_config_for_resume(cfg: TrainPipelineConfig, checkpoint_path: Path) -> Path:
+    policy_path = Path(checkpoint_path) / "pretrained_model"
+    if not policy_path.is_dir():
+        raise ValueError(f"resume checkpoint has no pretrained_model directory: {checkpoint_path}")
+    cfg.policy.pretrained_path = policy_path
+    cfg.policy.use_peft = (policy_path / "adapter_config.json").is_file()
+    return policy_path
+
+
+def _make_training_policy(
+    *,
+    cfg: TrainPipelineConfig,
+    dataset: Any,
+    resume_checkpoint_path: Path | None,
+    resume_peft_base_policy_path: str | None,
+) -> Any:
+    if resume_checkpoint_path is None or not bool(cfg.policy.use_peft):
+        return make_policy(cfg=cfg.policy, ds_meta=dataset.meta, rename_map=cfg.rename_map)
+
+    adapter_path = Path(resume_checkpoint_path) / "pretrained_model"
+    adapter_config_path = adapter_path / "adapter_config.json"
+    adapter_config = _read_json_file(adapter_config_path)
+    if not isinstance(adapter_config, dict):
+        raise ValueError(f"resume PEFT checkpoint has no valid adapter config: {adapter_config_path}")
+
+    base_policy_path = str(resume_peft_base_policy_path or "").strip()
+    if not base_policy_path:
+        recorded_base = str(adapter_config.get("base_model_name_or_path") or "").strip()
+        if recorded_base and (Path(recorded_base).exists() or _looks_like_hf_repo_id(recorded_base)):
+            base_policy_path = recorded_base
+    if not base_policy_path:
+        raise ValueError(
+            "resume PEFT checkpoint points to a missing base policy; set "
+            "peft.base_model_name_or_path in the SO101 training config"
+        )
+
+    saved_pretrained_path = cfg.policy.pretrained_path
+    saved_use_peft = cfg.policy.use_peft
+    cfg.policy.pretrained_path = Path(base_policy_path)
+    cfg.policy.use_peft = False
+    try:
+        base_policy = make_policy(cfg=cfg.policy, ds_meta=dataset.meta, rename_map=cfg.rename_map)
+    finally:
+        cfg.policy.pretrained_path = saved_pretrained_path
+        cfg.policy.use_peft = saved_use_peft
+
+    from peft import PeftConfig, PeftModel
+
+    peft_config = PeftConfig.from_pretrained(adapter_path)
+    peft_config.base_model_name_or_path = base_policy_path
+    policy = PeftModel.from_pretrained(
+        base_policy,
+        adapter_path,
+        config=peft_config,
+        is_trainable=True,
+    )
+    policy.to(cfg.policy.device)
+    print(
+        f"Resumed PEFT policy artifact {adapter_path} on explicit base {base_policy_path}",
+        flush=True,
+    )
+    return policy
+
+
+def _looks_like_hf_repo_id(value: str) -> bool:
+    if value.startswith((".", "/", "~")):
+        return False
+    return value.count("/") == 1 and all(part.strip() for part in value.split("/", 1))
+
+
+def _activate_peft_adapter_for_training(policy: Any) -> None:
+    adapter_name = getattr(policy, "active_adapter", None)
+    if not isinstance(adapter_name, str) or not adapter_name:
+        raise ValueError("resumed PEFT policy has no active adapter")
+    policy.set_adapter(adapter_name, inference_mode=False)
+    policy.train()
 
 
 def _read_json_file(path: Path) -> Any:
@@ -823,7 +999,7 @@ def _make_dataset(
 ) -> Any:
     entries = _train_dataset_entries(wrapper_args)
     if entries:
-        return _make_concat_train_dataset(cfg, augmentation, entries)
+        return _make_concat_train_dataset(cfg, augmentation, entries, wrapper_args)
     dataset = make_dataset(cfg)
     cache_dir = os.environ.get("SO101_IMAGE_CACHE_DIR")
     if cache_dir:
@@ -831,12 +1007,27 @@ def _make_dataset(
     if augmentation.enabled and not augmentation.gpu_image_augmentation:
         dataset = SamplingAugmentedDataset(dataset, augmentation)
     dataset = _maybe_wrap_visual_servo_labels(dataset, getattr(dataset, "root", None))
+    dataset = _maybe_wrap_action_overlap_consistency(dataset, wrapper_args)
     if wrapper_args.train_grid_bin_sidecar is not None:
         dataset = GridBinBalancedDataset(dataset, wrapper_args.train_grid_bin_sidecar)
     source_spans = _train_dataset_source_spans(wrapper_args)
     if source_spans:
         dataset = _SourceAnnotatedDataset(dataset, source_spans)
     return dataset
+
+
+def _normalized_action_period(dataset: Any, *, joint_index: int, period: float) -> float:
+    if joint_index < 0 or period <= 0.0:
+        raise ValueError("wrist-roll joint index and period must be positive")
+    stats = getattr(getattr(dataset, "meta", None), "stats", None)
+    action_stats = stats.get(ACTION) if isinstance(stats, dict) else None
+    std = action_stats.get("std") if isinstance(action_stats, dict) else None
+    if std is None or joint_index >= len(std):
+        raise ValueError(f"dataset action std is missing wrist-roll joint index {joint_index}")
+    scale = float(std[joint_index])
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError(f"dataset action std[{joint_index}] must be finite and positive, got {scale}")
+    return float(period) / scale
 
 
 def _require_training_datasets_256(cfg: TrainPipelineConfig, wrapper_args: argparse.Namespace) -> None:
@@ -998,6 +1189,85 @@ class _VisualServoLabelDataset(torch.utils.data.Dataset):
         return getattr(self.dataset, name)
 
 
+class _ActionOverlapConsistencyDataset(torch.utils.data.Dataset):
+    """Attach the same episode sample at t+offset for chunk-overlap training."""
+
+    prefix = "action_overlap."
+
+    def __init__(self, dataset: Any, offset: int) -> None:
+        self.dataset = dataset
+        self.offset = max(1, int(offset))
+        self.meta = getattr(dataset, "meta")
+        self.root = getattr(dataset, "root", None)
+        self.repo_id = getattr(dataset, "repo_id", None)
+        for name in (
+            "disable_episode_aware_sampler",
+            "requires_grid_bin_balanced_sampler",
+            "requires_dataset_balanced_sampler",
+        ):
+            if hasattr(dataset, name):
+                setattr(self, name, getattr(dataset, name))
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        item = dict(self.dataset[index])
+        future_index = int(index) + self.offset
+        future = item
+        valid = False
+        if future_index < len(self.dataset):
+            future = dict(self.dataset[future_index])
+            valid = _same_episode(item, future)
+        for key, value in list(future.items()):
+            item[f"{self.prefix}{key}"] = value
+        item["action_overlap.valid"] = torch.tensor(bool(valid))
+        return item
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.dataset, name)
+
+
+def _same_episode(current: dict[str, Any], future: dict[str, Any]) -> bool:
+    current_episode = _item_int(current.get("episode_index"))
+    future_episode = _item_int(future.get("episode_index"))
+    if current_episode is None or future_episode is None:
+        return False
+    return current_episode == future_episode
+
+
+def _item_int(value: Any) -> int | None:
+    if torch.is_tensor(value):
+        if value.numel() != 1:
+            return None
+        return int(value.detach().cpu().item())
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
+
+
+def _maybe_wrap_action_overlap_consistency(dataset: Any, wrapper_args: argparse.Namespace) -> Any:
+    overlap_weight = float(wrapper_args.so101_action_overlap_consistency_weight)
+    requery_weight = float(wrapper_args.so101_action_requery_consistency_weight)
+    if overlap_weight <= 0.0 and requery_weight <= 0.0:
+        return dataset
+    overlap_offset = int(wrapper_args.so101_action_overlap_consistency_offset)
+    requery_offset = int(wrapper_args.so101_action_requery_consistency_offset)
+    if overlap_weight > 0.0 and requery_weight > 0.0 and overlap_offset != requery_offset:
+        raise ValueError(
+            "action_overlap_consistency and action_requery_consistency must use the same offset "
+            "because they share one future-observation batch"
+        )
+    offset = requery_offset if requery_weight > 0.0 else overlap_offset
+    horizon = max(
+        int(wrapper_args.so101_action_overlap_consistency_horizon) if overlap_weight > 0.0 else 0,
+        int(wrapper_args.so101_action_requery_consistency_horizon) if requery_weight > 0.0 else 0,
+    )
+    if offset <= 0 or horizon <= 0:
+        return dataset
+    return _ActionOverlapConsistencyDataset(dataset, offset=offset)
+
+
 def _maybe_wrap_visual_servo_labels(dataset: Any, root: Any) -> Any:
     if root is None:
         return dataset
@@ -1011,6 +1281,7 @@ def _make_concat_train_dataset(
     cfg: TrainPipelineConfig,
     augmentation: SamplingAugmentationConfig,
     entries: list[dict[str, Any]],
+    wrapper_args: argparse.Namespace,
 ) -> Any:
     summary = validate_lerobot_dataset_infos(entries)
     print(
@@ -1040,6 +1311,7 @@ def _make_concat_train_dataset(
         if augmentation.enabled and not augmentation.gpu_image_augmentation:
             dataset = SamplingAugmentedDataset(dataset, augmentation)
         dataset = _maybe_wrap_visual_servo_labels(dataset, root)
+        dataset = _maybe_wrap_action_overlap_consistency(dataset, wrapper_args)
         if entry.get("grid_bin_sidecar"):
             dataset = GridBinBalancedDataset(dataset, Path(str(entry["grid_bin_sidecar"])))
         datasets.append(dataset)
@@ -1132,6 +1404,8 @@ def _make_validation_dataloader(
     cfg: TrainPipelineConfig,
     wrapper_args: argparse.Namespace,
 ) -> torch.utils.data.DataLoader | None:
+    if _validation_dataset_entries(wrapper_args):
+        return None
     if wrapper_args.validation_dataset_root is None:
         return None
     repo_id = wrapper_args.validation_dataset_repo_id or cfg.dataset.repo_id
@@ -1374,7 +1648,7 @@ def _make_valid_mask_head(*, policy: Any, hidden_dim: int) -> SO101ValidMaskHead
 
 
 def _make_visual_servo_head(*, policy: Any, hidden_dim: int, device: Any = "cpu") -> SO101VisualServoHead:
-    context_dim = int(policy.model.vlm_with_expert.config.text_config.hidden_size)
+    context_dim = int(_smolvla_flow_model(policy).vlm_with_expert.config.text_config.hidden_size)
     return SO101VisualServoHead(
         SO101VisualServoHeadConfig(hidden_dim=int(hidden_dim), context_dim=context_dim)
     ).to(device)
@@ -1471,10 +1745,19 @@ class _SO101LightningModule:
         action_prefix_loss_weight: float,
         action_chunk_consistency_steps: int,
         action_chunk_consistency_weight: float,
+        action_overlap_consistency_offset: int,
+        action_overlap_consistency_horizon: int,
+        action_overlap_consistency_weight: float,
+        action_requery_consistency_offset: int,
+        action_requery_consistency_horizon: int,
+        action_requery_consistency_weight: float,
         action_delta_loss_weight: float,
         action_gripper_transition_loss_weight: float,
         action_terminal_loss_steps: int,
         action_terminal_loss_weight: float,
+        action_wrist_roll_circular_loss_weight: float,
+        action_wrist_roll_joint_index: int,
+        action_wrist_roll_period_normalized: float,
         action_smoothness_loss_weight: float,
         action_smoothness_include_gripper: bool,
         validation_dataloader: torch.utils.data.DataLoader | None,
@@ -1505,10 +1788,21 @@ class _SO101LightningModule:
                 self.action_prefix_loss_weight = max(0.0, float(action_prefix_loss_weight))
                 self.action_chunk_consistency_steps = max(0, int(action_chunk_consistency_steps))
                 self.action_chunk_consistency_weight = max(0.0, float(action_chunk_consistency_weight))
+                self.action_overlap_consistency_offset = max(0, int(action_overlap_consistency_offset))
+                self.action_overlap_consistency_horizon = max(0, int(action_overlap_consistency_horizon))
+                self.action_overlap_consistency_weight = max(0.0, float(action_overlap_consistency_weight))
+                self.action_requery_consistency_offset = max(0, int(action_requery_consistency_offset))
+                self.action_requery_consistency_horizon = max(0, int(action_requery_consistency_horizon))
+                self.action_requery_consistency_weight = max(0.0, float(action_requery_consistency_weight))
                 self.action_delta_loss_weight = max(0.0, float(action_delta_loss_weight))
                 self.action_gripper_transition_loss_weight = max(0.0, float(action_gripper_transition_loss_weight))
                 self.action_terminal_loss_steps = max(0, int(action_terminal_loss_steps))
                 self.action_terminal_loss_weight = max(0.0, float(action_terminal_loss_weight))
+                self.action_wrist_roll_circular_loss_weight = max(
+                    0.0, float(action_wrist_roll_circular_loss_weight)
+                )
+                self.action_wrist_roll_joint_index = int(action_wrist_roll_joint_index)
+                self.action_wrist_roll_period_normalized = float(action_wrist_roll_period_normalized)
                 self.action_smoothness_loss_weight = max(0.0, float(action_smoothness_loss_weight))
                 self.action_smoothness_include_gripper = bool(action_smoothness_include_gripper)
                 self.validation_dataloader = validation_dataloader
@@ -1535,7 +1829,10 @@ class _SO101LightningModule:
                 started = time.perf_counter()
                 self.policy.train()
                 raw_batch = batch
-                batch = self.preprocessor(batch)
+                action_overlap_raw_batch = _extract_prefixed_batch(raw_batch, "action_overlap.")
+                action_overlap_valid = raw_batch.get("action_overlap.valid")
+                batch = self.preprocessor(_drop_prefixed_batch(raw_batch, "action_overlap."))
+                action_overlap_batch = self.preprocessor(action_overlap_raw_batch) if action_overlap_raw_batch else None
                 _copy_visual_servo_labels(raw_batch, batch)
                 dataloading_s = time.perf_counter() - self._last_step_started if self._last_step_started else 0.0
                 pre_augmented_images = None
@@ -1546,6 +1843,8 @@ class _SO101LightningModule:
                 if self.augmentation.enabled and self.augmentation.gpu_image_augmentation:
                     pre_augmented_images = _clone_image_tensors_for_logging(batch, self.input_image_cameras)
                     augment_batch_on_device(batch, augmentation)
+                    if action_overlap_batch is not None and self.action_requery_consistency_weight > 0.0:
+                        augment_batch_on_device(action_overlap_batch, augmentation)
                 if pre_augmented_images is not None:
                     self._log_input_images(pre_augmented_images, split="train", tag_prefix="input")
                     self._log_input_images(batch, split="train", tag_prefix="augmented_input")
@@ -1570,8 +1869,19 @@ class _SO101LightningModule:
                     gripper_transition_weight=self.action_gripper_transition_loss_weight,
                     terminal_steps=self.action_terminal_loss_steps,
                     terminal_weight=self.action_terminal_loss_weight,
+                    wrist_roll_circular_weight=self.action_wrist_roll_circular_loss_weight,
+                    wrist_roll_joint_index=self.action_wrist_roll_joint_index,
+                    wrist_roll_period_normalized=self.action_wrist_roll_period_normalized,
                     smoothness_weight=self.action_smoothness_loss_weight,
                     smoothness_include_gripper=self.action_smoothness_include_gripper,
+                    overlap_batch=action_overlap_batch,
+                    overlap_valid=action_overlap_valid,
+                    overlap_offset=self.action_overlap_consistency_offset,
+                    overlap_horizon=self.action_overlap_consistency_horizon,
+                    overlap_weight=self.action_overlap_consistency_weight,
+                    requery_offset=self.action_requery_consistency_offset,
+                    requery_horizon=self.action_requery_consistency_horizon,
+                    requery_weight=self.action_requery_consistency_weight,
                     valid_mask_head=self.valid_mask_head,
                     valid_mask_loss_weight=self.valid_mask_loss_weight,
                 )
@@ -1625,7 +1935,7 @@ class _SO101LightningModule:
                 )
                 self._log_system_metrics(batch_size=batch_size)
                 for key, value in (output_dict or {}).items():
-                    if key == "loss":
+                    if key == "loss" or not should_log_repeated_scalar_metric(key):
                         continue
                     if torch.is_tensor(value) and value.numel() == 1:
                         value = value.detach()
@@ -1766,6 +2076,9 @@ class _SO101LightningModule:
                         gripper_transition_weight=self.action_gripper_transition_loss_weight,
                         terminal_steps=self.action_terminal_loss_steps,
                         terminal_weight=self.action_terminal_loss_weight,
+                        wrist_roll_circular_weight=self.action_wrist_roll_circular_loss_weight,
+                        wrist_roll_joint_index=self.action_wrist_roll_joint_index,
+                        wrist_roll_period_normalized=self.action_wrist_roll_period_normalized,
                         smoothness_weight=0.0,
                         smoothness_include_gripper=self.action_smoothness_include_gripper,
                         valid_mask_head=self.valid_mask_head,
@@ -1791,7 +2104,7 @@ class _SO101LightningModule:
                     self.last_validation_loss = _scalar_float(loss)
                     self._log_validation_scalar(IMPORTANT_VAL_LOSS_TAG, loss, batch_size=batch_size, log_step=log_step)
                 for key, value in (output_dict or {}).items():
-                    if key == "loss":
+                    if key == "loss" or not should_log_repeated_scalar_metric(key):
                         continue
                     self._log_validation_scalar(
                         _scalar_metric_tag(prefix, key),
@@ -1845,6 +2158,9 @@ class _SO101LightningModule:
                             gripper_transition_weight=self.action_gripper_transition_loss_weight,
                             terminal_steps=self.action_terminal_loss_steps,
                             terminal_weight=self.action_terminal_loss_weight,
+                            wrist_roll_circular_weight=self.action_wrist_roll_circular_loss_weight,
+                            wrist_roll_joint_index=self.action_wrist_roll_joint_index,
+                            wrist_roll_period_normalized=self.action_wrist_roll_period_normalized,
                             smoothness_weight=0.0,
                             smoothness_include_gripper=self.action_smoothness_include_gripper,
                             valid_mask_head=self.valid_mask_head,
@@ -2042,6 +2358,7 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             enabled: bool,
             initial_step: int,
             post_checkpoint_loop_commands: list[list[str]] | None,
+            post_training_loop_commands: list[list[str]] | None,
             retention_policy: str,
         ) -> None:
             super().__init__()
@@ -2053,8 +2370,10 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             self.enabled = enabled
             self.initial_step = max(0, int(initial_step))
             self.post_checkpoint_loop_commands = [list(command) for command in (post_checkpoint_loop_commands or [])]
+            self.post_training_loop_commands = [list(command) for command in (post_training_loop_commands or [])]
             self.retention_policy = retention_policy
             self.saved_steps: set[int] = set()
+            self.final_evaluation_completed = False
             self.retention_state_path = Path(self.cfg.output_dir) / "checkpoints" / "retention_state.json"
             self.retention_events_path = Path(self.cfg.output_dir) / "checkpoints" / "retention_events.jsonl"
             self.retention_state = _read_json_file(self.retention_state_path) or {}
@@ -2078,6 +2397,27 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             step = self.initial_step + int(trainer.global_step)
             if self.enabled and step > 0:
                 self._save(trainer, self.policy_module, step)
+                if not self.final_evaluation_completed and self.post_training_loop_commands:
+                    checkpoint_dir, checkpoint_step = self._final_evaluation_checkpoint(step)
+                    self._run_loop_commands(
+                        commands=self.post_training_loop_commands,
+                        checkpoint_dir=checkpoint_dir,
+                        step=checkpoint_step,
+                        label="final closed-loop test",
+                    )
+                    self.final_evaluation_completed = True
+
+        def _final_evaluation_checkpoint(self, step: int) -> tuple[Path, int]:
+            numeric = get_step_checkpoint_dir(self.cfg.output_dir, self.cfg.steps, step)
+            if numeric.exists():
+                return numeric, int(step)
+            checkpoint_root = Path(self.cfg.output_dir) / "checkpoints"
+            for name in ("best_closed_loop", "best_val_loss", "best_train_loss"):
+                candidate = checkpoint_root / name
+                payload = _read_json_file(candidate / "training_state" / "training_step.json")
+                if candidate.exists() and isinstance(payload, dict) and payload.get("step") is not None:
+                    return candidate, int(payload["step"])
+            raise RuntimeError("final closed-loop evaluation has no retained checkpoint")
 
         def _save(self, trainer: Any, pl_module: Any, step: int) -> None:
             if step in self.saved_steps:
@@ -2128,7 +2468,22 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
             )
 
         def _run_post_checkpoint_loop_test(self, *, checkpoint_dir: Path, step: int) -> float | None:
-            if not self.post_checkpoint_loop_commands:
+            return self._run_loop_commands(
+                commands=self.post_checkpoint_loop_commands,
+                checkpoint_dir=checkpoint_dir,
+                step=step,
+                label="closed-loop test",
+            )
+
+        def _run_loop_commands(
+            self,
+            *,
+            commands: list[list[str]],
+            checkpoint_dir: Path,
+            step: int,
+            label: str,
+        ) -> float | None:
+            if not commands:
                 return None
             env = {
                 **os.environ,
@@ -2136,13 +2491,18 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
                 "SO101_CHECKPOINT_STEP": str(step),
             }
             success_values: list[float] = []
-            for index, command in enumerate(self.post_checkpoint_loop_commands, start=1):
+            for index, command in enumerate(commands, start=1):
                 print(
-                    f"Running closed-loop test {index}/{len(self.post_checkpoint_loop_commands)} "
+                    f"Running {label} {index}/{len(commands)} "
                     f"after checkpoint step {step}",
                     flush=True,
                 )
-                subprocess.run(command, check=True, env=env)
+                subprocess.run(
+                    command,
+                    check=True,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                )
                 success = _latest_closed_loop_success_for_command(command, checkpoint_dir.name)
                 if success is not None:
                     success_values.append(success)
@@ -2251,13 +2611,31 @@ def _make_lerobot_checkpoint_callback(Callback: type[Any], **kwargs: Any) -> Any
 
         def _refresh_last_retained_checkpoint(self) -> None:
             checkpoint_root = Path(self.cfg.output_dir) / "checkpoints"
-            for name in ("best_closed_loop", "best_val_loss", "best_train_loss"):
-                target = checkpoint_root / name
-                if target.exists():
-                    update_last_checkpoint(target)
-                    return
+            target = _latest_retained_checkpoint(checkpoint_root)
+            if target is not None:
+                update_last_checkpoint(target)
 
     return LeRobotCheckpointCallback(**kwargs)
+
+
+def _latest_retained_checkpoint(checkpoint_root: Path) -> Path | None:
+    """Return the newest retained checkpoint alias by its saved training step."""
+
+    candidates: list[tuple[int, int, Path]] = []
+    names = ("best_closed_loop", "best_val_loss", "best_train_loss")
+    for priority, name in enumerate(names):
+        candidate = Path(checkpoint_root) / name
+        payload = _read_json_file(candidate / "training_state" / "training_step.json")
+        if not candidate.exists() or not isinstance(payload, dict):
+            continue
+        try:
+            step = int(payload["step"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        candidates.append((step, -priority, candidate))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda row: (row[0], row[1]))[2]
 
 
 def _forward_policy_with_optional_prefix_loss(
@@ -2272,8 +2650,19 @@ def _forward_policy_with_optional_prefix_loss(
     gripper_transition_weight: float = 0.0,
     terminal_steps: int = 0,
     terminal_weight: float = 1.0,
+    wrist_roll_circular_weight: float = 0.0,
+    wrist_roll_joint_index: int = 4,
+    wrist_roll_period_normalized: float = 2.0 * math.pi,
     smoothness_weight: float = 0.0,
     smoothness_include_gripper: bool = False,
+    overlap_batch: dict[str, Any] | None = None,
+    overlap_valid: Any = None,
+    overlap_offset: int = 0,
+    overlap_horizon: int = 0,
+    overlap_weight: float = 0.0,
+    requery_offset: int = 0,
+    requery_horizon: int = 0,
+    requery_weight: float = 0.0,
     valid_mask_head: SO101ValidMaskHead | None = None,
     valid_mask_loss_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
@@ -2285,11 +2674,31 @@ def _forward_policy_with_optional_prefix_loss(
         or (int(terminal_steps) > 0 and float(terminal_weight) != 1.0)
     )
     use_smoothness = float(smoothness_weight) > 0.0
+    use_wrist_roll_circular = float(wrist_roll_circular_weight) > 0.0
+    use_overlap = (
+        overlap_batch is not None
+        and int(overlap_offset) > 0
+        and int(overlap_horizon) > 0
+        and float(overlap_weight) > 0.0
+    )
+    use_requery = (
+        overlap_batch is not None
+        and int(requery_offset) > 0
+        and int(requery_horizon) > 0
+        and float(requery_weight) > 0.0
+    )
+    use_valid_mask = valid_mask_head is not None and float(valid_mask_loss_weight) > 0.0
+    if use_valid_mask and getattr(policy, "name", None) != "smolvla":
+        raise ValueError("inference-aligned valid-mask training requires a SmolVLA policy")
     if (
         not use_prefix
         and not use_consistency
         and not use_teacher_importance
+        and not use_wrist_roll_circular
         and not use_smoothness
+        and not use_overlap
+        and not use_requery
+        and not use_valid_mask
     ) or getattr(policy, "name", None) != "smolvla":
         return _add_valid_mask_auxiliary_loss(
             policy.forward(batch),
@@ -2298,13 +2707,17 @@ def _forward_policy_with_optional_prefix_loss(
             weight=valid_mask_loss_weight,
         )
     if not all(hasattr(policy, name) for name in ("prepare_images", "prepare_state", "prepare_action")):
+        if use_valid_mask:
+            raise ValueError(
+                "inference-aligned valid-mask training requires SmolVLA prepare_images/state/action"
+            )
         return _add_valid_mask_auxiliary_loss(
             policy.forward(batch),
             valid_mask_head=valid_mask_head,
             batch=batch,
             weight=valid_mask_loss_weight,
         )
-    action_loss, loss_dict = _forward_smolvla_with_prefix_loss(
+    action_loss, loss_dict, action_hat = _forward_smolvla_with_prefix_loss(
         policy,
         batch,
         prefix_steps=prefix_steps,
@@ -2315,14 +2728,26 @@ def _forward_policy_with_optional_prefix_loss(
         gripper_transition_weight=gripper_transition_weight,
         terminal_steps=terminal_steps,
         terminal_weight=terminal_weight,
+        wrist_roll_circular_weight=wrist_roll_circular_weight,
+        wrist_roll_joint_index=wrist_roll_joint_index,
+        wrist_roll_period_normalized=wrist_roll_period_normalized,
         smoothness_weight=smoothness_weight,
         smoothness_include_gripper=smoothness_include_gripper,
+        overlap_batch=overlap_batch,
+        overlap_valid=overlap_valid,
+        overlap_offset=overlap_offset,
+        overlap_horizon=overlap_horizon,
+        overlap_weight=overlap_weight,
+        requery_offset=requery_offset,
+        requery_horizon=requery_horizon,
+        requery_weight=requery_weight,
     )
     return _add_valid_mask_auxiliary_loss(
         (action_loss, loss_dict),
         valid_mask_head=valid_mask_head,
         batch=batch,
         weight=valid_mask_loss_weight,
+        action_chunk=action_hat.detach(),
     )
 
 
@@ -2332,12 +2757,17 @@ def _add_valid_mask_auxiliary_loss(
     valid_mask_head: SO101ValidMaskHead | None,
     batch: dict[str, Any],
     weight: float,
+    action_chunk: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     action_loss, loss_dict = _normalize_policy_loss_output(policy_output)
     if valid_mask_head is None or float(weight) <= 0.0 or batch.get("action_is_pad") is None:
         return action_loss, loss_dict
+    if action_chunk is None:
+        raise ValueError(
+            "valid-mask training requires the detached SmolVLA predicted action chunk"
+        )
     state = batch[OBS_STATE]
-    action = batch[ACTION]
+    action = action_chunk[:, :, : batch[ACTION].shape[-1]]
     labels = valid_labels_from_action_is_pad(batch.get("action_is_pad")).to(device=state.device)
     logits = valid_mask_head(state, action)
     labels = labels[:, : logits.shape[1]]
@@ -2345,12 +2775,19 @@ def _add_valid_mask_auxiliary_loss(
     valid_probs = torch.sigmoid(logits.detach())
     valid_pred = (valid_probs >= 0.5).to(dtype=labels.dtype)
     valid_mask_accuracy = (valid_pred == labels).float().mean()
+    boundary_metrics = valid_mask_boundary_metrics(
+        valid_probs,
+        labels,
+        threshold=float(valid_mask_head.config.threshold),
+        consecutive=int(valid_mask_head.config.consecutive_invalid),
+    )
     total_loss = action_loss + float(weight) * valid_mask_loss
     loss_dict = dict(loss_dict)
     loss_dict["action_loss"] = _detach_scalar(action_loss)
     loss_dict["valid_mask_loss"] = _detach_scalar(valid_mask_loss)
     loss_dict["valid_mask_loss_weight"] = float(weight)
     loss_dict["valid_mask_accuracy"] = _detach_scalar(valid_mask_accuracy)
+    loss_dict.update({name: _detach_scalar(value) for name, value in boundary_metrics.items()})
     loss_dict["loss"] = _detach_scalar(total_loss)
     return total_loss, loss_dict
 
@@ -2407,11 +2844,16 @@ def _smolvla_training_losses_and_action_hat(
     lang_masks: torch.Tensor,
     state: torch.Tensor,
     actions: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    *,
+    noise: torch.Tensor | None = None,
+    time_tensor: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Run SmolVLA's training forward while exposing a differentiable action estimate."""
 
-    noise = model.sample_noise(actions.shape, actions.device)
-    time_tensor = model.sample_time(actions.shape[0], actions.device)
+    if noise is None:
+        noise = model.sample_noise(actions.shape, actions.device)
+    if time_tensor is None:
+        time_tensor = model.sample_time(actions.shape[0], actions.device)
     time_expanded = time_tensor[:, None, None]
     x_t = time_expanded * noise + (1 - time_expanded) * actions
     u_t = noise - actions
@@ -2440,7 +2882,17 @@ def _smolvla_training_losses_and_action_hat(
     v_t = model.action_out_proj(suffix_out)
     losses = torch.nn.functional.mse_loss(u_t, v_t, reduction="none")
     action_hat = noise - v_t
-    return losses, action_hat
+    return losses, action_hat, noise, time_tensor
+
+
+def _smolvla_flow_model(policy: Any) -> Any:
+    """Resolve SmolVLA's flow model through an optional PEFT wrapper."""
+
+    base_policy = policy.get_base_model() if hasattr(policy, "get_base_model") else policy
+    model = getattr(base_policy, "model", None)
+    if model is None or not hasattr(model, "sample_noise"):
+        raise TypeError(f"could not resolve SmolVLA flow model from {type(policy).__name__}")
+    return model
 
 
 def _smoothness_action_dim(actions: torch.Tensor, include_gripper: bool) -> int:
@@ -2448,6 +2900,37 @@ def _smoothness_action_dim(actions: torch.Tensor, include_gripper: bool) -> int:
     if include_gripper or action_dim <= 1:
         return action_dim
     return action_dim - 1
+
+
+def _predicted_action_circular_loss(
+    predicted_actions: torch.Tensor,
+    target_actions: torch.Tensor,
+    *,
+    actions_is_pad: torch.Tensor | None,
+    joint_index: int,
+    period_normalized: float,
+) -> torch.Tensor | None:
+    """Measure wrist-roll error on a circle instead of across the wrap boundary."""
+
+    if predicted_actions.ndim != 3 or target_actions.ndim != 3:
+        return None
+    if joint_index < 0 or joint_index >= int(predicted_actions.shape[-1]):
+        raise ValueError(f"wrist-roll joint index {joint_index} is outside action dim {predicted_actions.shape[-1]}")
+    if not math.isfinite(period_normalized) or period_normalized <= 0.0:
+        raise ValueError(f"normalized wrist-roll period must be finite and positive, got {period_normalized}")
+    horizon = min(int(predicted_actions.shape[1]), int(target_actions.shape[1]))
+    if horizon <= 0:
+        return None
+    delta = predicted_actions[:, :horizon, joint_index] - target_actions[:, :horizon, joint_index]
+    phase_error = delta * (2.0 * math.pi / float(period_normalized))
+    circular_error = 1.0 - torch.cos(phase_error)
+    if actions_is_pad is None:
+        return circular_error.mean()
+    valid = (~actions_is_pad[:, :horizon]).to(dtype=circular_error.dtype, device=circular_error.device)
+    denom = valid.sum()
+    if denom <= 0:
+        return None
+    return (circular_error * valid).sum() / denom.clamp_min(torch.finfo(circular_error.dtype).eps)
 
 
 def _predicted_action_jerk_smoothness_loss(
@@ -2476,6 +2959,146 @@ def _predicted_action_jerk_smoothness_loss(
     return (jerk.square() * valid_triplet).sum() / denom.clamp_min(torch.finfo(jerk.dtype).eps)
 
 
+def _predicted_action_overlap_consistency_loss(
+    policy: Any,
+    *,
+    overlap_batch: dict[str, Any] | None,
+    current_action_hat: torch.Tensor,
+    current_actions_is_pad: torch.Tensor | None,
+    overlap_valid: Any,
+    offset: int,
+    horizon: int,
+) -> tuple[torch.Tensor | None, dict[str, Any]]:
+    if overlap_batch is None or int(offset) <= 0 or int(horizon) <= 0:
+        return None, {}
+    chunk = int(current_action_hat.shape[1])
+    start = int(offset)
+    length = min(int(horizon), max(0, chunk - start))
+    if length <= 0:
+        return None, {}
+    overlap_actions = policy.prepare_action(overlap_batch).detach()
+    action_dim = int(current_action_hat.shape[-1])
+    current = current_action_hat[:, start : start + length, :action_dim]
+    future = overlap_actions[:, :length, :action_dim]
+    valid = _overlap_valid_mask(
+        current_actions_is_pad=current_actions_is_pad,
+        future_actions_is_pad=overlap_batch.get("action_is_pad"),
+        overlap_valid=overlap_valid,
+        batch_size=int(current.shape[0]),
+        offset=start,
+        horizon=length,
+        device=current.device,
+    )
+    denom = valid.unsqueeze(-1).expand_as(current).sum()
+    if denom <= 0:
+        return None, {
+            "action_overlap_consistency_pairs": 0,
+            "action_overlap_consistency_offset": int(offset),
+            "action_overlap_consistency_horizon": int(horizon),
+        }
+    loss = ((current - future).square() * valid.unsqueeze(-1)).sum() / denom.clamp_min(
+        torch.finfo(current.dtype).eps
+    )
+    return loss, {
+        "action_overlap_consistency_pairs": int(valid.sum().detach().cpu().item()),
+        "action_overlap_consistency_offset": int(offset),
+        "action_overlap_consistency_horizon": int(length),
+        "action_overlap_consistency_target": "teacher",
+    }
+
+
+def _predicted_action_requery_consistency_loss(
+    *,
+    current_action_hat: torch.Tensor,
+    future_action_hat: torch.Tensor,
+    current_actions_is_pad: torch.Tensor | None,
+    future_actions_is_pad: torch.Tensor | None,
+    overlap_valid: Any,
+    offset: int,
+    horizon: int,
+) -> tuple[torch.Tensor | None, dict[str, Any]]:
+    chunk = int(current_action_hat.shape[1])
+    start = int(offset)
+    length = min(int(horizon), max(0, chunk - start), int(future_action_hat.shape[1]))
+    if length <= 0:
+        return None, {}
+    action_dim = min(int(current_action_hat.shape[-1]), int(future_action_hat.shape[-1]))
+    current = current_action_hat[:, start : start + length, :action_dim]
+    future = future_action_hat[:, :length, :action_dim].detach()
+    valid = _overlap_valid_mask(
+        current_actions_is_pad=current_actions_is_pad,
+        future_actions_is_pad=future_actions_is_pad,
+        overlap_valid=overlap_valid,
+        batch_size=int(current.shape[0]),
+        offset=start,
+        horizon=length,
+        device=current.device,
+    )
+    expanded_valid = valid.unsqueeze(-1).expand_as(current)
+    denom = expanded_valid.sum()
+    if denom <= 0:
+        return None, {
+            "action_requery_consistency_pairs": 0,
+            "action_requery_consistency_offset": int(offset),
+            "action_requery_consistency_horizon": int(horizon),
+        }
+    loss = torch.nn.functional.smooth_l1_loss(current, future, reduction="none")
+    loss = (loss * expanded_valid).sum() / denom.clamp_min(torch.finfo(current.dtype).eps)
+    return loss, {
+        "action_requery_consistency_pairs": int(valid.sum().detach().cpu().item()),
+        "action_requery_consistency_offset": int(offset),
+        "action_requery_consistency_horizon": int(length),
+        "action_requery_consistency_target": "future_observation_prediction",
+    }
+
+
+def _overlap_valid_mask(
+    *,
+    current_actions_is_pad: torch.Tensor | None,
+    future_actions_is_pad: torch.Tensor | None,
+    overlap_valid: Any,
+    batch_size: int,
+    offset: int,
+    horizon: int,
+    device: torch.device,
+) -> torch.Tensor:
+    valid = torch.ones((batch_size, horizon), dtype=torch.bool, device=device)
+    if current_actions_is_pad is not None:
+        valid = valid & (~current_actions_is_pad[:, offset : offset + horizon].to(device=device))
+    if future_actions_is_pad is not None:
+        valid = valid & (~future_actions_is_pad[:, :horizon].to(device=device))
+    if overlap_valid is not None:
+        if torch.is_tensor(overlap_valid):
+            pair_valid = overlap_valid.to(device=device, dtype=torch.bool)
+        else:
+            pair_valid = torch.as_tensor(overlap_valid, dtype=torch.bool, device=device)
+        if pair_valid.ndim == 0:
+            pair_valid = pair_valid.expand(batch_size)
+        valid = valid & pair_valid[:batch_size].unsqueeze(-1)
+    return valid
+
+
+def _aligned_requery_noise(
+    *,
+    model: Any,
+    future_actions: torch.Tensor,
+    current_noise: torch.Tensor,
+    offset: int,
+    horizon: int,
+) -> torch.Tensor:
+    future_noise = model.sample_noise(future_actions.shape, future_actions.device)
+    start = int(offset)
+    length = min(
+        int(horizon),
+        max(0, int(current_noise.shape[1]) - start),
+        int(future_noise.shape[1]),
+    )
+    if length > 0:
+        future_noise = future_noise.clone()
+        future_noise[:, :length] = current_noise[:, start : start + length]
+    return future_noise
+
+
 def _forward_smolvla_with_prefix_loss(
     policy: Any,
     batch: dict[str, Any],
@@ -2488,9 +3111,20 @@ def _forward_smolvla_with_prefix_loss(
     gripper_transition_weight: float = 0.0,
     terminal_steps: int = 0,
     terminal_weight: float = 1.0,
+    wrist_roll_circular_weight: float = 0.0,
+    wrist_roll_joint_index: int = 4,
+    wrist_roll_period_normalized: float = 2.0 * math.pi,
     smoothness_weight: float = 0.0,
     smoothness_include_gripper: bool = False,
-) -> tuple[torch.Tensor, dict[str, Any]]:
+    overlap_batch: dict[str, Any] | None = None,
+    overlap_valid: Any = None,
+    overlap_offset: int = 0,
+    overlap_horizon: int = 0,
+    overlap_weight: float = 0.0,
+    requery_offset: int = 0,
+    requery_horizon: int = 0,
+    requery_weight: float = 0.0,
+) -> tuple[torch.Tensor, dict[str, Any], torch.Tensor]:
     if getattr(policy.config, "adapt_to_pi_aloha", False):
         batch[OBS_STATE] = policy._pi_aloha_decode_state(batch[OBS_STATE])
         batch[ACTION] = policy._pi_aloha_encode_actions_inv(batch[ACTION])
@@ -2501,8 +3135,8 @@ def _forward_smolvla_with_prefix_loss(
     lang_masks = batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
     actions = policy.prepare_action(batch)
     actions_is_pad = batch.get("action_is_pad")
-    losses, action_hat = _smolvla_training_losses_and_action_hat(
-        policy.model,
+    losses, action_hat, flow_noise, flow_time = _smolvla_training_losses_and_action_hat(
+        _smolvla_flow_model(policy),
         images,
         img_masks,
         lang_tokens,
@@ -2552,6 +3186,80 @@ def _forward_smolvla_with_prefix_loss(
         loss_dict["action_chunk_consistency_loss"] = consistency_loss.detach().item()
         loss_dict["action_chunk_consistency_weight"] = float(consistency_weight)
         loss_dict["action_chunk_consistency_steps"] = int(min(max(0, consistency_steps), max(0, int(losses.shape[1]) - 1)))
+    overlap_loss, overlap_metrics = _predicted_action_overlap_consistency_loss(
+        policy,
+        overlap_batch=overlap_batch,
+        current_action_hat=action_hat[:, :, : policy.config.max_action_dim],
+        current_actions_is_pad=actions_is_pad,
+        overlap_valid=overlap_valid,
+        offset=overlap_offset,
+        horizon=overlap_horizon,
+    )
+    if overlap_loss is not None and float(overlap_weight) > 0.0:
+        total_loss = total_loss + float(overlap_weight) * overlap_loss
+        loss_dict["action_overlap_consistency_loss"] = overlap_loss.detach().item()
+        loss_dict["action_overlap_consistency_weight"] = float(overlap_weight)
+        loss_dict.update(overlap_metrics)
+    if (
+        overlap_batch is not None
+        and float(requery_weight) > 0.0
+        and int(requery_offset) > 0
+        and int(requery_horizon) > 0
+    ):
+        if getattr(policy.config, "adapt_to_pi_aloha", False):
+            overlap_batch[OBS_STATE] = policy._pi_aloha_decode_state(overlap_batch[OBS_STATE])
+            overlap_batch[ACTION] = policy._pi_aloha_encode_actions_inv(overlap_batch[ACTION])
+        future_images, future_img_masks = policy.prepare_images(overlap_batch)
+        future_state = policy.prepare_state(overlap_batch)
+        future_lang_tokens = overlap_batch[f"{OBS_LANGUAGE_TOKENS}"]
+        future_lang_masks = overlap_batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
+        future_actions = policy.prepare_action(overlap_batch)
+        future_noise = _aligned_requery_noise(
+            model=_smolvla_flow_model(policy),
+            future_actions=future_actions,
+            current_noise=flow_noise,
+            offset=requery_offset,
+            horizon=requery_horizon,
+        )
+        with torch.no_grad():
+            _future_losses, future_action_hat, _future_noise, _future_time = _smolvla_training_losses_and_action_hat(
+                _smolvla_flow_model(policy),
+                future_images,
+                future_img_masks,
+                future_lang_tokens,
+                future_lang_masks,
+                future_state,
+                future_actions,
+                noise=future_noise,
+                time_tensor=flow_time,
+            )
+        requery_loss, requery_metrics = _predicted_action_requery_consistency_loss(
+            current_action_hat=action_hat[:, :, : policy.config.max_action_dim],
+            future_action_hat=future_action_hat[:, :, : policy.config.max_action_dim],
+            current_actions_is_pad=actions_is_pad,
+            future_actions_is_pad=overlap_batch.get("action_is_pad"),
+            overlap_valid=overlap_valid,
+            offset=requery_offset,
+            horizon=requery_horizon,
+        )
+        if requery_loss is not None:
+            total_loss = total_loss + float(requery_weight) * requery_loss
+            loss_dict["action_requery_consistency_loss"] = requery_loss.detach().item()
+            loss_dict["action_requery_consistency_weight"] = float(requery_weight)
+            loss_dict.update(requery_metrics)
+    wrist_roll_circular_loss = _predicted_action_circular_loss(
+        action_hat[:, :, : policy.config.max_action_dim],
+        actions[:, :, : policy.config.max_action_dim],
+        actions_is_pad=actions_is_pad,
+        joint_index=wrist_roll_joint_index,
+        period_normalized=wrist_roll_period_normalized,
+    )
+    if wrist_roll_circular_loss is not None and float(wrist_roll_circular_weight) > 0.0:
+        total_loss = total_loss + float(wrist_roll_circular_weight) * wrist_roll_circular_loss
+        loss_dict["action_wrist_roll_circular_loss"] = wrist_roll_circular_loss.detach().item()
+        loss_dict["action_wrist_roll_circular_loss_weight"] = float(wrist_roll_circular_weight)
+        loss_dict["action_wrist_roll_joint_index"] = int(wrist_roll_joint_index)
+        loss_dict["action_wrist_roll_period_normalized"] = float(wrist_roll_period_normalized)
     smoothness_loss = _predicted_action_jerk_smoothness_loss(
         action_hat[:, :, : policy.config.max_action_dim],
         actions_is_pad=actions_is_pad,
@@ -2568,7 +3276,7 @@ def _forward_smolvla_with_prefix_loss(
     loss_dict["loss_prefix_weight"] = float(prefix_weight)
     loss_dict["loss_prefix_steps"] = int(min(prefix_steps, int(losses.shape[1])))
     loss_dict.update(teacher_importance_metrics)
-    return total_loss, loss_dict
+    return total_loss, loss_dict, action_hat[:, :, : policy.config.max_action_dim]
 
 
 def _teacher_action_importance_weights(
@@ -2743,6 +3451,21 @@ def _copy_visual_servo_labels(source: dict[str, Any], target: dict[str, Any]) ->
         if torch.is_tensor(value) and device is not None:
             value = value.to(device=device)
         target[key] = value
+
+
+def _extract_prefixed_batch(batch: dict[str, Any], prefix: str) -> dict[str, Any]:
+    extracted = {
+        key[len(prefix):]: value
+        for key, value in batch.items()
+        if key.startswith(prefix) and key != f"{prefix}valid"
+    }
+    if not extracted:
+        return {}
+    return extracted
+
+
+def _drop_prefixed_batch(batch: dict[str, Any], prefix: str) -> dict[str, Any]:
+    return {key: value for key, value in batch.items() if not key.startswith(prefix)}
 
 
 def _batch_dataset_names(batch: dict[str, Any]) -> list[str]:
@@ -2928,6 +3651,26 @@ def _parse_csv(value: str | None) -> tuple[str, ...]:
     if not value:
         return ()
     return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+def _apply_active_image_features(policy_config: Any, value: str | None) -> None:
+    active = set(_parse_csv(value))
+    if not active:
+        return
+    unknown = sorted(key for key in active if not key.startswith("observation.images."))
+    if unknown:
+        raise ValueError(f"active image features must use observation.images.* keys: {unknown}")
+    features = getattr(policy_config, "input_features", None)
+    if not isinstance(features, dict) or not features:
+        raise ValueError("pretrained SmolVLA policy config has no input_features to filter")
+    missing = sorted(active - set(features))
+    if missing:
+        raise ValueError(f"active image features are absent from policy input_features: {missing}")
+    policy_config.input_features = {
+        key: feature
+        for key, feature in features.items()
+        if not key.startswith("observation.images.") or key in active
+    }
 
 
 def _tensorboard_image(value: Any) -> torch.Tensor | None:

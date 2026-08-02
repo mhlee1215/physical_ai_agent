@@ -162,6 +162,33 @@ class SO101DatasetViewerCompletionTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_camera_contract_only_describes_present_image_features(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        import serve_so101_dataset_viewer as viewer
+
+        self.assertEqual(
+            viewer._camera_contract_for_keys(
+                [
+                    "observation.images.camera1",
+                    "observation.images.camera2",
+                ]
+            ),
+            {
+                "observation.images.camera1": "egocentric_cam",
+                "observation.images.camera2": "wrist_cam",
+            },
+        )
+        self.assertEqual(
+            viewer._camera_contract_for_keys(
+                [
+                    "observation.images.camera1",
+                    "observation.images.camera2",
+                    "observation.images.camera3",
+                ]
+            )["observation.images.camera3"],
+            "wrist_cam duplicate",
+        )
+
     def test_validation_closed_loop_report_is_exposed_as_virtual_dataset(self) -> None:
         import tempfile
 

@@ -11,6 +11,7 @@ from typing import Any
 from physical_ai_agent.safety.so100_action_gate import SO100_JOINT_ORDER
 from scripts.real_so100_micro_step import (
     _capture_visual,
+    _enable_torque_at_current_pose,
     _make_so100_bus,
     _probe_motion_video,
     _record_motion_video,
@@ -120,9 +121,10 @@ def move_to_natural_pose(
         # Hold the current pose before any camera work. If a previous command
         # left torque disabled, this prevents the arm from sagging while we
         # capture before-evidence or build the natural-pose trajectory.
-        current_hold = {joint: int(round(before_state[joint])) for joint in SO100_JOINT_ORDER}
-        bus.sync_write("Goal_Position", current_hold, normalize=False, num_retry=3)
+        current_hold = _enable_torque_at_current_pose(bus, before_state)
         report["initial_hold_sent_before_visual_capture"] = True
+        report["torque_enabled_for_move"] = True
+        report["initial_hold_target_raw"] = current_hold
         report["readback_before_raw"] = before_state
 
         before_image_path = None

@@ -3,26 +3,44 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
+import ipaddress
 import mimetypes
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 import pyarrow.parquet as pq
 
+from physical_ai_agent.so101_closed_loop_contract import (
+    contract_path_for_start_report,
+    load_executable_loop_test_contract,
+)
 from physical_ai_agent.so101_dataset_registry import (
     DATASET_RECIPE_DIR,
+    DatasetRegistryEntry,
     registered_dataset_roots,
     scan_dataset_registry,
+)
+from physical_ai_agent.so101_trainable_dataset_selection import (
+    DatasetRole,
+    dataset_role_counts,
+    dataset_role_selection_path,
+    load_dataset_role_selection,
+    selected_catalog_names,
+    selected_dataset_roots,
+    update_dataset_role_selection,
 )
 
 
@@ -50,6 +68,8 @@ LOOP_ANALYZER_MEDIA_JOB_LOCK = threading.Lock()
 DATASETS_PAYLOAD_CACHE_SECONDS = 5.0
 DATASETS_PAYLOAD_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 DATASETS_PAYLOAD_LOCK = threading.Lock()
+DATASETS_PROGRESS: dict[str, dict[str, Any]] = {}
+DATASETS_PROGRESS_LOCK = threading.Lock()
 DATASETS: dict[str, Path] = {}
 OFFICIAL_DATASET_SPLITS: list[str] = []
 ARCHIVED_DATASET_SPLITS: list[str] = []
@@ -83,6 +103,12 @@ MYCOBOT_JOINT_NAMES = [
     "joint6output_to_joint6",
     "gripper_controller",
 ]
+DATASET_DELETE_PRIVATE_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
 
 
 def _contract_dataset_roots(repo_root: Path) -> dict[str, Path]:
@@ -201,8 +227,26 @@ def make_handler(repo_root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == f"{LOOP_ANALYZER_ROUTE}/vendor/chart.umd.min.js":
                 self._send_file(repo_root / "third_party" / "chartjs" / "chart.umd.min.js", content_type="application/javascript; charset=utf-8")
                 return
+            if parsed.path == "/vendor/tabulator.min.css":
+                self._send_file(repo_root / "third_party" / "tabulator" / "tabulator.min.css", content_type="text/css; charset=utf-8")
+                return
+            if parsed.path == "/vendor/tabulator.min.js":
+                self._send_file(repo_root / "third_party" / "tabulator" / "tabulator.min.js", content_type="application/javascript; charset=utf-8")
+                return
             if parsed.path == "/api/datasets":
                 self._send_json(_datasets_payload(repo_root))
+                return
+            if parsed.path == "/api/datasets/catalog":
+                self._send_json(_dataset_catalog_page_payload(repo_root, parse_qs(parsed.query)))
+                return
+            if parsed.path == "/api/datasets/progress":
+                self._send_json(_datasets_progress_payload(repo_root))
+                return
+            if parsed.path in {
+                "/api/datasets/role-selection",
+                "/api/datasets/trainable-selection",
+            }:
+                self._send_json(_dataset_role_selection_payload(repo_root))
                 return
             if parsed.path == "/api/frame":
                 query = parse_qs(parsed.query)
@@ -243,6 +287,49 @@ def make_handler(repo_root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/simulator/run":
                 self._send_json(_run_interactive_simulator(repo_root, self._read_json_body()))
                 return
+            if parsed.path == "/api/datasets/delete":
+                body = self._read_json_body()
+                try:
+                    if not _trusted_dataset_delete_request(self.client_address[0], self.headers):
+                        raise PermissionError("dataset deletion is only available from localhost or the same private network")
+                    if self.headers.get("X-Dataset-Delete-Confirmation", "") != str(body.get("name") or ""):
+                        raise PermissionError("missing dataset deletion confirmation header")
+                    self._send_json(_delete_dataset(repo_root, body))
+                except PermissionError as exc:
+                    self._send_json({"status": "error", "message": str(exc)}, status=403)
+                except (FileNotFoundError, ValueError) as exc:
+                    self._send_json({"status": "error", "message": str(exc)}, status=400)
+                return
+            if parsed.path == "/api/datasets/bulk-delete":
+                body = self._read_json_body()
+                try:
+                    if not _trusted_dataset_delete_request(self.client_address[0], self.headers):
+                        raise PermissionError("dataset deletion is only available from localhost or the same private network")
+                    confirmation = str(body.get("confirmation") or "")
+                    if self.headers.get("X-Dataset-Delete-Confirmation", "") != confirmation:
+                        raise PermissionError("missing bulk dataset deletion confirmation header")
+                    self._send_json(_delete_datasets(repo_root, body))
+                except PermissionError as exc:
+                    self._send_json({"status": "error", "message": str(exc)}, status=403)
+                except (FileNotFoundError, ValueError) as exc:
+                    self._send_json({"status": "error", "message": str(exc)}, status=400)
+                return
+            if parsed.path in {
+                "/api/datasets/role-selection",
+                "/api/datasets/trainable-selection",
+            }:
+                body = self._read_json_body()
+                try:
+                    if not _trusted_dataset_delete_request(self.client_address[0], self.headers):
+                        raise PermissionError("dataset role selection can only be changed from localhost or the same private network")
+                    if parsed.path.endswith("/trainable-selection"):
+                        body.setdefault("role", "training")
+                    self._send_json(_update_dataset_role_selection(repo_root, body))
+                except PermissionError as exc:
+                    self._send_json({"status": "error", "message": str(exc)}, status=403)
+                except (FileNotFoundError, ValueError) as exc:
+                    self._send_json({"status": "error", "message": str(exc)}, status=400)
+                return
             if parsed.path == f"{LOOP_ANALYZER_ROUTE}/api/generate-media":
                 query = parse_qs(parsed.query)
                 loop_test_id = _query_str(query, "loop", "") or None
@@ -267,9 +354,9 @@ def make_handler(repo_root: Path) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(encoded)
 
-        def _send_json(self, payload: dict[str, Any]) -> None:
+        def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
             encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(encoded)))
@@ -309,47 +396,995 @@ def _query_str(query: dict[str, list[str]], key: str, default: str) -> str:
     return values[0] if values else default
 
 
+def _trusted_dataset_delete_request(client_ip: str, headers: Any) -> bool:
+    if headers.get("CF-Connecting-IP") or headers.get("X-Forwarded-For") or headers.get("Forwarded"):
+        return False
+    try:
+        address = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    if not _is_local_or_private_address(address):
+        return False
+
+    origin = str(headers.get("Origin") or "").strip()
+    if not origin:
+        return True
+    origin_host = urlparse(origin).hostname
+    if origin_host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        origin_address = ipaddress.ip_address(origin_host or "")
+    except ValueError:
+        return False
+    return _is_local_or_private_address(origin_address)
+
+
+def _is_local_or_private_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return address.is_loopback or any(
+        address.version == network.version and address in network
+        for network in DATASET_DELETE_PRIVATE_NETWORKS
+    )
+
+
+def _delete_dataset(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    name = str(payload.get("name") or "").strip()
+    confirmation = str(payload.get("confirm_name") or "").strip()
+    if not name:
+        raise ValueError("missing dataset name")
+    if confirmation != name:
+        raise ValueError("dataset name confirmation does not match")
+
+    roots = _dataset_roots(repo_root)
+    if name not in roots:
+        raise ValueError(f"unknown dataset: {name}")
+    dataset_root = roots[name].resolve()
+    workspace_root = (repo_root / "_workspace").resolve()
+    try:
+        dataset_root.relative_to(workspace_root)
+    except ValueError as exc:
+        raise PermissionError(f"refusing to delete a dataset outside {workspace_root}") from exc
+    if dataset_root == workspace_root:
+        raise PermissionError("refusing to delete the workspace root")
+    if not dataset_root.exists():
+        raise FileNotFoundError(f"dataset root does not exist: {dataset_root}")
+    if not dataset_root.is_dir():
+        raise ValueError(f"dataset root is not a directory: {dataset_root}")
+
+    affected_names = sorted(
+        split_name
+        for split_name, root in roots.items()
+        if root.resolve() == dataset_root
+    )
+    size_bytes = _dir_size(dataset_root)
+    shutil.rmtree(dataset_root)
+    update_dataset_role_selection(repo_root, remove_roots=[dataset_root])
+    _clear_dataset_caches(repo_root)
+    return {
+        "status": "deleted",
+        "name": name,
+        "root": str(dataset_root),
+        "affected_names": affected_names,
+        "size_bytes": size_bytes,
+        "size_human": _format_bytes(size_bytes),
+    }
+
+
+def _delete_datasets(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    names = _unique_dataset_names(payload.get("names"))
+    confirmation = str(payload.get("confirmation") or "").strip()
+    expected_confirmation = f"DELETE {len(names)} DATASETS"
+    if confirmation != expected_confirmation:
+        raise ValueError(
+            f"bulk deletion confirmation must exactly match: {expected_confirmation}"
+        )
+
+    roots = _dataset_roots(repo_root)
+    workspace_root = (repo_root / "_workspace").resolve()
+    targets: dict[Path, dict[str, Any]] = {}
+    for name in names:
+        if name not in roots:
+            raise ValueError(f"unknown dataset: {name}")
+        dataset_root = roots[name].resolve()
+        try:
+            dataset_root.relative_to(workspace_root)
+        except ValueError as exc:
+            raise PermissionError(
+                f"refusing to delete a dataset outside {workspace_root}"
+            ) from exc
+        if dataset_root == workspace_root:
+            raise PermissionError("refusing to delete the workspace root")
+        if not dataset_root.exists():
+            raise FileNotFoundError(f"dataset root does not exist: {dataset_root}")
+        if not dataset_root.is_dir():
+            raise ValueError(f"dataset root is not a directory: {dataset_root}")
+        targets.setdefault(
+            dataset_root,
+            {
+                "root": dataset_root,
+                "requested_names": [],
+                "affected_names": sorted(
+                    split_name
+                    for split_name, root in roots.items()
+                    if root.resolve() == dataset_root
+                ),
+                "size_bytes": _dir_size(dataset_root),
+            },
+        )["requested_names"].append(name)
+
+    total_size = sum(int(target["size_bytes"]) for target in targets.values())
+    for dataset_root in targets:
+        shutil.rmtree(dataset_root)
+    update_dataset_role_selection(repo_root, remove_roots=targets)
+    _clear_dataset_caches(repo_root)
+    affected_names = sorted(
+        {
+            affected_name
+            for target in targets.values()
+            for affected_name in target["affected_names"]
+        }
+    )
+    return {
+        "status": "deleted",
+        "requested_names": names,
+        "deleted_roots": [str(root) for root in sorted(targets, key=str)],
+        "affected_names": affected_names,
+        "size_bytes": total_size,
+        "size_human": _format_bytes(total_size),
+    }
+
+
+def _dataset_role_selection_payload(repo_root: Path) -> dict[str, Any]:
+    selection = load_dataset_role_selection(repo_root)
+    counts = dataset_role_counts(repo_root)
+    return {
+        "status": "ok",
+        "path": str(dataset_role_selection_path(repo_root)),
+        "schema_version": selection.schema_version,
+        "updated_at": selection.updated_at,
+        "count": len(selection.datasets),
+        "counts": counts,
+        "datasets": [entry.model_dump(mode="json") for entry in selection.datasets],
+        "marked_names": {
+            role: sorted(selected_catalog_names(repo_root, role))
+            for role in ("training", "validation", "loop_test")
+        },
+        "marked_roots_by_role": {
+            role: [
+                str(root)
+                for root in sorted(selected_dataset_roots(repo_root, role), key=str)
+            ]
+            for role in ("training", "validation", "loop_test")
+        },
+        # Compatibility for clients that only understood the original train set.
+        "marked_roots": [
+            str(root)
+            for root in sorted(selected_dataset_roots(repo_root, "training"), key=str)
+        ],
+    }
+
+
+def _trainable_dataset_selection_payload(repo_root: Path) -> dict[str, Any]:
+    return _dataset_role_selection_payload(repo_root)
+
+
+def _update_dataset_role_selection(
+    repo_root: Path,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    action = str(payload.get("action") or "").strip().lower()
+    if action not in {"mark", "remove"}:
+        raise ValueError("dataset role selection action must be 'mark' or 'remove'")
+    role = _dataset_selection_role(payload.get("role"))
+    names = _unique_dataset_names(payload.get("names"))
+    candidates = {candidate["name"]: candidate for candidate in _dataset_catalog_candidates(repo_root)}
+    missing = [name for name in names if name not in candidates]
+    if missing:
+        raise ValueError(f"unknown datasets: {', '.join(missing)}")
+
+    registry_by_root = _training_registry_entries_by_root(repo_root)
+    additions: list[dict[str, Any]] = []
+    if action == "mark":
+        rejected: list[str] = []
+        for name in names:
+            candidate = candidates[name]
+            eligible, reason, registry_entry = _dataset_role_eligibility(
+                candidate,
+                role,
+                registry_by_root,
+            )
+            if not eligible:
+                rejected.append(f"{name}: {reason}")
+                continue
+            additions.append(
+                _dataset_role_selection_entry(
+                    candidate,
+                    role,
+                    registry_entry,
+                )
+            )
+        if rejected:
+            raise ValueError(
+                f"datasets cannot be used for role '{role}': " + "; ".join(rejected)
+            )
+
+    selection = update_dataset_role_selection(
+        repo_root,
+        additions=additions,
+        removals=(
+            ({"role": role, "catalog_name": name} for name in names)
+            if action == "remove"
+            else ()
+        ),
+    )
+    _clear_dataset_caches(repo_root)
+    counts = dataset_role_counts(repo_root)
+    return {
+        "status": "updated",
+        "action": action,
+        "role": role,
+        "requested_names": names,
+        "count": len(selection.datasets),
+        "counts": counts,
+        "datasets": [entry.model_dump(mode="json") for entry in selection.datasets],
+        "marked_names": {
+            selected_role: sorted(selected_catalog_names(repo_root, selected_role))
+            for selected_role in ("training", "validation", "loop_test")
+        },
+    }
+
+
+def _update_trainable_dataset_selection(
+    repo_root: Path,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    compatible = dict(payload)
+    compatible.setdefault("role", "training")
+    return _update_dataset_role_selection(repo_root, compatible)
+
+
+def _unique_dataset_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("dataset names must be a non-empty list")
+    names = list(dict.fromkeys(str(name).strip() for name in value if str(name).strip()))
+    if not names:
+        raise ValueError("dataset names must be a non-empty list")
+    return names
+
+
+def _training_registry_entries_by_root(
+    repo_root: Path,
+) -> dict[Path, list[DatasetRegistryEntry]]:
+    entries: dict[Path, list[DatasetRegistryEntry]] = {}
+    for entry in scan_dataset_registry(repo_root, inspect_artifacts=True).entries:
+        entries.setdefault(Path(entry.absolute_root).resolve(), []).append(entry)
+    return entries
+
+
+def _dataset_training_eligibility(
+    candidate: dict[str, Any],
+    registry_by_root: dict[Path, list[DatasetRegistryEntry]],
+) -> tuple[bool, str, DatasetRegistryEntry | None]:
+    return _dataset_role_eligibility(candidate, "training", registry_by_root)
+
+
+def _dataset_role_eligibility(
+    candidate: dict[str, Any],
+    role: DatasetRole,
+    registry_by_root: dict[Path, list[DatasetRegistryEntry]],
+) -> tuple[bool, str, DatasetRegistryEntry | None]:
+    if candidate.get("platform") != "so101":
+        return False, "only SO101 LeRobot datasets are supported", None
+    if candidate.get("loader") != "lerobot":
+        return False, "dataset is not a LeRobot parquet export", None
+
+    if role == "loop_test":
+        if candidate.get("split_key") != "closed_loop":
+            return False, "only closed-loop catalog entries can be marked", None
+        test_case = candidate.get("loop_test_case")
+        if not isinstance(test_case, dict):
+            return False, "no executable loop-test contract is registered", None
+        report_value = test_case.get("start_report_path")
+        if report_value:
+            report_path = _resolve_dataset_path(
+                Path(candidate.get("repo_root") or REPO_ROOT),
+                Path(str(report_value)),
+            )
+            if not report_path.is_file():
+                return False, f"loop-test start report is missing: {report_path}", None
+        return True, "executable loop-test contract is registered", None
+
+    expected_split_key = "train" if role == "training" else "valid"
+    if candidate.get("split_key") != expected_split_key:
+        return False, f"only {expected_split_key} splits can be marked", None
+    registry_splits = {"train"} if role == "training" else {"validation", "val"}
+    entries = [
+        entry
+        for entry in registry_by_root.get(Path(candidate["root"]).resolve(), [])
+        if entry.split in registry_splits
+    ]
+    if not entries:
+        return False, "dataset is not registered by a generation recipe", None
+    ready = next((entry for entry in entries if entry.training_ready), None)
+    if ready is None:
+        errors = sorted({error for entry in entries for error in entry.readiness_errors})
+        return False, "; ".join(errors) or "dataset completion gate has not passed", None
+    return True, "registry completion gate passed", ready
+
+
+def _dataset_role_selection_entry(
+    candidate: dict[str, Any],
+    role: DatasetRole,
+    registry_entry: DatasetRegistryEntry | None,
+) -> dict[str, Any]:
+    test_case = candidate.get("loop_test_case") if role == "loop_test" else None
+    start_dataset = test_case.get("start_dataset") if isinstance(test_case, dict) else None
+    repo_id = (
+        registry_entry.repo_id
+        if registry_entry is not None and registry_entry.repo_id
+        else start_dataset.get("repo_id")
+        if isinstance(start_dataset, dict) and start_dataset.get("repo_id")
+        else "physical-ai-agent/" + str(candidate["name"]).replace("_", "-")
+    )
+    expected_episodes = (
+        registry_entry.episodes
+        if registry_entry is not None
+        else start_dataset.get("expected_episodes")
+        if isinstance(start_dataset, dict)
+        else test_case.get("episodes")
+        if isinstance(test_case, dict)
+        else None
+    )
+    expected_frames = (
+        registry_entry.frames
+        if registry_entry is not None
+        else start_dataset.get("expected_frames")
+        if isinstance(start_dataset, dict)
+        else None
+    )
+    return {
+        "role": role,
+        "catalog_name": str(candidate["name"]),
+        "root": str(candidate["root"]),
+        "repo_id": repo_id,
+        "expected_episodes": expected_episodes,
+        "expected_frames": expected_frames,
+        "grid_bin_sidecar": registry_entry.grid_sidecar if registry_entry else None,
+        "loop_test_case": copy.deepcopy(test_case),
+    }
+
+
+def _trainable_selection_entry(
+    candidate: dict[str, Any],
+    registry_entry: DatasetRegistryEntry,
+) -> dict[str, Any]:
+    return _dataset_role_selection_entry(candidate, "training", registry_entry)
+
+
+def _dataset_selection_role(value: Any) -> DatasetRole:
+    role = str(value or "").strip()
+    if role not in {"training", "validation", "loop_test"}:
+        raise ValueError(
+            "dataset role must be one of: training, validation, loop_test"
+        )
+    return role  # type: ignore[return-value]
+
+
+def _clear_dataset_caches(repo_root: Path) -> None:
+    _dataset_metadata.cache_clear()
+    _dataset.cache_clear()
+    with DATASETS_PAYLOAD_LOCK:
+        DATASETS_PAYLOAD_CACHE.pop(str(repo_root.resolve()), None)
+
+
 def _datasets_payload(repo_root: Path) -> dict[str, Any]:
     cache_key = str(repo_root.resolve())
     now = time.monotonic()
     cached = DATASETS_PAYLOAD_CACHE.get(cache_key)
     if cached is not None and now - cached[0] < DATASETS_PAYLOAD_CACHE_SECONDS:
+        _set_datasets_progress(repo_root, status="complete", percent=100, message="Catalog ready")
         return cached[1]
     with DATASETS_PAYLOAD_LOCK:
         now = time.monotonic()
         cached = DATASETS_PAYLOAD_CACHE.get(cache_key)
         if cached is not None and now - cached[0] < DATASETS_PAYLOAD_CACHE_SECONDS:
+            _set_datasets_progress(repo_root, status="complete", percent=100, message="Catalog ready")
             return cached[1]
-        payload = _build_datasets_payload(repo_root)
-        DATASETS_PAYLOAD_CACHE[cache_key] = (now, payload)
+        _set_datasets_progress(
+            repo_root,
+            status="loading",
+            percent=1,
+            completed=0,
+            total=0,
+            message="Discovering dataset sources",
+        )
+
+        def report_progress(completed: int, total: int, message: str) -> None:
+            fraction = completed / max(total, 1)
+            _set_datasets_progress(
+                repo_root,
+                status="loading",
+                percent=min(98, 5 + round(fraction * 92)),
+                completed=completed,
+                total=total,
+                message=message,
+            )
+
+        try:
+            payload = _build_datasets_payload(repo_root, progress=report_progress)
+        except Exception as exc:
+            _set_datasets_progress(
+                repo_root,
+                status="error",
+                message=f"Catalog loading failed: {exc}",
+            )
+            raise
+        DATASETS_PAYLOAD_CACHE[cache_key] = (time.monotonic(), payload)
+        _set_datasets_progress(
+            repo_root,
+            status="complete",
+            percent=100,
+            message="Catalog ready",
+        )
         return payload
 
 
-def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
+def _dataset_catalog_candidates(repo_root: Path) -> list[dict[str, Any]]:
+    official_roots = _official_dataset_roots(repo_root)
+    skill_roots = _skill_dataset_roots(repo_root)
+    recipe_roots = _generation_recipe_dataset_roots(repo_root)
+    photoreal_roots = _discover_so101_photoreal_datasets(repo_root)
+    photoreal_lerobot_roots = _discover_so101_photoreal_lerobot_datasets(repo_root)
+    closed_loop_views = _generation_closed_loop_views(repo_root)
+    temporary_roots = _discover_temporary_datasets(repo_root)
+    mycobot_roots = _discover_mycobot_datasets(repo_root)
+    loop_test_cases = _official_closed_loop_test_cases(repo_root)
+    recipe_paths = {_resolve_dataset_path(repo_root, root) for root in recipe_roots.values()}
+    official_paths = {_resolve_dataset_path(repo_root, root) for root in official_roots.values()}
+    skill_paths = {_resolve_dataset_path(repo_root, root) for root in skill_roots.values()}
+    candidates: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+
+    def add(
+        name: str,
+        root: Path,
+        *,
+        category: str,
+        loader: str = "lerobot",
+        loop_report: Path | None = None,
+    ) -> None:
+        if name in seen_names:
+            return
+        resolved = _resolve_dataset_path(repo_root, root)
+        if not resolved.exists():
+            return
+        seen_names.add(name)
+        platform = _dataset_platform(name, resolved)
+        creation = _dataset_creation_metadata(resolved)
+        split_key = _dataset_catalog_split_key(name, category)
+        render_key = _dataset_catalog_render_key(name, resolved, category, loader)
+        identity = _dataset_catalog_identity(name)
+        loop_test_case = (
+            _closed_loop_test_case_for_candidate(
+                repo_root,
+                dataset_root=resolved,
+                start_report=loop_report,
+                test_cases=loop_test_cases,
+            )
+            if split_key == "closed_loop"
+            else None
+        )
+        candidates.append(
+            {
+                "name": name,
+                "repo_root": repo_root,
+                "root": resolved,
+                "category": category,
+                "loader": loader,
+                "platform": platform,
+                "platform_label": _platform_label(platform),
+                "split_key": split_key,
+                "split_label": _dataset_catalog_split_label(split_key),
+                "render_key": render_key,
+                "render_label": _dataset_catalog_render_label(render_key),
+                "loop_report": loop_report.resolve() if loop_report else None,
+                "loop_test_case": loop_test_case,
+                **identity,
+                **creation,
+            }
+        )
+
+    for name, root in official_roots.items():
+        if _resolve_dataset_path(repo_root, root) not in recipe_paths:
+            add(name, root, category="official")
+    for name, root in skill_roots.items():
+        if _resolve_dataset_path(repo_root, root) not in recipe_paths:
+            add(name, root, category="skill")
+    for name, root in recipe_roots.items():
+        resolved = _resolve_dataset_path(repo_root, root)
+        category = (
+            "photoreal"
+            if _is_photoreal_lerobot_dataset(resolved)
+            else "official"
+            if resolved in official_paths
+            else "skill"
+            if resolved in skill_paths
+            else "generated"
+        )
+        add(name, root, category=category)
+    for name, view in closed_loop_views.items():
+        add(
+            name,
+            Path(view["root"]),
+            category="closed_loop",
+            loop_report=Path(view["report"]),
+        )
+    for name in ARCHIVED_DATASET_SPLITS:
+        if name in DATASETS:
+            add(name, DATASETS[name], category="archived")
+    for name, root in temporary_roots.items():
+        add(name, root, category="temporary")
+    for name, root in photoreal_roots.items():
+        if _resolve_dataset_path(repo_root, root) not in recipe_paths:
+            add(name, root, category="photoreal", loader="photoreal_jsonl")
+    for name, root in photoreal_lerobot_roots.items():
+        if _resolve_dataset_path(repo_root, root) not in recipe_paths:
+            add(name, root, category="photoreal")
+    for name, root in mycobot_roots.items():
+        add(name, root, category="mycobot", loader="mycobot")
+    return candidates
+
+
+def _dataset_catalog_split_key(name: str, category: str) -> str:
+    if category == "closed_loop" or name.endswith("_loop_val") or "_loop_validation" in name:
+        return "closed_loop"
+    if name.endswith("_val") or name.endswith("_valid") or "_validation" in name:
+        return "valid"
+    return "train"
+
+
+def _dataset_catalog_split_label(key: str) -> str:
+    return {"valid": "Validation", "closed_loop": "Closed loop"}.get(key, "Train")
+
+
+_CATALOG_NAME_SUFFIXES = (
+    "_loop_validation",
+    "_loop_test",
+    "_loop_val",
+    "_source_validation",
+    "_source_train",
+    "_validation",
+    "_valid",
+    "_val",
+    "_train",
+)
+_CATALOG_RENDER_TOKENS = {"photoreal", "simulation"}
+_CATALOG_FAMILY_PREFIXES = ("grip_the_cube",)
+_PHOTOREAL_LEROBOT_FORMAT = "so101_photoreal_lerobot_v1"
+
+
+def _dataset_catalog_identity(name: str) -> dict[str, str]:
+    """Split a catalog id into a stable task family and display version."""
+
+    canonical = name.strip().lower()
+    for suffix in _CATALOG_NAME_SUFFIXES:
+        if canonical.endswith(suffix):
+            canonical = canonical[: -len(suffix)]
+            break
+
+    match = re.search(r"(?:^|_)v(\d+(?:_\d+)*)(?=_|$)", canonical)
+    if match is None:
+        family_key = canonical or name.strip().lower()
+        return {
+            "family_key": family_key,
+            "family_label": family_key.replace("_", " "),
+            "version_key": "",
+            "version_label": "Unversioned",
+        }
+
+    family_key = canonical[: match.start()].rstrip("_")
+    tail_tokens = [token for token in canonical[match.end() :].strip("_").split("_") if token]
+    tail_tokens = [token for token in tail_tokens if token not in _CATALOG_RENDER_TOKENS]
+    tail_tokens = [token for token in tail_tokens if not re.fullmatch(r"train\d*", token)]
+
+    for known_family in _CATALOG_FAMILY_PREFIXES:
+        if family_key == known_family:
+            break
+        if family_key.startswith(known_family + "_"):
+            prefix_variant = family_key[len(known_family) + 1 :]
+            tail_tokens[:0] = [token for token in prefix_variant.split("_") if token]
+            family_key = known_family
+            break
+
+    version_key = f"v{match.group(1).replace('_', '.')}"
+    if tail_tokens:
+        version_key += "_" + "_".join(tail_tokens)
+    return {
+        "family_key": family_key,
+        "family_label": family_key.replace("_", " "),
+        "version_key": version_key,
+        "version_label": version_key,
+    }
+
+
+def _dataset_catalog_version_sort_key(candidate: dict[str, Any]) -> tuple[Any, ...]:
+    version = str(
+        candidate.get("version_key")
+        or _dataset_catalog_identity(str(candidate.get("name") or ""))["version_key"]
+    )
+    match = re.match(r"^v(\d+(?:\.\d+)*)(?:_(.*))?$", version)
+    if match is None:
+        return (0, (), version)
+    return (
+        1,
+        tuple(int(part) for part in match.group(1).split(".")),
+        match.group(2) or "",
+    )
+
+
+def _dataset_catalog_render_key(name: str, root: Path, category: str, loader: str) -> str:
+    if category == "photoreal" or loader == "photoreal_jsonl" or name.startswith("photoreal_"):
+        return "photoreal"
+    if loader == "mycobot" and "real" in name.lower():
+        return "real"
+    for metadata_path in (root / "manifest.json", root / "meta" / "info.json"):
+        if not metadata_path.is_file():
+            continue
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        dataset_format = str(payload.get("dataset_format") or payload.get("format") or "").lower()
+        if "real_camera" in dataset_format or "hardware" in dataset_format:
+            return "real"
+    return "simulation"
+
+
+def _is_photoreal_lerobot_dataset(root: Path) -> bool:
+    manifest_path = root / "photoreal_lerobot_manifest.json"
+    if not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return manifest.get("format") == _PHOTOREAL_LEROBOT_FORMAT
+
+
+def _dataset_catalog_render_label(key: str) -> str:
+    return {"photoreal": "Photoreal", "real": "Real camera"}.get(key, "Standard sim")
+
+
+def _dataset_catalog_page_payload(
+    repo_root: Path,
+    query: dict[str, list[str]],
+) -> dict[str, Any]:
+    try:
+        requested_page = max(1, int(_query_str(query, "page", "1")))
+        page_size = max(1, min(50, int(_query_str(query, "size", "10"))))
+    except ValueError as exc:
+        raise ValueError("catalog page and size must be integers") from exc
+
+    candidates = _dataset_catalog_candidates(repo_root)
+    filters = {
+        "platform_label": _query_str(query, "platform", "").strip().casefold(),
+        "split_label": _query_str(query, "status", "").strip().casefold(),
+        "render_label": _query_str(query, "type", "").strip().casefold(),
+        "family_label": _query_str(query, "family", "").strip().casefold(),
+        "version_label": _query_str(query, "version", "").strip().casefold(),
+        "name": _query_str(query, "name", "").strip().casefold(),
+    }
+
+    def matches(candidate: dict[str, Any]) -> bool:
+        identity = _dataset_catalog_identity(str(candidate["name"]))
+        for field in ("platform_label", "split_label", "render_label"):
+            expected = filters[field]
+            if expected and str(candidate[field]).casefold() != expected:
+                return False
+        family_label = str(candidate.get("family_label") or identity["family_label"])
+        if filters["family_label"] and filters["family_label"] not in family_label.casefold():
+            return False
+        version_label = str(candidate.get("version_label") or identity["version_label"])
+        if filters["version_label"] and filters["version_label"] not in version_label.casefold():
+            return False
+        return not filters["name"] or filters["name"] in str(candidate["name"]).casefold()
+
+    filtered = [candidate for candidate in candidates if matches(candidate)]
+    sort_field = _query_str(query, "sort", "createdEpoch")
+    sort_direction = _query_str(query, "dir", "desc").lower()
+    sort_key_by_field = {
+        "createdEpoch": lambda row: float(row.get("created_at_epoch") or 0),
+        "name": lambda row: str(row.get("name") or "").casefold(),
+        "familyLabel": lambda row: str(
+            row.get("family_label") or _dataset_catalog_identity(str(row["name"]))["family_label"]
+        ).casefold(),
+        "versionLabel": _dataset_catalog_version_sort_key,
+        "platformLabel": lambda row: str(row.get("platform_label") or "").casefold(),
+        "splitLabel": lambda row: str(row.get("split_label") or "").casefold(),
+        "renderLabel": lambda row: str(row.get("render_label") or "").casefold(),
+    }
+    sort_key = sort_key_by_field.get(sort_field, sort_key_by_field["createdEpoch"])
+    filtered.sort(key=sort_key, reverse=sort_direction != "asc")
+
+    total = len(filtered)
+    last_page = max(1, (total + page_size - 1) // page_size)
+    page = min(requested_page, last_page)
+    page_candidates = filtered[(page - 1) * page_size : page * page_size]
+    registry_by_root = _training_registry_entries_by_root(repo_root)
+    marked_names_by_role = {
+        role: selected_catalog_names(repo_root, role)
+        for role in ("training", "validation", "loop_test")
+    }
+    selection_counts = dataset_role_counts(repo_root)
+    _set_datasets_progress(
+        repo_root,
+        status="loading",
+        percent=5,
+        completed=0,
+        total=len(page_candidates),
+        message=f"Loading catalog page {page}",
+    )
+    rows = []
+    for index, candidate in enumerate(page_candidates, start=1):
+        item = _load_dataset_catalog_candidate(repo_root, candidate)
+        rows.append(
+            _dataset_catalog_remote_row(
+                candidate,
+                item,
+                registry_by_root=registry_by_root,
+                marked_names_by_role=marked_names_by_role,
+            )
+        )
+        _set_datasets_progress(
+            repo_root,
+            status="loading",
+            percent=min(98, 5 + round(index / max(len(page_candidates), 1) * 92)),
+            completed=index,
+            total=len(page_candidates),
+            message=f"Loading {candidate['name']}",
+        )
+    _set_datasets_progress(
+        repo_root,
+        status="complete",
+        percent=100,
+        completed=len(page_candidates),
+        total=len(page_candidates),
+        message=f"Catalog page {page} ready",
+    )
+    return {
+        "last_page": last_page,
+        "last_row": total,
+        "data": rows,
+        "page": page,
+        "size": page_size,
+        "total": total,
+        "platform_count": len({candidate["platform"] for candidate in filtered}),
+        "selection_counts": selection_counts,
+        "trainable_set_count": selection_counts["training"],
+    }
+
+
+def _load_dataset_catalog_candidate(repo_root: Path, candidate: dict[str, Any]) -> dict[str, Any]:
+    loader = candidate["loader"]
+    if loader == "photoreal_jsonl":
+        return _so101_photoreal_dataset_catalog_item(repo_root, candidate["name"], candidate["root"])
+    if loader == "mycobot":
+        return _mycobot_dataset_catalog_item(repo_root, candidate["name"], candidate["root"])
+    return _dataset_catalog_item(
+        repo_root,
+        candidate["name"],
+        candidate["root"],
+        category=candidate["category"],
+    )
+
+
+def _dataset_catalog_remote_row(
+    candidate: dict[str, Any],
+    item: dict[str, Any],
+    *,
+    registry_by_root: dict[Path, list[DatasetRegistryEntry]],
+    marked_names_by_role: dict[str, set[str]] | None = None,
+    marked_trainable_roots: set[Path] | None = None,
+) -> dict[str, Any]:
+    summary = item.get("summary") if isinstance(item.get("summary"), dict) else {}
+    identity = _dataset_catalog_identity(str(candidate["name"]))
+    role_eligibility = {}
+    for role in ("training", "validation", "loop_test"):
+        eligible, reason, _registry_entry = _dataset_role_eligibility(
+            candidate,
+            role,  # type: ignore[arg-type]
+            registry_by_root,
+        )
+        role_eligibility[role] = {"eligible": eligible, "reason": reason}
+    resolved_root = Path(candidate["root"]).resolve()
+    marked_names_by_role = marked_names_by_role or {
+        "training": set(),
+        "validation": set(),
+        "loop_test": set(),
+    }
+    marked_roles = [
+        role
+        for role in ("training", "validation", "loop_test")
+        if str(candidate["name"]) in marked_names_by_role.get(role, set())
+    ]
+    if (
+        marked_trainable_roots is not None
+        and resolved_root in marked_trainable_roots
+        and "training" not in marked_roles
+    ):
+        marked_roles.insert(0, "training")
+    training_eligibility = role_eligibility["training"]
+    return {
+        "name": candidate["name"],
+        "familyKey": candidate.get("family_key") or identity["family_key"],
+        "familyLabel": candidate.get("family_label") or identity["family_label"],
+        "versionKey": candidate.get("version_key") or identity["version_key"],
+        "versionLabel": candidate.get("version_label") or identity["version_label"],
+        "category": candidate["category"],
+        "platform": candidate["platform"],
+        "platformLabel": candidate["platform_label"],
+        "splitKey": candidate["split_key"],
+        "splitLabel": candidate["split_label"],
+        "renderKey": candidate["render_key"],
+        "renderLabel": candidate["render_label"],
+        "createdAt": item.get("created_at") or candidate.get("created_at"),
+        "createdEpoch": float(item.get("created_at_epoch") or candidate.get("created_at_epoch") or 0),
+        "episodes": int(summary.get("episodes") or item.get("episodes") or 0),
+        "availability": item.get("status") or "incomplete",
+        "detail": item.get("detail") or "",
+        "roleEligibility": role_eligibility,
+        "trainingEligible": training_eligibility["eligible"],
+        "trainingEligibilityReason": training_eligibility["reason"],
+        "markedRoles": marked_roles,
+        "markedTraining": "training" in marked_roles,
+        "markedValidation": "validation" in marked_roles,
+        "markedLoopTest": "loop_test" in marked_roles,
+        "markedTrainable": "training" in marked_roles,
+        "summary": summary,
+    }
+
+
+def _datasets_progress_payload(repo_root: Path) -> dict[str, Any]:
+    cache_key = str(repo_root.resolve())
+    with DATASETS_PROGRESS_LOCK:
+        progress = DATASETS_PROGRESS.get(cache_key)
+        if progress is None:
+            return {
+                "status": "idle",
+                "percent": 0,
+                "completed": 0,
+                "total": 0,
+                "message": "Waiting to load catalog",
+            }
+        return dict(progress)
+
+
+def _set_datasets_progress(
+    repo_root: Path,
+    *,
+    status: str,
+    percent: int | None = None,
+    completed: int | None = None,
+    total: int | None = None,
+    message: str | None = None,
+) -> None:
+    cache_key = str(repo_root.resolve())
+    with DATASETS_PROGRESS_LOCK:
+        current = DATASETS_PROGRESS.get(
+            cache_key,
+            {
+                "status": "idle",
+                "percent": 0,
+                "completed": 0,
+                "total": 0,
+                "message": "Waiting to load catalog",
+            },
+        )
+        updated = dict(current)
+        updated["status"] = status
+        if percent is not None:
+            updated["percent"] = max(0, min(100, int(percent)))
+        if completed is not None:
+            updated["completed"] = max(0, int(completed))
+        if total is not None:
+            updated["total"] = max(0, int(total))
+        if message is not None:
+            updated["message"] = message
+        updated["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        DATASETS_PROGRESS[cache_key] = updated
+
+
+def _build_datasets_payload(
+    repo_root: Path,
+    *,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     official_roots = _official_dataset_roots(repo_root)
     skill_roots = _skill_dataset_roots(repo_root)
     recipe_roots = _generation_recipe_dataset_roots(repo_root)
+    photoreal_roots = _discover_so101_photoreal_datasets(repo_root)
+    photoreal_lerobot_roots = _discover_so101_photoreal_lerobot_datasets(repo_root)
+    closed_loop_views = _generation_closed_loop_views(repo_root)
+    temporary_roots = _discover_temporary_datasets(repo_root)
+    mycobot_roots = _discover_mycobot_datasets(repo_root)
     recipe_paths = {_resolve_dataset_path(repo_root, root) for root in recipe_roots.values()}
-    official_items = [
-        _dataset_catalog_item(repo_root, split, root, category="official")
+    official_candidates = [
+        (split, root)
         for split, root in official_roots.items()
         if _resolve_dataset_path(repo_root, root) not in recipe_paths
     ]
-    skill_items = [
-        _dataset_catalog_item(repo_root, split, root, category="skill")
+    skill_candidates = [
+        (split, root)
         for split, root in skill_roots.items()
         if _resolve_dataset_path(repo_root, root) not in recipe_paths
     ]
+    photoreal_candidates = [
+        (split, root)
+        for split, root in photoreal_roots.items()
+        if _resolve_dataset_path(repo_root, root) not in recipe_paths
+    ]
+    photoreal_lerobot_candidates = [
+        (split, root)
+        for split, root in photoreal_lerobot_roots.items()
+        if _resolve_dataset_path(repo_root, root) not in recipe_paths
+    ]
+    archived_candidates = [(split, DATASETS[split]) for split in ARCHIVED_DATASET_SPLITS]
+    total_items = sum(
+        (
+            len(official_candidates),
+            len(skill_candidates),
+            len(photoreal_candidates),
+            len(photoreal_lerobot_candidates),
+            len(recipe_roots),
+            len(closed_loop_views),
+            len(archived_candidates),
+            len(temporary_roots),
+            len(mycobot_roots),
+        )
+    )
+    completed_items = 0
+
+    def record_item(item: dict[str, Any], split: str) -> dict[str, Any]:
+        nonlocal completed_items
+        completed_items += 1
+        if progress is not None:
+            progress(
+                completed_items,
+                total_items,
+                f"Reading {split}",
+            )
+        return item
+
+    if progress is not None:
+        progress(0, total_items, "Reading dataset metadata")
+
+    official_items = [
+        record_item(
+            _dataset_catalog_item(repo_root, split, root, category="official"),
+            split,
+        )
+        for split, root in official_candidates
+    ]
+    skill_items = [
+        record_item(
+            _dataset_catalog_item(repo_root, split, root, category="skill"),
+            split,
+        )
+        for split, root in skill_candidates
+    ]
     photoreal_items = [
-        _so101_photoreal_dataset_catalog_item(repo_root, split, path)
-        for split, path in _discover_so101_photoreal_datasets(repo_root).items()
-        if _resolve_dataset_path(repo_root, path) not in recipe_paths
+        record_item(
+            _so101_photoreal_dataset_catalog_item(repo_root, split, root),
+            split,
+        )
+        for split, root in photoreal_candidates
     ]
     photoreal_items.extend(
-        _dataset_catalog_item(repo_root, split, path, category="photoreal")
-        for split, path in _discover_so101_photoreal_lerobot_datasets(repo_root).items()
-        if _resolve_dataset_path(repo_root, path) not in recipe_paths
+        record_item(
+            _dataset_catalog_item(repo_root, split, root, category="photoreal"),
+            split,
+        )
+        for split, root in photoreal_lerobot_candidates
     )
     generated_items: list[dict[str, Any]] = []
     closed_loop_items: list[dict[str, Any]] = []
@@ -357,7 +1392,7 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
     skill_paths = {_resolve_dataset_path(repo_root, root) for root in skill_roots.values()}
     for split, root in recipe_roots.items():
         resolved = _resolve_dataset_path(repo_root, root)
-        if (resolved / "photoreal_lerobot_manifest.json").is_file():
+        if _is_photoreal_lerobot_dataset(resolved):
             category = "photoreal"
         else:
             category = (
@@ -367,7 +1402,10 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
                 if resolved in skill_paths
                 else "generated"
             )
-        item = _dataset_catalog_item(repo_root, split, root, category=category)
+        item = record_item(
+            _dataset_catalog_item(repo_root, split, root, category=category),
+            split,
+        )
         if category == "official":
             official_items.append(item)
         elif category == "skill":
@@ -376,25 +1414,39 @@ def _build_datasets_payload(repo_root: Path) -> dict[str, Any]:
             photoreal_items.append(item)
         else:
             generated_items.append(item)
-    for split, view in _generation_closed_loop_views(repo_root).items():
+    for split, view in closed_loop_views.items():
         closed_loop_items.append(
-            _dataset_catalog_item(
-                repo_root,
+            record_item(
+                _dataset_catalog_item(
+                    repo_root,
+                    split,
+                    Path(view["root"]),
+                    category="closed_loop",
+                ),
                 split,
-                Path(view["root"]),
-                category="closed_loop",
             )
         )
-    archived_items = [_dataset_catalog_item(repo_root, split, DATASETS[split], category="archived") for split in ARCHIVED_DATASET_SPLITS]
+    archived_items = [
+        record_item(
+            _dataset_catalog_item(repo_root, split, root, category="archived"),
+            split,
+        )
+        for split, root in archived_candidates
+    ]
     archived_visible_items = [item for item in archived_items if item["status"] == "available"]
     temporary_items = [
-        _dataset_catalog_item(repo_root, split, path, category="temporary")
-        for split, path in _discover_temporary_datasets(repo_root).items()
+        record_item(
+            _dataset_catalog_item(repo_root, split, root, category="temporary"),
+            split,
+        )
+        for split, root in temporary_roots.items()
     ]
     mycobot_items = [
-        _mycobot_dataset_catalog_item(repo_root, split, path)
-        for split, path in _discover_mycobot_datasets(repo_root).items()
+        record_item(_mycobot_dataset_catalog_item(repo_root, split, root), split)
+        for split, root in mycobot_roots.items()
     ]
+    if progress is not None:
+        progress(total_items, total_items, "Finalizing catalog")
     for item in [
         *official_items,
         *skill_items,
@@ -635,6 +1687,7 @@ def _dataset_catalog_item(repo_root: Path, split: str, root: Path, *, category: 
         "category": category,
         "platform": platform,
         "platform_label": _platform_label(platform),
+        **_dataset_creation_metadata(resolved),
     }
     try:
         dataset = _dataset_metadata(repo_root, split)
@@ -673,6 +1726,7 @@ def _dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
         "name": split,
         "platform": platform,
         "platform_label": _platform_label(platform),
+        **_dataset_creation_metadata(Path(dataset["root"])),
         "episodes": dataset["info"]["total_episodes"],
         "frames": dataset["info"]["total_frames"],
         "fps": dataset["info"].get("fps"),
@@ -687,8 +1741,15 @@ def _dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, Any]:
             key: dataset["info"]["features"][key]["shape"] for key in dataset["camera_keys"]
         },
         "episode_lengths": dataset["episode_lengths"],
-        "camera_contract": SO101_CAMERA_CONTRACT,
+        "camera_contract": _camera_contract_for_keys(dataset["camera_keys"]),
         "photoreal_preview": photoreal_preview,
+    }
+
+
+def _camera_contract_for_keys(camera_keys: list[str]) -> dict[str, str]:
+    return {
+        key: SO101_CAMERA_CONTRACT.get(key, key.rsplit(".", 1)[-1])
+        for key in camera_keys
     }
 
 
@@ -825,11 +1886,7 @@ def _discover_so101_photoreal_lerobot_datasets(repo_root: Path) -> dict[str, Pat
             resolved = dataset_root.resolve()
             if resolved in seen:
                 continue
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if manifest.get("format") != "so101_photoreal_lerobot_v1":
+            if not _is_photoreal_lerobot_dataset(dataset_root):
                 continue
             split = _unique_split_name("photoreal_lerobot_" + _slug(dataset_root.name), discovered)
             discovered[split] = dataset_root
@@ -846,6 +1903,7 @@ def _so101_photoreal_dataset_catalog_item(repo_root: Path, split: str, root: Pat
         "platform": "so101",
         "platform_label": "SO101",
         "dataset_format": "so101_photoreal_jsonl_v1",
+        **_dataset_creation_metadata(resolved),
     }
     try:
         dataset = _so101_photoreal_dataset(resolved)
@@ -894,6 +1952,7 @@ def _so101_photoreal_dataset_summary(split: str, dataset: dict[str, Any]) -> dic
         "dataset_format": "so101_photoreal_jsonl_v1",
         "platform": "so101",
         "platform_label": "SO101",
+        **_dataset_creation_metadata(Path(dataset["root"])),
         "root": str(dataset["root"]),
         "name": split,
         "episodes": int(manifest.get("episodes") or len(dataset["episode_lengths"])),
@@ -969,6 +2028,7 @@ def _mycobot_dataset_catalog_item(repo_root: Path, split: str, root: Path) -> di
         "platform": "mycobot",
         "platform_label": "MyCobot",
         "dataset_format": "mycobot_jsonl_v1",
+        **_dataset_creation_metadata(resolved),
     }
     try:
         dataset = _mycobot_dataset(resolved)
@@ -1081,6 +2141,76 @@ def _safe_mtime(path: Path) -> float:
         return 0.0
 
 
+def _dataset_creation_metadata(root: Path) -> dict[str, Any]:
+    explicit_paths = (
+        root / "meta" / "info.json",
+        root / "manifest.json",
+        root / "photoreal_lerobot_manifest.json",
+        root / "so101_lerobot_export_report.json",
+        root / "so101_lerobot_merge_report.json",
+    )
+    for path in explicit_paths:
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for field in ("created_at", "generated_at", "completed_at", "finished_at"):
+            timestamp = _datetime_timestamp(payload.get(field))
+            if timestamp is not None:
+                return _creation_metadata_payload(
+                    timestamp,
+                    source=f"{path.relative_to(root)}:{field}",
+                )
+
+    try:
+        root_stat = root.stat()
+    except OSError:
+        return {"created_at": None, "created_at_epoch": None, "created_at_source": None}
+
+    birthtime = getattr(root_stat, "st_birthtime", None)
+    if isinstance(birthtime, (int, float)) and birthtime > 0:
+        return _creation_metadata_payload(float(birthtime), source="filesystem_birthtime")
+
+    for path in (root / "meta" / "info.json", root / "manifest.json"):
+        try:
+            return _creation_metadata_payload(
+                path.stat().st_mtime,
+                source=f"{path.relative_to(root)}:mtime",
+            )
+        except OSError:
+            continue
+    return _creation_metadata_payload(root_stat.st_mtime, source="filesystem_mtime")
+
+
+def _datetime_timestamp(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _creation_metadata_payload(timestamp: float, *, source: str) -> dict[str, Any]:
+    return {
+        "created_at": datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "created_at_epoch": timestamp,
+        "created_at_source": source,
+    }
+
+
 def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dict[str, Any]:
     photoreal_roots = _discover_so101_photoreal_datasets(repo_root)
     if split in photoreal_roots:
@@ -1119,7 +2249,7 @@ def _frame_payload(repo_root: Path, split: str, episode: int, frame: int) -> dic
         "prompt": prompt,
         "task_index": task_index,
         "images": images,
-        "camera_contract": SO101_CAMERA_CONTRACT,
+        "camera_contract": _camera_contract_for_keys(dataset["camera_keys"]),
         "photoreal_images": photoreal_images,
         "state": dict(zip(JOINT_NAMES, state, strict=True)),
         "action": dict(zip(JOINT_NAMES, action, strict=True)),
@@ -1198,6 +2328,7 @@ def _mycobot_dataset_summary(split: str, dataset: dict[str, Any]) -> dict[str, A
         "dataset_format": "mycobot_jsonl_v1",
         "platform": "mycobot",
         "platform_label": "MyCobot",
+        **_dataset_creation_metadata(Path(dataset["root"])),
         "root": str(dataset["root"]),
         "name": split,
         "episodes": int(manifest.get("episodes") or len(episode_summaries)),
@@ -1442,8 +2573,7 @@ def _loop_tests_payload(repo_root: Path) -> dict[str, Any]:
 
 def _official_closed_loop_test_cases(repo_root: Path) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
-    for relative_path in TRAINING_CONFIGS:
-        config_path = repo_root / relative_path
+    for config_path in _training_config_paths(repo_root):
         if not config_path.exists():
             continue
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -1457,8 +2587,63 @@ def _official_closed_loop_test_cases(repo_root: Path) -> list[dict[str, Any]]:
             continue
         for test_case in test_cases:
             if isinstance(test_case, dict) and test_case.get("id"):
-                merged[str(test_case["id"])] = test_case
+                normalized = copy.deepcopy(test_case)
+                renderer = closed_loop.get("observation_renderer")
+                if isinstance(renderer, dict):
+                    normalized["_observation_renderer_contract"] = copy.deepcopy(
+                        renderer
+                    )
+                merged[str(test_case["id"])] = normalized
     return list(merged.values())
+
+
+def _training_config_paths(repo_root: Path) -> list[Path]:
+    paths = {
+        (repo_root / relative_path).resolve()
+        for relative_path in TRAINING_CONFIGS
+    }
+    paths.update((repo_root / "configs/so101/training").glob("*.json"))
+    return sorted(path.resolve() for path in paths if path.is_file())
+
+
+def _closed_loop_test_case_for_candidate(
+    repo_root: Path,
+    *,
+    dataset_root: Path,
+    start_report: Path | None,
+    test_cases: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    dataset_root = dataset_root.resolve()
+    resolved_report = start_report.resolve() if start_report else None
+    if resolved_report is not None:
+        contract_path = contract_path_for_start_report(resolved_report)
+        if contract_path.is_file():
+            contract = load_executable_loop_test_contract(
+                contract_path,
+                repo_root=repo_root,
+                expected_start_report=resolved_report,
+            )
+            test_case = copy.deepcopy(contract["test_case"])
+            test_case["_observation_renderer_contract"] = copy.deepcopy(
+                contract["observation_renderer"]
+            )
+            test_case["_contract_path"] = str(contract_path)
+            return test_case
+    for test_case in test_cases or _official_closed_loop_test_cases(repo_root):
+        configured_report = test_case.get("start_report_path")
+        if configured_report and resolved_report is not None:
+            candidate_report = _resolve_dataset_path(repo_root, Path(str(configured_report)))
+            if candidate_report == resolved_report:
+                return copy.deepcopy(test_case)
+        start_dataset = test_case.get("start_dataset")
+        if isinstance(start_dataset, dict) and start_dataset.get("root"):
+            configured_root = _resolve_dataset_path(
+                repo_root,
+                Path(str(start_dataset["root"])),
+            )
+            if configured_root == dataset_root:
+                return copy.deepcopy(test_case)
+    return None
 
 
 def _latest_test_case_report(repo_root: Path, test_case: dict[str, Any]) -> Path | None:
@@ -2184,6 +3369,7 @@ def _index_html() -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Robot Experiment Manager</title>
+  <link rel="stylesheet" href="/vendor/tabulator.min.css">
   <style>
     :root {
       font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -2275,7 +3461,216 @@ def _index_html() -> str:
       gap: 11px;
       align-items: end;
     }
-    .viewer-kind { grid-template-columns: minmax(200px, 300px) minmax(260px, 1fr); }
+    .dataset-catalog-header { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .catalog-loading {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 10px;
+      align-content: center;
+      justify-content: center;
+      align-items: center;
+      padding: 18px max(18px, calc((100% - 440px) / 2));
+      border: 0;
+      border-radius: 10px;
+      background: rgba(239, 246, 255, 0.94);
+      backdrop-filter: blur(2px);
+      color: #1e3a8a;
+    }
+    .catalog-loading[hidden] { display: none; }
+    .catalog-loading.error { border-color: #fecaca; background: #fff1f2; color: #991b1b; }
+    .catalog-loading-spinner {
+      width: 18px;
+      height: 18px;
+      border: 3px solid #bfdbfe;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: catalog-spin 700ms linear infinite;
+    }
+    .catalog-loading.error .catalog-loading-spinner { display: none; }
+    .catalog-loading-copy { display: grid; gap: 6px; min-width: 0; }
+    .catalog-loading-line { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+    .catalog-loading-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .catalog-loading-percent { min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
+    .catalog-loading progress {
+      width: 100%;
+      height: 8px;
+      border: 0;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #dbeafe;
+      accent-color: #2563eb;
+    }
+    .catalog-loading progress::-webkit-progress-bar { background: #dbeafe; border-radius: 999px; }
+    .catalog-loading progress::-webkit-progress-value { background: #2563eb; border-radius: 999px; transition: width 180ms ease; }
+    @keyframes catalog-spin { to { transform: rotate(360deg); } }
+    .dataset-catalog-shell {
+      position: relative;
+      min-height: 280px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .dataset-catalog-scroll { overflow-x: auto; }
+    #datasetCatalogGrid { min-width: 1140px; }
+    #datasetCatalogGrid.tabulator {
+      border: 0;
+      background: #fff;
+      color: var(--ink);
+      font-size: 12px;
+    }
+    #datasetCatalogGrid .tabulator-header {
+      border-bottom: 1px solid var(--line);
+      background: #edf3ff;
+      color: #334155;
+      font-weight: 800;
+    }
+    #datasetCatalogGrid .tabulator-header .tabulator-col { background: #edf3ff; }
+    #datasetCatalogGrid .tabulator-header .tabulator-col:hover { background: #e2eaff; }
+    #datasetCatalogGrid .tabulator-header-filter input,
+    #datasetCatalogGrid .tabulator-header-filter select {
+      min-height: 30px;
+      padding: 4px 7px;
+      border: 1px solid #bdc9da;
+      border-radius: 6px;
+      background: #fff;
+      color: #24324a;
+      font: inherit;
+    }
+    #datasetCatalogGrid .tabulator-row {
+      cursor: pointer;
+      border-bottom: 1px solid #e2e8f0;
+      background: #fff;
+      transition: background 120ms ease, box-shadow 120ms ease;
+    }
+    #datasetCatalogGrid .tabulator-row:nth-child(even) { background: #fbfdff; }
+    #datasetCatalogGrid .tabulator-row:hover { background: #f4f7ff; }
+    #datasetCatalogGrid .tabulator-row.dataset-selected {
+      background: var(--data-soft);
+      box-shadow: inset 4px 0 0 var(--data);
+    }
+    #datasetCatalogGrid .tabulator-cell { padding: 8px 9px; border-right-color: #edf1f7; }
+    #datasetCatalogGrid .tabulator-footer { display: none; }
+    #datasetCatalogGrid .tabulator-placeholder { min-height: 120px; color: var(--text-soft); }
+    .catalog-pager {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 48px;
+      padding: 7px 10px;
+      border-top: 1px solid var(--line);
+      background: #f8fafc;
+    }
+    .catalog-page-button,
+    .playback-icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 36px;
+      min-width: 36px;
+      height: 34px;
+      min-height: 34px;
+      padding: 0;
+      font-size: 16px;
+      line-height: 1;
+    }
+    .catalog-page-button:disabled { cursor: not-allowed; opacity: 0.42; }
+    .catalog-page-status { min-width: 150px; color: #475569; font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
+    .dataset-name-cell { color: var(--ink); overflow-wrap: anywhere; }
+    .dataset-family-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .dataset-family { display: block; font-weight: 820; }
+    .dataset-id { display: block; margin-top: 2px; color: #64748b; font-size: 10px; font-weight: 560; }
+    .trainable-set-badge {
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+      min-height: 20px;
+      padding: 2px 6px;
+      border: 1px solid #86efac;
+      border-radius: 999px;
+      background: #ecfdf5;
+      color: #047857;
+      font-size: 9px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+    .trainable-set-badge.validation-role {
+      border-color: #93c5fd;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .trainable-set-badge.loop-test-role {
+      border-color: #5eead4;
+      background: #f0fdfa;
+      color: #0f766e;
+    }
+    .dataset-select-checkbox { width: 16px; height: 16px; margin: 0; accent-color: #2563eb; cursor: pointer; }
+    .dataset-bulk-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0;
+      padding: 8px 10px;
+      border: 1px solid #d7e0ed;
+      border-radius: 9px;
+      background: #f8fafc;
+    }
+    .dataset-bulk-toolbar select { min-height: 34px; min-width: 220px; padding: 5px 8px; }
+    .dataset-bulk-toolbar button { min-height: 34px; padding: 5px 11px; }
+    .dataset-bulk-count { color: #334155; font-size: 12px; font-weight: 800; }
+    .dataset-bulk-spacer { flex: 1 1 auto; }
+    .dataset-cache-note { color: #64748b; font-size: 11px; }
+    .dataset-version-cell { color: #1d4ed8; font-weight: 780; white-space: nowrap; }
+    .dataset-created-cell { color: #475569; white-space: nowrap; }
+    .dataset-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border: 1px solid #d6deeb;
+      border-radius: 999px;
+      background: #f8fafc;
+      color: #334155;
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .dataset-badge.train { background: #eef2ff; border-color: #c7d2fe; color: #3730a3; }
+    .dataset-badge.valid { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
+    .dataset-badge.closed_loop { background: var(--loop-soft); border-color: #99ddd0; color: #115e59; }
+    .dataset-badge.simulation { background: #f8fafc; border-color: #cbd5e1; color: #475569; }
+    .dataset-badge.photoreal { background: #fff7ed; border-color: #fed7aa; color: #c2410c; }
+    .dataset-badge.real { background: #fdf2f8; border-color: #fbcfe8; color: #be185d; }
+    .selected-dataset-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin: 8px 0 12px;
+      color: var(--text-soft);
+      font-size: 13px;
+    }
+    .selected-dataset-name { color: var(--ink); font-weight: 850; overflow-wrap: anywhere; }
+    .playback-controls { grid-template-columns: minmax(210px, 1fr) minmax(210px, 1fr) auto; gap: 9px; }
+    .playback-actions { display: flex; align-items: end; gap: 6px; }
+    .playback-actions .fps-control { width: 68px; }
+    .playback-actions .fps-control select { min-height: 34px; padding: 5px 7px; }
+    .playback-icon-button.playing { border-color: var(--data); background: var(--data-soft); color: #1d4ed8; }
+    .range-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .range-value {
+      min-width: 34px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: var(--data-soft);
+      color: #1d4ed8;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      font-weight: 850;
+    }
     .loop-controls { grid-template-columns: minmax(240px, 1.2fr) minmax(240px, 1.2fr) minmax(140px, 0.7fr) minmax(140px, 0.7fr) minmax(88px, auto) minmax(88px, auto); }
 	    .sim-controls { grid-template-columns: minmax(220px, 1fr) minmax(300px, 1.25fr) minmax(220px, 1fr) minmax(120px, 0.45fr); }
 	    .sim-start-controls { grid-template-columns: minmax(240px, 0.45fr) minmax(360px, 1fr); align-items: stretch; }
@@ -2312,8 +3707,41 @@ def _index_html() -> str:
     textarea { width: 100%; resize: vertical; }
     select:focus, input:focus, textarea:focus { outline: 3px solid rgba(37,99,235,0.16); border-color: var(--data); }
     button { cursor: pointer; font-weight: 750; white-space: nowrap; }
-    button:not(.tab-button):not(.zoom-btn) { background: #f8fafc; transition: background 120ms ease, border-color 120ms ease, transform 120ms ease; }
-    button:not(.tab-button):not(.zoom-btn):hover { background: #eef4ff; border-color: #9fb7ee; transform: translateY(-1px); }
+    button:not(.tab-button):not(.zoom-btn):not(.dataset-sort-button) { background: #f8fafc; transition: background 120ms ease, border-color 120ms ease, transform 120ms ease; }
+    button:not(.tab-button):not(.zoom-btn):not(.dataset-sort-button):hover { background: #eef4ff; border-color: #9fb7ee; transform: translateY(-1px); }
+    button.dataset-delete-button {
+      min-height: 30px;
+      padding: 5px 9px;
+      border-color: #fecaca;
+      background: #fff5f5;
+      color: var(--bad);
+      font-size: 11px;
+    }
+    button.dataset-delete-button:hover:not(:disabled) {
+      border-color: #f87171;
+      background: #fee2e2;
+      transform: none;
+    }
+    button.dataset-delete-button:disabled {
+      cursor: not-allowed;
+      border-color: #e2e8f0;
+      background: #f8fafc;
+      color: #94a3b8;
+      opacity: 0.78;
+    }
+    .dataset-action-status {
+      margin: 10px 0 0;
+      padding: 9px 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-muted);
+      color: #334155;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .dataset-action-status[hidden] { display: none; }
+    .dataset-action-status.success { border-color: #86efac; background: #f0fdf4; color: var(--ok); }
+    .dataset-action-status.error { border-color: #fca5a5; background: #fef2f2; color: var(--bad); }
     .cameras { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
     .photoreal-cameras { grid-template-columns: minmax(260px, 520px); }
     .quick-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -2367,7 +3795,20 @@ def _index_html() -> str:
       main { padding: 12px; }
       header { padding: 18px 16px; }
       h1 { font-size: 25px; }
-	      .app-tabs, .controls, .cameras, .loop-grid, .viewer-kind, .manager-grid, .metric-grid, .loop-controls, .sim-controls, .sim-start-controls, .sim-policy-controls, .sim-run-controls { grid-template-columns: 1fr; }
+	      .app-tabs, .controls, .cameras, .loop-grid, .manager-grid, .metric-grid, .loop-controls, .sim-controls, .sim-start-controls, .sim-policy-controls, .sim-run-controls { grid-template-columns: 1fr; }
+      .playback-controls { grid-template-columns: 1fr; }
+      .playback-actions { justify-content: flex-start; }
+      .catalog-loading { padding: 16px; }
+      .dataset-catalog-header { align-items: start; flex-direction: column; }
+      #datasetCatalogGrid { min-width: 980px; }
+      #datasetCatalogGrid.tabulator { font-size: 11px; }
+      #datasetCatalogGrid .tabulator-cell { padding: 7px 5px; }
+      #datasetCatalogGrid .tabulator-col-title { font-size: 10px; }
+      .dataset-badge { padding: 2px 5px; font-size: 9px; }
+      .dataset-bulk-toolbar { align-items: stretch; }
+      .dataset-bulk-toolbar select { min-width: 0; flex: 1 1 190px; }
+      .dataset-bulk-spacer { display: none; }
+      button.dataset-delete-button { padding: 4px 5px; font-size: 10px; }
       .quick-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .rollout-row, .thumb-row { grid-template-columns: minmax(220px, 1fr); }
       .kv { grid-template-columns: 1fr; }
@@ -2387,36 +3828,74 @@ def _index_html() -> str:
 	      <button id="tabSimulator" class="tab-button" type="button">Interactive Simulator</button>
 	    </section>
 	    <section id="dataToolbar">
-	      <div class="controls viewer-kind">
-	        <label>Platform
-	          <select id="platformKind">
-	            <option value="so101" selected>SO101</option>
-	            <option value="mycobot">MyCobot</option>
-	          </select>
-	        </label>
-	        <label>Data type
-	          <select id="viewKind">
-	            <option value="train" selected>Train datasets</option>
-	            <option value="valid">Validation datasets</option>
-	            <option value="photoreal">Photoreal datasets</option>
-	            <option value="preview">Preview datasets</option>
-	            <option value="closed_loop">closed loop test case</option>
-	          </select>
-	        </label>
-	        <p id="kindMeta" class="meta"></p>
+	      <div class="dataset-catalog-header">
+	        <div>
+	          <div class="prompt-label">Dataset catalog</div>
+	          <p id="catalogMeta" class="meta"></p>
+	        </div>
+	        <span class="chip">Select one row to inspect its episodes and frames</span>
 	      </div>
+	      <div class="dataset-bulk-toolbar" role="group" aria-label="Dataset bulk actions">
+	        <span id="catalogSelectedCount" class="dataset-bulk-count">0 selected</span>
+	        <select id="catalogBulkAction" aria-label="Dataset bulk action">
+	          <option value="">Choose action</option>
+	          <option value="mark_training">Mark as training set</option>
+	          <option value="remove_training">Remove from training set</option>
+	          <option value="mark_validation">Mark as validation set</option>
+	          <option value="remove_validation">Remove from validation set</option>
+	          <option value="mark_loop_test">Mark as loop test set</option>
+	          <option value="remove_loop_test">Remove from loop test set</option>
+	          <option value="delete">Delete selected datasets</option>
+	        </select>
+	        <button id="catalogApplyBulkAction" type="button" disabled>Apply</button>
+	        <span class="dataset-bulk-spacer"></span>
+	        <span id="catalogTrainingCount" class="dataset-bulk-count">Training 0</span>
+	        <span id="catalogValidationCount" class="dataset-bulk-count">Validation 0</span>
+	        <span id="catalogLoopTestCount" class="dataset-bulk-count">Loop test 0</span>
+	        <span id="catalogCacheNote" class="dataset-cache-note">0 cached pages</span>
+	      </div>
+	      <div class="dataset-catalog-shell">
+	        <div id="catalogLoading" class="catalog-loading" role="status" aria-live="polite" hidden>
+	          <span class="catalog-loading-spinner" aria-hidden="true"></span>
+	          <div class="catalog-loading-copy">
+	            <div class="catalog-loading-line">
+	              <span id="catalogLoadingText" class="catalog-loading-text">Preparing dataset catalog</span>
+	              <strong id="catalogLoadingPercent" class="catalog-loading-percent">0%</strong>
+	            </div>
+	            <progress id="catalogLoadingBar" max="100" value="0" aria-label="Dataset catalog loading progress"></progress>
+	          </div>
+	        </div>
+	        <div class="dataset-catalog-scroll">
+	          <div id="datasetCatalogGrid" aria-label="Available datasets"></div>
+	        </div>
+	        <div class="catalog-pager" aria-label="Dataset catalog pages">
+	          <button id="catalogPreviousPage" class="catalog-page-button" type="button" title="Previous page" aria-label="Previous page" disabled>&#8592;</button>
+	          <span id="catalogPageStatus" class="catalog-page-status">Page 1 of 1</span>
+	          <button id="catalogNextPage" class="catalog-page-button" type="button" title="Next page" aria-label="Next page" disabled>&#8594;</button>
+	        </div>
+	      </div>
+	      <p id="datasetActionStatus" class="dataset-action-status" role="status" hidden></p>
 	    </section>
 	    <div id="datasetPanel" class="panel">
 	    <section>
 	      <div class="prompt-label">Dataset playback</div>
-	      <div class="controls">
-	        <label>Dataset<select id="split"></select></label>
-	        <label>Episode<input id="episode" type="range" min="0" max="0" value="0"></label>
-        <label>Frame<input id="frame" type="range" min="0" max="0" value="0"></label>
-        <button id="play">Play</button>
-        <label>FPS<select id="fps"><option value="30" selected>30</option><option value="24">24</option><option value="12">12</option><option value="6">6</option></select></label>
-        <button id="prev">Prev</button>
-        <button id="next">Next</button>
+	      <select id="split" hidden aria-hidden="true"></select>
+	      <div id="selectedDatasetMeta" class="selected-dataset-bar"></div>
+      <div class="controls playback-controls">
+	        <label>
+	          <span class="range-heading">Episode <output id="episodeValue" class="range-value">0</output></span>
+	          <input id="episode" type="range" min="0" max="0" value="0">
+	        </label>
+        <label>
+          <span class="range-heading">Frame <output id="frameValue" class="range-value">0</output></span>
+          <input id="frame" type="range" min="0" max="0" value="0">
+        </label>
+        <div class="playback-actions" role="group" aria-label="Playback controls">
+          <button id="prev" class="playback-icon-button" type="button" title="Previous frame" aria-label="Previous frame">&#9198;</button>
+          <button id="play" class="playback-icon-button" type="button" title="Play" aria-label="Play"><span aria-hidden="true">&#9654;</span></button>
+          <button id="next" class="playback-icon-button" type="button" title="Next frame" aria-label="Next frame">&#9197;</button>
+          <label class="fps-control">FPS<select id="fps"><option value="30" selected>30</option><option value="24">24</option><option value="12">12</option><option value="6">6</option></select></label>
+        </div>
       </div>
       <p id="meta" class="meta"></p>
       <div id="photorealShortcuts" class="quick-strip"></div>
@@ -2527,16 +4006,22 @@ def _index_html() -> str:
 	      <img id="zoomImage" alt="zoomed frame">
 	    </div>
 	  </main>
+	  <script src="/vendor/tabulator.min.js"></script>
 	  <script>
 	    let datasets = {};
-	    let datasetNamesByKind = { train: [], valid: [], photoreal: [], preview: [], closed_loop: [] };
+	    let datasetOrder = [];
 	    let datasetPlatformByName = {};
+	    let datasetPlatformLabelByName = {};
 	    let datasetCategoryByName = {};
+	    let datasetSplitByName = {};
+	    let datasetRenderTypeByName = {};
 	    let loopAnalyzerLoaded = false;
 	    let simulatorConfig = { presets: [], training_runs: [], defaults: {} };
 	    const split = document.getElementById("split");
 	    const episode = document.getElementById("episode");
 	    const frame = document.getElementById("frame");
+	    const episodeValue = document.getElementById("episodeValue");
+	    const frameValue = document.getElementById("frameValue");
     const play = document.getElementById("play");
     const fps = document.getElementById("fps");
     const meta = document.getElementById("meta");
@@ -2552,9 +4037,24 @@ def _index_html() -> str:
 	    const tabLoopAnalyzer = document.getElementById("tabLoopAnalyzer");
 	    const tabSimulator = document.getElementById("tabSimulator");
 	    const dataToolbar = document.getElementById("dataToolbar");
-	    const platformKind = document.getElementById("platformKind");
-	    const viewKind = document.getElementById("viewKind");
-	    const kindMeta = document.getElementById("kindMeta");
+	    const catalogMeta = document.getElementById("catalogMeta");
+	    const catalogLoading = document.getElementById("catalogLoading");
+	    const catalogLoadingText = document.getElementById("catalogLoadingText");
+	    const catalogLoadingPercent = document.getElementById("catalogLoadingPercent");
+	    const catalogLoadingBar = document.getElementById("catalogLoadingBar");
+	    const datasetCatalogGrid = document.getElementById("datasetCatalogGrid");
+	    const catalogPreviousPage = document.getElementById("catalogPreviousPage");
+	    const catalogNextPage = document.getElementById("catalogNextPage");
+	    const catalogPageStatus = document.getElementById("catalogPageStatus");
+	    const catalogSelectedCount = document.getElementById("catalogSelectedCount");
+	    const catalogBulkAction = document.getElementById("catalogBulkAction");
+	    const catalogApplyBulkAction = document.getElementById("catalogApplyBulkAction");
+	    const catalogTrainingCount = document.getElementById("catalogTrainingCount");
+	    const catalogValidationCount = document.getElementById("catalogValidationCount");
+	    const catalogLoopTestCount = document.getElementById("catalogLoopTestCount");
+	    const catalogCacheNote = document.getElementById("catalogCacheNote");
+	    const datasetActionStatus = document.getElementById("datasetActionStatus");
+	    const selectedDatasetMeta = document.getElementById("selectedDatasetMeta");
 	    const datasetPanel = document.getElementById("datasetPanel");
 	    function loopPlaybackTick() {}
 	    const trainingPanel = document.getElementById("trainingPanel");
@@ -2597,41 +4097,94 @@ def _index_html() -> str:
 	    let simContinuationStartReportPath = null;
 	    let trainingRunRows = [];
 	    let selectedTrainingId = null;
+	    let catalogProgressTimer = null;
+	    let catalogLoadingHideTimer = null;
+	    let catalogProgressRequestInFlight = false;
+	    let catalogLoadGeneration = 0;
+	    let datasetCatalogTable = null;
+	    let catalogCurrentPage = 1;
+	    let catalogLastPage = 1;
+	    let catalogTotalRows = 0;
+	    let catalogSelectionCounts = {training: 0, validation: 0, loop_test: 0};
+	    const catalogSelectedNames = new Set();
+	    const datasetCatalogPageCache = new Map();
+	    const catalogPageCacheLimit = 20;
 
-    async function init() {
-      const payload = await fetch("/api/datasets").then(r => r.json());
-      datasets = payload.datasets;
-      datasetPlatformByName = {};
-      datasetCategoryByName = {};
-      const orderedNames = [];
-      for (const group of payload.dataset_groups || []) {
-        for (const item of group.items || []) {
-          if (item.name) {
-            datasetPlatformByName[item.name] = item.platform || item.summary?.platform || "so101";
-            datasetCategoryByName[item.name] = item.category || group.id || "";
-          }
-          if (item.status === "available" && datasets[item.name] && !orderedNames.includes(item.name)) {
-            orderedNames.push(item.name);
-          }
-        }
-      }
-      for (const name of Object.keys(datasets)) {
-        datasetPlatformByName[name] = datasetPlatformByName[name] || datasets[name]?.platform || "so101";
-        datasetCategoryByName[name] = datasetCategoryByName[name] || datasets[name]?.category || "";
-        if (!orderedNames.includes(name)) orderedNames.push(name);
-      }
-	      datasetNamesByKind = {
-	        train: orderedNames.filter(name => isTrainDataset(name)),
-	        valid: orderedNames.filter(name => name.endsWith("_val") || name.endsWith("_valid") || name.includes("_validation")),
-	        photoreal: orderedNames.filter(name => isPhotorealDataset(name)),
-	        closed_loop: orderedNames.filter(name => datasetCategoryByName[name] === "closed_loop"),
-	        preview: orderedNames.filter(name => isPreviewDataset(name)),
-	      };
-	      if (!datasetNamesByKind.train.length) datasetNamesByKind.train = orderedNames;
-	      if (!datasetNamesByKind.valid.length) datasetNamesByKind.valid = orderedNames.filter(name => !isTrainDataset(name));
-	      if (!datasetNamesByKind.preview.length) datasetNamesByKind.preview = orderedNames.filter(name => !isTrainDataset(name) && !name.endsWith("_val") && !name.endsWith("_valid") && !name.includes("_validation") && !isPhotorealDataset(name) && datasetCategoryByName[name] !== "closed_loop");
-	      syncViewKind();
+	    function renderCatalogLoading(progress = {}) {
+	      const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+	      const completed = Math.max(0, Number(progress.completed || 0));
+	      const total = Math.max(0, Number(progress.total || 0));
+	      const count = total > 0 ? ` · ${completed.toLocaleString()} / ${total.toLocaleString()}` : "";
+	      catalogLoading.hidden = false;
+	      catalogLoading.classList.toggle("error", progress.status === "error");
+	      catalogLoadingText.textContent = `${progress.message || "Loading dataset catalog"}${count}`;
+	      catalogLoadingPercent.textContent = `${Math.round(percent)}%`;
+	      catalogLoadingBar.value = percent;
 	    }
+
+	    async function pollCatalogProgress(generation) {
+	      if (generation !== catalogLoadGeneration || catalogProgressRequestInFlight) return;
+	      catalogProgressRequestInFlight = true;
+	      try {
+	        const response = await fetch("/api/datasets/progress", { cache: "no-store" });
+	        if (!response.ok) return;
+	        const progress = await response.json();
+	        if (generation === catalogLoadGeneration) renderCatalogLoading(progress);
+	      } catch (_) {
+	        // The main catalog request reports actionable failures.
+	      } finally {
+	        catalogProgressRequestInFlight = false;
+	      }
+	    }
+
+	    function startCatalogLoading(message = "Loading dataset catalog") {
+	      catalogLoadGeneration += 1;
+	      const generation = catalogLoadGeneration;
+	      if (catalogLoadingHideTimer) clearTimeout(catalogLoadingHideTimer);
+	      if (catalogProgressTimer) clearInterval(catalogProgressTimer);
+	      catalogProgressRequestInFlight = false;
+	      renderCatalogLoading({ status: "loading", percent: 0, message });
+	      catalogProgressTimer = setInterval(() => pollCatalogProgress(generation), 400);
+	    }
+
+	    function finishCatalogLoading() {
+	      catalogLoadGeneration += 1;
+	      if (catalogProgressTimer) clearInterval(catalogProgressTimer);
+	      catalogProgressTimer = null;
+	      renderCatalogLoading({ status: "complete", percent: 100, message: "Catalog ready" });
+	      catalogLoadingHideTimer = setTimeout(() => {
+	        catalogLoading.hidden = true;
+	      }, 350);
+	    }
+
+	    function failCatalogLoading(error) {
+	      catalogLoadGeneration += 1;
+	      if (catalogProgressTimer) clearInterval(catalogProgressTimer);
+	      catalogProgressTimer = null;
+	      renderCatalogLoading({
+	        status: "error",
+	        percent: Number(catalogLoadingBar.value || 0),
+	        message: `Catalog loading failed: ${error?.message || error}`,
+	      });
+	    }
+
+    async function init(options = {}) {
+      if (!options.preserveStatus) setDatasetActionStatus("");
+      if (!options.preserveLoadedDatasets) {
+        datasets = {};
+        datasetOrder = [];
+        datasetPlatformByName = {};
+        datasetPlatformLabelByName = {};
+        datasetCategoryByName = {};
+        datasetSplitByName = {};
+        datasetRenderTypeByName = {};
+        split.innerHTML = "";
+      }
+      renderDatasetCatalog();
+      if (datasetCatalogTable && options.reload) {
+        await datasetCatalogTable.setData();
+      }
+    }
 
 	    function syncAppTab(tabName) {
 	      const showData = tabName === "viewer";
@@ -2648,7 +4201,6 @@ def _index_html() -> str:
 	      loopPanel.hidden = !showLoop;
 	      simPanel.hidden = !showSim;
 	      if (showSim) {
-	        kindMeta.textContent = "";
 	        if (!simulatorConfig.presets.length) initSimulator();
 	        return;
 	      }
@@ -2660,57 +4212,648 @@ def _index_html() -> str:
 	        initLoopAnalyzer();
 	        return;
 	      }
-	      syncViewKind();
+	      syncDataViewer();
 	    }
 
-	    function syncViewKind() {
+	    function syncDataViewer() {
 	      datasetPanel.hidden = false;
 	      loopPanel.hidden = true;
 	      trainingPanel.hidden = true;
 	      simPanel.hidden = true;
-	      const platform = platformKind.value || "so101";
-	      const selectedNames = namesForKindAndPlatform(viewKind.value, platform);
-	      if (!selectedNames.length) {
-	        const fallbackKind = ["photoreal", "closed_loop", "preview", "train", "valid"].find(kind => namesForKindAndPlatform(kind, platform).length);
-	        if (fallbackKind && fallbackKind !== viewKind.value) {
-	          viewKind.value = fallbackKind;
-	        }
-	      }
-	      const names = namesForKindAndPlatform(viewKind.value, platform);
-	      const previous = split.value;
-	      split.innerHTML = names.map(name => `<option value="${name}">${name}</option>`).join("");
-	      if (names.includes(previous)) split.value = previous;
-	      else if (names.length) split.value = names[0];
-      kindMeta.textContent = `${platformLabel(platform)} ${viewKindLabel(viewKind.value)} datasets (${names.length})`;
+	      renderDatasetCatalog();
       if (split.value) {
         syncEpisodeRange();
         renderPhotorealShortcuts();
         loadFrame();
       } else {
-        meta.textContent = "No datasets are available for this platform and data type.";
+        meta.textContent = "No datasets are available in the catalog.";
         promptText.textContent = "";
         cameras.innerHTML = "";
         photorealShortcuts.innerHTML = "";
         photorealPanel.hidden = true;
         photorealCameras.innerHTML = "";
         jointRows.innerHTML = "";
-      }
+        selectedDatasetMeta.innerHTML = "";
+	      }
 	    }
 
-	    function namesForKindAndPlatform(kind, platform) {
-	      return (datasetNamesByKind[kind] || []).filter(name => (datasetPlatformByName[name] || "so101") === platform);
+	    function formatDatasetCreatedAt(value) {
+	      const date = new Date(value || "");
+	      if (!Number.isFinite(date.getTime())) return "Unknown";
+	      const pad = number => String(number).padStart(2, "0");
+	      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 	    }
 
-	    function isTrainDataset(name) {
-	      if (name.endsWith("_val") || name.endsWith("_valid") || name.includes("_validation") || name.includes("_loop_")) return false;
+
+	    function syncDatasetCatalogSelection() {
+	      if (!datasetCatalogTable) return;
+	      datasetCatalogTable.getRows().forEach(row => {
+	        const selected = row.getData().name === split.value;
+	        const element = row.getElement();
+	        element.classList.toggle("dataset-selected", selected);
+	        element.setAttribute("aria-selected", String(selected));
+	      });
+	    }
+
+	    function catalogFiltersFromParams(params) {
+	      const values = {};
+	      const visit = filter => {
+	        if (Array.isArray(filter)) {
+	          filter.forEach(visit);
+	          return;
+	        }
+	        if (filter?.field && filter.value !== undefined && filter.value !== null && String(filter.value) !== "") {
+	          values[filter.field] = String(filter.value);
+	        }
+	      };
+	      visit(params?.filter || params?.filters || []);
+	      return values;
+	    }
+
+	    function catalogQueryFromParams(params = {}) {
+	      const query = new URLSearchParams({
+	        page: String(params.page || 1),
+	        size: String(params.size || 10),
+	      });
+	      const filters = catalogFiltersFromParams(params);
+	      if (filters.platformLabel) query.set("platform", filters.platformLabel);
+	      if (filters.splitLabel) query.set("status", filters.splitLabel);
+	      if (filters.renderLabel) query.set("type", filters.renderLabel);
+	      if (filters.familyLabel) query.set("family", filters.familyLabel);
+	      if (filters.versionLabel) query.set("version", filters.versionLabel);
+	      if (filters.name) query.set("name", filters.name);
+	      const sorters = params.sorters || params.sort || [];
+	      if (Array.isArray(sorters) && sorters.length) {
+	        query.set("sort", sorters[0].field || "createdEpoch");
+	        query.set("dir", sorters[0].dir || "desc");
+	      }
+	      return query;
+	    }
+
+	    function cloneCatalogPayload(payload) {
+	      return JSON.parse(JSON.stringify(payload));
+	    }
+
+	    function catalogCacheKey(url, query) {
+	      return `${url}?${query.toString()}`;
+	    }
+
+	    function getCachedCatalogPage(key) {
+	      const payload = datasetCatalogPageCache.get(key);
+	      if (!payload) return null;
+	      datasetCatalogPageCache.delete(key);
+	      datasetCatalogPageCache.set(key, payload);
+	      return cloneCatalogPayload(payload);
+	    }
+
+	    function cacheCatalogPage(key, payload) {
+	      datasetCatalogPageCache.delete(key);
+	      datasetCatalogPageCache.set(key, cloneCatalogPayload(payload));
+	      while (datasetCatalogPageCache.size > catalogPageCacheLimit) {
+	        datasetCatalogPageCache.delete(datasetCatalogPageCache.keys().next().value);
+	      }
+	      updateBulkActionUi();
+	    }
+
+	    function clearCatalogPageCache() {
+	      datasetCatalogPageCache.clear();
+	      updateBulkActionUi();
+	    }
+
+	    function hideCatalogLoadingImmediately() {
+	      catalogLoadGeneration += 1;
+	      if (catalogProgressTimer) clearInterval(catalogProgressTimer);
+	      if (catalogLoadingHideTimer) clearTimeout(catalogLoadingHideTimer);
+	      catalogProgressTimer = null;
+	      catalogLoadingHideTimer = null;
+	      catalogLoading.hidden = true;
+	    }
+
+	    function currentCatalogPageNames() {
+	      if (!datasetCatalogTable) return [];
+	      return datasetCatalogTable.getRows().map(row => row.getData().name).filter(Boolean);
+	    }
+
+	    function updateBulkActionUi() {
+	      const currentNames = currentCatalogPageNames();
+	      const selectedOnPage = currentNames.filter(name => catalogSelectedNames.has(name));
+	      const pageCheckbox = datasetCatalogGrid.querySelector(".dataset-select-page-checkbox");
+	      if (pageCheckbox) {
+	        pageCheckbox.checked = currentNames.length > 0 && selectedOnPage.length === currentNames.length;
+	        pageCheckbox.indeterminate = selectedOnPage.length > 0 && selectedOnPage.length < currentNames.length;
+	      }
+	      datasetCatalogGrid.querySelectorAll(".dataset-row-select-checkbox").forEach(checkbox => {
+	        checkbox.checked = catalogSelectedNames.has(checkbox.dataset.datasetName || "");
+	      });
+	      catalogSelectedCount.textContent = `${catalogSelectedNames.size.toLocaleString()} selected`;
+	      catalogTrainingCount.textContent = `Training ${Number(catalogSelectionCounts.training || 0).toLocaleString()}`;
+	      catalogValidationCount.textContent = `Validation ${Number(catalogSelectionCounts.validation || 0).toLocaleString()}`;
+	      catalogLoopTestCount.textContent = `Loop test ${Number(catalogSelectionCounts.loop_test || 0).toLocaleString()}`;
+	      catalogCacheNote.textContent = `${datasetCatalogPageCache.size.toLocaleString()} cached pages`;
+	      catalogApplyBulkAction.disabled = (
+	        catalogSelectedNames.size === 0
+	        || !catalogBulkAction.value
+	        || !isPrivateViewerHost()
+	      );
+	      catalogApplyBulkAction.title = isPrivateViewerHost()
+	        ? "Apply the selected action"
+	        : "Dataset changes are available from localhost or the same Wi-Fi only";
+	    }
+
+	    function toggleCatalogSelection(name, checked) {
+	      if (checked) catalogSelectedNames.add(name);
+	      else catalogSelectedNames.delete(name);
+	      updateBulkActionUi();
+	    }
+
+	    function selectCurrentCatalogPage(checked) {
+	      currentCatalogPageNames().forEach(name => {
+	        if (checked) catalogSelectedNames.add(name);
+	        else catalogSelectedNames.delete(name);
+	      });
+	      updateBulkActionUi();
+	    }
+
+	    function clearCatalogSelection() {
+	      catalogSelectedNames.clear();
+	      catalogBulkAction.value = "";
+	      updateBulkActionUi();
+	    }
+
+	    function registerCatalogRow(row) {
+	      const summary = row.summary || {};
+	      row.deleteEnabled = row.availability === "available" && canDeleteDataset(summary);
+	      row.deleteTitle = row.deleteEnabled
+	        ? `Delete ${row.name}`
+	        : "Deletion is only available for ready _workspace datasets over localhost or the same Wi-Fi";
+	      if (row.availability !== "available" || !summary.episodes) return;
+	      datasets[row.name] = summary;
+	      datasetPlatformByName[row.name] = row.platform || summary.platform || "so101";
+	      datasetPlatformLabelByName[row.name] = row.platformLabel || summary.platform_label || platformLabel(datasetPlatformByName[row.name]);
+	      datasetCategoryByName[row.name] = row.category || "";
+	      datasetSplitByName[row.name] = row.splitKey || splitForDataset(row.name);
+	      datasetRenderTypeByName[row.name] = row.renderKey || renderTypeForDataset(row.name);
+	      if (!datasetOrder.includes(row.name)) datasetOrder.push(row.name);
+	      if (![...split.options].some(option => option.value === row.name)) {
+	        split.add(new Option(row.name, row.name));
+	      }
+	    }
+
+	    function updateCatalogPager() {
+	      const first = catalogTotalRows ? (catalogCurrentPage - 1) * 10 + 1 : 0;
+	      const last = Math.min(catalogCurrentPage * 10, catalogTotalRows);
+	      catalogPreviousPage.disabled = catalogCurrentPage <= 1;
+	      catalogNextPage.disabled = catalogCurrentPage >= catalogLastPage || catalogTotalRows === 0;
+	      catalogPageStatus.textContent = `Page ${catalogCurrentPage} of ${catalogLastPage} · ${first}-${last} of ${catalogTotalRows}`;
+	    }
+
+	    function applyDatasetCatalogPayload(payload, requestedPage, {fromCache = false} = {}) {
+	      const hadSelection = Boolean(split.value && datasets[split.value]);
+	      (payload.data || []).forEach(registerCatalogRow);
+	      catalogCurrentPage = Number(payload.page || requestedPage);
+	      catalogLastPage = Number(payload.last_page || 1);
+	      catalogTotalRows = Number(payload.total || payload.last_row || 0);
+	      catalogSelectionCounts = {
+	        training: Number(payload.selection_counts?.training ?? payload.trainable_set_count ?? 0),
+	        validation: Number(payload.selection_counts?.validation || 0),
+	        loop_test: Number(payload.selection_counts?.loop_test || 0),
+	      };
+	      catalogMeta.textContent = (
+	        `${catalogTotalRows.toLocaleString()} matching datasets · server-loaded 10 per page · newest first`
+	        + (fromCache ? " · restored from page cache" : "")
+	      );
+	      updateCatalogPager();
+	      if (!hadSelection) {
+	        const firstReady = (payload.data || []).find(row => row.availability === "available" && datasets[row.name]);
+	        if (firstReady) selectDataset(firstReady.name);
+	      }
+	      updateBulkActionUi();
+	      return payload;
+	    }
+
+	    async function requestDatasetCatalogPage(url, _config, params) {
+	      const requestedPage = Number(params?.page || 1);
+	      const query = catalogQueryFromParams(params);
+	      const cacheKey = catalogCacheKey(url, query);
+	      const cachedPayload = getCachedCatalogPage(cacheKey);
+	      if (cachedPayload) {
+	        hideCatalogLoadingImmediately();
+	        return applyDatasetCatalogPayload(cachedPayload, requestedPage, {fromCache: true});
+	      }
+
+	      startCatalogLoading(`Loading catalog page ${requestedPage}`);
+	      try {
+	        const response = await fetch(`${url}?${query.toString()}`, { cache: "no-store" });
+	        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+	        const payload = await response.json();
+	        cacheCatalogPage(cacheKey, payload);
+	        applyDatasetCatalogPayload(payload, requestedPage);
+	        finishCatalogLoading();
+	        return payload;
+	      } catch (error) {
+	        failCatalogLoading(error);
+	        throw error;
+	      }
+	    }
+
+	    function catalogSelectHeaderFilter(values) {
+	      return (cell, _onRendered, success) => {
+	        const select = document.createElement("select");
+	        select.setAttribute("aria-label", `${cell.getColumn().getDefinition().title} filter`);
+	        select.add(new Option("All", ""));
+	        values.forEach(value => select.add(new Option(value, value)));
+	        select.value = String(cell.getValue() || "");
+	        select.addEventListener("change", () => success(select.value));
+	        return select;
+	      };
+	    }
+
+	    function renderDatasetCatalog() {
+	      if (datasetCatalogTable) {
+	        syncDatasetCatalogSelection();
+	        renderSelectedDatasetMeta();
+	        return;
+	      }
+	      catalogMeta.textContent = "Loading the first 10 datasets...";
+	      datasetCatalogTable = new Tabulator(datasetCatalogGrid, {
+	          index: "name",
+	          layout: "fitColumns",
+	          ajaxURL: "/api/datasets/catalog",
+	          ajaxRequestFunc: requestDatasetCatalogPage,
+	          pagination: true,
+	          paginationMode: "remote",
+	          paginationSize: 10,
+	          filterMode: "remote",
+	          sortMode: "remote",
+	          placeholder: "No datasets match the current filters.",
+	          headerFilterLiveFilterDelay: 300,
+	          rowFormatter: row => {
+	            const selected = row.getData().name === split.value;
+	            row.getElement().classList.toggle("dataset-selected", selected);
+	            row.getElement().setAttribute("aria-selected", String(selected));
+	          },
+	          columns: [
+	            {
+	              title: "",
+	              field: "name",
+	              width: 42,
+	              minWidth: 42,
+	              headerSort: false,
+	              hozAlign: "center",
+	              headerHozAlign: "center",
+	              titleFormatter: () => {
+	                const checkbox = document.createElement("input");
+	                checkbox.type = "checkbox";
+	                checkbox.className = "dataset-select-checkbox dataset-select-page-checkbox";
+	                checkbox.setAttribute("aria-label", "Select all datasets on this page");
+	                checkbox.addEventListener("click", event => event.stopPropagation());
+	                checkbox.addEventListener("change", () => selectCurrentCatalogPage(checkbox.checked));
+	                return checkbox;
+	              },
+	              formatter: cell => {
+	                const row = cell.getRow().getData();
+	                const checkbox = document.createElement("input");
+	                checkbox.type = "checkbox";
+	                checkbox.className = "dataset-select-checkbox dataset-row-select-checkbox";
+	                checkbox.dataset.datasetName = row.name;
+	                checkbox.checked = catalogSelectedNames.has(row.name);
+	                const eligibleRoles = Object.entries(row.roleEligibility || {})
+	                  .filter(([, contract]) => contract?.eligible)
+	                  .map(([role]) => role.replace("_", " "));
+	                checkbox.title = eligibleRoles.length
+	                  ? `${row.name} can be used for: ${eligibleRoles.join(", ")}`
+	                  : `${row.name}: not eligible for a dataset role`;
+	                checkbox.setAttribute("aria-label", `Select ${row.name}`);
+	                checkbox.addEventListener("click", event => event.stopPropagation());
+	                checkbox.addEventListener("change", () => toggleCatalogSelection(row.name, checkbox.checked));
+	                return checkbox;
+	              },
+	            },
+	            { title: "Platform", field: "platformLabel", minWidth: 90, headerFilter: catalogSelectHeaderFilter(["SO101", "MyCobot"]), headerFilterFunc: "=" },
+	            {
+	              title: "Dataset",
+	              field: "familyLabel",
+	              minWidth: 250,
+	              widthGrow: 3,
+	              headerFilter: "input",
+	              cssClass: "dataset-name-cell",
+	              formatter: cell => {
+	                const row = cell.getRow().getData();
+	                const markedRoles = new Set(row.markedRoles || []);
+	                const badges = [
+	                  markedRoles.has("training")
+	                    ? '<span class="trainable-set-badge" title="Included in the marked training set">Training</span>'
+	                    : "",
+	                  markedRoles.has("validation")
+	                    ? '<span class="trainable-set-badge validation-role" title="Included in the marked validation set">Validation</span>'
+	                    : "",
+	                  markedRoles.has("loop_test")
+	                    ? '<span class="trainable-set-badge loop-test-role" title="Included in the marked loop test set">Loop test</span>'
+	                    : "",
+	                ].join("");
+	                return `<span class="dataset-family-line"><span class="dataset-family">${escapeHtml(cell.getValue())}</span>${badges}</span><span class="dataset-id" title="${escapeAttr(row.name)}">${escapeHtml(row.name)}</span>`;
+	              },
+	            },
+	            {
+	              title: "Version",
+	              field: "versionLabel",
+	              minWidth: 132,
+	              headerFilter: "input",
+	              cssClass: "dataset-version-cell",
+	            },
+	            {
+	              title: "Status",
+	              field: "splitLabel",
+	              minWidth: 112,
+	              headerFilter: catalogSelectHeaderFilter(["Train", "Validation", "Closed loop"]),
+	              headerFilterFunc: "=",
+	              formatter: cell => `<span class="dataset-badge ${escapeAttr(cell.getRow().getData().splitKey)}">${escapeHtml(cell.getValue())}</span>`,
+	            },
+	            {
+	              title: "Type",
+	              field: "renderLabel",
+	              minWidth: 125,
+	              headerFilter: catalogSelectHeaderFilter(["Standard sim", "Photoreal", "Real camera"]),
+	              headerFilterFunc: "=",
+	              formatter: cell => `<span class="dataset-badge ${escapeAttr(cell.getRow().getData().renderKey)}">${escapeHtml(cell.getValue())}</span>`,
+	            },
+	            {
+	              title: "Created",
+	              field: "createdEpoch",
+	              minWidth: 155,
+	              sorter: "number",
+	              cssClass: "dataset-created-cell",
+	              formatter: cell => {
+	                const createdAt = cell.getRow().getData().createdAt;
+	                return `<time datetime="${escapeAttr(createdAt)}" title="${escapeAttr(createdAt || "Creation date unavailable")}">${escapeHtml(formatDatasetCreatedAt(createdAt))}</time>`;
+	              },
+	            },
+	            { title: "Episodes", field: "episodes", headerSort: false, width: 96, hozAlign: "right", headerHozAlign: "right" },
+	            {
+	              title: "Action",
+	              field: "name",
+	              width: 92,
+	              headerSort: false,
+	              hozAlign: "center",
+	              formatter: cell => {
+	                const row = cell.getRow().getData();
+	                return `<button class="dataset-delete-button" type="button" title="${escapeAttr(row.deleteTitle)}" aria-label="${escapeAttr(row.deleteTitle)}" ${row.deleteEnabled ? "" : "disabled"}>Delete</button>`;
+	              },
+	              cellClick: (event, cell) => {
+	                event.stopPropagation();
+	                const row = cell.getRow().getData();
+	                if (row.deleteEnabled) deleteDataset(row.name);
+	              },
+	            },
+	          ],
+	      });
+	      datasetCatalogTable.on("rowClick", (event, row) => {
+	        if (event.target.closest(".dataset-select-checkbox, .dataset-delete-button")) return;
+	        if (row.getData().availability === "available") selectDataset(row.getData().name);
+	      });
+	      datasetCatalogTable.on("dataLoaded", () => {
+	        syncDatasetCatalogSelection();
+	        updateBulkActionUi();
+	      });
+	      datasetCatalogTable.on("pageLoaded", page => {
+	        catalogCurrentPage = Number(page || 1);
+	        updateCatalogPager();
+	        updateBulkActionUi();
+	      });
+	    }
+
+	    function renderSelectedDatasetMeta() {
+	      const name = split.value;
+	      const data = datasets[name];
+	      if (!name || !data) {
+	        selectedDatasetMeta.innerHTML = "";
+	        return;
+	      }
+	      selectedDatasetMeta.innerHTML = `
+	        <span>Selected</span>
+	        <span class="selected-dataset-name">${escapeHtml(name)}</span>
+	        <span class="chip">${escapeHtml(datasetPlatformLabelByName[name] || platformLabel(datasetPlatformByName[name]))}</span>
+	        <span class="chip">Split: ${escapeHtml(splitLabel(datasetSplitByName[name]))}</span>
+	        <span class="chip">Render: ${escapeHtml(renderTypeLabel(datasetRenderTypeByName[name]))}</span>
+	        <span class="chip">${Number(data.episodes || 0).toLocaleString()} episodes</span>
+	        <span class="chip">${Number(data.frames || 0).toLocaleString()} frames</span>
+	        <span class="chip">Created: ${escapeHtml(formatDatasetCreatedAt(data.created_at))}</span>
+	        <span class="chip">${escapeHtml(data.size_human || "")}</span>
+	      `;
+	    }
+
+	    function setPlaybackRunning(running) {
+	      play.innerHTML = running ? '<span aria-hidden="true">&#10074;&#10074;</span>' : '<span aria-hidden="true">&#9654;</span>';
+	      play.classList.toggle("playing", running);
+	      play.title = running ? "Pause" : "Play";
+	      play.setAttribute("aria-label", running ? "Pause" : "Play");
+	    }
+
+	    function selectDataset(name) {
+	      if (!datasets[name]) return;
+	      if (timer) {
+	        clearInterval(timer);
+	        timer = null;
+	        setPlaybackRunning(false);
+	      }
+	      split.value = name;
+	      episode.value = "0";
+	      frame.value = "0";
+	      syncDatasetCatalogSelection();
+	      renderSelectedDatasetMeta();
+	      syncEpisodeRange();
+	      renderPhotorealShortcuts();
+	      loadFrame();
+	    }
+
+	    function isPrivateViewerHost() {
+	      const host = window.location.hostname;
+	      if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
+	      if (/^10[.]/.test(host) || /^192[.]168[.]/.test(host)) return true;
+	      const match = host.match(/^172[.]([0-9]+)[.]/);
+	      return Boolean(match && Number(match[1]) >= 16 && Number(match[1]) <= 31);
+	    }
+
+	    function canDeleteDataset(data) {
+	      const root = String(data?.root || "").replaceAll("\\\\", "/");
+	      return isPrivateViewerHost() && root.includes("/_workspace/");
+	    }
+
+	    function setDatasetActionStatus(message, tone = "") {
+	      datasetActionStatus.textContent = message || "";
+	      datasetActionStatus.className = `dataset-action-status ${tone}`.trim();
+	      datasetActionStatus.hidden = !message;
+	    }
+
+	    function removeCatalogEntries(names) {
+	      for (const name of names) {
+	        catalogSelectedNames.delete(name);
+	        delete datasets[name];
+	        datasetOrder = datasetOrder.filter(candidate => candidate !== name);
+	        [...split.options].filter(option => option.value === name).forEach(option => option.remove());
+	      }
+	    }
+
+	    async function reloadCatalogAfterMutation() {
+	      clearCatalogPageCache();
+	      await init({preserveStatus: true, preserveLoadedDatasets: true, reload: true});
+	      updateBulkActionUi();
+	    }
+
+	    async function applyCatalogBulkAction() {
+	      const action = catalogBulkAction.value;
+	      const names = [...catalogSelectedNames].sort((left, right) => left.localeCompare(right));
+	      if (!action || !names.length) return;
+	      if (!isPrivateViewerHost()) {
+	        setDatasetActionStatus("Dataset changes are available from localhost or the same Wi-Fi only.", "error");
+	        return;
+	      }
+
+	      catalogApplyBulkAction.disabled = true;
+	      try {
+	        const roleActions = {
+	          mark_training: {apiAction: "mark", role: "training", label: "training"},
+	          remove_training: {apiAction: "remove", role: "training", label: "training"},
+	          mark_validation: {apiAction: "mark", role: "validation", label: "validation"},
+	          remove_validation: {apiAction: "remove", role: "validation", label: "validation"},
+	          mark_loop_test: {apiAction: "mark", role: "loop_test", label: "loop test"},
+	          remove_loop_test: {apiAction: "remove", role: "loop_test", label: "loop test"},
+	        };
+	        const roleAction = roleActions[action];
+	        if (roleAction) {
+	          const {apiAction, role, label} = roleAction;
+	          setDatasetActionStatus(
+	            `${apiAction === "mark" ? "Adding" : "Removing"} ${names.length} dataset${names.length === 1 ? "" : "s"} ${apiAction === "mark" ? "to" : "from"} the ${label} set...`,
+	          );
+	          const response = await fetch("/api/datasets/role-selection", {
+	            method: "POST",
+	            headers: {"Content-Type": "application/json"},
+	            body: JSON.stringify({action: apiAction, role, names}),
+	          });
+	          const result = await response.json();
+	          if (!response.ok) throw new Error(result.message || `${label} set update failed`);
+	          catalogSelectionCounts = {
+	            training: Number(result.counts?.training || 0),
+	            validation: Number(result.counts?.validation || 0),
+	            loop_test: Number(result.counts?.loop_test || 0),
+	          };
+	          clearCatalogSelection();
+	          await reloadCatalogAfterMutation();
+	          setDatasetActionStatus(
+	            `${names.length} dataset${names.length === 1 ? "" : "s"} ${apiAction === "mark" ? "added to" : "removed from"} the ${label} set.`,
+	            "success",
+	          );
+	          return;
+	        }
+
+	        if (action === "delete") {
+	          const preview = names.slice(0, 8).join("\\n");
+	          const remainder = names.length > 8 ? `\\n...and ${names.length - 8} more` : "";
+	          if (!window.confirm(
+	            `Delete ${names.length} selected dataset${names.length === 1 ? "" : "s"} permanently?\\n\\n${preview}${remainder}\\n\\nThis cannot be undone.`,
+	          )) return;
+	          const required = `DELETE ${names.length} DATASETS`;
+	          const confirmation = window.prompt(
+	            `One more confirmation is required.\\n\\nType exactly:\\n${required}`,
+	            "",
+	          );
+	          if (confirmation === null) return;
+	          if (confirmation.trim() !== required) {
+	            setDatasetActionStatus("Bulk deletion cancelled: the confirmation text did not match.", "error");
+	            return;
+	          }
+	          setDatasetActionStatus(`Deleting ${names.length} selected datasets...`);
+	          const response = await fetch("/api/datasets/bulk-delete", {
+	            method: "POST",
+	            headers: {
+	              "Content-Type": "application/json",
+	              "X-Dataset-Delete-Confirmation": required,
+	            },
+	            body: JSON.stringify({names, confirmation: required}),
+	          });
+	          const result = await response.json();
+	          if (!response.ok) throw new Error(result.message || "bulk dataset deletion failed");
+	          removeCatalogEntries(result.affected_names || names);
+	          clearCatalogSelection();
+	          await reloadCatalogAfterMutation();
+	          setDatasetActionStatus(
+	            `Deleted ${result.deleted_roots?.length || names.length} dataset director${(result.deleted_roots?.length || names.length) === 1 ? "y" : "ies"} (${result.size_human || "size unavailable"}).`,
+	            "success",
+	          );
+	        }
+	      } catch (error) {
+	        setDatasetActionStatus(`Bulk action failed: ${error.message || error}`, "error");
+	      } finally {
+	        updateBulkActionUi();
+	      }
+	    }
+
+	    async function deleteDataset(name) {
+	      const data = datasets[name];
+	      if (!data || !canDeleteDataset(data)) {
+	        setDatasetActionStatus("This dataset cannot be deleted from the current address.", "error");
+	        return;
+	      }
+	      const aliases = datasetOrder.filter(candidate => datasets[candidate]?.root === data.root);
+	      const aliasNote = aliases.length > 1
+	        ? `\\n\\nThis physical directory is also used by:\\n${aliases.filter(candidate => candidate !== name).join("\\n")}`
+	        : "";
+	      const approved = window.confirm(
+	        `Delete this dataset permanently?\\n\\n${name}\\n${data.root}${aliasNote}\\n\\nThis cannot be undone.`,
+	      );
+	      if (!approved) return;
+	      const confirmation = window.prompt(
+	        `One more confirmation is required.\\n\\nType the exact dataset name to delete:\\n${name}`,
+	        "",
+	      );
+	      if (confirmation === null) return;
+	      if (confirmation.trim() !== name) {
+	        setDatasetActionStatus("Deletion cancelled: the dataset name did not match.", "error");
+	        return;
+	      }
+	      if (timer) {
+	        clearInterval(timer);
+	        timer = null;
+	        setPlaybackRunning(false);
+	      }
+	      setDatasetActionStatus(`Deleting ${name}...`);
+	      datasetCatalogGrid.querySelectorAll(".dataset-delete-button").forEach(button => { button.disabled = true; });
+	      try {
+	        const response = await fetch("/api/datasets/delete", {
+	          method: "POST",
+	          headers: {
+	            "Content-Type": "application/json",
+	            "X-Dataset-Delete-Confirmation": name,
+	          },
+	          body: JSON.stringify({name, confirm_name: confirmation.trim()}),
+	        });
+	        const result = await response.json();
+	        if (!response.ok) throw new Error(result.message || "dataset deletion failed");
+	        removeCatalogEntries(result.affected_names || [name]);
+	        await reloadCatalogAfterMutation();
+	        const affected = (result.affected_names || []).join(", ");
+	        setDatasetActionStatus(
+	          `Deleted ${result.name} (${result.size_human || "size unavailable"}). Removed catalog entries: ${affected || result.name}.`,
+	          "success",
+	        );
+	      } catch (error) {
+	        renderDatasetCatalog();
+	        setDatasetActionStatus(`Delete failed: ${error.message || error}`, "error");
+	      }
+	    }
+
+	    function splitForDataset(name) {
 	      const category = datasetCategoryByName[name] || "";
-	      return /_train[0-9]*$/.test(name) || category === "official" || category === "skill" || category === "generated";
+	      if (category === "closed_loop" || name.endsWith("_loop_val") || name.includes("_loop_validation")) return "closed_loop";
+	      if (name.endsWith("_val") || name.endsWith("_valid") || name.includes("_validation")) return "valid";
+	      return "train";
 	    }
 
-	    function isPreviewDataset(name) {
-	      const platform = datasetPlatformByName[name] || "so101";
-	      const category = datasetCategoryByName[name] || "";
-	      return platform !== "so101" || category === "temporary" || category === "mycobot";
+	    function renderTypeForDataset(name) {
+	      if (isPhotorealDataset(name)) return "photoreal";
+	      const format = String(datasets[name]?.dataset_format || "").toLowerCase();
+	      if (format.includes("real_camera") || format.includes("hardware")) return "real";
+	      return "simulation";
 	    }
 
 	    function isPhotorealDataset(name) {
@@ -2722,12 +4865,16 @@ def _index_html() -> str:
 	      return platform === "mycobot" ? "MyCobot" : "SO101";
 	    }
 
-	    function viewKindLabel(kind) {
-	      if (kind === "valid") return "validation";
-	      if (kind === "photoreal") return "photoreal";
-	      if (kind === "closed_loop") return "closed loop";
-	      if (kind === "preview") return "preview";
-	      return "train";
+	    function splitLabel(kind) {
+	      if (kind === "valid") return "Validation";
+	      if (kind === "closed_loop") return "Closed loop";
+	      return "Train";
+	    }
+
+	    function renderTypeLabel(kind) {
+	      if (kind === "photoreal") return "Photoreal";
+	      if (kind === "real") return "Real camera";
+	      return "Standard sim";
 	    }
 
 	    async function loadTrainingRuns() {
@@ -2837,6 +4984,7 @@ def _index_html() -> str:
       if (data.fps) fps.value = String(data.fps);
       episode.max = String(data.episodes - 1);
       episode.value = String(Math.min(Number(episode.value), data.episodes - 1));
+      episodeValue.value = episode.value;
       syncFrameRange();
     }
 
@@ -2846,6 +4994,7 @@ def _index_html() -> str:
       const length = data.episode_lengths[Number(episode.value)];
       frame.max = String(length - 1);
       frame.value = String(Math.min(Number(frame.value), length - 1));
+      frameValue.value = frame.value;
     }
 
 	    function renderPhotorealShortcuts() {
@@ -3202,8 +5351,6 @@ def _index_html() -> str:
 	    tabTrainingManager.addEventListener("click", () => syncAppTab("training"));
 	    tabLoopAnalyzer.addEventListener("click", () => syncAppTab("loop"));
 	    tabSimulator.addEventListener("click", () => syncAppTab("simulator"));
-	    platformKind.addEventListener("change", syncViewKind);
-	    viewKind.addEventListener("change", syncViewKind);
 	    trainingReload.addEventListener("click", loadTrainingRuns);
 	    trainingRuns.addEventListener("click", event => {
 	      const button = event.target.closest?.(".run-item");
@@ -3241,29 +5388,55 @@ def _index_html() -> str:
 	      const button = event.target.closest?.("button[data-episode][data-frame]");
 	      if (!button) return;
 	      episode.value = button.dataset.episode;
+	      episodeValue.value = episode.value;
 	      syncFrameRange();
 	      frame.value = button.dataset.frame;
+	      frameValue.value = frame.value;
 	      loadFrame();
 	    });
-	    split.addEventListener("change", () => { syncEpisodeRange(); renderPhotorealShortcuts(); loadFrame(); });
-	    episode.addEventListener("input", () => { frame.value = "0"; loadFrame(); });
-	    frame.addEventListener("input", loadFrame);
+	    episode.addEventListener("input", () => {
+	      episodeValue.value = episode.value;
+	      frame.value = "0";
+	      frameValue.value = "0";
+	      loadFrame();
+	    });
+	    frame.addEventListener("input", () => {
+	      frameValue.value = frame.value;
+	      loadFrame();
+	    });
     play.addEventListener("click", () => {
       if (timer) {
         clearInterval(timer);
         timer = null;
-        play.textContent = "Play";
+        setPlaybackRunning(false);
         return;
       }
-      play.textContent = "Pause";
+      setPlaybackRunning(true);
       timer = setInterval(() => {
         if (Number(frame.value) >= Number(frame.max)) frame.value = "0";
         else frame.value = String(Number(frame.value) + 1);
+        frameValue.value = frame.value;
         loadFrame();
       }, Math.max(16, 1000 / Number(fps.value || 12)));
 	    });
-	    document.getElementById("prev").addEventListener("click", () => { frame.value = String(Math.max(0, Number(frame.value) - 1)); loadFrame(); });
-	    document.getElementById("next").addEventListener("click", () => { frame.value = String(Math.min(Number(frame.max), Number(frame.value) + 1)); loadFrame(); });
+	    document.getElementById("prev").addEventListener("click", () => {
+	      frame.value = String(Math.max(0, Number(frame.value) - 1));
+	      frameValue.value = frame.value;
+	      loadFrame();
+	    });
+	    document.getElementById("next").addEventListener("click", () => {
+	      frame.value = String(Math.min(Number(frame.max), Number(frame.value) + 1));
+	      frameValue.value = frame.value;
+	      loadFrame();
+	    });
+	    catalogPreviousPage.addEventListener("click", () => {
+	      if (datasetCatalogTable && catalogCurrentPage > 1) datasetCatalogTable.setPage(catalogCurrentPage - 1);
+	    });
+	    catalogNextPage.addEventListener("click", () => {
+	      if (datasetCatalogTable && catalogCurrentPage < catalogLastPage) datasetCatalogTable.setPage(catalogCurrentPage + 1);
+	    });
+	    catalogBulkAction.addEventListener("change", updateBulkActionUi);
+	    catalogApplyBulkAction.addEventListener("click", applyCatalogBulkAction);
 	    loopAnalyzerReload.addEventListener("click", () => initLoopAnalyzer(true));
 	    init();
   </script>

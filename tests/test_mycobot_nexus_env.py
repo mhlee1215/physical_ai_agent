@@ -536,14 +536,14 @@ def _minimal_280_fingertip_collada_triangle() -> str:
     <geometry id="mesh">
       <mesh>
         <source id="mesh-position" name="position">
-          <float_array id="mesh-position-array" count="9">-0.03176 -0.01318 0 0.0275 0.01318 0 0 0 0.012</float_array>
+          <float_array id="mesh-position-array" count="12">-0.028 -0.013 0 0.0275 0.0415 0 0 0 0.012 0 0 -0.004</float_array>
         </source>
         <vertices id="mesh-vertices">
           <input semantic="POSITION" source="#mesh-position" />
         </vertices>
-        <triangles count="1">
+        <triangles count="4">
           <input semantic="VERTEX" source="#mesh-vertices" offset="0" />
-          <p>0 1 2</p>
+          <p>0 1 2 0 3 1 1 3 2 2 3 0</p>
         </triangles>
       </mesh>
     </geometry>
@@ -584,14 +584,14 @@ def _tiny_collada_triangle() -> str:
     <geometry id="mesh">
       <mesh>
         <source id="mesh-position" name="position">
-          <float_array id="mesh-position-array" count="9">0 0 0 0.01 0 0 0 0.01 0</float_array>
+          <float_array id="mesh-position-array" count="12">0 0 0 0.01 0 0 0 0.01 0 0 0 0.01</float_array>
         </source>
         <vertices id="mesh-vertices">
           <input semantic="POSITION" source="#mesh-position" />
         </vertices>
-        <triangles count="1">
+        <triangles count="4">
           <input semantic="VERTEX" source="#mesh-vertices" offset="0" />
-          <p>0 1 2</p>
+          <p>0 1 2 0 3 1 1 3 2 2 3 0</p>
         </triangles>
       </mesh>
     </geometry>

@@ -289,7 +289,14 @@ def _prepare_official_32x32_uvc_camera_rig_xml_unlocked(
     staged_assets: dict[str, str] = {}
     for filename in expected_hashes:
         destination = build_dir / filename
-        shutil.copyfile(source_dir / filename, destination)
+        temporary = destination.with_name(
+            f".{destination.name}.{os.getpid()}.tmp"
+        )
+        try:
+            shutil.copyfile(source_dir / filename, temporary)
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
         staged_assets[filename] = str(destination)
 
     robot_xml = build_dir / "so101_new_calib_official_32x32_uvc_camera_rig.xml"

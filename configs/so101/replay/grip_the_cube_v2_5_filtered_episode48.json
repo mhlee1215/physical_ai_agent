@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "root": "_workspace/so101_lerobot/grip_the_cube_v2_5_filtered",
+    "episode": 48
+  },
+  "hardware": {
+    "port": "/dev/cu.usbmodem5AE60824791",
+    "calibration": "_workspace/real_so100/calibration/so100_local.json",
+    "home_pose": "_workspace/real_so100/home_pose/canonical_home_pose_2026_06_07.json",
+    "serial_num_retry": 3
+  },
+  "trajectory": {
+    "fps": null,
+    "alignment": "calibrated-start-relative",
+    "max_trajectory_step_raw": 50.0,
+    "max_bridge_step_raw": 10.0,
+    "max_tracking_error_raw": 45.0,
+    "max_start_error_raw": 30.0,
+    "start_range_tolerance_raw": 5.0,
+    "bridge_step_seconds": 0.12,
+    "hold_final_seconds": 1.0
+  },
+  "execution": {
+    "enabled": true,
+    "operator_confirmed": true,
+    "workspace_clear_confirmed": true,
+    "direct_observer_confirmed": true,
+    "require_typed_confirmation": true,
+    "return_mode": "home",
+    "disable_torque_after_run": true
+  },
+  "recording": {
+    "enabled": true,
+    "camera_index": 1,
+    "video_fps": 12.0
+  },
+  "output_dir": "_workspace/real_so101/dataset_episode_replays/grip_the_cube_v2_5_filtered_episode48"
+}

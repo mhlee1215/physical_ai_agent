@@ -1,5 +1,10 @@
 # SO101 Training Dataset Contracts
 
+The canonical inventory of implemented teacher motions, recommended production
+recipes, primitive boundaries, and known limitations is
+[`docs/so101_teacher_trajectory_catalog.md`](../../../docs/so101_teacher_trajectory_catalog.md).
+Read it before selecting or extending a teacher trajectory.
+
 This directory is for dataset contracts, export recipes, checksums, and
 dataset-only manifests. User-facing training run configs live under
 `configs/so101/training/`.
@@ -165,6 +170,23 @@ adding another shell wrapper with the same purpose. If neither `--preset` nor
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start
 ```
+
+The Robot Experiment Manager persists three independent, completion-gated roles
+in `_workspace/so101_training/dataset_role_selection.json`: `training`,
+`validation`, and `loop_test`. To replace all three dataset inputs in the chosen
+config with those exact role sets, add `--use-marked-dataset-set`:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
+  --preset default \
+  --use-marked-dataset-set
+```
+
+All three roles must be non-empty. Training and validation rows must pass the
+dataset completion registry, while a loop-test row must carry an executable
+test-case contract. A missing root/start report fails before training starts.
+`--use-marked-trainable-set` remains available only as a legacy train-source
+override.
 
 The explicit spelling of the same default is:
 

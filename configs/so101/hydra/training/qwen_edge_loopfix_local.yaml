@@ -57,6 +57,7 @@ launcher:
   closed_loop_valid_mask_checkpoint: _workspace/so101_valid_mask_head/qwen_edge_primitives/valid_mask_head.pt
   closed_loop_valid_mask_threshold: 0.5
   closed_loop_valid_mask_consecutive: 2
+  closed_loop_valid_mask_requery_confirmations: 2
   closed_loop_policy_n_action_steps: 15
   closed_loop_policy_num_steps: 10
   validation_interval_steps: null

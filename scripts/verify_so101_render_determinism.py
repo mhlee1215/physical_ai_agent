@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -83,7 +84,10 @@ def _camera_images(root: Path) -> dict[str, Path]:
     for path in sorted(frame_dir.glob("episode_0000_frame_0000_camera*.*")):
         if path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
             continue
-        images[path.stem.rsplit("_", 1)[-1]] = path
+        match = re.search(r"_(camera\d+)$", path.stem)
+        if match is None:
+            continue
+        images[match.group(1)] = path
     if not images:
         raise FileNotFoundError(f"no determinism probe images under {frame_dir}")
     return images

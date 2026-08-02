@@ -1,0 +1,175 @@
+{
+  "name": "grip_the_cube_v3_hardware_locked_photoreal_v1",
+  "description": "SO101 SmolVLA continuation training on the hardware-locked v3 photoreal grip and alignment datasets, with held-out v3 validation and an exactly matched hardware-rig photoreal closed-loop test.",
+  "default_config": "configs/so101/training_defaults/grip_the_cube_v2_default.json",
+  "scenario": "grip_the_cube",
+  "execution_policy": "single_smolvla_teacher",
+  "task": "grip_the_cube_v3_hardware_locked_photoreal_v1",
+  "action_mode": "absolute_qpos",
+  "dataset": {
+    "train_datasets": [
+      {
+        "name": "grip_the_cube_v3_hardware_locked_photoreal_v1",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-v1",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 300,
+        "expected_frames": 53100,
+        "quality_note": "Hardware-locked v10 camera assembly, balanced camera1 bins 9/10, successful staged grip-and-lift trajectories, terminal hold, and deterministic 256-spp photoreal rerender.",
+        "grid_balance": {
+          "camera_key": "observation.images.camera1",
+          "grid_size": 4,
+          "frame_index": 0,
+          "bins": [9, 10],
+          "visible_episodes": 300,
+          "bin_source": "report",
+          "bin_counts": {
+            "9": 150,
+            "10": 150
+          }
+        }
+      },
+      {
+        "name": "grip_the_cube_v3_align_trajectory_hardware_locked_photoreal_v1",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-align-trajectory-hardware-locked-photoreal-v1",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v3_align_trajectory_hardware_locked_photoreal_v1",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v3_align_trajectory_hardware_locked_photoreal_v1/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 200,
+        "expected_frames": 29400,
+        "quality_note": "Hardware-locked v10 near-target alignment trajectories, balanced camera1 bins 9/10, strict pre-close geometry gates, and deterministic 256-spp photoreal rerender.",
+        "grid_balance": {
+          "camera_key": "observation.images.camera1",
+          "grid_size": 4,
+          "frame_index": 0,
+          "bins": [9, 10],
+          "visible_episodes": 200,
+          "bin_source": "report",
+          "bin_counts": {
+            "9": 100,
+            "10": 100
+          }
+        }
+      }
+    ],
+    "validation_dataset": {
+      "name": "grip_the_cube_v3_hardware_locked_photoreal_v1_validation",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-v1-validation",
+      "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1_validation",
+      "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1_validation/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+      "expected_episodes": 50,
+      "expected_frames": 8850,
+      "quality_note": "Held-out hardware-locked v10 validation trajectories with 25 episodes each in camera1 bins 9 and 10 and the canonical 10-episode loop-start report."
+    },
+    "camera_contract": {
+      "observation.images.camera1": "egocentric_cam",
+      "observation.images.camera2": "wrist_cam",
+      "observation.images.camera3": "wrist_cam duplicate"
+    },
+    "prompt_contract": {
+      "task": "grip the {color} {shape} and lift",
+      "generated_task": "grip the green cube and lift",
+      "applies_to": [
+        "grip_the_cube_v3_hardware_locked_photoreal_v1",
+        "grip_the_cube_v3_align_trajectory_hardware_locked_photoreal_v1",
+        "grip_the_cube_v3_hardware_locked_photoreal_v1_validation"
+      ]
+    },
+    "generation": {
+      "source_recipes": [
+        "configs/so101/dataset_generation/grip_the_cube_v3_hardware_locked_photoreal_v1.json",
+        "configs/so101/dataset_generation/grip_the_cube_v3_align_trajectory_hardware_locked_photoreal_v1.json"
+      ],
+      "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+      "skill_mode": "grip_the_cube_v1",
+      "target_object_color": "green",
+      "target_object_shape": "cube",
+      "object_half_sizes": [0.015],
+      "terminal_hold_steps": 12,
+      "balanced_camera1_bins": [9, 10]
+    }
+  },
+  "training_config": {
+    "data_loading": {
+      "predecoded_image_cache": {
+        "root_env": "SO101_PREDECODED_CACHE_ROOT",
+        "default_root": "_workspace/so101_image_cache",
+        "train": false,
+        "validation": "grip_the_cube_v3_hardware_locked_photoreal_v1_validation"
+      }
+    },
+    "closed_loop": {
+      "observation_renderer": {
+        "mode": "blender_cycles_live",
+        "render_policy_inference_only": false,
+        "camera_keys": [
+          "observation.images.camera1",
+          "observation.images.camera2"
+        ],
+        "width": 256,
+        "height": 256,
+        "source_width": 512,
+        "source_height": 512,
+        "policy_resize": "direct_square_render",
+        "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+        "profile_from_camera_rig": true,
+        "samples": 256,
+        "denoise": false,
+        "compute_device_type": "METAL",
+        "cycles_seed": 98200,
+        "lighting_profile": "directional_key_fill_rim_v4",
+        "key_light_power": 0.0,
+        "fill_light_power": 0.0,
+        "world_strength": 0.015,
+        "hdri_rotation_deg": 90.0,
+        "exposure": -1.6,
+        "color_management": "AgX",
+        "color_look": "AgX - Medium High Contrast",
+        "gamma": 1.0,
+        "output_format": "PNG",
+        "sample_clamp_indirect": 0.85,
+        "background_wall": false,
+        "stable_tabletop": true,
+        "scene_profile": "pbr_workshop_v4",
+        "robot_material": "matte_pla",
+        "material_profile": "configs/so101/render_profiles/black_arm_green_white_gripper_white_mount_locked_v1.json",
+        "camera_lens": 48.0,
+        "asset_root": "_workspace/photoreal_assets",
+        "blender_bin": "blender",
+        "max_mesh_geoms": 128,
+        "preserve_pinhole_renders": true,
+        "bevel_width_range_m": [0.00024, 0.00032],
+        "bevel_segments": 3
+      },
+      "test_cases": [
+        {
+          "id": "grip_the_cube_v3_hardware_locked_photoreal_v1_loop_test",
+          "description": "Ten held-out validation first states replayed in the exact v10 hardware camera rig with the matching v3 photoreal render profile.",
+          "episodes": 10,
+          "steps": 200,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "grip the green cube and lift",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1_validation/meta/closed_loop/grip_the_cube_v3_hardware_locked_photoreal_v1_validation_start10.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 8850
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          }
+        }
+      ]
+    }
+  }
+}

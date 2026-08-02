@@ -1744,9 +1744,9 @@ def _add_280_pi_position_actuators(root: ET.Element) -> None:
         "joint4_to_joint3": "-2.53 2.53",
         "joint5_to_joint4": "-2.53 2.53",
         "joint6_to_joint5": "-2.93 2.93",
-        "joint6output_to_joint6": "-3.14 3.14",
+        "joint7_to_joint6": "-3.14 3.14",
     }
-    for joint_name in MYCOBOT_320_MODEL_JOINT_NAMES:
+    for joint_name in MYCOBOT_MODEL_JOINT_NAMES:
         ET.SubElement(
             actuator,
             "position",

@@ -56,7 +56,14 @@
     "grid_lookup_y_max": 0.45,
     "grid_lookup_resolution": 161,
     "deterministic_camera_bin_lookup": true,
-    "target_object_color": "green"
+    "target_object_color": "green",
+    "object_half_sizes": "0.015",
+    "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+    "spawn_center_x": 0.15,
+    "spawn_center_y": 0.0,
+    "spawn_min_radius": 0.1,
+    "spawn_max_radius": 0.3,
+    "spawn_angle_half_range_deg": 90.0
   },
   "sidecar": {
     "camera_key": "observation.images.camera1",

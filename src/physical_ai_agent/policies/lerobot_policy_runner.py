@@ -178,7 +178,7 @@ def load_lerobot_policy_runner(
     checkpoint is loaded but its normalizer/unnormalizer processors are skipped.
     """
 
-    from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+    from lerobot.policies.factory import get_policy_class
 
     policy_cls = get_policy_class(policy_type)
     policy = _load_policy_from_pretrained(
@@ -188,6 +188,7 @@ def load_lerobot_policy_runner(
         map_location=device,
         device=device,
     )
+    _set_policy_runtime_device(policy, device)
     policy.eval()
 
     preprocessor_overrides: dict[str, Any] = {
@@ -211,6 +212,12 @@ def load_lerobot_policy_runner(
         processor_source=processor_source,
         visual_servo_head=visual_servo_head,
     )
+
+
+def _set_policy_runtime_device(policy: Any, device: str) -> None:
+    config = getattr(policy, "config", None)
+    if config is not None and hasattr(config, "device"):
+        config.device = device
 
 
 def _load_visual_servo_head_if_present(policy_path: Path, *, device: str) -> Any | None:
@@ -298,12 +305,52 @@ def _load_policy_from_pretrained(
     map_location: str,
     device: str,
 ) -> Any:
+    from physical_ai_agent.policies.peft_loader import load_policy_artifact
+
+    return load_policy_artifact(
+        policy_path,
+        base_loader=lambda base_path, policy_config_path: _load_base_policy_from_pretrained(
+            policy_cls=policy_cls,
+            policy_path=base_path,
+            policy_config_path=policy_config_path,
+            local_files_only=local_files_only,
+            map_location=map_location,
+            device=device,
+        ),
+        device=device,
+    )
+
+
+def _load_base_policy_from_pretrained(
+    *,
+    policy_cls: Any,
+    policy_path: str,
+    policy_config_path: str | None,
+    local_files_only: bool,
+    map_location: str,
+    device: str,
+) -> Any:
+    policy_config = None
+    if policy_config_path is not None:
+        from lerobot.configs.policies import PreTrainedConfig
+
+        config_class = getattr(policy_cls, "config_class", None)
+        if config_class is None:
+            raise ValueError(f"policy class has no config_class for PEFT artifact: {policy_cls}")
+        policy_config = PreTrainedConfig.from_pretrained(
+            policy_config_path,
+            local_files_only=local_files_only,
+        )
+        if not isinstance(policy_config, config_class):
+            raise TypeError(f"Expected {config_class.__name__}, got {type(policy_config).__name__}")
+    config_kwargs = {"config": policy_config} if policy_config is not None else {}
     if not local_files_only:
         return policy_cls.from_pretrained(
             policy_path,
             local_files_only=False,
             map_location=map_location,
             device=device,
+            **config_kwargs,
         )
 
     try:
@@ -316,6 +363,7 @@ def _load_policy_from_pretrained(
             local_files_only=True,
             map_location=map_location,
             device=device,
+            **config_kwargs,
         )
 
     try:
@@ -332,6 +380,7 @@ def _load_policy_from_pretrained(
             local_files_only=True,
             map_location=map_location,
             device=device,
+            **config_kwargs,
         )
 
     def _local_from_pretrained(original: Any):
@@ -365,6 +414,7 @@ def _load_policy_from_pretrained(
             local_files_only=True,
             map_location=map_location,
             device=device,
+            **config_kwargs,
         )
 
 

@@ -78,6 +78,7 @@ class SO101HydraLauncherDefaults(BaseModel):
     closed_loop_valid_mask_checkpoint: str | None
     closed_loop_valid_mask_threshold: float = Field(ge=0, le=1)
     closed_loop_valid_mask_consecutive: PositiveInt
+    closed_loop_valid_mask_requery_confirmations: PositiveInt
     closed_loop_policy_n_action_steps: PositiveInt
     closed_loop_policy_num_steps: PositiveInt
     validation_interval_steps: PositiveInt | None

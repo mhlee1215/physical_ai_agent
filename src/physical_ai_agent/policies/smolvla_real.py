@@ -157,7 +157,7 @@ def _run_policy_rollout(
 ) -> tuple[list[SO101Step], list[Any], dict[str, str]]:
     import json
 
-    from physical_ai_agent.sim.so101_camera_input import SO101InputFrame, _make_camera, _write_input_preview
+    from physical_ai_agent.sim.so101_camera_input import SO101InputFrame, _write_input_preview
 
     env = SO101NexusEnv(env_id=env_id, render_mode=None)
     renderer = None
@@ -271,15 +271,25 @@ def _load_pretrained_policy(model_id: str, local_files_only: bool, device: str =
     from huggingface_hub import snapshot_download
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
     import lerobot.policies.smolvla.smolvlm_with_expert as smolvlm_with_expert
+    from physical_ai_agent.policies.peft_loader import load_policy_artifact
 
     _ensure_local_smolvla_config_type(model_id)
     device_plan = _select_policy_device(device)
 
     def _from_pretrained(selected_device: str):
-        return SmolVLAPolicy.from_pretrained(
+        return load_policy_artifact(
             model_id,
-            local_files_only=local_files_only,
-            map_location=selected_device,
+            base_loader=lambda path, policy_config_path: SmolVLAPolicy.from_pretrained(
+                path,
+                local_files_only=local_files_only,
+                map_location=selected_device,
+                device=selected_device,
+                **_peft_policy_config_kwargs(
+                    SmolVLAPolicy,
+                    policy_config_path,
+                    local_files_only=local_files_only,
+                ),
+            ),
             device=selected_device,
         )
 
@@ -321,10 +331,19 @@ def _load_pretrained_policy(model_id: str, local_files_only: bool, device: str =
         ),
     ):
         def _local_policy(selected_device: str):
-            return SmolVLAPolicy.from_pretrained(
+            return load_policy_artifact(
                 model_id,
-                local_files_only=True,
-                map_location=selected_device,
+                base_loader=lambda path, policy_config_path: SmolVLAPolicy.from_pretrained(
+                    path,
+                    local_files_only=True,
+                    map_location=selected_device,
+                    device=selected_device,
+                    **_peft_policy_config_kwargs(
+                        SmolVLAPolicy,
+                        policy_config_path,
+                        local_files_only=True,
+                    ),
+                ),
                 device=selected_device,
             )
 
@@ -332,6 +351,25 @@ def _load_pretrained_policy(model_id: str, local_files_only: bool, device: str =
             loader=_local_policy,
             device_plan=device_plan,
         )
+
+
+def _peft_policy_config_kwargs(
+    policy_cls: Any,
+    policy_config_path: str | None,
+    *,
+    local_files_only: bool,
+) -> dict[str, Any]:
+    if policy_config_path is None:
+        return {}
+    from lerobot.configs.policies import PreTrainedConfig
+
+    config = PreTrainedConfig.from_pretrained(
+        policy_config_path,
+        local_files_only=local_files_only,
+    )
+    if not isinstance(config, policy_cls.config_class):
+        raise TypeError(f"Expected {policy_cls.config_class.__name__}, got {type(config).__name__}")
+    return {"config": config}
 
 
 def _ensure_local_smolvla_config_type(model_id: str) -> None:

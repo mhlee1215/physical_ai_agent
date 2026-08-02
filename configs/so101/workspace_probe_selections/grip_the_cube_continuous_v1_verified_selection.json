@@ -1,0 +1,40 @@
+{
+  "format": "so101_verified_probe_selection_v1",
+  "name": "grip_the_cube_continuous_v1_verified_selection",
+  "description": "Seed-free representative placements selected only from points that passed physical grasp, operational lift, strict teacher geometry, and the dataset visibility contract. No source frames, actions, states, or seeds are reused.",
+  "base_reference": "shoulder_pan_axis_projection",
+  "base_origin_world_xy_m": [0.015478381254367828, 0.00000525602343],
+  "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+  "probe_reports": [
+    {
+      "path": "_workspace/so101_workspace_probes/grip_the_cube_continuous_v1_near_regression_probe/summary.json",
+      "sha256": "3748edbb78cdd9e39a1d4090af19737239f33f7fd2add37530d56d5c6adfc8d5"
+    },
+    {
+      "path": "_workspace/so101_workspace_probes/grip_the_cube_continuous_v1_bridge_probe/summary.json",
+      "sha256": "79ff636d053b005efc364582d0d67575018bc3c6513d58d83cf027be3470b49e"
+    },
+    {
+      "path": "_workspace/so101_workspace_probes/grip_the_cube_continuous_v1_outer_probe/summary.json",
+      "sha256": "4f4a73a86a2b7a02dc4b115411df07ec1db76b598ef05340bc073faff3e26326"
+    },
+    {
+      "path": "_workspace/so101_workspace_probes/grip_the_cube_continuous_v1_outer_boundary_probe/summary.json",
+      "sha256": "741b2bbac949b007d59404b9d7cf7bf59375eae98a1127e5dbfa7a905b835d10"
+    },
+    {
+      "path": "_workspace/so101_workspace_probes/grip_the_cube_continuous_v1_outer_yaw_boundary_probe/summary.json",
+      "sha256": "ea6eeb5b3745242a365d31d42a565afba29b2a6ca185156296598afe00f6569e"
+    }
+  ],
+  "placements": [
+    {"id": "continuous-r100", "point_id": "r000_a002_yaw00", "world_xy_m": [0.10208092163281171, 0.05000525602343], "radius_from_base_m": 0.10, "angle_from_base_deg": 30.0, "object_yaw_deg": 30.0},
+    {"id": "continuous-r140", "point_id": "r002_a002_yaw00", "world_xy_m": [0.13672193778418926, 0.07000525602343], "radius_from_base_m": 0.14, "angle_from_base_deg": 30.0, "object_yaw_deg": 30.0},
+    {"id": "continuous-r180", "point_id": "r000_a003_yaw00", "world_xy_m": [0.17136295393556678, 0.09000525602342999], "radius_from_base_m": 0.18, "angle_from_base_deg": 30.0, "object_yaw_deg": 30.0},
+    {"id": "continuous-r200", "point_id": "r002_a003_yaw00", "world_xy_m": [0.18868346201125555, 0.10000525602342998], "radius_from_base_m": 0.20, "angle_from_base_deg": 30.0, "object_yaw_deg": 30.0},
+    {"id": "continuous-r220", "point_id": "r004_a003_yaw00", "world_xy_m": [0.20600397008694432, 0.11000525602342999], "radius_from_base_m": 0.22, "angle_from_base_deg": 30.0, "object_yaw_deg": 30.0},
+    {"id": "continuous-r280", "point_id": "r000_a002_yaw00", "world_xy_m": [0.25796549431401067, 0.14000525602342997], "radius_from_base_m": 0.28, "angle_from_base_deg": 30.0, "object_yaw_deg": 30.0},
+    {"id": "continuous-r300", "point_id": "r002_a002_yaw00", "world_xy_m": [0.27528600238969947, 0.15000525602342996], "radius_from_base_m": 0.30, "angle_from_base_deg": 30.0, "object_yaw_deg": 30.0},
+    {"id": "continuous-r305", "point_id": "r003_a005_yaw00", "world_xy_m": [0.23114594951626483, 0.21567282428532697], "radius_from_base_m": 0.305, "angle_from_base_deg": 45.0, "object_yaw_deg": 30.0}
+  ]
+}

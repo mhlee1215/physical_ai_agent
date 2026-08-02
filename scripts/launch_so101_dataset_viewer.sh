@@ -56,6 +56,36 @@ bootout() {
   done
 }
 
+stop_orphaned_listener() {
+  local pid
+  local command
+  local listener_pids
+  local stopped=""
+  listener_pids="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  for pid in $listener_pids; do
+    [ -n "$pid" ] || continue
+    command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    case "$command" in
+      *"$ROOT/scripts/serve_so101_dataset_viewer.py"*)
+        kill "$pid"
+        stopped="$stopped $pid"
+        ;;
+    esac
+  done
+
+  for _ in $(seq 1 50); do
+    local alive=0
+    for pid in $stopped; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+        break
+      fi
+    done
+    [ "$alive" -eq 0 ] && return
+    sleep 0.1
+  done
+}
+
 bootstrap() {
   local attempt
   for attempt in 1 2 3 4 5; do
@@ -71,6 +101,7 @@ bootstrap() {
 start() {
   write_plist
   bootout
+  stop_orphaned_listener
   bootstrap
   launchctl kickstart -k "gui/$UID_VALUE/$LABEL"
 }

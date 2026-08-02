@@ -66,6 +66,38 @@ class SamplingAugmentationTest(unittest.TestCase):
         self.assertEqual(float(augmented[5]), 1.0)
 
     @unittest.skipIf(torch is None, "torch is not installed in this Python environment")
+    def test_state_jitter_probability_can_disable_recovery_perturbation(self) -> None:
+        state = torch.zeros((4, 6), dtype=torch.float32)
+
+        augmented = augment_state_tensor(
+            state,
+            SamplingAugmentationConfig(
+                state_jitter_std=0.1,
+                state_jitter_prob=0.0,
+                enabled=True,
+            ),
+        )
+
+        self.assertTrue(torch.equal(augmented, state))
+
+    @unittest.skipIf(torch is None, "torch is not installed in this Python environment")
+    def test_state_jitter_probability_one_perturbs_every_sample(self) -> None:
+        torch.manual_seed(123)
+        state = torch.zeros((8, 6), dtype=torch.float32)
+
+        augmented = augment_state_tensor(
+            state,
+            SamplingAugmentationConfig(
+                state_jitter_std=0.1,
+                state_jitter_prob=1.0,
+                enabled=True,
+            ),
+        )
+
+        self.assertTrue(torch.all(augmented[:, :5].abs().sum(dim=1) > 0.0))
+        self.assertTrue(torch.equal(augmented[:, 5], state[:, 5]))
+
+    @unittest.skipIf(torch is None, "torch is not installed in this Python environment")
     def test_patch_mask_ratio_masks_patch_grid(self) -> None:
         batch = {
             "observation.images.camera1": torch.ones((2, 3, 256, 256), dtype=torch.float32),

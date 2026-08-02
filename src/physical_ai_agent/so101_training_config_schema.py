@@ -5,7 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, PositiveInt, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeFloat,
+    PositiveFloat,
+    PositiveInt,
+    ValidationError,
+    model_validator,
+)
 
 
 SCHEMA_PATH = Path("configs/so101/schemas/training_config.schema.json")
@@ -97,6 +106,7 @@ class PredecodedImageCacheConfig(StrictModel):
 
 class AugmentationConfig(StrictModel):
     state_jitter_std: NonNegativeFloat | None = None
+    state_jitter_prob: float | None = Field(default=None, ge=0, le=1)
     state_jitter_arm_only: bool | None = None
     state_dropout_prob: float | None = Field(default=None, ge=0, lt=1)
     state_dropout_keep_gripper: bool | None = None
@@ -121,9 +131,54 @@ class WeightedStepsConfig(ExtensibleModel):
     weight: NonNegativeFloat | None = None
 
 
+class ActionOverlapConsistencyConfig(ExtensibleModel):
+    offset: PositiveInt | None = None
+    horizon: PositiveInt | None = None
+    weight: NonNegativeFloat | None = None
+
+
+class ActionRequeryConsistencyConfig(StrictModel):
+    offset: PositiveInt
+    horizon: PositiveInt
+    weight: NonNegativeFloat
+
+
 class ActionSmoothnessConfig(ExtensibleModel):
     weight: NonNegativeFloat | None = None
     include_gripper: bool | None = None
+
+
+class ActionWristRollCircularConfig(StrictModel):
+    weight: NonNegativeFloat
+    joint_index: int = Field(ge=0)
+    period_radians: float = Field(gt=0)
+
+
+class ModelInputsConfig(StrictModel):
+    active_image_features: list[
+        Literal[
+            "observation.images.camera1",
+            "observation.images.camera2",
+            "observation.images.camera3",
+        ]
+    ]
+
+    @model_validator(mode="after")
+    def active_cameras_are_unique(self) -> ModelInputsConfig:
+        if not self.active_image_features:
+            raise ValueError("active_image_features must select at least one camera")
+        if len(set(self.active_image_features)) != len(self.active_image_features):
+            raise ValueError("active_image_features must not contain duplicates")
+        return self
+
+
+class PeftTrainingConfig(StrictModel):
+    enabled: bool
+    method_type: Literal["LORA"]
+    base_model_name_or_path: str
+    target_modules: str | list[str]
+    full_training_modules: list[str]
+    r: PositiveInt
 
 
 class TrainingDataLoadingConfig(StrictModel):
@@ -134,14 +189,18 @@ class TrainingDataLoadingConfig(StrictModel):
 class TrainingLossesConfig(ExtensibleModel):
     action_prefix: WeightedStepsConfig | None = None
     action_chunk_consistency: WeightedStepsConfig | None = None
+    action_overlap_consistency: ActionOverlapConsistencyConfig | None = None
+    action_requery_consistency: ActionRequeryConsistencyConfig | None = None
     action_smoothness: ActionSmoothnessConfig | None = None
+    action_wrist_roll_circular: ActionWristRollCircularConfig | None = None
     action_teacher_importance: dict[str, Any] | None = None
 
 
 class SO101DatasetSectionConfig(StrictModel):
     train_dataset: DatasetConfig | None = None
     train_datasets: list[DatasetConfig] | None = None
-    validation_dataset: DatasetConfig
+    validation_dataset: DatasetConfig | None = None
+    validation_datasets: list[DatasetConfig] | None = None
     camera_contract: CameraContractConfig
     prompt_contract: dict[str, Any] | None = None
     generation: dict[str, Any] | None = None
@@ -151,11 +210,14 @@ class SO101DatasetSectionConfig(StrictModel):
     @model_validator(mode="after")
     def exactly_one_train_source(self) -> SO101DatasetSectionConfig:
         _validate_train_source_choice(self.train_dataset, self.train_datasets)
+        _validate_validation_source_choice(self.validation_dataset, self.validation_datasets)
         return self
 
 
 class SO101RuntimeTrainingConfig(StrictModel):
     training: TrainingConfig | None = None
+    model_inputs: ModelInputsConfig | None = None
+    peft: PeftTrainingConfig | None = None
     data_loading: TrainingDataLoadingConfig | None = None
     losses: TrainingLossesConfig | None = None
     augmentation: AugmentationConfig | None = None
@@ -167,13 +229,179 @@ class ActionRmseSweepConfig(ExtensibleModel):
     enabled: bool | None = None
     episodes: PositiveInt | None = None
     tensorboard_tag: str | None = None
+    y_axis_max: PositiveFloat | None = None
     n_action_steps: list[PositiveInt] | None = None
+    render_policy_inference_only: bool | None = None
+    timeline_mode: Literal["start_dataset", "phase_chain"] | None = None
+    test_cases: list[str] | None = None
+    phase_contract_test_case_id: str | None = None
+
+
+class TemporalEnsembleConfig(StrictModel):
+    enabled: bool
+    decay: NonNegativeFloat
+
+
+class ClosedLoopEnvironmentConfig(StrictModel):
+    camera_rig_config: str
+    target_object_color: Literal["red", "blue", "green"]
+    object_half_sizes: list[float] = Field(min_length=1)
+    spawn_center: tuple[float, float]
+    spawn_min_radius: NonNegativeFloat
+    spawn_max_radius: NonNegativeFloat
+    spawn_angle_half_range_deg: NonNegativeFloat
+
+    @model_validator(mode="after")
+    def validate_object_and_spawn_contract(self) -> ClosedLoopEnvironmentConfig:
+        if any(float(value) <= 0.0 for value in self.object_half_sizes):
+            raise ValueError("object_half_sizes values must be positive")
+        if float(self.spawn_max_radius) < float(self.spawn_min_radius):
+            raise ValueError("spawn_max_radius must be >= spawn_min_radius")
+        return self
+
+
+class ClosedLoopObservationRendererConfig(StrictModel):
+    mode: Literal["blender_cycles_live"]
+    render_policy_inference_only: bool
+    camera_keys: list[Literal["observation.images.camera1", "observation.images.camera2"]]
+    width: PositiveInt
+    height: PositiveInt
+    source_width: PositiveInt | None = None
+    source_height: PositiveInt | None = None
+    policy_resize: Literal["direct_square_render", "center_crop_square_then_resize"] | None = None
+    camera_rig_config: str | None = None
+    profile_from_camera_rig: bool | None = None
+    samples: PositiveInt
+    denoise: bool
+    compute_device_type: str | None = None
+    cycles_seed: int
+    lighting_profile: Literal["studio_small_08", "flat", "directional_key_fill_rim_v4"]
+    key_light_power: NonNegativeFloat
+    fill_light_power: NonNegativeFloat
+    world_strength: NonNegativeFloat
+    hdri_rotation_deg: float
+    exposure: float
+    color_management: Literal["Filmic", "Standard", "AgX"]
+    color_look: str
+    gamma: float
+    output_format: Literal["PNG", "JPEG"]
+    sample_clamp_indirect: NonNegativeFloat
+    background_wall: bool
+    stable_tabletop: bool
+    scene_profile: Literal["neutral", "black_table_clutter", "pbr_workbench_v4", "pbr_workshop_v4"]
+    robot_material: Literal["plastic", "matte_pla", "metal"]
+    material_profile: str
+    camera_lens: float
+    asset_root: str
+    blender_bin: str
+    max_mesh_geoms: PositiveInt
+    preserve_pinhole_renders: bool | None = None
+    bevel_width_range_m: tuple[NonNegativeFloat, NonNegativeFloat] | None = None
+    bevel_segments: PositiveInt | None = None
+    lens_distortion: dict[str, Any] | None = None
+    visual_props: list[dict[str, Any]] | None = None
+    lights: list[dict[str, Any]] | None = None
+
+    @model_validator(mode="after")
+    def require_policy_camera_pair(self) -> ClosedLoopObservationRendererConfig:
+        expected = ["observation.images.camera1", "observation.images.camera2"]
+        if self.camera_keys != expected:
+            raise ValueError(f"camera_keys must be exactly {expected}")
+        source_fields = (self.source_width, self.source_height, self.policy_resize)
+        if any(value is not None for value in source_fields) and not all(value is not None for value in source_fields):
+            raise ValueError("source_width, source_height, and policy_resize must be declared together")
+        if self.source_width is not None and self.source_height is not None:
+            if int(self.source_width) < int(self.width) or int(self.source_height) < int(self.height):
+                raise ValueError("source render resolution cannot be smaller than policy output resolution")
+            if self.policy_resize == "direct_square_render" and int(self.source_width) != int(self.source_height):
+                raise ValueError("direct_square_render requires a square source render")
+        if self.profile_from_camera_rig and not self.camera_rig_config:
+            raise ValueError("profile_from_camera_rig requires camera_rig_config")
+        return self
+
+
+class ClosedLoopTensorBoardMediaConfig(StrictModel):
+    train_reference_frequency: Literal["once_per_run", "every_checkpoint", "disabled"]
+    chain_rollout_layout: Literal["per_episode", "combined"] | None = None
+    render_test_cases: list[str] | None = None
+
+    @model_validator(mode="after")
+    def render_test_case_ids_are_unique(self) -> ClosedLoopTensorBoardMediaConfig:
+        if self.render_test_cases is not None and len(set(self.render_test_cases)) != len(
+            self.render_test_cases
+        ):
+            raise ValueError("render_test_cases must not contain duplicates")
+        return self
+
+
+class ClosedLoopPhaseVerifierConfig(StrictModel):
+    kind: Literal["approach", "alignment", "grip_lift"]
+    tcp_position_tolerance_m: NonNegativeFloat | None = None
+    gripper_open_tolerance_rad: NonNegativeFloat | None = None
+    edge_xy_tolerance_m: NonNegativeFloat | None = None
+    jaw_angle_tolerance_deg: NonNegativeFloat | None = None
+    lift_height_m: NonNegativeFloat | None = None
+    hold_steps: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def require_kind_specific_thresholds(self) -> ClosedLoopPhaseVerifierConfig:
+        required = {
+            "approach": ("tcp_position_tolerance_m", "gripper_open_tolerance_rad"),
+            "alignment": (
+                "edge_xy_tolerance_m",
+                "jaw_angle_tolerance_deg",
+                "gripper_open_tolerance_rad",
+            ),
+            "grip_lift": ("lift_height_m",),
+        }[self.kind]
+        missing = [name for name in required if getattr(self, name) is None]
+        if missing:
+            raise ValueError(f"{self.kind} verifier missing thresholds: {', '.join(missing)}")
+        if self.kind == "grip_lift" and self.hold_steps <= 0:
+            raise ValueError("grip_lift verifier hold_steps must be positive")
+        return self
+
+
+class ClosedLoopPhaseConfig(StrictModel):
+    id: Literal["approach", "alignment", "grip_lift"]
+    prompt: str
+    max_steps: PositiveInt
+    reference_length_multiplier: PositiveFloat | None = None
+    reference_report_path: str
+    verifier: ClosedLoopPhaseVerifierConfig
+
+    @model_validator(mode="after")
+    def verifier_matches_phase(self) -> ClosedLoopPhaseConfig:
+        if self.verifier.kind != self.id:
+            raise ValueError(f"phase {self.id!r} requires verifier kind {self.id!r}")
+        return self
+
+
+class ClosedLoopPhaseContractConfig(StrictModel):
+    mode: Literal["primitive", "chain"]
+    handoff_mode: Literal["continuous", "oracle_reset"]
+    phases: list[ClosedLoopPhaseConfig] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_phase_sequence(self) -> ClosedLoopPhaseContractConfig:
+        ids = [phase.id for phase in self.phases]
+        expected = ["approach", "alignment", "grip_lift"]
+        if self.mode == "primitive" and len(ids) != 1:
+            raise ValueError("primitive phase contract must contain exactly one phase")
+        if self.mode == "chain" and ids != expected:
+            raise ValueError(f"chain phase contract must use {expected}")
+        if self.mode == "primitive" and self.handoff_mode != "continuous":
+            raise ValueError("primitive phase contract handoff_mode must be continuous")
+        return self
 
 
 class ClosedLoopTestCaseConfig(ExtensibleModel):
     id: str
     description: str | None = None
+    schedule: Literal["periodic", "final", "manual"] = "periodic"
     episodes: PositiveInt | None = None
+    episode_indices: list[int] | None = None
+    source_grid_bins: list[int] | None = None
     steps: PositiveInt | None = None
     seed: int | None = None
     start_contract: str | None = None
@@ -184,6 +412,25 @@ class ClosedLoopTestCaseConfig(ExtensibleModel):
     start_report_path: str | None = None
     plan_json: str | None = None
     start_dataset: DatasetConfig | None = None
+    env_config: ClosedLoopEnvironmentConfig | None = None
+    phase_contract: ClosedLoopPhaseContractConfig | None = None
+
+    @model_validator(mode="after")
+    def validate_phase_test_contract(self) -> ClosedLoopTestCaseConfig:
+        if self.episode_indices is not None:
+            if any(index < 0 for index in self.episode_indices):
+                raise ValueError("episode_indices must be non-negative")
+            if len(set(self.episode_indices)) != len(self.episode_indices):
+                raise ValueError("episode_indices must not contain duplicates")
+            if self.episodes is not None and len(self.episode_indices) != self.episodes:
+                raise ValueError("episodes must equal len(episode_indices)")
+        if (
+            self.phase_contract is not None
+            and self.phase_contract.handoff_mode == "oracle_reset"
+            and self.schedule != "manual"
+        ):
+            raise ValueError("oracle_reset phase contracts are manual diagnostics only")
+        return self
 
 
 class ClosedLoopConfig(ExtensibleModel):
@@ -202,6 +449,9 @@ class ClosedLoopConfig(ExtensibleModel):
     success_threshold: float | None = None
     valid_mask_checkpoint: str | None = None
     action_rmse_sweep: ActionRmseSweepConfig | None = None
+    temporal_ensemble: TemporalEnsembleConfig | None = None
+    observation_renderer: ClosedLoopObservationRendererConfig | None = None
+    tensorboard_media: ClosedLoopTensorBoardMediaConfig | None = None
     test_cases: list[ClosedLoopTestCaseConfig] | None = None
 
     @model_validator(mode="after")
@@ -213,6 +463,45 @@ class ClosedLoopConfig(ExtensibleModel):
             if case.id in seen:
                 raise ValueError(f"duplicate closed_loop test case id {case.id!r}")
             seen.add(case.id)
+        render_test_cases = (
+            self.tensorboard_media.render_test_cases
+            if self.tensorboard_media is not None
+            else None
+        )
+        unknown_render_cases = sorted(set(render_test_cases or []) - seen)
+        if unknown_render_cases:
+            raise ValueError(
+                "tensorboard_media.render_test_cases contains unknown test ids: "
+                + ", ".join(unknown_render_cases)
+            )
+        if self.action_rmse_sweep is not None:
+            unknown_rmse_cases = sorted(
+                set(self.action_rmse_sweep.test_cases or []) - seen
+            )
+            if unknown_rmse_cases:
+                raise ValueError(
+                    "action_rmse_sweep.test_cases contains unknown test ids: "
+                    + ", ".join(unknown_rmse_cases)
+                )
+            source_case_id = self.action_rmse_sweep.phase_contract_test_case_id
+            if source_case_id is not None and source_case_id not in seen:
+                raise ValueError(
+                    "action_rmse_sweep.phase_contract_test_case_id contains unknown test id: "
+                    + source_case_id
+                )
+            if self.action_rmse_sweep.timeline_mode == "phase_chain":
+                if source_case_id is None:
+                    raise ValueError(
+                        "phase_chain action RMSE requires phase_contract_test_case_id"
+                    )
+                source_case = next(case for case in self.test_cases if case.id == source_case_id)
+                if (
+                    source_case.phase_contract is None
+                    or source_case.phase_contract.mode != "chain"
+                ):
+                    raise ValueError(
+                        "phase_chain action RMSE source test case must use a chain phase contract"
+                    )
         return self
 
     @model_validator(mode="after")
@@ -251,7 +540,8 @@ class SO101TrainingConfig(StrictModel):
     training_config: SO101RuntimeTrainingConfig | None = None
     train_dataset: DatasetConfig | None = None
     train_datasets: list[DatasetConfig] | None = None
-    validation_dataset: DatasetConfig
+    validation_dataset: DatasetConfig | None = None
+    validation_datasets: list[DatasetConfig] | None = None
     camera_contract: CameraContractConfig
     prompt_contract: dict[str, Any] | None = None
     training: TrainingConfig | None = None
@@ -261,8 +551,13 @@ class SO101TrainingConfig(StrictModel):
     augmentation: AugmentationConfig
     action_prefix: WeightedStepsConfig | None = None
     action_chunk_consistency: WeightedStepsConfig | None = None
+    action_overlap_consistency: ActionOverlapConsistencyConfig | None = None
+    action_requery_consistency: ActionRequeryConsistencyConfig | None = None
     action_smoothness: ActionSmoothnessConfig | None = None
+    action_wrist_roll_circular: ActionWristRollCircularConfig | None = None
     action_teacher_importance: dict[str, Any] | None = None
+    model_inputs: ModelInputsConfig | None = None
+    peft: PeftTrainingConfig | None = None
     dataset_generation: dict[str, Any] | None = None
     dataset_generation_augmentation: dict[str, Any] | None = None
     reachable_bin_filter: dict[str, Any] | None = None
@@ -278,6 +573,54 @@ class SO101TrainingConfig(StrictModel):
     @model_validator(mode="after")
     def exactly_one_train_source(self) -> SO101TrainingConfig:
         _validate_train_source_choice(self.train_dataset, self.train_datasets)
+        _validate_validation_source_choice(self.validation_dataset, self.validation_datasets)
+        renderer = self.closed_loop.observation_renderer if self.closed_loop is not None else None
+        if renderer is not None:
+            validation_specs = self.validation_datasets or (
+                [self.validation_dataset] if self.validation_dataset is not None else []
+            )
+            validation_roots = {
+                str(dataset.root or "")
+                for dataset in validation_specs
+                if dataset.root
+            }
+            if not validation_roots or any("photoreal" not in root for root in validation_roots):
+                raise ValueError(
+                    "closed_loop.observation_renderer=blender_cycles_live requires photoreal validation datasets"
+                )
+            for index, case in enumerate(self.closed_loop.test_cases or []):
+                start_root = str(case.start_dataset.root or "") if case.start_dataset is not None else ""
+                if start_root not in validation_roots:
+                    raise ValueError(
+                        f"closed_loop.test_cases[{index}].start_dataset.root must match a validation dataset root"
+                    )
+                report_path = str(case.start_report_path or "")
+                if not any(report_path.startswith(root.rstrip("/") + "/") for root in validation_roots):
+                    raise ValueError(
+                        f"closed_loop.test_cases[{index}].start_report_path must be inside a validation dataset root"
+                    )
+                if case.phase_contract is not None:
+                    for phase in case.phase_contract.phases:
+                        if not any(
+                            phase.reference_report_path.startswith(root.rstrip("/") + "/")
+                            for root in validation_roots
+                        ):
+                            raise ValueError(
+                                f"closed_loop.test_cases[{index}] phase {phase.id!r} reference report "
+                                "must be inside a validation dataset root"
+                            )
+                if renderer.camera_rig_config is not None and case.env_config is not None:
+                    if case.env_config.camera_rig_config != renderer.camera_rig_config:
+                        raise ValueError(
+                            f"closed_loop.test_cases[{index}].env_config.camera_rig_config must match "
+                            "closed_loop.observation_renderer.camera_rig_config"
+                        )
+                if case.env_config is not None and case.env_object_color is not None:
+                    if case.env_config.target_object_color != case.env_object_color:
+                        raise ValueError(
+                            f"closed_loop.test_cases[{index}].env_object_color must match "
+                            "env_config.target_object_color"
+                        )
         return self
 
 
@@ -423,6 +766,7 @@ def _reject_dataset_keys_in_default(default_payload: dict[str, Any], default_pat
         "train_dataset",
         "train_datasets",
         "validation_dataset",
+        "validation_datasets",
         "camera_contract",
         "prompt_contract",
         "dataset_generation",
@@ -460,6 +804,7 @@ def normalize_so101_training_config(config: dict[str, Any]) -> dict[str, Any]:
         _copy_if_absent(normalized, "train_dataset", dataset_section.get("train_dataset"))
         _copy_if_absent(normalized, "train_datasets", dataset_section.get("train_datasets"))
         _copy_if_absent(normalized, "validation_dataset", dataset_section.get("validation_dataset"))
+        _copy_if_absent(normalized, "validation_datasets", dataset_section.get("validation_datasets"))
         _copy_if_absent(normalized, "camera_contract", dataset_section.get("camera_contract"))
         _copy_if_absent(normalized, "prompt_contract", dataset_section.get("prompt_contract"))
         _copy_if_absent(normalized, "dataset_generation", dataset_section.get("generation"))
@@ -469,6 +814,8 @@ def normalize_so101_training_config(config: dict[str, Any]) -> dict[str, Any]:
     training_section = normalized.get("training_config")
     if isinstance(training_section, dict):
         _copy_if_absent(normalized, "training", training_section.get("training"))
+        _copy_if_absent(normalized, "model_inputs", training_section.get("model_inputs"))
+        _copy_if_absent(normalized, "peft", training_section.get("peft"))
         _copy_if_absent(normalized, "augmentation", training_section.get("augmentation"))
         _copy_if_absent(normalized, "closed_loop", training_section.get("closed_loop"))
         _copy_if_absent(normalized, "visual_servo", training_section.get("visual_servo"))
@@ -480,7 +827,10 @@ def normalize_so101_training_config(config: dict[str, Any]) -> dict[str, Any]:
         if isinstance(losses, dict):
             _copy_if_absent(normalized, "action_prefix", losses.get("action_prefix"))
             _copy_if_absent(normalized, "action_chunk_consistency", losses.get("action_chunk_consistency"))
+            _copy_if_absent(normalized, "action_overlap_consistency", losses.get("action_overlap_consistency"))
+            _copy_if_absent(normalized, "action_requery_consistency", losses.get("action_requery_consistency"))
             _copy_if_absent(normalized, "action_smoothness", losses.get("action_smoothness"))
+            _copy_if_absent(normalized, "action_wrist_roll_circular", losses.get("action_wrist_roll_circular"))
             _copy_if_absent(normalized, "action_teacher_importance", losses.get("action_teacher_importance"))
     return normalized
 
@@ -505,11 +855,30 @@ def _validate_train_source_choice(
             raise ValueError(f"duplicate train_datasets names: {duplicates}")
 
 
+def _validate_validation_source_choice(
+    validation_dataset: DatasetConfig | None,
+    validation_datasets: list[DatasetConfig] | None,
+) -> None:
+    has_single = validation_dataset is not None
+    has_multi = validation_datasets is not None
+    if has_single == has_multi:
+        raise ValueError("define exactly one of validation_dataset or validation_datasets")
+    if validation_datasets is not None:
+        if not validation_datasets:
+            raise ValueError("validation_datasets must be non-empty")
+        names = [dataset.name for dataset in validation_datasets if dataset.name]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate validation_datasets names: {duplicates}")
+
+
 def _strict_errors(config: dict[str, Any], label: str) -> list[str]:
     errors: list[str] = []
     normalized = normalize_so101_training_config(config)
     if ("train_dataset" in normalized) == ("train_datasets" in normalized):
         errors.append(f"{label}: define exactly one of train_dataset or train_datasets")
+    if ("validation_dataset" in normalized) == ("validation_datasets" in normalized):
+        errors.append(f"{label}: define exactly one of validation_dataset or validation_datasets")
     try:
         SO101TrainingConfig.model_validate(normalized)
     except ValidationError as exc:
@@ -517,6 +886,7 @@ def _strict_errors(config: dict[str, Any], label: str) -> list[str]:
             error
             for error in _pydantic_errors(exc, label)
             if "define exactly one of train_dataset or train_datasets" not in error
+            and "define exactly one of validation_dataset or validation_datasets" not in error
         )
         return errors
     errors.extend(_cross_field_errors(normalized, label, strict=True))
@@ -550,8 +920,39 @@ def _relaxed_errors(config: dict[str, Any], label: str) -> list[str]:
                         errors.append(f"{label}.train_datasets[{index}]: duplicate dataset name {name!r}")
                     seen_names.add(name)
 
+    has_single_validation = "validation_dataset" in normalized
+    has_multi_validation = "validation_datasets" in normalized
+    if has_single_validation and has_multi_validation:
+        errors.append(f"{label}: define exactly one of validation_dataset or validation_datasets")
+    if has_single_validation:
+        errors.extend(
+            _validate_model(
+                DatasetConfig,
+                normalized.get("validation_dataset"),
+                f"{label}.validation_dataset",
+            )
+        )
+    if has_multi_validation:
+        value = normalized.get("validation_datasets")
+        if not isinstance(value, list) or not value:
+            errors.append(f"{label}.validation_datasets: must be a non-empty list")
+        else:
+            seen_names: set[str] = set()
+            for index, dataset in enumerate(value):
+                errors.extend(
+                    _validate_model(
+                        DatasetConfig,
+                        dataset,
+                        f"{label}.validation_datasets[{index}]",
+                    )
+                )
+                if isinstance(dataset, dict) and dataset.get("name"):
+                    name = str(dataset["name"])
+                    if name in seen_names:
+                        errors.append(f"{label}.validation_datasets[{index}]: duplicate dataset name {name!r}")
+                    seen_names.add(name)
+
     relaxed_models: tuple[tuple[str, type[BaseModel]], ...] = (
-        ("validation_dataset", DatasetConfig),
         ("camera_contract", CameraContractConfig),
         ("tensorboard", TensorBoardConfig),
         ("training", TrainingConfig),
@@ -560,7 +961,12 @@ def _relaxed_errors(config: dict[str, Any], label: str) -> list[str]:
         ("closed_loop", ClosedLoopConfig),
         ("action_prefix", WeightedStepsConfig),
         ("action_chunk_consistency", WeightedStepsConfig),
+        ("action_overlap_consistency", ActionOverlapConsistencyConfig),
+        ("action_requery_consistency", ActionRequeryConsistencyConfig),
         ("action_smoothness", ActionSmoothnessConfig),
+        ("action_wrist_roll_circular", ActionWristRollCircularConfig),
+        ("model_inputs", ModelInputsConfig),
+        ("peft", PeftTrainingConfig),
     )
     for key, model in relaxed_models:
         if key in normalized:
@@ -586,6 +992,23 @@ def _cross_field_errors(config: dict[str, Any], label: str, *, strict: bool) -> 
         unknown = sorted(set(cache["train"]) - known)
         for key in unknown:
             errors.append(f"{label}.predecoded_image_cache.train: cache mapping key {key!r} is not a train_datasets name")
+    validation_datasets = config.get("validation_datasets")
+    if (
+        isinstance(cache, dict)
+        and isinstance(cache.get("validation"), dict)
+        and isinstance(validation_datasets, list)
+    ):
+        known = {
+            str(item.get("name"))
+            for item in validation_datasets
+            if isinstance(item, dict) and item.get("name")
+        }
+        unknown = sorted(set(cache["validation"]) - known)
+        for key in unknown:
+            errors.append(
+                f"{label}.predecoded_image_cache.validation: cache mapping key {key!r} "
+                "is not a validation_datasets name"
+            )
 
     closed_loop = config.get("closed_loop")
     if isinstance(closed_loop, dict):

@@ -20,6 +20,9 @@ from physical_ai_agent.so101_dataset_registry import (
     require_recipe_training_ready,
     validate_registered_recipe,
 )
+from physical_ai_agent.so101_workspace_spawn_catalog import (
+    load_workspace_spawn_catalog,
+)
 
 DEFAULT_RECIPE = Path("configs/so101/dataset_generation/grip_the_cube_v2.json")
 
@@ -66,7 +69,12 @@ def main() -> None:
         print(json.dumps({"recipe": str(args.recipe), "stages": stages}, indent=2))
         return
 
-    _require_append_only_output_roots(recipe, split=args.split, overwrite=args.overwrite)
+    _require_append_only_output_roots(
+        recipe,
+        split=args.split,
+        overwrite=args.overwrite,
+        reuse_complete_splits=args.reuse_complete_shards,
+    )
 
     env = {**os.environ, "PYTHONPATH": _prepend_pythonpath(os.environ.get("PYTHONPATH", ""))}
     _run_stages(
@@ -74,6 +82,7 @@ def main() -> None:
         env=env,
         workers=args.workers,
         reuse_complete_shards=args.reuse_complete_shards,
+        recipe=recipe,
     )
     selected_splits = _selected_split_names(recipe, args.split)
     try:
@@ -124,6 +133,45 @@ def _validate_spawn_catalogs(recipe: dict[str, Any]) -> None:
         if not path.is_file():
             raise FileNotFoundError(f"spawn catalog does not exist: {path}")
         payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("format") in {
+            "so101_workspace_spawn_catalog_v1",
+            "so101_workspace_spawn_catalog_v2",
+        }:
+            catalog = load_workspace_spawn_catalog(path)
+            if expected_qpos is not None and (
+                len(catalog.home_qpos) != len(expected_qpos)
+                or any(
+                    not math.isclose(float(left), float(right), abs_tol=5e-6)
+                    for left, right in zip(
+                        catalog.home_qpos, expected_qpos, strict=True
+                    )
+                )
+            ):
+                raise ValueError(
+                    f"workspace spawn catalog home qpos does not match recipe: {path}"
+                )
+            if expected_rig is not None and catalog.camera_rig_config != expected_rig:
+                raise ValueError(
+                    f"workspace spawn catalog camera rig does not match recipe: {path}"
+                )
+            common = recipe.get("common", {})
+            if (
+                common.get("target_object_color") is not None
+                and catalog.object_color != common["target_object_color"]
+            ):
+                raise ValueError(
+                    f"workspace spawn catalog object color does not match recipe: {path}"
+                )
+            common_sizes = [
+                float(value)
+                for value in str(common.get("object_half_sizes", "")).split(",")
+                if value.strip()
+            ]
+            if common_sizes and common_sizes != [catalog.object_half_size_m]:
+                raise ValueError(
+                    f"workspace spawn catalog object size does not match recipe: {path}"
+                )
+            continue
         if payload.get("format") != "so101_spawn_catalog_v1":
             raise ValueError(f"unsupported spawn catalog format: {path}")
         if expected_yaw is not None and (
@@ -137,7 +185,10 @@ def _validate_spawn_catalogs(recipe: dict[str, Any]) -> None:
             raise ValueError(f"spawn catalog initial qpos does not match recipe: {path}")
         if expected_rig is not None and payload.get("camera_rig_config") != expected_rig:
             raise ValueError(f"spawn catalog camera rig does not match recipe: {path}")
-        if expected_rig_sha256 is not None and payload.get("camera_rig_sha256") != expected_rig_sha256:
+        if (
+            expected_rig_sha256 is not None
+            and payload.get("camera_rig_sha256") != expected_rig_sha256
+        ):
             raise ValueError(f"spawn catalog camera rig checksum does not match recipe: {path}")
         lookup = payload.get("lookup")
         if not isinstance(lookup, dict) or not lookup:
@@ -157,16 +208,28 @@ def _validate_spawn_catalogs(recipe: dict[str, Any]) -> None:
 
 
 def _require_append_only_output_roots(
-    recipe: dict[str, Any], *, split: str, overwrite: bool
+    recipe: dict[str, Any],
+    *,
+    split: str,
+    overwrite: bool,
+    reuse_complete_splits: bool = False,
 ) -> None:
     if overwrite:
         return
     selected = _selected_split_names(recipe, split)
-    existing = [
-        Path(str(recipe["splits"][name]["output_root"]))
-        for name in selected
-        if Path(str(recipe["splits"][name]["output_root"])).exists()
-    ]
+    existing = []
+    for name in selected:
+        split_spec = recipe["splits"][name]
+        output_root = Path(str(split_spec["output_root"]))
+        if not output_root.exists():
+            continue
+        if (
+            reuse_complete_splits
+            and split_spec.get("kind", "generated") == "generated"
+            and _generated_split_output_is_complete(split_spec)
+        ):
+            continue
+        existing.append(output_root)
     if existing:
         roots = "\n".join(f"- {root}" for root in existing)
         raise FileExistsError(
@@ -188,6 +251,30 @@ def build_stages(
     generated_selected = [
         name for name in selected if recipe["splits"][name].get("kind", "generated") == "generated"
     ]
+    if generated_selected:
+        source = recipe.get("source") or {}
+        for catalog_index, raw_catalog_path in enumerate(source.get("catalogs", [])):
+            catalog_path = Path(raw_catalog_path)
+            payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+            if payload.get("format") != "so101_workspace_spawn_catalog_v2":
+                continue
+            stages.append(
+                {
+                    "name": f"workspace-distribution:{catalog_index}",
+                    "command": [
+                        python,
+                        recipe["workspace_catalog_distribution_report_script"],
+                        "--catalog",
+                        str(catalog_path),
+                        "--output-dir",
+                        str(
+                            Path(recipe["workspace_catalog_distribution_report_root"])
+                            / recipe["name"]
+                            / catalog_path.stem
+                        ),
+                    ],
+                }
+            )
     for lookup in recipe.get("lookup_builders", []) if generated_selected else []:
         stages.append(
             {
@@ -197,6 +284,42 @@ def build_stages(
         )
     for split_name in selected:
         split_spec = recipe["splits"][split_name]
+        if split_spec.get("kind", "generated") == "phase_subset":
+            stages.append(
+                {
+                    "name": f"phase-subset:{split_name}",
+                    "command": _phase_subset_command(
+                        recipe,
+                        split_spec=split_spec,
+                        python=python,
+                        overwrite=overwrite,
+                    ),
+                }
+            )
+            stages.append(
+                {
+                    "name": f"sidecar:{split_name}",
+                    "command": _sidecar_command(
+                        recipe,
+                        split_spec=split_spec,
+                        python=python,
+                    ),
+                }
+            )
+            if split_spec.get("closed_loop"):
+                stages.append(
+                    {
+                        "name": f"closed-loop-starts:{split_name}",
+                        "command": _closed_loop_command(
+                            recipe,
+                            recipe_path=recipe_path,
+                            split_name=split_name,
+                            split_spec=split_spec,
+                            python=python,
+                        ),
+                    }
+                )
+            continue
         if split_spec.get("kind", "generated") == "episode_subset":
             stages.append(
                 {
@@ -220,7 +343,11 @@ def build_stages(
                     {
                         "name": f"closed-loop-starts:{split_name}",
                         "command": _closed_loop_command(
-                            recipe, split_spec=split_spec, python=python
+                            recipe,
+                            recipe_path=recipe_path,
+                            split_name=split_name,
+                            split_spec=split_spec,
+                            python=python,
                         ),
                     }
                 )
@@ -233,11 +360,11 @@ def build_stages(
                         "name": f"render-replay:{split_name}",
                         "command": _render_replay_command(
                             recipe,
+                            recipe_path=recipe_path,
                             split_name=split_name,
                             split_spec=split_spec,
                             source_spec=source_spec,
                             python=python,
-                            recipe_path=recipe_path,
                         ),
                     }
                 )
@@ -299,7 +426,11 @@ def build_stages(
                     {
                         "name": f"closed-loop-starts:{split_name}",
                         "command": _closed_loop_command(
-                            recipe, split_spec=split_spec, python=python
+                            recipe,
+                            recipe_path=recipe_path,
+                            split_name=split_name,
+                            split_spec=split_spec,
+                            python=python,
                         ),
                     }
                 )
@@ -361,13 +492,39 @@ def build_stages(
             stages.append(
                 {
                     "name": f"closed-loop-starts:{split_name}",
-                    "command": _closed_loop_command(recipe, split_spec=split_spec, python=python),
+                    "command": _closed_loop_command(
+                        recipe,
+                        recipe_path=recipe_path,
+                        split_name=split_name,
+                        split_spec=split_spec,
+                        python=python,
+                    ),
+                }
+            )
+    if int(recipe.get("schema_version", 1)) >= 2:
+        for split_name in selected:
+            stages.append(
+                {
+                    "name": f"distribution:{split_name}",
+                    "command": _distribution_report_command(
+                        recipe,
+                        split_name=split_name,
+                        split_spec=recipe["splits"][split_name],
+                        python=python,
+                        recipe_path=recipe_path,
+                    ),
                 }
             )
     if split == "all" and {"train", "validation"}.issubset(recipe["splits"]):
-        stages.append(
-            {"name": "audit:train-vs-validation", "command": _audit_command(recipe, python=python)}
+        audit_command = (
+            _phase_subset_audit_command(recipe, python=python)
+            if all(
+                recipe["splits"][name].get("kind") == "phase_subset"
+                for name in ("train", "validation")
+            )
+            else _audit_command(recipe, python=python)
         )
+        stages.append({"name": "audit:train-vs-validation", "command": audit_command})
     if "train" in selected:
         for reference in recipe.get("overlap_audits", []):
             stages.append(
@@ -425,11 +582,11 @@ def _render_replay_path(source_spec: dict[str, Any], replay: dict[str, Any]) -> 
 def _render_replay_command(
     recipe: dict[str, Any],
     *,
+    recipe_path: Path,
     split_name: str,
     split_spec: dict[str, Any],
     source_spec: dict[str, Any],
     python: str,
-    recipe_path: Path,
 ) -> list[str]:
     return [
         python,
@@ -478,6 +635,12 @@ def _render_command(
         str(render["width"]),
         "--height",
         str(render["height"]),
+        "--source-width",
+        str(render.get("source_width") or render["width"]),
+        "--source-height",
+        str(render.get("source_height") or render["height"]),
+        "--policy-resize",
+        render.get("policy_resize", "direct_square_render"),
         "--samples",
         str(render["samples"]),
         "--cycles-seed",
@@ -519,6 +682,18 @@ def _render_command(
         command.append("--skip-existing")
     if render.get("material_profile"):
         command.extend(["--robot-material-config", render["material_profile"]])
+    if render.get("profile_from_camera_rig"):
+        camera_rig_config = recipe["common"].get("camera_rig_config")
+        if not camera_rig_config:
+            raise ValueError(
+                "profile_from_camera_rig requires common.camera_rig_config"
+            )
+        command.extend(["--camera-rig-config", camera_rig_config])
+    command.append(
+        "--preserve-pinhole-renders"
+        if render.get("preserve_pinhole_renders", False)
+        else "--no-preserve-pinhole-renders"
+    )
     if not render.get("duplicate_camera3_from_camera2", True):
         command.append("--no-duplicate-camera3-from-camera2")
     return command
@@ -614,16 +789,33 @@ def _export_command(
         str(bin_spec["episodes"]),
         "--seed",
         str(bin_spec["seed"]),
-        "--grid-balance-target-per-bin",
-        str(bin_spec["episodes"]),
-        "--grid-balance-bins",
-        str(bin_id),
-        "--grid-lookup-start-index",
-        str(bin_spec["lookup_start_index"]),
     ]
-    lookup_cache = split_spec.get("lookup_cache") or recipe.get("lookup_cache")
-    if lookup_cache:
-        command.extend(["--grid-lookup-cache", str(lookup_cache)])
+    workspace_catalog = recipe["common"].get("workspace_spawn_catalog")
+    if workspace_catalog:
+        command.extend(
+            [
+                "--workspace-spawn-catalog",
+                str(workspace_catalog),
+                "--workspace-spawn-start-index",
+                str(bin_spec["lookup_start_index"]),
+                "--workspace-spawn-candidate-count",
+                str(bin_spec["workspace_candidate_count"]),
+            ]
+        )
+    else:
+        command.extend(
+            [
+                "--grid-balance-target-per-bin",
+                str(bin_spec["episodes"]),
+                "--grid-balance-bins",
+                str(bin_id),
+                "--grid-lookup-start-index",
+                str(bin_spec["lookup_start_index"]),
+            ]
+        )
+        lookup_cache = split_spec.get("lookup_cache") or recipe.get("lookup_cache")
+        if lookup_cache:
+            command.extend(["--grid-lookup-cache", str(lookup_cache)])
     start_pose = recipe.get("start_pose")
     if start_pose:
         command.append(
@@ -632,6 +824,12 @@ def _export_command(
             )
         )
     for key, value in recipe["common"].items():
+        if key == "workspace_spawn_catalog":
+            continue
+        if key == "include_camera3_duplicate":
+            if value is False:
+                command.append("--no-camera3-duplicate")
+            continue
         if key == "contact_alignment":
             command.extend(_contact_alignment_args(value))
             continue
@@ -647,6 +845,26 @@ def _export_command(
     if overwrite:
         command.append("--overwrite")
     return command
+
+
+def _distribution_report_command(
+    recipe: dict[str, Any],
+    *,
+    split_name: str,
+    split_spec: dict[str, Any],
+    python: str,
+    recipe_path: Path,
+) -> list[str]:
+    return [
+        python,
+        recipe["distribution_report_script"],
+        "--dataset-root",
+        split_spec["output_root"],
+        "--recipe",
+        str(recipe_path),
+        "--split",
+        split_name,
+    ]
 
 
 def _episode_subset_command(
@@ -675,6 +893,60 @@ def _episode_subset_command(
     ]
     if subset.get("selection_source_root"):
         command.extend(["--selection-source-root", subset["selection_source_root"]])
+    if overwrite:
+        command.append("--overwrite")
+    return command
+
+
+def _phase_subset_command(
+    recipe: dict[str, Any],
+    *,
+    split_spec: dict[str, Any],
+    python: str,
+    overwrite: bool,
+) -> list[str]:
+    subset = split_spec["phase_subset"]
+    command = [
+        python,
+        recipe["phase_subset_script"],
+        "--output-root",
+        split_spec["output_root"],
+        "--repo-id",
+        split_spec["repo_id"],
+        "--phase-id",
+        subset["phase_id"],
+        "--prompt",
+        subset["prompt"],
+        "--entry-replay-qpos-rmse-max",
+        str(subset["entry_replay_qpos_rmse_max"]),
+    ]
+    for source in subset["sources"]:
+        command.extend(
+            [
+                "--source-spec",
+                json.dumps(source, separators=(",", ":"), sort_keys=True),
+            ]
+        )
+    if subset.get("reconstruct_sim_snapshots", True):
+        command.extend(
+            [
+                "--reconstruct-sim-snapshots",
+                "--target-object-color",
+                str(recipe["common"]["target_object_color"]),
+                "--object-half-sizes",
+                str(recipe["common"]["object_half_sizes"]),
+                "--camera-rig-config",
+                str(recipe["common"]["camera_rig_config"]),
+                "--spawn-center",
+                f"{recipe['common']['spawn_center_x']},{recipe['common']['spawn_center_y']}",
+                "--spawn-min-radius",
+                str(recipe["common"]["spawn_min_radius"]),
+                "--spawn-max-radius",
+                str(recipe["common"]["spawn_max_radius"]),
+                "--spawn-angle-half-range-deg",
+                str(recipe["common"]["spawn_angle_half_range_deg"]),
+            ]
+        )
     if overwrite:
         command.append("--overwrite")
     return command
@@ -723,6 +995,21 @@ def _inspection_gate_args(gates: list[dict[str, Any]]) -> list[str]:
             [
                 "--min-gripper-floor-clearance-m",
                 str(floor_clearance["min_clearance_m"]),
+            ]
+        )
+    initial_visibility = by_kind.get("initial_target_visibility")
+    if initial_visibility is not None:
+        camera_names = [
+            str(value).removeprefix("observation.images.")
+            for value in initial_visibility["camera_keys"]
+        ]
+        command.extend(
+            [
+                "--require-initial-target-visible",
+                "--initial-target-visibility-cameras",
+                ",".join(camera_names),
+                "--initial-target-min-area-pixels",
+                str(initial_visibility["min_area_pixels"]),
             ]
         )
     visual = by_kind.get("camera2_visual_alignment")
@@ -824,7 +1111,12 @@ def _sidecar_command(
 
 
 def _closed_loop_command(
-    recipe: dict[str, Any], *, split_spec: dict[str, Any], python: str
+    recipe: dict[str, Any],
+    *,
+    recipe_path: Path,
+    split_name: str,
+    split_spec: dict[str, Any],
+    python: str,
 ) -> list[str]:
     loop = split_spec["closed_loop"]
     root = Path(split_spec["output_root"])
@@ -838,8 +1130,21 @@ def _closed_loop_command(
         "--episodes",
         str(loop["episodes"]),
         "--grid-bins",
-        ",".join(str(value) for value in loop["bins"]),
+        (
+            "auto"
+            if loop.get("bin_selection", "declared") == "all_visible"
+            else ",".join(str(value) for value in loop["bins"])
+        ),
     ]
+    sidecar = recipe["sidecar"]
+    sidecar_stem = (
+        f"{sidecar['camera_key'].replace('.', '_')}_"
+        f"{sidecar['grid_size']}x{sidecar['grid_size']}_"
+        f"frame{sidecar['frame_index']}.parquet"
+    )
+    command.extend(
+        ["--grid-sidecar", str(root / "meta" / "camera_grid_bins" / sidecar_stem)]
+    )
     for key, flag in (
         ("success_metric", "--success-metric"),
         ("lift_success_height", "--lift-success-height"),
@@ -848,6 +1153,62 @@ def _closed_loop_command(
             command.extend([flag, str(loop[key])])
     for source_report in loop.get("exclude_source_reports", []):
         command.extend(["--exclude-source-report", str(source_report)])
+    if int(recipe.get("schema_version", 1)) >= 2:
+        common = recipe["common"]
+        closed_loop_splits = [
+            name
+            for name, spec in recipe["splits"].items()
+            if isinstance(spec.get("closed_loop"), dict)
+        ]
+        test_case_id = (
+            f"{recipe['name']}_loop_test"
+            if len(closed_loop_splits) == 1
+            else f"{recipe['name']}_{split_name}_loop_test"
+        )
+        command.extend(
+            [
+                "--write-executable-contract",
+                "--contract-id",
+                test_case_id,
+                "--contract-description",
+                (
+                    f"Held-out {split_name} starts generated by {recipe['name']} "
+                    "with the matching camera and environment contract."
+                ),
+                "--contract-steps",
+                str(loop.get("steps", 200)),
+                "--contract-seed",
+                str(loop.get("seed", 98100)),
+                "--task-prompt",
+                str(recipe["audit"]["expected_prompt"]),
+                "--start-dataset-name",
+                Path(split_spec["output_root"]).name,
+                "--start-dataset-root",
+                str(split_spec["output_root"]),
+                "--start-dataset-repo-id",
+                str(split_spec["repo_id"]),
+                "--source-recipe",
+                str(recipe_path),
+                "--source-split",
+                split_name,
+                "--camera-rig-config",
+                str(common["camera_rig_config"]),
+                "--target-object-color",
+                str(common["target_object_color"]),
+                "--object-half-sizes",
+                str(common["object_half_sizes"]),
+                "--spawn-center-x",
+                str(common["spawn_center_x"]),
+                "--spawn-center-y",
+                str(common["spawn_center_y"]),
+                "--spawn-min-radius",
+                str(common["spawn_min_radius"]),
+                "--spawn-max-radius",
+                str(common["spawn_max_radius"]),
+                "--spawn-angle-half-range-deg",
+                str(common["spawn_angle_half_range_deg"]),
+            ]
+        )
     return command
 
 
@@ -870,10 +1231,6 @@ def _audit_command(recipe: dict[str, Any], *, python: str) -> list[str]:
         audit["expected_prompt"],
         "--expected-resolution",
         "x".join(str(value) for value in audit["expected_resolution"]),
-        "--expected-train-bins",
-        _bin_counts_arg(train_bin_spec),
-        "--expected-validation-bins",
-        _bin_counts_arg(validation_bin_spec),
         "--expected-terminal-hold-steps",
         str(recipe["common"]["terminal_hold_steps"]),
         "--max-pre-close-alignment-deg",
@@ -881,7 +1238,51 @@ def _audit_command(recipe: dict[str, Any], *, python: str) -> list[str]:
         "--output",
         str(Path(validation) / "meta" / "split_overlap_audit.json"),
     ]
+    if recipe["common"].get("workspace_spawn_catalog"):
+        command.extend(
+            [
+                "--expected-train-episodes",
+                str(_split_episode_count(train_bin_spec)),
+                "--expected-validation-episodes",
+                str(_split_episode_count(validation_bin_spec)),
+            ]
+        )
+    else:
+        command.extend(
+            [
+                "--expected-train-bins",
+                _bin_counts_arg(train_bin_spec),
+                "--expected-validation-bins",
+                _bin_counts_arg(validation_bin_spec),
+            ]
+        )
     return _append_lift_audit_args(command, audit)
+
+
+def _phase_subset_audit_command(
+    recipe: dict[str, Any],
+    *,
+    python: str,
+) -> list[str]:
+    audit = recipe["audit"]
+    return [
+        python,
+        recipe["audit_script"],
+        "--train-root",
+        recipe["splits"]["train"]["output_root"],
+        "--validation-root",
+        recipe["splits"]["validation"]["output_root"],
+        "--expected-prompt",
+        audit["expected_prompt"],
+        "--expected-resolution",
+        "x".join(str(value) for value in audit["expected_resolution"]),
+        "--output",
+        str(
+            Path(recipe["splits"]["validation"]["output_root"])
+            / "meta"
+            / "split_overlap_audit.json"
+        ),
+    ]
 
 
 def _source_split_spec(recipe: dict[str, Any], split_spec: dict[str, Any]) -> dict[str, Any]:
@@ -901,6 +1302,12 @@ def _bin_counts_arg(split_spec: dict[str, Any]) -> str:
     return ",".join(f"{bin_id}:{counts[bin_id]}" for bin_id in sorted(counts))
 
 
+def _split_episode_count(split_spec: dict[str, Any]) -> int:
+    if split_spec.get("expected_episodes") is not None:
+        return int(split_spec["expected_episodes"])
+    return sum(int(row["episodes"]) for row in split_spec.get("bins", []))
+
+
 def _reference_audit_command(
     recipe: dict[str, Any], *, reference: dict[str, Any], python: str
 ) -> list[str]:
@@ -917,8 +1324,6 @@ def _reference_audit_command(
         audit["expected_prompt"],
         "--expected-resolution",
         "x".join(str(value) for value in audit["expected_resolution"]),
-        "--expected-train-bins",
-        _bin_counts_arg(train_spec),
         "--expected-validation-bins",
         ",".join(f"{key}:{value}" for key, value in reference["reference_bins"].items()),
         "--expected-terminal-hold-steps",
@@ -928,6 +1333,12 @@ def _reference_audit_command(
         "--output",
         str(Path(train_spec["output_root"]) / reference["output"]),
     ]
+    if recipe["common"].get("workspace_spawn_catalog"):
+        command.extend(
+            ["--expected-train-episodes", str(_split_episode_count(train_spec))]
+        )
+    else:
+        command.extend(["--expected-train-bins", _bin_counts_arg(train_spec)])
     return _append_lift_audit_args(command, audit)
 
 
@@ -980,20 +1391,41 @@ def _run_stages(
     env: dict[str, str],
     workers: int,
     reuse_complete_shards: bool = False,
+    recipe: dict[str, Any] | None = None,
 ) -> None:
     if workers < 1:
         raise ValueError("--workers must be >= 1")
     index = 0
     while index < len(stages):
+        stage_name = str(stages[index]["name"])
+        if stage_name.startswith("render:") and workers > 1:
+            render_stages = _partition_render_stage(stages[index], workers=workers)
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(render_stages)
+            ) as pool:
+                futures = [pool.submit(_run_stage, stage, env) for stage in render_stages]
+                for future in futures:
+                    future.result()
+            index += 1
+            continue
         if not stages[index]["name"].startswith("export:"):
             _run_stage(stages[index], env)
             index += 1
             continue
         split_name = stages[index]["name"].split(":", 2)[1]
+        if (
+            reuse_complete_shards
+            and recipe is not None
+            and _generated_split_output_is_complete(recipe["splits"][split_name])
+        ):
+            print(f"[so101-dataset] reuse complete generated split {split_name}", flush=True)
+            index = _skip_generated_split_stages(stages, index=index, split_name=split_name)
+            continue
         end = index
         while end < len(stages) and stages[end]["name"].startswith(f"export:{split_name}:"):
             end += 1
-        exports = stages[index:end]
+        all_exports = list(stages[index:end])
+        exports = list(all_exports)
         if reuse_complete_shards:
             pending = []
             for stage in exports:
@@ -1003,7 +1435,7 @@ def _run_stages(
                     pending.append(stage)
             exports = pending
         lookup_cache = None
-        if exports:
+        if exports and "--grid-lookup-cache" in exports[0]["command"]:
             command = exports[0]["command"]
             lookup_cache = Path(command[command.index("--grid-lookup-cache") + 1])
         if lookup_cache is not None and not lookup_cache.exists() and exports:
@@ -1014,7 +1446,239 @@ def _run_stages(
             futures = [pool.submit(_run_stage, stage, env) for stage in exports]
             for future in futures:
                 future.result()
+        if recipe is not None:
+            _repair_cross_shard_workspace_spacing(
+                all_exports,
+                env=env,
+                recipe=recipe,
+            )
         index = end
+
+
+def _repair_cross_shard_workspace_spacing(
+    export_stages: list[dict[str, Any]],
+    *,
+    env: dict[str, str],
+    recipe: dict[str, Any],
+) -> None:
+    catalog_path = recipe.get("common", {}).get("workspace_spawn_catalog")
+    if not catalog_path or len(export_stages) < 2:
+        return
+    catalog = load_workspace_spawn_catalog(Path(str(catalog_path)))
+    distribution = catalog.continuous_distribution
+    minimum_spacing_m = (
+        0.0 if distribution is None else float(distribution.minimum_spacing_m)
+    )
+    if minimum_spacing_m <= 0.0:
+        return
+
+    report_paths = [
+        Path(_command_arg(stage["command"], "--root"))
+        / "so101_lerobot_export_report.json"
+        for stage in export_stages
+    ]
+    repairs_by_shard: dict[int, int] = {}
+    max_repairs = max(1, len(export_stages) * 3)
+    for _ in range(max_repairs + 1):
+        violations = _cross_shard_workspace_spacing_violations(
+            report_paths,
+            minimum_spacing_m=minimum_spacing_m,
+        )
+        if not violations:
+            print(
+                "[so101-dataset] global workspace spacing passed "
+                f"minimum_m={minimum_spacing_m:.9f} "
+                f"repairs={sum(repairs_by_shard.values())}",
+                flush=True,
+            )
+            return
+        if sum(repairs_by_shard.values()) >= max_repairs:
+            break
+
+        violation = violations[0]
+        repair_index = max(
+            int(violation["left_shard_index"]),
+            int(violation["right_shard_index"]),
+        )
+        repairs_by_shard[repair_index] = repairs_by_shard.get(repair_index, 0) + 1
+        command = list(export_stages[repair_index]["command"])
+        for index, report_path in enumerate(report_paths):
+            if index == repair_index:
+                continue
+            command.extend(
+                ["--workspace-spawn-forbidden-report", str(report_path)]
+            )
+        if "--overwrite" not in command:
+            command.append("--overwrite")
+        print(
+            "[so101-dataset] repairing cross-shard workspace spacing "
+            f"shard={repair_index} distance_m={violation['distance_m']:.9f} "
+            f"minimum_m={minimum_spacing_m:.9f}",
+            flush=True,
+        )
+        _run_stage(
+            {
+                "name": f"repair-spacing:{repair_index}",
+                "command": command,
+            },
+            env,
+        )
+
+    remaining = _cross_shard_workspace_spacing_violations(
+        report_paths,
+        minimum_spacing_m=minimum_spacing_m,
+    )
+    raise RuntimeError(
+        "cross-shard workspace spacing repair did not converge: "
+        f"remaining={len(remaining)} repairs={repairs_by_shard}"
+    )
+
+
+def _cross_shard_workspace_spacing_violations(
+    report_paths: list[Path],
+    *,
+    minimum_spacing_m: float,
+) -> list[dict[str, Any]]:
+    shard_positions: list[list[tuple[int, float, float]]] = []
+    for report_path in report_paths:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        rows = []
+        for episode_index, episode in enumerate(payload.get("episodes") or []):
+            workspace_spawn = episode.get("workspace_spawn")
+            world_xy = (
+                None
+                if not isinstance(workspace_spawn, dict)
+                else workspace_spawn.get("world_xy_m")
+            )
+            if not isinstance(world_xy, list) or len(world_xy) != 2:
+                raise ValueError(
+                    "workspace shard report episode has no world_xy_m: "
+                    f"{report_path} episode={episode_index}"
+                )
+            rows.append((episode_index, float(world_xy[0]), float(world_xy[1])))
+        shard_positions.append(rows)
+
+    violations = []
+    for left_shard_index, left_rows in enumerate(shard_positions):
+        for right_shard_index in range(left_shard_index + 1, len(shard_positions)):
+            for left_episode_index, left_x, left_y in left_rows:
+                for right_episode_index, right_x, right_y in shard_positions[
+                    right_shard_index
+                ]:
+                    distance_m = math.hypot(left_x - right_x, left_y - right_y)
+                    if distance_m >= minimum_spacing_m - 1e-12:
+                        continue
+                    violations.append(
+                        {
+                            "distance_m": distance_m,
+                            "left_shard_index": left_shard_index,
+                            "left_episode_index": left_episode_index,
+                            "right_shard_index": right_shard_index,
+                            "right_episode_index": right_episode_index,
+                        }
+                    )
+    return sorted(violations, key=lambda row: float(row["distance_m"]))
+
+
+def _command_arg(command: list[str], flag: str) -> str:
+    try:
+        return str(command[command.index(flag) + 1])
+    except (ValueError, IndexError) as exc:
+        raise ValueError(f"stage command is missing {flag}") from exc
+
+
+def _generated_split_output_is_complete(split_spec: dict[str, Any]) -> bool:
+    root = Path(str(split_spec["output_root"]))
+    report_path = root / "so101_lerobot_export_report.json"
+    if not report_path.is_file():
+        return False
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    expected = sum(int(item["episodes"]) for item in split_spec.get("bins", []))
+    if int(report.get("exported_episodes", -1)) != expected:
+        return False
+    replay_manifest = root / "render_replay" / "manifest.json"
+    grid_sidecar = (
+        root
+        / "meta"
+        / "camera_grid_bins"
+        / "observation_images_camera1_4x4_frame0.parquet"
+    )
+    distribution_dir = root / "meta" / "distribution"
+    distribution_json = distribution_dir / "distribution.json"
+    distribution_markdown = distribution_dir / "distribution.md"
+    distribution_html = distribution_dir / "distribution.html"
+    if not all(
+        path.is_file()
+        for path in (distribution_json, distribution_markdown, distribution_html)
+    ):
+        return False
+    try:
+        distribution = json.loads(distribution_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if distribution.get("gate", {}).get("status") != "passed":
+        return False
+    recorded_markdown_sha256 = (
+        distribution.get("artifacts", {}).get("markdown_sha256")
+    )
+    if not recorded_markdown_sha256:
+        return False
+    actual_markdown_sha256 = hashlib.sha256(distribution_markdown.read_bytes()).hexdigest()
+    return (
+        replay_manifest.is_file()
+        and grid_sidecar.is_file()
+        and recorded_markdown_sha256 == actual_markdown_sha256
+    )
+
+
+def _skip_generated_split_stages(
+    stages: list[dict[str, Any]],
+    *,
+    index: int,
+    split_name: str,
+) -> int:
+    while index < len(stages):
+        name = str(stages[index]["name"])
+        if name.startswith(f"export:{split_name}:") or name in {
+            f"merge:{split_name}",
+            f"render-replay:{split_name}",
+            f"sidecar:{split_name}",
+            f"closed-loop-starts:{split_name}",
+            f"distribution:{split_name}",
+        }:
+            index += 1
+            continue
+        break
+    return index
+
+
+def _partition_render_stage(
+    stage: dict[str, Any],
+    *,
+    workers: int,
+) -> list[dict[str, Any]]:
+    command = list(stage["command"])
+    episodes_index = command.index("--episodes") + 1
+    episodes = [value for value in command[episodes_index].split(",") if value]
+    worker_count = min(max(1, int(workers)), len(episodes))
+    if worker_count == 1:
+        return [stage]
+    partitions = [episodes[index::worker_count] for index in range(worker_count)]
+    result = []
+    for worker_index, partition in enumerate(partitions):
+        worker_command = list(command)
+        worker_command[episodes_index] = ",".join(partition)
+        result.append(
+            {
+                **stage,
+                "name": f"{stage['name']}:worker{worker_index}",
+                "command": worker_command,
+            }
+        )
+    return result
 
 
 def _export_shard_is_complete(stage: dict[str, Any]) -> bool:

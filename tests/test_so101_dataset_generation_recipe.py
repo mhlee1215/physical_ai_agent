@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import subprocess
 import sys
@@ -14,7 +15,6 @@ from pydantic import ValidationError
 
 from physical_ai_agent.so101_dataset_generation_schema import DatasetGenerationRecipe
 
-
 RECIPE_PATH = Path("configs/so101/dataset_generation/grip_the_cube_v2.json")
 ADDITIONAL_RECIPE_PATH = Path("configs/so101/dataset_generation/grip_the_cube_v2_1.json")
 V25_RECIPE_PATH = Path("configs/so101/dataset_generation/grip_the_cube_v2_5.json")
@@ -25,9 +25,26 @@ V3_RECIPE_PATHS = (
     Path("configs/so101/dataset_generation/grip_the_cube_v3.json"),
     Path("configs/so101/dataset_generation/grip_the_cube_v3_align.json"),
 )
+V41_RECIPE_PATH = Path("configs/so101/dataset_generation/grip_the_cube_v4_1.json")
+V42_RECIPE_PATH = Path("configs/so101/dataset_generation/grip_the_cube_v4_2.json")
+V43_AT_RECIPE_PATH = Path(
+    "configs/so101/dataset_generation/grip_the_cube_v4_3_at.json"
+)
+V44_RECIPE_PATH = Path("configs/so101/dataset_generation/grip_the_cube_v4_4.json")
+V44_AT_RECIPE_PATH = Path(
+    "configs/so101/dataset_generation/grip_the_cube_v4_4_at.json"
+)
 CAMERA_MATCHED_CANARY_RECIPE_PATH = Path(
     "configs/so101/dataset_generation/"
     "grip_the_cube_v3_camera_matched_canary_v1.json"
+)
+HARDWARE_LOCKED_V3_RECIPE_PATH = Path(
+    "configs/so101/dataset_generation/"
+    "grip_the_cube_v3_hardware_locked_photoreal_v1.json"
+)
+HARDWARE_LOCKED_V3_ALIGN_RECIPE_PATH = Path(
+    "configs/so101/dataset_generation/"
+    "grip_the_cube_v3_align_trajectory_hardware_locked_photoreal_v1.json"
 )
 FULL_PHOTOREAL_RECIPE_PATHS = (
     Path("configs/so101/dataset_generation/grip_the_cube_v2_5_photoreal.json"),
@@ -53,6 +70,445 @@ PHOTOREAL_FILTERED_RECIPE_PATHS = (
 
 
 class SO101DatasetGenerationRecipeTests(unittest.TestCase):
+    def test_v44_continuous_dataset_contract_is_disjoint_and_training_sized(self) -> None:
+        from physical_ai_agent.so101_workspace_spawn_catalog import (
+            load_workspace_spawn_catalog,
+        )
+
+        main = DatasetGenerationRecipe.model_validate_json(
+            V44_RECIPE_PATH.read_text(encoding="utf-8")
+        )
+        align = DatasetGenerationRecipe.model_validate_json(
+            V44_AT_RECIPE_PATH.read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(main.schema_version, 2)
+        self.assertEqual(align.schema_version, 2)
+        self.assertEqual(main.common.skill_mode, "grip_the_cube_continuous_v1")
+        self.assertEqual(align.common.skill_mode, "grip_the_cube_continuous_v1")
+        self.assertEqual(main.common.trajectory_variant, "auto")
+        self.assertEqual(align.common.trajectory_variant, "auto")
+        self.assertEqual((main.common.width, main.common.height), (256, 256))
+        self.assertEqual((align.common.width, align.common.height), (256, 256))
+        self.assertEqual(main.common.terminal_hold_steps, 12)
+        self.assertEqual(align.common.terminal_hold_steps, 12)
+        self.assertEqual(main.distribution_report.max_camera1_invisible_fraction, 0.05)
+        self.assertEqual(main.distribution_report.min_nearest_neighbor_min_m, 0.0002)
+        self.assertEqual(align.distribution_report.max_camera1_invisible_fraction, 0.4)
+        self.assertEqual(align.distribution_report.min_nearest_neighbor_min_m, 0.0002)
+        self.assertEqual(
+            main.distribution_report.max_all_policy_cameras_invisible_fraction,
+            0.0,
+        )
+
+        self.assertEqual(
+            sum(item.episodes for item in main.splits["train"].bins),
+            500,
+        )
+        self.assertEqual(
+            sum(item.episodes for item in main.splits["validation"].bins),
+            50,
+        )
+        self.assertEqual(
+            sum(item.episodes for item in align.splits["train"].bins),
+            300,
+        )
+        self.assertEqual(main.splits["validation"].closed_loop.episodes, 10)
+        self.assertEqual(align.common.grip_the_cube_start_profile, "correction")
+        self.assertEqual(align.common.initial_qpos_mode, "reset_only")
+        self.assertGreater(align.common.near_target_joint_std, 0.0)
+        self.assertGreater(align.common.near_target_xy_std, 0.0)
+
+        main_catalog = load_workspace_spawn_catalog(
+            Path(main.source.catalogs[0])
+        )
+        align_catalog = load_workspace_spawn_catalog(
+            Path(align.source.catalogs[0])
+        )
+        self.assertEqual(main_catalog.candidate_sequence_offset, 1_000_000)
+        self.assertEqual(align_catalog.candidate_sequence_offset, 2_000_000)
+        self.assertTrue(main_catalog.preserve_evidence_object_yaw)
+        self.assertTrue(align_catalog.preserve_evidence_object_yaw)
+        main_positions = {
+            tuple(round(value, 12) for value in row.world_xy_m)
+            for row in main_catalog.candidates
+        }
+        align_positions = {
+            tuple(round(value, 12) for value in row.world_xy_m)
+            for row in align_catalog.candidates
+        }
+        self.assertFalse(main_positions & align_positions)
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/generate_so101_dataset_recipe.py",
+                "--recipe",
+                str(V44_RECIPE_PATH),
+                "--split",
+                "all",
+                "--workers",
+                "3",
+                "--dry-run",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        stages = json.loads(completed.stdout)["stages"]
+        self.assertEqual(
+            len([row for row in stages if row["name"].startswith("export:")]),
+            11,
+        )
+        audit_command = next(
+            row["command"] for row in stages if row["name"] == "audit:train-vs-validation"
+        )
+        self.assertIn("--expected-train-episodes", audit_command)
+        self.assertEqual(audit_command[audit_command.index("--expected-train-episodes") + 1], "500")
+        self.assertIn("--expected-validation-episodes", audit_command)
+        self.assertEqual(
+            audit_command[audit_command.index("--expected-validation-episodes") + 1],
+            "50",
+        )
+        self.assertNotIn("--expected-train-bins", audit_command)
+        loop_command = next(
+            row["command"]
+            for row in stages
+            if row["name"] == "closed-loop-starts:validation"
+        )
+        self.assertIn("--write-executable-contract", loop_command)
+        self.assertEqual(
+            _value_after(loop_command, "--contract-id"),
+            "grip_the_cube_v4_4_loop_test",
+        )
+        self.assertEqual(
+            _value_after(loop_command, "--camera-rig-config"),
+            str(main.common.camera_rig_config),
+        )
+        self.assertEqual(
+            _value_after(loop_command, "--task-prompt"),
+            "grip the green cube and lift",
+        )
+        self.assertEqual(stages[-1]["name"], "completion:registry-viewer")
+
+    def test_v43_at_is_a_fresh_perturbed_alignment_dataset(self) -> None:
+        recipe = DatasetGenerationRecipe.model_validate_json(
+            V43_AT_RECIPE_PATH.read_text(encoding="utf-8")
+        )
+        self.assertEqual(recipe.schema_version, 2)
+        self.assertEqual(recipe.source.mode, "from_spawn_catalog")
+        self.assertEqual(recipe.common.grip_the_cube_start_profile, "correction")
+        self.assertEqual(recipe.common.initial_qpos_mode, "reset_only")
+        self.assertEqual(recipe.common.near_target_joint_std, 0.035)
+        self.assertEqual(recipe.common.near_target_xy_std, 0.02)
+        self.assertEqual(recipe.common.approach_steps, 40)
+        self.assertEqual(
+            recipe.distribution_report.max_camera1_invisible_fraction,
+            0.30,
+        )
+        self.assertEqual(recipe.distribution_report.min_object_yaw_span_deg, 79.0)
+        self.assertEqual(
+            sum(item.episodes for item in recipe.splits["train"].bins),
+            300,
+        )
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/generate_so101_dataset_recipe.py",
+                "--recipe",
+                str(V43_AT_RECIPE_PATH),
+                "--split",
+                "train",
+                "--dry-run",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        stages = json.loads(completed.stdout)["stages"]
+        exports = [
+            row["command"]
+            for row in stages
+            if row["name"].startswith("export:train:")
+        ]
+        self.assertEqual(len(exports), 4)
+        self.assertTrue(
+            all(
+                _value_after(command, "--initial-qpos-mode") == "reset_only"
+                for command in exports
+            )
+        )
+        self.assertTrue(
+            all(
+                _value_after(command, "--workspace-spawn-catalog")
+                == "configs/so101/spawn_catalogs/grip_the_cube_v4_3_at_workspace_candidates.json"
+                for command in exports
+            )
+        )
+
+    def test_v42_runs_continuous_workspace_gate_before_cell_quota_exports(self) -> None:
+        recipe = DatasetGenerationRecipe.model_validate_json(
+            V42_RECIPE_PATH.read_text(encoding="utf-8")
+        )
+        self.assertEqual(recipe.distribution_report.polar_radial_bins, 6)
+        self.assertEqual(recipe.distribution_report.polar_angular_bins, 10)
+        self.assertEqual(
+            recipe.distribution_report.max_workspace_cell_total_variation,
+            0.0,
+        )
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/generate_so101_dataset_recipe.py",
+                "--recipe",
+                str(V42_RECIPE_PATH),
+                "--split",
+                "train",
+                "--dry-run",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        stages = json.loads(completed.stdout)["stages"]
+        self.assertEqual(stages[0]["name"], "workspace-distribution:0")
+        exports = [
+            stage for stage in stages if stage["name"].startswith("export:")
+        ]
+        self.assertEqual(len(exports), 4)
+        self.assertTrue(
+            all(
+                "grip_the_cube_v4_2_workspace_candidates.json"
+                in " ".join(stage["command"])
+                for stage in exports
+            )
+        )
+
+    def test_v41_separates_peak_lift_target_from_terminal_hold_success(self) -> None:
+        recipe = DatasetGenerationRecipe.model_validate_json(
+            V41_RECIPE_PATH.read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(recipe.common.lift_target_height, 0.065)
+        self.assertEqual(recipe.common.lift_success_height, 0.06)
+        self.assertFalse(recipe.common.include_camera3_duplicate)
+        self.assertEqual(recipe.audit.expected_min_lift_height, 0.06)
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/generate_so101_dataset_recipe.py",
+                "--recipe",
+                str(V41_RECIPE_PATH),
+                "--split",
+                "train",
+                "--dry-run",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        stages = json.loads(completed.stdout)["stages"]
+        export_commands = [
+            stage["command"] for stage in stages if stage["name"].startswith("export:")
+        ]
+        self.assertTrue(export_commands)
+        self.assertTrue(
+            all("--no-camera3-duplicate" in command for command in export_commands)
+        )
+
+        invalid = recipe.model_dump(mode="json", exclude_none=True)
+        invalid["common"]["lift_success_height"] = 0.066
+        with self.assertRaisesRegex(
+            ValidationError,
+            "lift_success_height cannot exceed lift_target_height",
+        ):
+            DatasetGenerationRecipe.model_validate(invalid)
+
+    def test_hardware_locked_v3_full_recipes_are_disjoint_and_training_sized(self) -> None:
+        main = DatasetGenerationRecipe.model_validate_json(
+            HARDWARE_LOCKED_V3_RECIPE_PATH.read_text(encoding="utf-8")
+        )
+        align = DatasetGenerationRecipe.model_validate_json(
+            HARDWARE_LOCKED_V3_ALIGN_RECIPE_PATH.read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(sum(item.episodes for item in main.splits["source_train"].bins), 300)
+        self.assertEqual(
+            sum(item.episodes for item in main.splits["source_validation"].bins),
+            50,
+        )
+        self.assertEqual(sum(item.episodes for item in align.splits["source_train"].bins), 200)
+        self.assertEqual(main.splits["validation"].closed_loop.episodes, 10)
+        self.assertEqual(main.splits["validation"].closed_loop.bins, [9, 10])
+        self.assertEqual(align.common.grip_the_cube_start_profile, "correction")
+        self.assertEqual(align.common.initial_qpos_mode, "reset_only")
+
+        for recipe, split_names in ((main, ("train", "validation")), (align, ("train",))):
+            for split_name in split_names:
+                render = recipe.splits[split_name].render
+                self.assertEqual((render.width, render.height), (256, 256))
+                self.assertEqual(
+                    (render.source_width, render.source_height),
+                    (512, 512),
+                )
+                self.assertEqual(render.policy_resize, "direct_square_render")
+                self.assertTrue(render.profile_from_camera_rig)
+                self.assertFalse(render.preserve_pinhole_renders)
+                self.assertEqual(render.scene_profile, "pbr_workshop_v4")
+                self.assertEqual(
+                    render.lighting_profile,
+                    "directional_key_fill_rim_v4",
+                )
+                self.assertEqual(render.samples, 256)
+                self.assertFalse(render.denoise)
+
+        catalogs = []
+        for path in (
+            Path(main.splits["source_train"].lookup_cache),
+            Path(main.splits["source_validation"].lookup_cache),
+            Path(align.splits["source_train"].lookup_cache),
+        ):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            catalogs.append(
+                {
+                    (round(float(x), 12), round(float(y), 12))
+                    for rows in payload["lookup"].values()
+                    for x, y in rows
+                }
+            )
+        self.assertFalse(catalogs[0] & catalogs[1])
+        self.assertFalse(catalogs[0] & catalogs[2])
+        self.assertFalse(catalogs[1] & catalogs[2])
+
+    def test_photoreal_render_workers_partition_episodes_without_overlap(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from generate_so101_dataset_recipe import _partition_render_stage
+
+        stage = {
+            "name": "render:train",
+            "command": [
+                "python",
+                "scripts/render_so101_dataset_blender_preview.py",
+                "--episodes",
+                ",".join(str(index) for index in range(10)),
+                "--frames",
+                "all",
+                "--skip-existing",
+            ],
+        }
+        workers = _partition_render_stage(stage, workers=4)
+        episode_sets = [
+            set(_value_after(item["command"], "--episodes").split(","))
+            for item in workers
+        ]
+
+        self.assertEqual(len(workers), 4)
+        self.assertEqual(set.union(*episode_sets), {str(index) for index in range(10)})
+        for index, left in enumerate(episode_sets):
+            for right in episode_sets[index + 1 :]:
+                self.assertFalse(left & right)
+        self.assertTrue(all("--skip-existing" in item["command"] for item in workers))
+
+    def test_cross_shard_spacing_detector_finds_only_inter_shard_collisions(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from generate_so101_dataset_recipe import (
+            _cross_shard_workspace_spacing_violations,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = []
+            for index, positions in enumerate(
+                (
+                    ((0.0, 0.0), (0.0005, 0.0)),
+                    ((0.001, 0.0),),
+                    ((0.01, 0.0),),
+                )
+            ):
+                path = root / f"shard_{index}.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "episodes": [
+                                {"workspace_spawn": {"world_xy_m": list(position)}}
+                                for position in positions
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                reports.append(path)
+
+            violations = _cross_shard_workspace_spacing_violations(
+                reports,
+                minimum_spacing_m=0.0015,
+            )
+
+        self.assertEqual(len(violations), 2)
+        self.assertEqual(
+            {
+                (row["left_shard_index"], row["right_shard_index"])
+                for row in violations
+            },
+            {(0, 1)},
+        )
+        self.assertAlmostEqual(violations[0]["distance_m"], 0.0005)
+
+    def test_complete_generated_source_can_be_reused_for_photoreal_derivative(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from generate_so101_dataset_recipe import _generated_split_output_is_complete
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "render_replay").mkdir()
+            (root / "meta" / "camera_grid_bins").mkdir(parents=True)
+            (root / "so101_lerobot_export_report.json").write_text(
+                json.dumps({"exported_episodes": 3}),
+                encoding="utf-8",
+            )
+            (root / "render_replay" / "manifest.json").write_text("{}", encoding="utf-8")
+            (
+                root
+                / "meta"
+                / "camera_grid_bins"
+                / "observation_images_camera1_4x4_frame0.parquet"
+            ).touch()
+            (root / "meta" / "distribution").mkdir()
+            markdown = root / "meta" / "distribution" / "distribution.md"
+            markdown.write_text("# passed\n", encoding="utf-8")
+            (root / "meta" / "distribution" / "distribution.html").touch()
+            (root / "meta" / "distribution" / "distribution.json").write_text(
+                json.dumps(
+                    {
+                        "gate": {"status": "passed"},
+                        "artifacts": {
+                            "markdown_sha256": hashlib.sha256(
+                                markdown.read_bytes()
+                            ).hexdigest()
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            split = {
+                "output_root": str(root),
+                "bins": [
+                    {"id": 9, "episodes": 1},
+                    {"id": 10, "episodes": 2},
+                ],
+            }
+
+            self.assertTrue(_generated_split_output_is_complete(split))
+
+            report = root / "meta" / "distribution" / "distribution.json"
+            payload = json.loads(report.read_text(encoding="utf-8"))
+            payload["gate"]["status"] = "failed"
+            report.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertFalse(_generated_split_output_is_complete(split))
+
     def test_schema_v2_operator_templates_validate(self) -> None:
         for path in sorted(
             Path("configs/so101/dataset_generation/templates").glob("*.json")
@@ -119,6 +575,39 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
             row["command"] for row in stages if row["name"].startswith("export:train:")
         )
         self.assertIn("--initial-qpos=" + ",".join(map(str, qpos)), export)
+
+    def test_hardware_qpos_can_be_reset_only_for_correction_start(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from export_so101_teacher_rollouts_lerobot import _uses_exact_initial_qpos
+        from generate_so101_dataset_recipe import build_stages
+
+        payload = _schema_v2_grip_recipe(RECIPE_PATH, source={"mode": "from_scratch"})
+        qpos = [-0.23, -1.54, 1.2, 1.34, 0.003, -0.13]
+        payload["start_pose"] = {
+            "contract": "lerobot_calibrated_so101_position_to_mujoco_qpos",
+            "readback_artifact": "_workspace/readback.json",
+            "calibration_artifact": "_workspace/calibration.json",
+            "joint_order": [
+                "shoulder_pan", "shoulder_lift", "elbow_flex",
+                "wrist_flex", "wrist_roll", "gripper",
+            ],
+            "raw_positions": [2047, 2049, 2048, 2038, 2050, 2054],
+            "lerobot_positions": [-13.2, -88.7, 69.1, 77.1, 0.2, 2.3],
+            "sim_qpos": qpos,
+        }
+        payload["common"]["grip_the_cube_start_profile"] = "correction"
+        payload["common"]["initial_qpos_mode"] = "reset_only"
+        recipe = DatasetGenerationRecipe.model_validate(payload).as_dict()
+        stages = build_stages(
+            recipe, python="python", split="all", overwrite=False, recipe_path=RECIPE_PATH
+        )
+        export = next(
+            row["command"] for row in stages if row["name"].startswith("export:train:")
+        )
+
+        self.assertEqual(_value_after(export, "--initial-qpos-mode"), "reset_only")
+        self.assertFalse(_uses_exact_initial_qpos(tuple(qpos), mode="reset_only"))
+        self.assertTrue(_uses_exact_initial_qpos(tuple(qpos), mode="exact"))
 
     def test_camera_aligned_start_pose_requires_multiview_evidence(self) -> None:
         payload = _schema_v2_grip_recipe(RECIPE_PATH, source={"mode": "from_scratch"})
@@ -206,7 +695,10 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
             row["command"] for row in stages if row["name"].startswith("export:train:")
         )
         self.assertEqual(export.count("--edge-contact-parallel-success-threshold-deg"), 1)
-        self.assertEqual(_value_after(export, "--close-alignment-gate-mode"), "preclose_and_early_trace")
+        self.assertEqual(
+            _value_after(export, "--close-alignment-gate-mode"),
+            "preclose_and_early_trace",
+        )
         self.assertEqual(_value_after(export, "--pre-close-image-alignment-max-deg"), "8.0")
 
     def test_schema_v2_maps_floor_clearance_and_camera_rig_to_exporter(self) -> None:
@@ -232,6 +724,47 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
         self.assertEqual(
             _value_after(export, "--camera-rig-config"),
             "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v4.json",
+        )
+
+    def test_reproject_spawn_catalog_deduplicates_coordinate_only_sources(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from reproject_so101_spawn_catalog import (
+            collect_unique_spawn_xy,
+            translate_spawn_xy,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.json"
+            second = root / "second.json"
+            first.write_text(
+                json.dumps(
+                    {
+                        "format": "so101_spawn_catalog_v1",
+                        "lookup": {"5": [[0.1, 0.2], [0.3, 0.4]]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            second.write_text(
+                json.dumps(
+                    {
+                        "format": "so101_spawn_catalog_v1",
+                        "lookup": {"9": [[0.3, 0.4], [0.5, 0.6]]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            candidates, sources = collect_unique_spawn_xy([first, second])
+
+        self.assertEqual(candidates, [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]])
+        self.assertEqual([item["candidate_rows"] for item in sources], [2, 2])
+        self.assertTrue(
+            np.allclose(
+                translate_spawn_xy(candidates, translate_x=-0.01, translate_y=0.02),
+                [[0.09, 0.22], [0.29, 0.42], [0.49, 0.62]],
+            )
         )
 
     def test_schema_v2_rejects_duplicate_inspection_gate_kinds(self) -> None:
@@ -282,6 +815,18 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
             "contract": "jaw_line_vs_contact_face_normal_through_cube_center",
             "max_pre_close_error_deg": 3.0,
         }
+        camera_rig = (
+            "configs/so101/camera_rigs/"
+            "official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json"
+        )
+        camera_rig_sha256 = (
+            "466f955ea0cbd6ee4dd58652b12c0a876777323eb010a840e3cd029306149520"
+        )
+        payload["common"]["camera_rig_config"] = camera_rig
+        payload["render_replay"]["environment"]["camera_rig_config"] = camera_rig
+        payload["render_replay"]["environment"]["camera_rig_sha256"] = (
+            camera_rig_sha256
+        )
 
         recipe = DatasetGenerationRecipe.model_validate(payload)
 
@@ -317,7 +862,12 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     [stage["name"] for stage in stages],
-                    ["subset:train", "sidecar:train", "completion:registry-viewer"],
+                    [
+                        "subset:train",
+                        "sidecar:train",
+                        "distribution:train",
+                        "completion:registry-viewer",
+                    ],
                 )
                 subset = stages[0]["command"]
                 self.assertEqual(_value_after(subset, "--edge-mode"), "top-contact")
@@ -462,7 +1012,10 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
         self.assertEqual(_value_after(validation5, "--grid-lookup-start-index"), "253")
         self.assertEqual(_value_after(train5, "--width"), "256")
         self.assertEqual(_value_after(train5, "--height"), "256")
-        self.assertEqual(_value_after(train5, "--edge-contact-parallel-success-threshold-deg"), "3.0")
+        self.assertEqual(
+            _value_after(train5, "--edge-contact-parallel-success-threshold-deg"),
+            "3.0",
+        )
         self.assertIn("--deterministic-camera-bin-lookup", train5)
         self.assertIn("--overwrite", train5)
         self.assertIn("merge:train", stages)
@@ -563,8 +1116,15 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
                 capture_output=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            stages = {row["name"]: row["command"] for row in json.loads(completed.stdout)["stages"]}
-            export = next(command for name, command in stages.items() if name.startswith("export:train:"))
+            stages = {
+                row["name"]: row["command"]
+                for row in json.loads(completed.stdout)["stages"]
+            }
+            export = next(
+                command
+                for name, command in stages.items()
+                if name.startswith("export:train:")
+            )
             self.assertEqual(_value_after(export, "--lift-target-height"), "0.065")
             self.assertEqual(_value_after(export, "--lift-controller-z-error"), "0.015")
             self.assertEqual(_value_after(export, "--move-target-z-offset"), "0.075")
@@ -610,7 +1170,10 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
                 for name, split in recipe.splits.items()
             }
             self.assertEqual(actual_counts, counts)
-            self.assertEqual(recipe.common.camera_rig_config, "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v4.json")
+            self.assertEqual(
+                recipe.common.camera_rig_config,
+                "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v4.json",
+            )
             self.assertEqual(recipe.common.inspection_gates[2].min_clearance_m, 0.01)
             for split in recipe.splits.values():
                 for row in split.bins:
@@ -702,6 +1265,8 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
             self.assertEqual(_value_after(stages["render:validation"], "--frames"), "all")
             self.assertIn("--skip-existing", stages["render:train"])
             self.assertIn("--skip-existing", stages["render:validation"])
+            self.assertIn("--no-preserve-pinhole-renders", stages["render:train"])
+            self.assertIn("--no-preserve-pinhole-renders", stages["render:validation"])
             self.assertNotIn("--skip-existing", stages["render-determinism:train"])
             for split in ("train", "validation"):
                 builder_cameras = _value_after(
@@ -793,6 +1358,59 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
         self.assertEqual(report["episodes"][0]["seed"], 12)
         self.assertEqual(report["episodes"][0]["source_validation_episode_index"], 2)
         self.assertEqual(report["exclusion_contract"]["excluded_validation_episodes"], 2)
+
+    def test_closed_loop_uses_workspace_camera1_bin_from_merged_report(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from build_so101_closed_loop_start_report import build_report
+
+        episodes = [
+            {
+                "seed": 100 + index,
+                "camera1_grid_bin": bin_id,
+                "workspace_spawn": {"camera1_grid_bin": bin_id},
+                "sim_snapshot": {"qpos": []},
+            }
+            for index, bin_id in enumerate((5, 6, 7, 9))
+        ]
+        report = build_report(
+            {"episodes": episodes},
+            count=4,
+            bins=[5, 6, 7, 9],
+            source_path=Path("validation/so101_lerobot_export_report.json"),
+        )
+
+        self.assertEqual(report["grid_bin_counts"], {"5": 1, "6": 1, "7": 1, "9": 1})
+        self.assertEqual(
+            [row["source_validation_episode_index"] for row in report["episodes"]],
+            [0, 1, 2, 3],
+        )
+
+    def test_closed_loop_grid_sidecar_overrides_source_phase_bins(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from build_so101_closed_loop_start_report import (
+            apply_grid_sidecar,
+            available_grid_bins,
+        )
+
+        source = {
+            "episodes": [
+                {"camera1_grid_bin": 10, "sim_snapshot": {}},
+                {"camera1_grid_bin": 10, "sim_snapshot": {}},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "grid.parquet"
+            pd.DataFrame(
+                [
+                    {"episode_index": 0, "visible": True, "grid_bin": 6},
+                    {"episode_index": 1, "visible": False, "grid_bin": -1},
+                ]
+            ).to_parquet(path, index=False)
+            enriched = apply_grid_sidecar(source, path)
+
+        self.assertEqual(enriched["episodes"][0]["camera1_grid_bin"], 6)
+        self.assertEqual(enriched["episodes"][1]["camera1_grid_bin"], -1)
+        self.assertEqual(available_grid_bins(enriched), [6])
 
     def test_v25_recipe_declares_every_source_dataset(self) -> None:
         for path in (V25_RECIPE_PATH, ALIGN_RECIPE_PATH):
@@ -952,6 +1570,7 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
         sys.path.insert(0, str(Path("scripts").resolve()))
         from export_so101_teacher_rollouts_lerobot import (
             _fixed_jaw_lift_target_reached,
+            _fixed_jaw_pick_success,
             _fixed_jaw_terminal_event_stops_episode,
         )
 
@@ -963,6 +1582,27 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
         self.assertTrue(
             _fixed_jaw_lift_target_reached(
                 {"is_grasped": True, "lift_height": 0.081}, target_height=0.08
+            )
+        )
+        self.assertTrue(
+            _fixed_jaw_pick_success(
+                {"is_grasped": True, "lift_height": 0.0644},
+                lift_target_reached=True,
+                terminal_min_height=0.06,
+            )
+        )
+        self.assertFalse(
+            _fixed_jaw_pick_success(
+                {"is_grasped": True, "lift_height": 0.0599},
+                lift_target_reached=True,
+                terminal_min_height=0.06,
+            )
+        )
+        self.assertFalse(
+            _fixed_jaw_pick_success(
+                {"is_grasped": True, "lift_height": 0.0644},
+                lift_target_reached=False,
+                terminal_min_height=0.06,
             )
         )
         self.assertFalse(
@@ -981,6 +1621,54 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
             )
         )
 
+    def test_fixed_jaw_capture_gate_uses_jaw_corridor_not_one_pad_target(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from export_so101_teacher_rollouts_lerobot import (
+            _jaw_capture_geometry_from_points,
+            _jaw_capture_geometry_passes,
+        )
+
+        centered = _jaw_capture_geometry_from_points(
+            np.asarray([-0.06, 0.0, 0.05]),
+            np.asarray([0.06, 0.0, 0.05]),
+            np.asarray([0.0, 0.0001, 0.015]),
+        )
+        self.assertTrue(centered["cube_center_between_jaws"])
+        self.assertAlmostEqual(
+            centered["cube_center_to_jaw_line_xy_m"], 0.0001
+        )
+        self.assertTrue(
+            _jaw_capture_geometry_passes(
+                centered,
+                max_centerline_error_m=0.012,
+            )
+        )
+
+        off_line = _jaw_capture_geometry_from_points(
+            np.asarray([-0.06, 0.0, 0.05]),
+            np.asarray([0.06, 0.0, 0.05]),
+            np.asarray([0.0, 0.02, 0.015]),
+        )
+        self.assertFalse(
+            _jaw_capture_geometry_passes(
+                off_line,
+                max_centerline_error_m=0.012,
+            )
+        )
+
+        outside = _jaw_capture_geometry_from_points(
+            np.asarray([-0.06, 0.0, 0.05]),
+            np.asarray([0.06, 0.0, 0.05]),
+            np.asarray([0.08, 0.0, 0.015]),
+        )
+        self.assertFalse(outside["cube_center_between_jaws"])
+        self.assertFalse(
+            _jaw_capture_geometry_passes(
+                outside,
+                max_centerline_error_m=0.012,
+            )
+        )
+
     def test_correction_visibility_tries_mirrored_offsets_before_zero(self) -> None:
         sys.path.insert(0, str(Path("scripts").resolve()))
         from export_so101_teacher_rollouts_lerobot import _correction_visibility_scales
@@ -991,6 +1679,55 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
             scales[:-1],
             (1.0, -1.0, 0.75, -0.75, 0.5, -0.5, 0.25, -0.25),
         )
+
+    def test_teacher_visibility_uses_target_geom_segmentation_for_large_wrist_view(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from export_so101_teacher_rollouts_lerobot import _object_visibility_in_camera
+
+        segmentation = np.full((256, 256, 2), -1, dtype=np.int32)
+        segmentation[72:188, 68:182, 0] = 41
+        segmentation[72:188, 68:182, 1] = 5
+        segmentation[:, 200:, 0] = 99
+        segmentation[:, 200:, 1] = 5
+
+        class _Renderer:
+            def __init__(self) -> None:
+                self.segmentation_enabled = False
+
+            def update_scene(self, _data: object, *, camera: object) -> None:
+                self.camera = camera
+
+            def enable_segmentation_rendering(self) -> None:
+                self.segmentation_enabled = True
+
+            def render(self) -> np.ndarray:
+                self.assert_segmentation_enabled = self.segmentation_enabled
+                return segmentation
+
+            def disable_segmentation_rendering(self) -> None:
+                self.segmentation_enabled = False
+
+        slot = type("_Slot", (), {"geom_id": 41})()
+        unwrapped = type(
+            "_Unwrapped",
+            (),
+            {
+                "data": object(),
+                "_slots": [slot],
+                "_target_slot_idx": 0,
+            },
+        )()
+        env = type("_Env", (), {"unwrapped": unwrapped})()
+        renderer = _Renderer()
+
+        result = _object_visibility_in_camera(env, renderer, "wrist_cam")
+
+        self.assertTrue(result["visible"])
+        self.assertTrue(result["centered"])
+        self.assertEqual(result["area"], 116 * 114)
+        self.assertEqual(result["bbox"], [68, 72, 181, 187])
+        self.assertFalse(renderer.segmentation_enabled)
+        self.assertTrue(renderer.assert_segmentation_enabled)
 
     def test_correction_trajectory_converges_directly_to_grasp_prepose(self) -> None:
         sys.path.insert(0, str(Path("scripts").resolve()))
@@ -1089,7 +1826,30 @@ class SO101DatasetGenerationRecipeTests(unittest.TestCase):
             )
 
         self.assertEqual(report["status"], "passed")
-        self.assertEqual(report["overlap_counts"], {"seeds": 0, "spawn_xy": 0, "trajectory_hashes": 0})
+        self.assertEqual(
+            report["overlap_counts"],
+            {"seeds": 0, "spawn_xy": 0, "trajectory_hashes": 0},
+        )
+
+    def test_split_audit_uses_contact_time_alignment_when_present(self) -> None:
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        from audit_so101_dataset_splits import _episode_alignment_error_deg
+
+        self.assertEqual(
+            _episode_alignment_error_deg(
+                {
+                    "pre_close_cube_face_normal_parallel_error_deg": 17.0,
+                    "near_contact_alignment_sample": {"parallel_error_deg": 0.25},
+                }
+            ),
+            0.25,
+        )
+        self.assertEqual(
+            _episode_alignment_error_deg(
+                {"pre_close_cube_face_normal_parallel_error_deg": 1.5}
+            ),
+            1.5,
+        )
 
     def test_terminal_hold_audit_rejects_action_different_from_final_lift(self) -> None:
         sys.path.insert(0, str(Path("scripts").resolve()))
@@ -1124,6 +1884,20 @@ def _schema_v2_grip_recipe(path: Path, *, source: dict[str, object]) -> dict[str
     payload["schema_version"] = 2
     payload["source"] = source
     payload.pop("source_datasets", None)
+    payload["common"].update(
+        {
+            "object_half_sizes": "0.015",
+            "camera_rig_config": (
+                "configs/so101/camera_rigs/"
+                "official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json"
+            ),
+            "spawn_center_x": 0.15,
+            "spawn_center_y": 0.0,
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0,
+        }
+    )
     payload["common"].pop("close_alignment_gate_mode", None)
     payload["common"].pop("edge_contact_parallel_success_threshold_deg", None)
     payload["common"]["contact_alignment"] = {
@@ -1136,10 +1910,30 @@ def _schema_v2_grip_recipe(path: Path, *, source: dict[str, object]) -> dict[str
             "close_50_max_deg": 8.0,
         },
     }
+    payload["common"].update(
+        {
+            "object_half_sizes": "0.015",
+            "camera_rig_config": (
+                "configs/so101/camera_rigs/"
+                "official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json"
+            ),
+            "spawn_center_x": 0.15,
+            "spawn_center_y": 0.0,
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0,
+        }
+    )
     return payload
 
 
-def _write_fake_split(root: Path, *, seed: int, spawn_xy: tuple[float, float], action_value: float) -> None:
+def _write_fake_split(
+    root: Path,
+    *,
+    seed: int,
+    spawn_xy: tuple[float, float],
+    action_value: float,
+) -> None:
     (root / "meta").mkdir(parents=True)
     (root / "data" / "chunk-000").mkdir(parents=True)
     (root / "so101_lerobot_export_report.json").write_text(

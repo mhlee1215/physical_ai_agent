@@ -43,7 +43,7 @@ ml = [
   "transformers>=4.43",
 ]
 smolvla = [
-  "lerobot[smolvla]>=0.5.1,<0.6",
+  "lerobot[smolvla,peft]>=0.5.1,<0.6",
 ]
 maniskill = [
   "gymnasium>=1.0",

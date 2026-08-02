@@ -1,0 +1,77 @@
+{
+  "format": "so101_near_range_teacher_probe_v1",
+  "description": "Contact-centric near-range teacher feasibility evidence from the exact hardware-aligned home pose. This file contains placement evidence only; it contains no dataset frames, actions, states, or episode seeds.",
+  "base_origin_world_xy_m": [
+    0.015478381254367828,
+    0.00000525602343
+  ],
+  "home_qpos": [
+    0.0,
+    -1.5707963267948966,
+    1.5707963267948966,
+    0.66,
+    1.5707963267948966,
+    -0.17453
+  ],
+  "object": {
+    "color": "green",
+    "half_size_m": 0.015
+  },
+  "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+  "teacher_contract": {
+    "skill_mode": "grip_the_cube_near_v1",
+    "solver_profile": "near_contact",
+    "alignment_stage": "realized_contact_width_during_close",
+    "max_contact_parallel_error_deg": 3.0,
+    "min_gripper_floor_clearance_m": 0.01,
+    "min_lift_height_m": 0.05,
+    "terminal_hold_steps": 12
+  },
+  "verified_cases": [
+    {
+      "case_id": "near-r10-a-15-y28",
+      "radius_from_base_m": 0.10,
+      "angle_from_base_deg": -15.0,
+      "world_xy_m": [0.11207096388327467, -0.025876648486822074],
+      "object_yaw_deg": 28.0,
+      "lift_height_m": 0.05995083882851991,
+      "contact_parallel_error_deg": 1.6808454265545556
+    },
+    {
+      "case_id": "near-r12-a-07-y38",
+      "radius_from_base_m": 0.12,
+      "angle_from_base_deg": -7.0,
+      "world_xy_m": [0.13458391945132644, -0.014619065185187697],
+      "object_yaw_deg": 38.0,
+      "lift_height_m": 0.05959828102725778,
+      "contact_parallel_error_deg": 1.8370903355812547
+    },
+    {
+      "case_id": "near-r14-a00-y47",
+      "radius_from_base_m": 0.14,
+      "angle_from_base_deg": 0.0,
+      "world_xy_m": [0.15547838125436783, 0.00000525602343],
+      "object_yaw_deg": 47.0,
+      "lift_height_m": 0.0603591158320258,
+      "contact_parallel_error_deg": 1.8920116690520252
+    },
+    {
+      "case_id": "near-r16-a07-y56",
+      "radius_from_base_m": 0.16,
+      "angle_from_base_deg": 7.0,
+      "world_xy_m": [0.17428576551697933, 0.019504350968253596],
+      "object_yaw_deg": 56.0,
+      "lift_height_m": 0.06006076849673467,
+      "contact_parallel_error_deg": 1.4315114501873591
+    },
+    {
+      "case_id": "near-r18-a15-y66",
+      "radius_from_base_m": 0.18,
+      "angle_from_base_deg": 15.0,
+      "world_xy_m": [0.1893450299864001, 0.046592684141883736],
+      "object_yaw_deg": 66.0,
+      "lift_height_m": 0.06123205896662995,
+      "contact_parallel_error_deg": 1.5539433557339886
+    }
+  ]
+}

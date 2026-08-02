@@ -1,0 +1,4045 @@
+{
+  "band_cell_counts": {
+    "bridge_18_22cm": 32,
+    "mid_22_28cm": 60,
+    "near_10_18cm": 100,
+    "outer_28_30cm": 17
+  },
+  "band_probabilities": {
+    "bridge_18_22cm": 0.24,
+    "mid_22_28cm": 0.34,
+    "near_10_18cm": 0.32,
+    "outer_28_30cm": 0.1
+  },
+  "base_contract": {
+    "base_world_rotation_xy": [
+      [
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "reference": "shoulder_pan_axis_projection",
+    "world_xyz_m": [
+      0.015478381254367828,
+      5.256023430000001e-06,
+      0.0696
+    ]
+  },
+  "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+  "catalog_id": "grip_the_cube_continuous_v1_production_evidence",
+  "cell_count": 209,
+  "cells": [
+    {
+      "angle_from_base_deg": 47.525736629277716,
+      "base_xy_m": [
+        0.06767283642883476,
+        0.07391857473681085
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 2.45463552,
+      "point_id": "near_10_18cm-000",
+      "radius_from_base_m": 0.10021760564614042,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0000",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.08315121768320259,
+        0.07392383076024085
+      ]
+    },
+    {
+      "angle_from_base_deg": 14.603925929689268,
+      "base_xy_m": [
+        0.09704492033820643,
+        0.025285409191794426
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 3.6066355199999998,
+      "point_id": "near_10_18cm-001",
+      "radius_from_base_m": 0.10028493646328603,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0000",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11252330159257426,
+        0.025290665215224425
+      ]
+    },
+    {
+      "angle_from_base_deg": -51.23969546948768,
+      "base_xy_m": [
+        0.06289002049735144,
+        -0.07833047812498038
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 3.46263552,
+      "point_id": "near_10_18cm-002",
+      "radius_from_base_m": 0.10045306606293963,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-backup-0000",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.07836840175171927,
+        -0.07832522210155038
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.418740744504078,
+      "base_xy_m": [
+        0.08817050041615247,
+        0.049719526725528804
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 2.8866355199999996,
+      "point_id": "near_10_18cm-003",
+      "radius_from_base_m": 0.1012228654081938,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0000",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1036488816705203,
+        0.04972478274895881
+      ]
+    },
+    {
+      "angle_from_base_deg": -70.99278188924076,
+      "base_xy_m": [
+        0.033075411769525956,
+        -0.09601867327619987
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 3.8946355199999996,
+      "point_id": "near_10_18cm-004",
+      "radius_from_base_m": 0.10155574076065475,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0000",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.04855379302389379,
+        -0.09601341725276986
+      ]
+    },
+    {
+      "angle_from_base_deg": 72.21709465396907,
+      "base_xy_m": [
+        0.031127709024491624,
+        0.09705093617442284
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 4.182635519999999,
+      "point_id": "near_10_18cm-005",
+      "radius_from_base_m": 0.10192064796421436,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-backup-0000",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.04660609027885945,
+        0.09705619219785284
+      ]
+    },
+    {
+      "angle_from_base_deg": 61.517506176602836,
+      "base_xy_m": [
+        0.04874687910399385,
+        0.08984603641266498
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 48.96663552,
+      "point_id": "near_10_18cm-006",
+      "radius_from_base_m": 0.10221823947537599,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0001",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.06422526035836168,
+        0.08985129243609498
+      ]
+    },
+    {
+      "angle_from_base_deg": -66.8775555517922,
+      "base_xy_m": [
+        0.04042508156592417,
+        -0.09467249474812467
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 48.24663552,
+      "point_id": "near_10_18cm-007",
+      "radius_from_base_m": 0.1029420637127764,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0001",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.055903462820292,
+        -0.09466723872469467
+      ]
+    },
+    {
+      "angle_from_base_deg": -42.18619752710085,
+      "base_xy_m": [
+        0.07671263547554058,
+        -0.0695251036665329
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 47.814635519999996,
+      "point_id": "near_10_18cm-008",
+      "radius_from_base_m": 0.10353051956522441,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0001",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.09219101672990841,
+        -0.0695198476431029
+      ]
+    },
+    {
+      "angle_from_base_deg": 7.196518522281863,
+      "base_xy_m": [
+        0.10303785394504916,
+        0.013010347260701018
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 47.52663552,
+      "point_id": "near_10_18cm-009",
+      "radius_from_base_m": 0.10385599877448251,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0002",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.118516235199417,
+        0.013015603284131018
+      ]
+    },
+    {
+      "angle_from_base_deg": 4.3158600860678575,
+      "base_xy_m": [
+        0.10539238600773063,
+        0.007953832600879644
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 26.862635519999998,
+      "point_id": "near_10_18cm-010",
+      "radius_from_base_m": 0.10569209280473782,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-backup-0001",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.12087076726209846,
+        0.007959088624309643
+      ]
+    },
+    {
+      "angle_from_base_deg": 42.99898765808432,
+      "base_xy_m": [
+        0.07802019960115017,
+        0.07275243594301158
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 70.92663551999999,
+      "point_id": "near_10_18cm-011",
+      "radius_from_base_m": 0.106677403799705,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0003",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.093498580855518,
+        0.07275769196644158
+      ]
+    },
+    {
+      "angle_from_base_deg": -60.704716045619364,
+      "base_xy_m": [
+        0.052537859851468,
+        -0.09363942419554289
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 69.77463552,
+      "point_id": "near_10_18cm-012",
+      "radius_from_base_m": 0.10737117155663951,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0004",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.06801624110583583,
+        -0.09363416817211288
+      ]
+    },
+    {
+      "angle_from_base_deg": 16.66153909841354,
+      "base_xy_m": [
+        0.10307378936249399,
+        0.030848215959785024
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 70.78263552,
+      "point_id": "near_10_18cm-013",
+      "radius_from_base_m": 0.10759097769536864,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-backup-0002",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11855217061686182,
+        0.030853471983215024
+      ]
+    },
+    {
+      "angle_from_base_deg": 66.04425514779626,
+      "base_xy_m": [
+        0.0438505261540441,
+        0.09869498385155553
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 70.49463551999999,
+      "point_id": "near_10_18cm-014",
+      "radius_from_base_m": 0.10799800221043589,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0004",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.05932890740841193,
+        0.09870023987498554
+      ]
+    },
+    {
+      "angle_from_base_deg": -73.66767900858233,
+      "base_xy_m": [
+        0.03056263541855377,
+        -0.1042976212466894
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 14.22663552,
+      "point_id": "near_10_18cm-015",
+      "radius_from_base_m": 0.10868334040433848,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0005",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.0460410166729216,
+        -0.1042923652232594
+      ]
+    },
+    {
+      "angle_from_base_deg": 49.789111114874444,
+      "base_xy_m": [
+        0.07104291864803759,
+        0.08403554123948764
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 14.946635520000001,
+      "point_id": "near_10_18cm-016",
+      "radius_from_base_m": 0.11004121264983095,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0006",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.08652129990240542,
+        0.08404079726291765
+      ]
+    },
+    {
+      "angle_from_base_deg": -46.50718518142183,
+      "base_xy_m": [
+        0.07607436024944236,
+        -0.08018578548647745
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 60.30663552,
+      "point_id": "near_10_18cm-017",
+      "radius_from_base_m": 0.11053084855118644,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0006",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.0915527415038102,
+        -0.08018052946304745
+      ]
+    },
+    {
+      "angle_from_base_deg": 45.67388477742588,
+      "base_xy_m": [
+        0.07803902736941964,
+        0.07989667507900616
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 60.59463552,
+      "point_id": "near_10_18cm-018",
+      "radius_from_base_m": 0.1116851309774283,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0007",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.09351740862378748,
+        0.07990193110243617
+      ]
+    },
+    {
+      "angle_from_base_deg": 4.933144036685135,
+      "base_xy_m": [
+        0.1122307049222823,
+        0.009686968261169939
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 37.19463552,
+      "point_id": "near_10_18cm-019",
+      "radius_from_base_m": 0.1126479848086299,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0007",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.12770908617665014,
+        0.009692224284599938
+      ]
+    },
+    {
+      "angle_from_base_deg": -44.44957201269755,
+      "base_xy_m": [
+        0.0806506100485301,
+        -0.0791157227120201
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 37.48263552,
+      "point_id": "near_10_18cm-020",
+      "radius_from_base_m": 0.11297707060038915,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-backup-0003",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.09612899130289793,
+        -0.07911046668859009
+      ]
+    },
+    {
+      "angle_from_base_deg": -71.61006583985805,
+      "base_xy_m": [
+        0.036425326167060776,
+        -0.10956283172257164
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 81.40263552,
+      "point_id": "near_10_18cm-021",
+      "radius_from_base_m": 0.11545916369628403,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-backup-0003",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.05190370742142861,
+        -0.10955757569914164
+      ]
+    },
+    {
+      "angle_from_base_deg": -31.48660904973459,
+      "base_xy_m": [
+        0.09998168554972331,
+        -0.0612367179552049
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 5.62263552,
+      "point_id": "near_10_18cm-022",
+      "radius_from_base_m": 0.11724450124116297,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-backup-0004",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11546006680409114,
+        -0.061231461931774894
+      ]
+    },
+    {
+      "angle_from_base_deg": 68.92491358401023,
+      "base_xy_m": [
+        0.04221946124704318,
+        0.10955610509368469
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 4.61463552,
+      "point_id": "near_10_18cm-023",
+      "radius_from_base_m": 0.1174096378977853,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0010",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.05769784250141101,
+        0.10956136111711469
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.550427987302413,
+      "base_xy_m": [
+        0.11839301127881337,
+        0.01150512718851186
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 50.98263552,
+      "point_id": "near_10_18cm-024",
+      "radius_from_base_m": 0.11895071698518284,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-backup-0004",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1338713925331812,
+        0.011510383211941859
+      ]
+    },
+    {
+      "angle_from_base_deg": -68.52364608677163,
+      "base_xy_m": [
+        0.043645214954085326,
+        -0.11093407178545621
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 49.542635520000005,
+      "point_id": "near_10_18cm-025",
+      "radius_from_base_m": 0.11921104425047649,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-backup-0004",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.05912359620845316,
+        -0.1109288157620262
+      ]
+    },
+    {
+      "angle_from_base_deg": 59.8714156416234,
+      "base_xy_m": [
+        0.06016249620252834,
+        0.1036665188089666
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 50.262635519999996,
+      "point_id": "near_10_18cm-026",
+      "radius_from_base_m": 0.11985938874902151,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-backup-0005",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.07564087745689617,
+        0.1036717748323966
+      ]
+    },
+    {
+      "angle_from_base_deg": 73.45166255520365,
+      "base_xy_m": [
+        0.0342491690404188,
+        0.11526607259436698
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 28.734635520000005,
+      "point_id": "near_10_18cm-027",
+      "radius_from_base_m": 0.12024671750733598,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-backup-0005",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.049727550294786635,
+        0.11527132861779699
+      ]
+    },
+    {
+      "angle_from_base_deg": 25.715037040800382,
+      "base_xy_m": [
+        0.10877250157099023,
+        0.05238383312891478
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 27.00663552,
+      "point_id": "near_10_18cm-028",
+      "radius_from_base_m": 0.12072913099699287,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0012",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.12425088282535807,
+        0.05238908915234478
+      ]
+    },
+    {
+      "angle_from_base_deg": -74.69648559294447,
+      "base_xy_m": [
+        0.031948907848609986,
+        -0.11675739958807789
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 28.01463552,
+      "point_id": "near_10_18cm-029",
+      "radius_from_base_m": 0.12104967191731279,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0012",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.04742728910297782,
+        -0.11675214356464789
+      ]
+    },
+    {
+      "angle_from_base_deg": 50.40639506549172,
+      "base_xy_m": [
+        0.07731259962998735,
+        0.09347611999726105
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 29.16663552,
+      "point_id": "near_10_18cm-030",
+      "radius_from_base_m": 0.12130549481078368,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0012",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.09279098088435518,
+        0.09348137602069105
+      ]
+    },
+    {
+      "angle_from_base_deg": -33.54422221845887,
+      "base_xy_m": [
+        0.1016872706607454,
+        -0.06741826204269413
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 28.44663552,
+      "point_id": "near_10_18cm-031",
+      "radius_from_base_m": 0.12200624193576763,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0013",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11716565191511323,
+        -0.06741300601926413
+      ]
+    },
+    {
+      "angle_from_base_deg": 36.41462551816663,
+      "base_xy_m": [
+        0.09854076137319219,
+        0.07268934873336436
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 72.65463552,
+      "point_id": "near_10_18cm-032",
+      "radius_from_base_m": 0.12245008399870154,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0013",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11401914262756002,
+        0.07269460475679436
+      ]
+    },
+    {
+      "angle_from_base_deg": 3.492814818578154,
+      "base_xy_m": [
+        0.12228578361197774,
+        0.007463926426058815
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 73.80663552,
+      "point_id": "near_10_18cm-033",
+      "radius_from_base_m": 0.12251335874625699,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0013",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.13776416486634557,
+        0.007469182449488815
+      ]
+    },
+    {
+      "angle_from_base_deg": -35.80759670405558,
+      "base_xy_m": [
+        0.10093447427058515,
+        -0.07281658447777986
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 15.95463552,
+      "point_id": "near_10_18cm-034",
+      "radius_from_base_m": 0.12445892122017234,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0014",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11641285552495298,
+        -0.07281132845434986
+      ]
+    },
+    {
+      "angle_from_base_deg": -53.91459258882924,
+      "base_xy_m": [
+        0.07385322231545823,
+        -0.10133224869168042
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 16.38663552,
+      "point_id": "near_10_18cm-035",
+      "radius_from_base_m": 0.12538948548937054,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0015",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.08933160356982606,
+        -0.10132699266825042
+      ]
+    },
+    {
+      "angle_from_base_deg": 30.036024695121355,
+      "base_xy_m": [
+        0.1089249465341365,
+        0.06297919572227462
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 16.67463552,
+      "point_id": "near_10_18cm-036",
+      "radius_from_base_m": 0.1258213935357937,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0015",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.12440332778850433,
+        0.06298445174570462
+      ]
+    },
+    {
+      "angle_from_base_deg": 60.48869959224072,
+      "base_xy_m": [
+        0.06252277793241817,
+        0.11045779877809711
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 62.75463552,
+      "point_id": "near_10_18cm-037",
+      "radius_from_base_m": 0.12692526569319865,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0016",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.078001159186786,
+        0.11046305480152711
+      ]
+    },
+    {
+      "angle_from_base_deg": 40.73561317248762,
+      "base_xy_m": [
+        0.0965213134040451,
+        0.0831258631837719
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 62.32263552,
+      "point_id": "near_10_18cm-038",
+      "radius_from_base_m": 0.12738238917247965,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-backup-0007",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11199969465841293,
+        0.0831311192072019
+      ]
+    },
+    {
+      "angle_from_base_deg": 7.813802472899141,
+      "base_xy_m": [
+        0.12635025771399283,
+        0.017338842144060895
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 61.314635519999996,
+      "point_id": "near_10_18cm-039",
+      "radius_from_base_m": 0.12753439956062468,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0016",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.14182863896836065,
+        0.017344098167490895
+      ]
+    },
+    {
+      "angle_from_base_deg": -43.21500411146299,
+      "base_xy_m": [
+        0.09338753080292235,
+        -0.0877427613072571
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 62.034635519999995,
+      "point_id": "near_10_18cm-040",
+      "radius_from_base_m": 0.1281406378604737,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0017",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.10886591205729018,
+        -0.0877375052838271
+      ]
+    },
+    {
+      "angle_from_base_deg": 1.6409629667263061,
+      "base_xy_m": [
+        0.1287513814505578,
+        0.0036884747338190222
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 39.78663552,
+      "point_id": "near_10_18cm-041",
+      "radius_from_base_m": 0.128804204400668,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0017",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.14422976270492563,
+        0.0036937307572490223
+      ]
+    },
+    {
+      "angle_from_base_deg": -72.43311110734776,
+      "base_xy_m": [
+        0.03905673413286788,
+        -0.1233697474673736
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 38.34663552,
+      "point_id": "near_10_18cm-042",
+      "radius_from_base_m": 0.1294044940150421,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0018",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.05453511538723571,
+        -0.1233644914439436
+      ]
+    },
+    {
+      "angle_from_base_deg": 38.678000003763344,
+      "base_xy_m": [
+        0.10287542961774007,
+        0.08235392554246865
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 85.14663552,
+      "point_id": "near_10_18cm-043",
+      "radius_from_base_m": 0.13177831032187756,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0019",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1183538108721079,
+        0.08235918156589865
+      ]
+    },
+    {
+      "angle_from_base_deg": -71.81582715673048,
+      "base_xy_m": [
+        0.04246133308949569,
+        -0.1292672149208596
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 52.56663552,
+      "point_id": "near_10_18cm-044",
+      "radius_from_base_m": 0.13606240355488658,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0022",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.057939714343863524,
+        -0.1292619588974296
+      ]
+    },
+    {
+      "angle_from_base_deg": 14.192403295944402,
+      "base_xy_m": [
+        0.13222085061590333,
+        0.033438366041716044
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 29.45463552,
+      "point_id": "near_10_18cm-045",
+      "radius_from_base_m": 0.13638356814929287,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0022",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.14769923187027115,
+        0.03344362206514605
+      ]
+    },
+    {
+      "angle_from_base_deg": -63.1738518480885,
+      "base_xy_m": [
+        0.061576783724279424,
+        -0.12176320202469271
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 30.60663552,
+      "point_id": "near_10_18cm-046",
+      "radius_from_base_m": 0.13644771035503972,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0022",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.07705516497864726,
+        -0.1217579460012627
+      ]
+    },
+    {
+      "angle_from_base_deg": 65.22120988030653,
+      "base_xy_m": [
+        0.057455558468580484,
+        0.12446620610509643
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 31.326635520000004,
+      "point_id": "near_10_18cm-047",
+      "radius_from_base_m": 0.13708748178128013,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0022",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.07293393972294832,
+        0.12447146212852643
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.007218110759226,
+      "base_xy_m": [
+        0.12039238202607878,
+        0.06675441566832502
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 30.89463552,
+      "point_id": "near_10_18cm-048",
+      "radius_from_base_m": 0.1376607339117906,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-backup-0009",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.13587076328044662,
+        0.06675967169175502
+      ]
+    },
+    {
+      "angle_from_base_deg": -53.29730863821196,
+      "base_xy_m": [
+        0.08235064312320341,
+        -0.11047103348085235
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 30.17463552,
+      "point_id": "near_10_18cm-049",
+      "radius_from_base_m": 0.13778779939142946,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0023",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.09782902437757124,
+        -0.11046577745742235
+      ]
+    },
+    {
+      "angle_from_base_deg": -67.28907818553706,
+      "base_xy_m": [
+        0.053636874188033104,
+        -0.12815445130181755
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 76.25463552,
+      "point_id": "near_10_18cm-050",
+      "radius_from_base_m": 0.1389261590238959,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0023",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.06911525544240094,
+        -0.12814919527838756
+      ]
+    },
+    {
+      "angle_from_base_deg": -26.136814811051465,
+      "base_xy_m": [
+        0.1255655014029824,
+        -0.06161397989539743
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 74.52663552,
+      "point_id": "near_10_18cm-051",
+      "radius_from_base_m": 0.13986771486348382,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0024",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1410438826573502,
+        -0.061608723871967426
+      ]
+    },
+    {
+      "angle_from_base_deg": 6.784995888536997,
+      "base_xy_m": [
+        0.13919840696500466,
+        0.01656143591412762
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 75.53463552,
+      "point_id": "near_10_18cm-052",
+      "radius_from_base_m": 0.14018016143924508,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-backup-0010",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.15467678821937247,
+        0.01656669193755762
+      ]
+    },
+    {
+      "angle_from_base_deg": 44.85083950993618,
+      "base_xy_m": [
+        0.09946852076519198,
+        0.0989519632848049
+      ],
+      "camera1_grid_bin": 14,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 19.26663552,
+      "point_id": "near_10_18cm-053",
+      "radius_from_base_m": 0.1403049452483155,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0024",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11494690201955982,
+        0.09895721930823491
+      ]
+    },
+    {
+      "angle_from_base_deg": -39.09977777401443,
+      "base_xy_m": [
+        0.10941457066862094,
+        -0.08891810494232412
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 18.546635520000002,
+      "point_id": "near_10_18cm-054",
+      "radius_from_base_m": 0.14098928207893255,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0025",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.12489295192298877,
+        -0.08891284891889412
+      ]
+    },
+    {
+      "angle_from_base_deg": 67.89610699964811,
+      "base_xy_m": [
+        0.053494330019404845,
+        0.13171497377636232
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 18.834635520000003,
+      "point_id": "near_10_18cm-055",
+      "radius_from_base_m": 0.14216355954017476,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-backup-0010",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.06897271127377268,
+        0.1317202297997923
+      ]
+    },
+    {
+      "angle_from_base_deg": 72.01133333709666,
+      "base_xy_m": [
+        0.043961197985299794,
+        0.1353897733687079
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 63.18663552,
+      "point_id": "near_10_18cm-056",
+      "radius_from_base_m": 0.14234808625736003,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0025",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.059439579239667625,
+        0.13539502939213788
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.55042798730241,
+      "base_xy_m": [
+        0.08088784204810577,
+        0.11791473474478709
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 64.48263552,
+      "point_id": "near_10_18cm-057",
+      "radius_from_base_m": 0.1429920545384701,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-backup-0010",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.0963662233024736,
+        0.11791999076821709
+      ]
+    },
+    {
+      "angle_from_base_deg": -24.696485592944462,
+      "base_xy_m": [
+        0.1317075663281222,
+        -0.060568924648338504
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 41.51463552,
+      "point_id": "near_10_18cm-058",
+      "radius_from_base_m": 0.14496716063002962,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0027",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.14718594758249,
+        -0.0605636686249085
+      ]
+    },
+    {
+      "angle_from_base_deg": -32.926938267841585,
+      "base_xy_m": [
+        0.12188275527210456,
+        -0.07893080278581409
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 42.66663552,
+      "point_id": "near_10_18cm-059",
+      "radius_from_base_m": 0.14520839390728352,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0028",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1373611365264724,
+        -0.07892554676238409
+      ]
+    },
+    {
+      "angle_from_base_deg": -0.005127568253115555,
+      "base_xy_m": [
+        0.1454191441721788,
+        -1.3013988035067565e-05
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 41.082635520000004,
+      "point_id": "near_10_18cm-060",
+      "radius_from_base_m": 0.14541914475450887,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-backup-0011",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.16089752542654662,
+        -7.757964605067565e-06
+      ]
+    },
+    {
+      "angle_from_base_deg": -46.91870781516669,
+      "base_xy_m": [
+        0.09992056969681722,
+        -0.10684735566496863
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 86.15463552,
+      "point_id": "near_10_18cm-061",
+      "radius_from_base_m": 0.1462890209863092,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0028",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11539895095118505,
+        -0.10684209964153862
+      ]
+    },
+    {
+      "angle_from_base_deg": 4.110098769195432,
+      "base_xy_m": [
+        0.14656757266085593,
+        0.010532060835255597
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 85.86663552,
+      "point_id": "near_10_18cm-062",
+      "radius_from_base_m": 0.1469454921429467,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0029",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.16204595391522375,
+        0.010537316858685596
+      ]
+    },
+    {
+      "angle_from_base_deg": 63.369358028454684,
+      "base_xy_m": [
+        0.06615938502297476,
+        0.13194094676981286
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 86.87463552,
+      "point_id": "near_10_18cm-063",
+      "radius_from_base_m": 0.14759904356442424,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0029",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.0816377662773426,
+        0.13194620279324284
+      ]
+    },
+    {
+      "angle_from_base_deg": -37.04216460529015,
+      "base_xy_m": [
+        0.11797793544534237,
+        -0.0890389488324488
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 85.72263552,
+      "point_id": "near_10_18cm-064",
+      "radius_from_base_m": 0.1478063857251533,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-backup-0011",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1334563166997102,
+        -0.0890336928090188
+      ]
+    },
+    {
+      "angle_from_base_deg": -64.40841974932306,
+      "base_xy_m": [
+        0.06407765344795649,
+        -0.13379083144812334
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 10.374635520000002,
+      "point_id": "near_10_18cm-065",
+      "radius_from_base_m": 0.14834396600797944,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0030",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.07955603470232432,
+        -0.13378557542469335
+      ]
+    },
+    {
+      "angle_from_base_deg": 3.081292184833302,
+      "base_xy_m": [
+        0.1490454976749516,
+        0.00802320844815592
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 9.654635520000003,
+      "point_id": "near_10_18cm-066",
+      "radius_from_base_m": 0.14926128852109163,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0030",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1645238789293194,
+        0.00802846447158592
+      ]
+    },
+    {
+      "angle_from_base_deg": 25.303514407055516,
+      "base_xy_m": [
+        0.1364673928130418,
+        0.06451808234741255
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 55.01463552,
+      "point_id": "near_10_18cm-067",
+      "radius_from_base_m": 0.1509500985457663,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0031",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1519457740674096,
+        0.06452333837084255
+      ]
+    },
+    {
+      "angle_from_base_deg": -33.95574485220372,
+      "base_xy_m": [
+        0.12595629704028077,
+        -0.08481711788829611
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 54.29463552,
+      "point_id": "near_10_18cm-068",
+      "radius_from_base_m": 0.15185167845953024,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0032",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1414346782946486,
+        -0.08481186186486611
+      ]
+    },
+    {
+      "angle_from_base_deg": 43.822032925574035,
+      "base_xy_m": [
+        0.11029879044668302,
+        0.1058541878102858
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 33.054635520000005,
+      "point_id": "near_10_18cm-069",
+      "radius_from_base_m": 0.15287554497360445,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0033",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.12577717170105085,
+        0.1058594438337158
+      ]
+    },
+    {
+      "angle_from_base_deg": 10.900222225985573,
+      "base_xy_m": [
+        0.15017997485990373,
+        0.028920708878850822
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 32.04663552,
+      "point_id": "near_10_18cm-070",
+      "radius_from_base_m": 0.15293930904439368,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0033",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.16565835611427154,
+        0.02892596490228082
+      ]
+    },
+    {
+      "angle_from_base_deg": 21.599810703351807,
+      "base_xy_m": [
+        0.1437910527618823,
+        0.05693035566906404
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 77.69463552,
+      "point_id": "near_10_18cm-071",
+      "radius_from_base_m": 0.15465100145481295,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0034",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.15926943401625013,
+        0.056935611692494045
+      ]
+    },
+    {
+      "angle_from_base_deg": 72.62861728771395,
+      "base_xy_m": [
+        0.046210874667169374,
+        0.14771759310749588
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 76.97463552,
+      "point_id": "near_10_18cm-072",
+      "radius_from_base_m": 0.15477704045166568,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0034",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.061689255921537206,
+        0.14772284913092587
+      ]
+    },
+    {
+      "angle_from_base_deg": 31.476353913228365,
+      "base_xy_m": [
+        0.13240480732738374,
+        0.08106262546682624
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 76.54263552,
+      "point_id": "near_10_18cm-073",
+      "radius_from_base_m": 0.15524877536063386,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-backup-0013",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.14788318858175156,
+        0.08106788149025625
+      ]
+    },
+    {
+      "angle_from_base_deg": -44.0380493789527,
+      "base_xy_m": [
+        0.11270566141894937,
+        -0.10898332962014746
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 20.27463552,
+      "point_id": "near_10_18cm-074",
+      "radius_from_base_m": 0.15677988471413212,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0035",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1281840426733172,
+        -0.10897807359671746
+      ]
+    },
+    {
+      "angle_from_base_deg": -31.692370366607022,
+      "base_xy_m": [
+        0.13513596755233703,
+        -0.0834368175607763
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 66.78663552,
+      "point_id": "near_10_18cm-075",
+      "radius_from_base_m": 0.15881886616827534,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0036",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.15061434880670485,
+        -0.0834315615373463
+      ]
+    },
+    {
+      "angle_from_base_deg": -62.55656789747121,
+      "base_xy_m": [
+        0.07420683953844313,
+        -0.14289428685812566
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 44.82663552,
+      "point_id": "near_10_18cm-076",
+      "radius_from_base_m": 0.16101376416622448,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0038",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.08968522079281097,
+        -0.14288903083469567
+      ]
+    },
+    {
+      "angle_from_base_deg": -50.21088888512554,
+      "base_xy_m": [
+        0.1041990429831637,
+        -0.12511191666811505
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 88.74663552,
+      "point_id": "near_10_18cm-077",
+      "radius_from_base_m": 0.16282024521224797,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0039",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11967742423753153,
+        -0.12510666064468506
+      ]
+    },
+    {
+      "angle_from_base_deg": -25.519530860434173,
+      "base_xy_m": [
+        0.14742081065965587,
+        -0.0703778149378513
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 88.31463552,
+      "point_id": "near_10_18cm-078",
+      "radius_from_base_m": 0.16335829409912603,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0039",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1628991919140237,
+        -0.07037255891442129
+      ]
+    },
+    {
+      "angle_from_base_deg": 73.86318518894853,
+      "base_xy_m": [
+        0.045694145937671835,
+        0.15793014869823638
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 0.7266355200000001,
+      "point_id": "near_10_18cm-079",
+      "radius_from_base_m": 0.16440768485937726,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0040",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.061172527192039666,
+        0.15793540472166637
+      ]
+    },
+    {
+      "angle_from_base_deg": -0.2108888851255415,
+      "base_xy_m": [
+        0.16583882007722514,
+        -0.0006104065973193121
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 1.4466355199999998,
+      "point_id": "near_10_18cm-080",
+      "radius_from_base_m": 0.16583994344192327,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0041",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.18131720133159296,
+        -0.0006051505738893121
+      ]
+    },
+    {
+      "angle_from_base_deg": 64.80968724656168,
+      "base_xy_m": [
+        0.07092987540640777,
+        0.15079983294304997
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 45.94263552,
+      "point_id": "near_10_18cm-081",
+      "radius_from_base_m": 0.1666482428374818,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-backup-0016",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.0864082566607756,
+        0.15080508896647996
+      ]
+    },
+    {
+      "angle_from_base_deg": 46.70269136178801,
+      "base_xy_m": [
+        0.11501233656729996,
+        0.12205961362445165
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 46.374635520000005,
+      "point_id": "near_10_18cm-082",
+      "radius_from_base_m": 0.16770923302197857,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0042",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1304907178216678,
+        0.12206486964788166
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.961950621047279,
+      "base_xy_m": [
+        0.16781904652122193,
+        0.01752582282029174
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 22.97463552,
+      "point_id": "near_10_18cm-083",
+      "radius_from_base_m": 0.16873170075839425,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0043",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.18329742777558974,
+        0.01753107884372174
+      ]
+    },
+    {
+      "angle_from_base_deg": -18.72940740364406,
+      "base_xy_m": [
+        0.16069911841306714,
+        -0.05448559609734794
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 23.406635520000002,
+      "point_id": "near_10_18cm-084",
+      "radius_from_base_m": 0.16968466884436056,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0043",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.17617749966743496,
+        -0.054480340073917936
+      ]
+    },
+    {
+      "angle_from_base_deg": 58.636847740388845,
+      "base_xy_m": [
+        0.08847889302755396,
+        0.14516153874025645
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 24.41463552,
+      "point_id": "near_10_18cm-085",
+      "radius_from_base_m": 0.1700011377633112,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0043",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1039572742819218,
+        0.14516679476368644
+      ]
+    },
+    {
+      "angle_from_base_deg": 1.846724283598732,
+      "base_xy_m": [
+        0.17026009764647823,
+        0.005489625691429372
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 68.62263552,
+      "point_id": "near_10_18cm-086",
+      "radius_from_base_m": 0.17034857451948432,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-backup-0017",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.18573847890084605,
+        0.005494881714859371
+      ]
+    },
+    {
+      "angle_from_base_deg": -55.76644444068109,
+      "base_xy_m": [
+        0.0964518724003364,
+        -0.14174598107632377
+      ],
+      "camera1_grid_bin": 15,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 68.04663552000001,
+      "point_id": "near_10_18cm-087",
+      "radius_from_base_m": 0.1714493710715216,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0044",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.11193025365470423,
+        -0.14174072505289378
+      ]
+    },
+    {
+      "angle_from_base_deg": 62.95783539470983,
+      "base_xy_m": [
+        0.07836104030037556,
+        0.15351281446140977
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 11.922635520000002,
+      "point_id": "near_10_18cm-088",
+      "radius_from_base_m": 0.1723561337487596,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-backup-0018",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.0938394215547434,
+        0.15351807048483976
+      ]
+    },
+    {
+      "angle_from_base_deg": 34.97429630005965,
+      "base_xy_m": [
+        0.14161300053936915,
+        0.09906384264229276
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 12.78663552,
+      "point_id": "near_10_18cm-089",
+      "radius_from_base_m": 0.1728232821144776,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0045",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.15709138179373697,
+        0.09906909866572276
+      ]
+    },
+    {
+      "angle_from_base_deg": 42.38170370746704,
+      "base_xy_m": [
+        0.12903052958588904,
+        0.11774552762464195
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 56.706635520000006,
+      "point_id": "near_10_18cm-090",
+      "radius_from_base_m": 0.1746793829872899,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0046",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.14450891084025685,
+        0.11775078364807195
+      ]
+    },
+    {
+      "angle_from_base_deg": -33.338460901586444,
+      "base_xy_m": [
+        0.14657517059774128,
+        -0.09642279919740634
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 57.28263552,
+      "point_id": "near_10_18cm-091",
+      "radius_from_base_m": 0.17544696304245425,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-backup-0018",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1620535518521091,
+        -0.09641754317397634
+      ]
+    },
+    {
+      "angle_from_base_deg": 16.044255147796264,
+      "base_xy_m": [
+        0.16899536387661826,
+        0.048599936512609784
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 56.99463552,
+      "point_id": "near_10_18cm-092",
+      "radius_from_base_m": 0.17584478053334512,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s01-primary-0047",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.18447374513098608,
+        0.04860519253603979
+      ]
+    },
+    {
+      "angle_from_base_deg": 44.43931687619131,
+      "base_xy_m": [
+        0.12596581755426448,
+        0.12352428768750727
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 33.88263552,
+      "point_id": "near_10_18cm-093",
+      "radius_from_base_m": 0.17642459250575104,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-backup-0019",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1414441988086323,
+        0.12352954371093727
+      ]
+    },
+    {
+      "angle_from_base_deg": -39.51130040775928,
+      "base_xy_m": [
+        0.13641663593235548,
+        -0.11249839235171094
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 35.75463552,
+      "point_id": "near_10_18cm-094",
+      "radius_from_base_m": 0.1768202104987445,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0047",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1518950171867233,
+        -0.11249313632828094
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.581259255495908,
+      "base_xy_m": [
+        0.16683851380309406,
+        -0.06264820151285357
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 79.38663552,
+      "point_id": "near_10_18cm-095",
+      "radius_from_base_m": 0.17821303779695893,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0048",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.18231689505746188,
+        -0.06264294548942356
+      ]
+    },
+    {
+      "angle_from_base_deg": 71.5998107033518,
+      "base_xy_m": [
+        0.05634845438982021,
+        0.16938783465378696
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 80.39463552000001,
+      "point_id": "near_10_18cm-096",
+      "radius_from_base_m": 0.17851438832996155,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s00-primary-0049",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.07182683564418804,
+        0.16939309067721695
+      ]
+    },
+    {
+      "angle_from_base_deg": 22.2170946539691,
+      "base_xy_m": [
+        0.1655674219514527,
+        0.06762444549990732
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 80.68263552,
+      "point_id": "near_10_18cm-097",
+      "radius_from_base_m": 0.1788452874437018,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-backup-0019",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.1810458032058205,
+        0.06762970152333732
+      ]
+    },
+    {
+      "angle_from_base_deg": -35.396074070310725,
+      "base_xy_m": [
+        0.1463512549827059,
+        -0.10399133139741654
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 80.10663552,
+      "point_id": "near_10_18cm-098",
+      "radius_from_base_m": 0.17953519666299506,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s02-primary-0049",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.16182963623707372,
+        -0.10398607537398653
+      ]
+    },
+    {
+      "angle_from_base_deg": -2.474263370722241,
+      "base_xy_m": [
+        0.17966667464725575,
+        -0.007763559880458006
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0032,
+      "object_yaw_deg": 78.95463552,
+      "point_id": "near_10_18cm-099",
+      "radius_from_base_m": 0.17983433165227464,
+      "source_band": "near_10_18cm",
+      "source_point_id": "grip_the_cube_near_v1_train200-s03-primary-0049",
+      "uniform_area_weight": 0.0032,
+      "world_xy_m": [
+        0.19514505590162357,
+        -0.007758303857028006
+      ]
+    },
+    {
+      "angle_from_base_deg": -29.999999999999996,
+      "base_xy_m": [
+        0.16454482671904336,
+        -0.09499999999999999
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": -30.0,
+      "point_id": "bridge_18_22cm-000",
+      "radius_from_base_m": 0.19,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r001_a001_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.18002320797341118,
+        -0.09499474397656998
+      ]
+    },
+    {
+      "angle_from_base_deg": -29.999999999999996,
+      "base_xy_m": [
+        0.16454482671904336,
+        -0.09499999999999999
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 15.0,
+      "point_id": "bridge_18_22cm-001",
+      "radius_from_base_m": 0.19,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r001_a001_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.18002320797341118,
+        -0.09499474397656998
+      ]
+    },
+    {
+      "angle_from_base_deg": -29.999999999999996,
+      "base_xy_m": [
+        0.17320508075688773,
+        -0.09999999999999998
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": -30.0,
+      "point_id": "bridge_18_22cm-002",
+      "radius_from_base_m": 0.19999999999999998,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r002_a001_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.18868346201125555,
+        -0.09999474397656997
+      ]
+    },
+    {
+      "angle_from_base_deg": -29.999999999999996,
+      "base_xy_m": [
+        0.17320508075688773,
+        -0.09999999999999998
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 15.0,
+      "point_id": "bridge_18_22cm-003",
+      "radius_from_base_m": 0.19999999999999998,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r002_a001_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.18868346201125555,
+        -0.09999474397656997
+      ]
+    },
+    {
+      "angle_from_base_deg": -29.999999999999996,
+      "base_xy_m": [
+        0.18186533479473213,
+        -0.10499999999999998
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": -30.0,
+      "point_id": "bridge_18_22cm-004",
+      "radius_from_base_m": 0.21,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r003_a001_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.19734371604909995,
+        -0.10499474397656998
+      ]
+    },
+    {
+      "angle_from_base_deg": -29.999999999999996,
+      "base_xy_m": [
+        0.18186533479473213,
+        -0.10499999999999998
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 15.0,
+      "point_id": "bridge_18_22cm-005",
+      "radius_from_base_m": 0.21,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r003_a001_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.19734371604909995,
+        -0.10499474397656998
+      ]
+    },
+    {
+      "angle_from_base_deg": -29.999999999999996,
+      "base_xy_m": [
+        0.1905255888325765,
+        -0.10999999999999999
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": -30.0,
+      "point_id": "bridge_18_22cm-006",
+      "radius_from_base_m": 0.22,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r004_a001_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.20600397008694432,
+        -0.10999474397656998
+      ]
+    },
+    {
+      "angle_from_base_deg": -29.999999999999996,
+      "base_xy_m": [
+        0.1905255888325765,
+        -0.10999999999999999
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 15.0,
+      "point_id": "bridge_18_22cm-007",
+      "radius_from_base_m": 0.22,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r004_a001_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.20600397008694432,
+        -0.10999474397656998
+      ]
+    },
+    {
+      "angle_from_base_deg": 0.0,
+      "base_xy_m": [
+        0.19,
+        0.0
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 0.0,
+      "point_id": "bridge_18_22cm-008",
+      "radius_from_base_m": 0.19,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r001_a002_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.20547838125436782,
+        5.256023430000001e-06
+      ]
+    },
+    {
+      "angle_from_base_deg": 0.0,
+      "base_xy_m": [
+        0.19,
+        0.0
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 45.0,
+      "point_id": "bridge_18_22cm-009",
+      "radius_from_base_m": 0.19,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r001_a002_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.20547838125436782,
+        5.256023430000001e-06
+      ]
+    },
+    {
+      "angle_from_base_deg": 0.0,
+      "base_xy_m": [
+        0.19999999999999998,
+        0.0
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 0.0,
+      "point_id": "bridge_18_22cm-010",
+      "radius_from_base_m": 0.19999999999999998,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r002_a002_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.2154783812543678,
+        5.256023430000001e-06
+      ]
+    },
+    {
+      "angle_from_base_deg": 0.0,
+      "base_xy_m": [
+        0.19999999999999998,
+        0.0
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 45.0,
+      "point_id": "bridge_18_22cm-011",
+      "radius_from_base_m": 0.19999999999999998,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r002_a002_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.2154783812543678,
+        5.256023430000001e-06
+      ]
+    },
+    {
+      "angle_from_base_deg": 0.0,
+      "base_xy_m": [
+        0.21,
+        0.0
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 0.0,
+      "point_id": "bridge_18_22cm-012",
+      "radius_from_base_m": 0.21,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r003_a002_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.2254783812543678,
+        5.256023430000001e-06
+      ]
+    },
+    {
+      "angle_from_base_deg": 0.0,
+      "base_xy_m": [
+        0.21,
+        0.0
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 45.0,
+      "point_id": "bridge_18_22cm-013",
+      "radius_from_base_m": 0.21,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r003_a002_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.2254783812543678,
+        5.256023430000001e-06
+      ]
+    },
+    {
+      "angle_from_base_deg": 0.0,
+      "base_xy_m": [
+        0.22,
+        0.0
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 0.0,
+      "point_id": "bridge_18_22cm-014",
+      "radius_from_base_m": 0.22,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r004_a002_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.23547838125436782,
+        5.256023430000001e-06
+      ]
+    },
+    {
+      "angle_from_base_deg": 0.0,
+      "base_xy_m": [
+        0.22,
+        0.0
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 45.0,
+      "point_id": "bridge_18_22cm-015",
+      "radius_from_base_m": 0.22,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r004_a002_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.23547838125436782,
+        5.256023430000001e-06
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.16454482671904336,
+        0.09499999999999999
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 30.0,
+      "point_id": "bridge_18_22cm-016",
+      "radius_from_base_m": 0.19,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r001_a003_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.18002320797341118,
+        0.09500525602342999
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.16454482671904336,
+        0.09499999999999999
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 75.0,
+      "point_id": "bridge_18_22cm-017",
+      "radius_from_base_m": 0.19,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r001_a003_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.18002320797341118,
+        0.09500525602342999
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.17320508075688773,
+        0.09999999999999998
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 30.0,
+      "point_id": "bridge_18_22cm-018",
+      "radius_from_base_m": 0.19999999999999998,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r002_a003_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.18868346201125555,
+        0.10000525602342998
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.17320508075688773,
+        0.09999999999999998
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 75.0,
+      "point_id": "bridge_18_22cm-019",
+      "radius_from_base_m": 0.19999999999999998,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r002_a003_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.18868346201125555,
+        0.10000525602342998
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.18186533479473213,
+        0.10499999999999998
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 30.0,
+      "point_id": "bridge_18_22cm-020",
+      "radius_from_base_m": 0.21,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r003_a003_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.19734371604909995,
+        0.10500525602342999
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.18186533479473213,
+        0.10499999999999998
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 75.0,
+      "point_id": "bridge_18_22cm-021",
+      "radius_from_base_m": 0.21,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r003_a003_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.19734371604909995,
+        0.10500525602342999
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.1905255888325765,
+        0.10999999999999999
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 30.0,
+      "point_id": "bridge_18_22cm-022",
+      "radius_from_base_m": 0.22,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r004_a003_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.20600397008694432,
+        0.11000525602342999
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.1905255888325765,
+        0.10999999999999999
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 75.0,
+      "point_id": "bridge_18_22cm-023",
+      "radius_from_base_m": 0.22,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r004_a003_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.20600397008694432,
+        0.11000525602342999
+      ]
+    },
+    {
+      "angle_from_base_deg": 59.99999999999999,
+      "base_xy_m": [
+        0.09500000000000003,
+        0.16454482671904333
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 60.0,
+      "point_id": "bridge_18_22cm-024",
+      "radius_from_base_m": 0.19,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r001_a004_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.11047838125436786,
+        0.16455008274247332
+      ]
+    },
+    {
+      "angle_from_base_deg": 59.99999999999999,
+      "base_xy_m": [
+        0.09500000000000003,
+        0.16454482671904333
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 105.0,
+      "point_id": "bridge_18_22cm-025",
+      "radius_from_base_m": 0.19,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r001_a004_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.11047838125436786,
+        0.16455008274247332
+      ]
+    },
+    {
+      "angle_from_base_deg": 59.99999999999999,
+      "base_xy_m": [
+        0.10000000000000002,
+        0.1732050807568877
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 60.0,
+      "point_id": "bridge_18_22cm-026",
+      "radius_from_base_m": 0.19999999999999998,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r002_a004_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.11547838125436785,
+        0.1732103367803177
+      ]
+    },
+    {
+      "angle_from_base_deg": 59.99999999999999,
+      "base_xy_m": [
+        0.10000000000000002,
+        0.1732050807568877
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 105.0,
+      "point_id": "bridge_18_22cm-027",
+      "radius_from_base_m": 0.19999999999999998,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r002_a004_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.11547838125436785,
+        0.1732103367803177
+      ]
+    },
+    {
+      "angle_from_base_deg": 59.99999999999999,
+      "base_xy_m": [
+        0.10500000000000002,
+        0.1818653347947321
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 60.0,
+      "point_id": "bridge_18_22cm-028",
+      "radius_from_base_m": 0.21,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r003_a004_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.12047838125436786,
+        0.1818705908181621
+      ]
+    },
+    {
+      "angle_from_base_deg": 59.99999999999999,
+      "base_xy_m": [
+        0.10500000000000002,
+        0.1818653347947321
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 105.0,
+      "point_id": "bridge_18_22cm-029",
+      "radius_from_base_m": 0.21,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r003_a004_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.12047838125436786,
+        0.1818705908181621
+      ]
+    },
+    {
+      "angle_from_base_deg": 59.99999999999999,
+      "base_xy_m": [
+        0.11000000000000003,
+        0.1905255888325765
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 60.0,
+      "point_id": "bridge_18_22cm-030",
+      "radius_from_base_m": 0.22000000000000003,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r004_a004_yaw00",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.12547838125436786,
+        0.1905308448560065
+      ]
+    },
+    {
+      "angle_from_base_deg": 59.99999999999999,
+      "base_xy_m": [
+        0.11000000000000003,
+        0.1905255888325765
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0075,
+      "object_yaw_deg": 105.0,
+      "point_id": "bridge_18_22cm-031",
+      "radius_from_base_m": 0.22000000000000003,
+      "source_band": "bridge_18_22cm",
+      "source_point_id": "r004_a004_yaw01",
+      "uniform_area_weight": 0.0075,
+      "world_xy_m": [
+        0.12547838125436786,
+        0.1905308448560065
+      ]
+    },
+    {
+      "angle_from_base_deg": -19.999999999999996,
+      "base_xy_m": [
+        0.22082776588468847,
+        -0.08037473368153214
+      ],
+      "camera1_grid_bin": 11,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": -20.0,
+      "point_id": "mid_22_28cm-000",
+      "radius_from_base_m": 0.235,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r001_a000_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2363061471390563,
+        -0.08036947765810214
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2349231551964771,
+        -0.08550503583141718
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": -20.0,
+      "point_id": "mid_22_28cm-001",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a000_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.25040153645084495,
+        -0.08549977980798718
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2349231551964771,
+        -0.08550503583141718
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 2.5,
+      "point_id": "mid_22_28cm-002",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a000_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.25040153645084495,
+        -0.08549977980798718
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2349231551964771,
+        -0.08550503583141718
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 25.0,
+      "point_id": "mid_22_28cm-003",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a000_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.25040153645084495,
+        -0.08549977980798718
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2349231551964771,
+        -0.08550503583141718
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 47.5,
+      "point_id": "mid_22_28cm-004",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a000_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.25040153645084495,
+        -0.08549977980798718
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.24901854450826574,
+        -0.09063533798130222
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": -20.0,
+      "point_id": "mid_22_28cm-005",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a000_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.26449692576263356,
+        -0.09063008195787221
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.24901854450826574,
+        -0.09063533798130222
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 2.5,
+      "point_id": "mid_22_28cm-006",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a000_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.26449692576263356,
+        -0.09063008195787221
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.24901854450826574,
+        -0.09063533798130222
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 25.0,
+      "point_id": "mid_22_28cm-007",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a000_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.26449692576263356,
+        -0.09063008195787221
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.24901854450826574,
+        -0.09063533798130222
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 47.5,
+      "point_id": "mid_22_28cm-008",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a000_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.26449692576263356,
+        -0.09063008195787221
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2631139338200544,
+        -0.09576564013118725
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": -20.0,
+      "point_id": "mid_22_28cm-009",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a000_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2785923150744222,
+        -0.09576038410775725
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2631139338200544,
+        -0.09576564013118725
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 2.5,
+      "point_id": "mid_22_28cm-010",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a000_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2785923150744222,
+        -0.09576038410775725
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2631139338200544,
+        -0.09576564013118725
+      ],
+      "camera1_grid_bin": 7,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 47.5,
+      "point_id": "mid_22_28cm-011",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a000_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2785923150744222,
+        -0.09576038410775725
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2341057540515602,
+        0.02048159954569967
+      ],
+      "camera1_grid_bin": 10,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 5.0,
+      "point_id": "mid_22_28cm-012",
+      "radius_from_base_m": 0.235,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r001_a001_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.24958413530592802,
+        0.02048685556912967
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2490486745229364,
+        0.02178893568691454
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 5.0,
+      "point_id": "mid_22_28cm-013",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a001_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.26452705577730423,
+        0.02179419171034454
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2490486745229364,
+        0.02178893568691454
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 27.5,
+      "point_id": "mid_22_28cm-014",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a001_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.26452705577730423,
+        0.02179419171034454
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2490486745229364,
+        0.02178893568691454
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 50.0,
+      "point_id": "mid_22_28cm-015",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a001_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.26452705577730423,
+        0.02179419171034454
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2490486745229364,
+        0.02178893568691454
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 72.5,
+      "point_id": "mid_22_28cm-016",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a001_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.26452705577730423,
+        0.02179419171034454
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2639915949943126,
+        0.023096271828129414
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 5.0,
+      "point_id": "mid_22_28cm-017",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a001_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2794699762486804,
+        0.023101527851559413
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2639915949943126,
+        0.023096271828129414
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 27.5,
+      "point_id": "mid_22_28cm-018",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a001_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2794699762486804,
+        0.023101527851559413
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2639915949943126,
+        0.023096271828129414
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 50.0,
+      "point_id": "mid_22_28cm-019",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a001_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2794699762486804,
+        0.023101527851559413
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2639915949943126,
+        0.023096271828129414
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 72.5,
+      "point_id": "mid_22_28cm-020",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a001_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2794699762486804,
+        0.023101527851559413
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.27893451546568876,
+        0.02440360796934429
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 5.0,
+      "point_id": "mid_22_28cm-021",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a001_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2944128967200566,
+        0.02440886399277429
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.27893451546568876,
+        0.02440360796934429
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 27.5,
+      "point_id": "mid_22_28cm-022",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a001_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2944128967200566,
+        0.02440886399277429
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.27893451546568876,
+        0.02440360796934429
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 72.5,
+      "point_id": "mid_22_28cm-023",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a001_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2944128967200566,
+        0.02440886399277429
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.2035159698893431,
+        0.11749999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 30.0,
+      "point_id": "mid_22_28cm-024",
+      "radius_from_base_m": 0.235,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r001_a002_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2189943511437109,
+        0.11750525602342998
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.21650635094610968,
+        0.12499999999999999
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 30.0,
+      "point_id": "mid_22_28cm-025",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a002_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2319847322004775,
+        0.12500525602343
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.21650635094610968,
+        0.12499999999999999
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 52.5,
+      "point_id": "mid_22_28cm-026",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a002_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2319847322004775,
+        0.12500525602343
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.21650635094610968,
+        0.12499999999999999
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 75.0,
+      "point_id": "mid_22_28cm-027",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a002_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2319847322004775,
+        0.12500525602343
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.21650635094610968,
+        0.12499999999999999
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 97.5,
+      "point_id": "mid_22_28cm-028",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a002_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.2319847322004775,
+        0.12500525602343
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.22949673200287626,
+        0.13249999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 30.0,
+      "point_id": "mid_22_28cm-029",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a002_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.24497511325724408,
+        0.13250525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.22949673200287626,
+        0.13249999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 52.5,
+      "point_id": "mid_22_28cm-030",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a002_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.24497511325724408,
+        0.13250525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.22949673200287626,
+        0.13249999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 75.0,
+      "point_id": "mid_22_28cm-031",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a002_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.24497511325724408,
+        0.13250525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.22949673200287626,
+        0.13249999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 97.5,
+      "point_id": "mid_22_28cm-032",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a002_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.24497511325724408,
+        0.13250525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.24248711305964285,
+        0.13999999999999999
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 30.0,
+      "point_id": "mid_22_28cm-033",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a002_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.25796549431401067,
+        0.14000525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.24248711305964285,
+        0.13999999999999999
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 52.5,
+      "point_id": "mid_22_28cm-034",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a002_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.25796549431401067,
+        0.14000525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.24248711305964285,
+        0.13999999999999999
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 97.5,
+      "point_id": "mid_22_28cm-035",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a002_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.25796549431401067,
+        0.14000525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.0,
+      "base_xy_m": [
+        0.13479046254249583,
+        0.19250073040791307
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 55.0,
+      "point_id": "mid_22_28cm-036",
+      "radius_from_base_m": 0.235,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r001_a003_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.15026884379686364,
+        0.19250598643134306
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1433941090877615,
+        0.20478801107224795
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 55.0,
+      "point_id": "mid_22_28cm-037",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a003_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.15887249034212933,
+        0.20479326709567794
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1433941090877615,
+        0.20478801107224795
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 77.5,
+      "point_id": "mid_22_28cm-038",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a003_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.15887249034212933,
+        0.20479326709567794
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1433941090877615,
+        0.20478801107224795
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 100.0,
+      "point_id": "mid_22_28cm-039",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a003_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.15887249034212933,
+        0.20479326709567794
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1433941090877615,
+        0.20478801107224795
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 122.5,
+      "point_id": "mid_22_28cm-040",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a003_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.15887249034212933,
+        0.20479326709567794
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1519977556330272,
+        0.21707529173658283
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 55.0,
+      "point_id": "mid_22_28cm-041",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a003_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.16747613688739502,
+        0.21708054776001282
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1519977556330272,
+        0.21707529173658283
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 77.5,
+      "point_id": "mid_22_28cm-042",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a003_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.16747613688739502,
+        0.21708054776001282
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1519977556330272,
+        0.21707529173658283
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 100.0,
+      "point_id": "mid_22_28cm-043",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a003_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.16747613688739502,
+        0.21708054776001282
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1519977556330272,
+        0.21707529173658283
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 122.5,
+      "point_id": "mid_22_28cm-044",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a003_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.16747613688739502,
+        0.21708054776001282
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.0,
+      "base_xy_m": [
+        0.1606014021782929,
+        0.22936257240091773
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 55.0,
+      "point_id": "mid_22_28cm-045",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a003_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.17607978343266073,
+        0.22936782842434772
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.0,
+      "base_xy_m": [
+        0.1606014021782929,
+        0.22936257240091773
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 77.5,
+      "point_id": "mid_22_28cm-046",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a003_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.17607978343266073,
+        0.22936782842434772
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.0,
+      "base_xy_m": [
+        0.1606014021782929,
+        0.22936257240091773
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 122.5,
+      "point_id": "mid_22_28cm-047",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a003_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.17607978343266073,
+        0.22936782842434772
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.040807321751728645,
+        0.23142982195786888
+      ],
+      "camera1_grid_bin": 13,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 80.0,
+      "point_id": "mid_22_28cm-048",
+      "radius_from_base_m": 0.235,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r001_a004_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.05628570300609648,
+        0.23143507798129886
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.043412044416732604,
+        0.246201938253052
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 80.0,
+      "point_id": "mid_22_28cm-049",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a004_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.058890425671100435,
+        0.246207194276482
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.043412044416732604,
+        0.246201938253052
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 102.5,
+      "point_id": "mid_22_28cm-050",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a004_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.058890425671100435,
+        0.246207194276482
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.043412044416732604,
+        0.246201938253052
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 125.0,
+      "point_id": "mid_22_28cm-051",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a004_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.058890425671100435,
+        0.246207194276482
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.043412044416732604,
+        0.246201938253052
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 147.5,
+      "point_id": "mid_22_28cm-052",
+      "radius_from_base_m": 0.25,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r002_a004_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.058890425671100435,
+        0.246207194276482
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04601676708173656,
+        0.26097405454823513
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 80.0,
+      "point_id": "mid_22_28cm-053",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a004_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.061495148336104394,
+        0.2609793105716651
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04601676708173656,
+        0.26097405454823513
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 102.5,
+      "point_id": "mid_22_28cm-054",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a004_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.061495148336104394,
+        0.2609793105716651
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04601676708173656,
+        0.26097405454823513
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 125.0,
+      "point_id": "mid_22_28cm-055",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a004_yaw02",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.061495148336104394,
+        0.2609793105716651
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04601676708173656,
+        0.26097405454823513
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 147.5,
+      "point_id": "mid_22_28cm-056",
+      "radius_from_base_m": 0.265,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r003_a004_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.061495148336104394,
+        0.2609793105716651
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04862148974674052,
+        0.2757461708434183
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 80.0,
+      "point_id": "mid_22_28cm-057",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a004_yaw00",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.06409987100110835,
+        0.2757514268668483
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04862148974674052,
+        0.2757461708434183
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 102.5,
+      "point_id": "mid_22_28cm-058",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a004_yaw01",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.06409987100110835,
+        0.2757514268668483
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04862148974674052,
+        0.2757461708434183
+      ],
+      "camera1_grid_bin": 12,
+      "cell_area_m2": 0.005666666666666667,
+      "object_yaw_deg": 147.5,
+      "point_id": "mid_22_28cm-059",
+      "radius_from_base_m": 0.28,
+      "source_band": "mid_22_28cm",
+      "source_point_id": "r004_a004_yaw03",
+      "uniform_area_weight": 0.005666666666666667,
+      "world_xy_m": [
+        0.06409987100110835,
+        0.2757514268668483
+      ]
+    },
+    {
+      "angle_from_base_deg": 20.0,
+      "base_xy_m": [
+        0.2725108600279134,
+        0.09918584156444392
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-000",
+      "radius_from_base_m": 0.29,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r000_a000_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.28798924128228126,
+        0.09919109758787392
+      ]
+    },
+    {
+      "angle_from_base_deg": 19.999999999999996,
+      "base_xy_m": [
+        0.277209323131843,
+        0.10089594228107227
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-001",
+      "radius_from_base_m": 0.295,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r001_a000_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.29268770438621083,
+        0.10090119830450227
+      ]
+    },
+    {
+      "angle_from_base_deg": 20.0,
+      "base_xy_m": [
+        0.2819077862357725,
+        0.10260604299770061
+      ],
+      "camera1_grid_bin": 6,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-002",
+      "radius_from_base_m": 0.3,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r002_a000_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.29738616749014035,
+        0.10261129902113061
+      ]
+    },
+    {
+      "angle_from_base_deg": 25.0,
+      "base_xy_m": [
+        0.26282925824062847,
+        0.12255929590480283
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-003",
+      "radius_from_base_m": 0.29,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r000_a001_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.2783076394949963,
+        0.12256455192823283
+      ]
+    },
+    {
+      "angle_from_base_deg": 25.0,
+      "base_xy_m": [
+        0.26736079717581174,
+        0.12467238721350633
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-004",
+      "radius_from_base_m": 0.295,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r001_a001_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.2828391784301796,
+        0.12467764323693634
+      ]
+    },
+    {
+      "angle_from_base_deg": 25.000000000000007,
+      "base_xy_m": [
+        0.27189233611099495,
+        0.12678547852220984
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-005",
+      "radius_from_base_m": 0.3,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r002_a001_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.2873707173653628,
+        0.12679073454563983
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.2511473670974872,
+        0.14499999999999996
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-006",
+      "radius_from_base_m": 0.29,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r000_a002_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.26662574835185504,
+        0.14500525602342995
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999993,
+      "base_xy_m": [
+        0.2554774941164094,
+        0.14749999999999996
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-007",
+      "radius_from_base_m": 0.295,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r001_a002_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.27095587537077725,
+        0.14750525602342995
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999993,
+      "base_xy_m": [
+        0.2598076211353316,
+        0.14999999999999997
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-008",
+      "radius_from_base_m": 0.3,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r002_a002_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.27528600238969947,
+        0.15000525602342996
+      ]
+    },
+    {
+      "angle_from_base_deg": 35.0,
+      "base_xy_m": [
+        0.2375540928438076,
+        0.16633716654180333
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-009",
+      "radius_from_base_m": 0.29,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r000_a003_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.2530324740981754,
+        0.16634242256523332
+      ]
+    },
+    {
+      "angle_from_base_deg": 35.0,
+      "base_xy_m": [
+        0.24164985306525258,
+        0.16920504872355857
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-010",
+      "radius_from_base_m": 0.295,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r001_a003_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.2571282343196204,
+        0.16921030474698856
+      ]
+    },
+    {
+      "angle_from_base_deg": 35.0,
+      "base_xy_m": [
+        0.24574561328669753,
+        0.1720729309053138
+      ],
+      "camera1_grid_bin": 5,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-011",
+      "radius_from_base_m": 0.3,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r002_a003_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.2612239945410654,
+        0.1720781869287438
+      ]
+    },
+    {
+      "angle_from_base_deg": 40.0,
+      "base_xy_m": [
+        0.2259831107200985,
+        0.18962234485752907
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-012",
+      "radius_from_base_m": 0.295,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r001_a004_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.2414614919744663,
+        0.18962760088095906
+      ]
+    },
+    {
+      "angle_from_base_deg": 40.0,
+      "base_xy_m": [
+        0.2298133329356934,
+        0.19283628290596178
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-013",
+      "radius_from_base_m": 0.3,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r002_a004_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.2452917141900612,
+        0.19284153892939176
+      ]
+    },
+    {
+      "angle_from_base_deg": 45.0,
+      "base_xy_m": [
+        0.20506096654409878,
+        0.20506096654409875
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-014",
+      "radius_from_base_m": 0.29,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r000_a005_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.2205393477984666,
+        0.20506622256752874
+      ]
+    },
+    {
+      "angle_from_base_deg": 45.0,
+      "base_xy_m": [
+        0.20859650045003153,
+        0.2085965004500315
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-015",
+      "radius_from_base_m": 0.295,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r001_a005_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.22407488170439935,
+        0.2086017564734615
+      ]
+    },
+    {
+      "angle_from_base_deg": 45.0,
+      "base_xy_m": [
+        0.21213203435596426,
+        0.21213203435596423
+      ],
+      "camera1_grid_bin": 9,
+      "cell_area_m2": 0.0058823529411764705,
+      "object_yaw_deg": 30.0,
+      "point_id": "outer_28_30cm-016",
+      "radius_from_base_m": 0.3,
+      "source_band": "outer_28_30cm",
+      "source_point_id": "r002_a005_yaw00",
+      "uniform_area_weight": 0.0058823529411764705,
+      "world_xy_m": [
+        0.22761041561033207,
+        0.21213729037939422
+      ]
+    }
+  ],
+  "description": "Seed-free jointly teacher-feasible evidence for the unified 10-30 cm continuous SO101 grasp teacher.",
+  "format": "so101_grasp_workspace_catalog_v1",
+  "home_qpos": [
+    0.0,
+    -1.5707963267948966,
+    1.5707963267948966,
+    0.66,
+    1.5707963267948966,
+    -0.17453
+  ],
+  "object_color": "green",
+  "object_half_size_m": 0.015,
+  "selection_contract": {
+    "near_evidence_selection": "deterministic_farthest_point_radius_angle_relative_yaw",
+    "outer_boundary_30_5cm_excluded": true,
+    "radius_max_m": 0.3,
+    "radius_min_m": 0.1,
+    "source_frames_actions_states_or_seeds_reused": false
+  },
+  "source_catalogs": [
+    {
+      "path": "configs/so101/spawn_catalogs/grip_the_cube_near_v1_train200.json",
+      "sha256": "4949d31a13ca3b769054e23ae0fbf3bb37886b3175b4c874cfd83104c71b09c2"
+    },
+    {
+      "path": "_workspace/so101_workspace_probes/grip_the_cube_continuous_v1_bridge_probe/successful_workspace_catalog.json",
+      "sha256": "f1fa9a14890b1fd7a94cead95646fcc06a1fbb10352608a007c07f1c92d33b6a"
+    },
+    {
+      "path": "configs/so101/spawn_catalogs/grip_the_cube_v4_3_joint_feasible_workspace.json",
+      "sha256": "a7e87875d49bdd3b26533a3a0ac79e054a6fb1586d714301769dcbf6a2d8b5fc"
+    },
+    {
+      "path": "_workspace/so101_workspace_probes/grip_the_cube_continuous_v1_outer_boundary_probe/successful_workspace_catalog.json",
+      "sha256": "c58eb3e8461fe4c50396394d0ea3a5c8ab8610103ef396e18e74a526d34bf321"
+    }
+  ]
+}

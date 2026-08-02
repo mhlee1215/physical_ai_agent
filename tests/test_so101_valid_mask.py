@@ -12,6 +12,8 @@ if torch is not None:
     from physical_ai_agent.policies.so101_valid_mask import (
         execution_horizon_from_valid_probs,
         first_invalid_step,
+        update_valid_mask_requery_stop,
+        valid_mask_boundary_metrics,
         valid_labels_from_action_is_pad,
     )
 
@@ -60,3 +62,27 @@ class SO101ValidMaskTest(TestCase):
 
         self.assertEqual(horizon, 3)
         self.assertEqual(reason, "max_horizon")
+
+    def test_boundary_metrics_expose_premature_stop_and_boundary_error(self) -> None:
+        metrics = valid_mask_boundary_metrics(
+            torch.tensor([[0.9, 0.2, 0.1, 0.1], [0.9, 0.9, 0.9, 0.9]]),
+            torch.tensor([[1.0, 1.0, 1.0, 0.0], [1.0, 1.0, 0.0, 0.0]]),
+            threshold=0.5,
+            consecutive=2,
+        )
+
+        self.assertEqual(metrics["valid_mask_boundary_mae_steps"].item(), 2.0)
+        self.assertEqual(metrics["valid_mask_premature_stop_rate"].item(), 0.5)
+        self.assertEqual(metrics["valid_mask_stop_precision"].item(), 1.0)
+        self.assertEqual(metrics["valid_mask_stop_recall"].item(), 0.5)
+        self.assertEqual(metrics["valid_mask_terminal_sample_fraction"].item(), 1.0)
+
+    def test_global_stop_requires_consecutive_requery_confirmations(self) -> None:
+        streak, stop = update_valid_mask_requery_stop(0, predicted_stop=True, required_confirmations=2)
+        self.assertEqual((streak, stop), (1, False))
+
+        streak, stop = update_valid_mask_requery_stop(streak, predicted_stop=True, required_confirmations=2)
+        self.assertEqual((streak, stop), (2, True))
+
+        streak, stop = update_valid_mask_requery_stop(streak, predicted_stop=False, required_confirmations=2)
+        self.assertEqual((streak, stop), (0, False))

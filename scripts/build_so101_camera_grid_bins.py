@@ -56,9 +56,12 @@ def build_bins(
     if bin_source == "report":
         report = json.loads((dataset_root / "so101_lerobot_export_report.json").read_text(encoding="utf-8"))
         report_bins = {
-            index: int(episode["grid_balance_bin"])
+            index: int(
+                episode.get("camera1_grid_bin", episode.get("grid_balance_bin"))
+            )
             for index, episode in enumerate(report.get("episodes", []))
-            if episode.get("grid_balance_bin") is not None
+            if episode.get("camera1_grid_bin", episode.get("grid_balance_bin"))
+            is not None
         }
     records = []
     counts = np.zeros((grid_size, grid_size), dtype=np.int64)
