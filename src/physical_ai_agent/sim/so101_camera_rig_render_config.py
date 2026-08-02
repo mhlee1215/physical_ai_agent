@@ -702,5 +702,78 @@ def load_so101_camera_rig_render_config(path: Path) -> SO101CameraRigRenderConfi
     return SO101CameraRigRenderConfig.model_validate(payload)
 
 
+def blender_render_profile(
+    config: SO101CameraRigRenderConfig,
+) -> dict[str, object]:
+    """Translate the reviewed camera-rig render contract into renderer inputs."""
+
+    render = config.render
+    return {
+        "mode": render.mode,
+        "render_policy_inference_only": render.render_policy_inference_only,
+        "camera_keys": list(config.camera_contract),
+        "source_width": render.source_width,
+        "source_height": render.source_height,
+        "policy_width": render.policy_size,
+        "policy_height": render.policy_size,
+        "policy_resize": render.policy_resize,
+        "samples": render.samples,
+        "denoise": render.denoise,
+        "cycles_seed": render.cycles_seed,
+        "lighting_profile": render.lighting_profile,
+        "key_light_power": render.key_light_power,
+        "fill_light_power": render.fill_light_power,
+        "world_strength": render.world_strength,
+        "hdri_rotation_deg": render.hdri_rotation_degrees,
+        "exposure": render.exposure,
+        "color_management": render.color_management,
+        "color_look": render.color_look,
+        "gamma": render.gamma,
+        "output_format": render.output_format,
+        "sample_clamp_indirect": render.sample_clamp_indirect,
+        "background_wall": render.background_wall,
+        "stable_tabletop": render.stable_tabletop,
+        "scene_profile": render.scene_profile,
+        "robot_material": render.robot_material,
+        "material_profile": str(resolve_repository_path(render.material_profile)),
+        "camera_lens": render.camera_lens_mm,
+        "asset_root": str(resolve_repository_path(render.photoreal_asset_root)),
+        "blender_bin": render.blender_bin,
+        "compute_device_type": render.compute_device_type,
+        "max_mesh_geoms": render.max_mesh_geoms,
+        "bevel_width_range_m": (
+            [value / 1000.0 for value in render.bevel_width_mm_range]
+            if render.bevel_width_mm_range is not None
+            else None
+        ),
+        "bevel_segments": render.bevel_segments,
+        "visual_props": (
+            [
+                {
+                    "kind": "blend_asset",
+                    "name": asset.name,
+                    "blend_path": str(resolve_repository_path(asset.blend.path).resolve()),
+                    "object_name": asset.object_name,
+                    "position": list(asset.position_m),
+                    "rotation_euler_degrees": list(asset.rotation_euler_degrees),
+                    "scale_xyz": list(asset.scale_xyz),
+                }
+                for asset in render.scene_assets
+            ]
+            or None
+        ),
+        "lights": [light.model_dump(mode="json") for light in render.lights],
+        "lens_distortion": {
+            camera_key: {
+                "model": config.sensor.distortion.model,
+                "coefficients": list(config.sensor.distortion.coefficients),
+                "calibration_status": config.sensor.distortion.calibration_status,
+            }
+            for camera_key in config.camera_contract
+        },
+        "preserve_pinhole_renders": render.preserve_pinhole_renders,
+    }
+
+
 def config_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()

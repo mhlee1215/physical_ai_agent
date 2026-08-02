@@ -13,6 +13,36 @@ from unittest import mock
 
 
 class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
+    def test_live_renderer_resolves_the_hardware_locked_camera_rig_profile(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview_profile",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        resolved = module._resolve_live_renderer_config(
+            {
+                "profile_from_camera_rig": True,
+                "camera_rig_config": (
+                    "configs/so101/camera_rigs/"
+                    "official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json"
+                ),
+            }
+        )
+
+        self.assertEqual(resolved["source_width"], 512)
+        self.assertEqual(resolved["source_height"], 512)
+        self.assertEqual(resolved["width"], 256)
+        self.assertEqual(resolved["height"], 256)
+        self.assertEqual(resolved["scene_profile"], "pbr_workshop_v4")
+        self.assertEqual(resolved["lighting_profile"], "directional_key_fill_rim_v4")
+        self.assertEqual(len(resolved["visual_props"]), 4)
+        self.assertEqual(len(resolved["lights"]), 4)
+        self.assertIn("observation.images.camera1", resolved["lens_distortion"])
+
     def test_named_camera1_uses_the_physical_pinhole_not_a_stereo_eye(self) -> None:
         spec = importlib.util.spec_from_file_location(
             "render_so101_dataset_blender_preview",
@@ -145,6 +175,208 @@ class SO101PhotorealPreviewPipelineTest(unittest.TestCase):
         self.assertIn("--camera-lens", completed.stdout)
         self.assertIn("--scene-profile", completed.stdout)
         self.assertIn("--robot-material-config", completed.stdout)
+        self.assertIn("--source-width", completed.stdout)
+        self.assertIn("--policy-resize", completed.stdout)
+        self.assertIn("--camera-rig-config", completed.stdout)
+        self.assertIn("--no-preserve-pinhole-renders", completed.stdout)
+
+    def test_pinhole_retention_does_not_change_final_distorted_pixels(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        from PIL import Image
+
+        camera_key = "observation.images.camera1"
+        camera_specs = {camera_key: {"fovy": 50.0}}
+        render_specs = {camera_key: {"fovy": 55.0}}
+        distortion = {
+            camera_key: {
+                "model": "opencv_brown_conrady",
+                "coefficients": [-0.08, 0.01, 0.0, 0.0, 0.0],
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kept = root / "kept.png"
+            discarded = root / "discarded.png"
+            source = Image.new("RGB", (32, 32))
+            source.putdata(
+                [
+                    ((x * 7) % 256, (y * 11) % 256, ((x + y) * 13) % 256)
+                    for y in range(32)
+                    for x in range(32)
+                ]
+            )
+            source.save(kept)
+            source.save(discarded)
+
+            module._apply_lens_distortion_to_images(
+                {camera_key: str(kept)},
+                target_camera_specs=camera_specs,
+                render_camera_specs=render_specs,
+                distortion_profiles=distortion,
+                preserve_pinhole=True,
+            )
+            module._apply_lens_distortion_to_images(
+                {camera_key: str(discarded)},
+                target_camera_specs=camera_specs,
+                render_camera_specs=render_specs,
+                distortion_profiles=distortion,
+                preserve_pinhole=False,
+            )
+
+            self.assertEqual(kept.read_bytes(), discarded.read_bytes())
+            self.assertTrue((root / "kept_pinhole.png").is_file())
+            self.assertFalse((root / "discarded_pinhole.png").exists())
+
+    def test_dataset_renderer_downsamples_512_source_to_256_policy_image(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "camera1.png"
+            Image.new("RGB", (512, 512), (10, 20, 30)).save(path)
+            module._resize_policy_image(
+                path,
+                width=256,
+                height=256,
+                mode="direct_square_render",
+            )
+            with Image.open(path) as resized:
+                resized_size = resized.size
+
+        self.assertEqual(resized_size, (256, 256))
+
+    def test_blender_batch_artifacts_are_process_unique_and_missing_outputs_retry(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frame_dir = root / "episode_0000_frame_0000"
+            mesh_dir = frame_dir / "ply"
+            mesh_dir.mkdir(parents=True)
+            spec_path = frame_dir / "blender_scene_spec.json"
+            spec_path.write_text("{}", encoding="utf-8")
+            camera1 = frame_dir / "camera1.png"
+            camera2 = frame_dir / "camera2.png"
+            item = {
+                "spec_path": spec_path,
+                "frame_dir": frame_dir,
+                "mesh_dir": mesh_dir,
+                "image_paths": {
+                    "observation.images.camera1": str(camera1),
+                    "observation.images.camera2": str(camera2),
+                },
+                "camera_specs": {
+                    "observation.images.camera1": {"rotation_degrees": 0},
+                    "observation.images.camera2": {"rotation_degrees": 0},
+                },
+                "render_camera_specs": {},
+                "distortion_profiles": {},
+                "rendered_item": {"episode": 0, "frame": 0},
+            }
+            calls = 0
+
+            def fake_blender(*_args, **_kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    camera1.write_bytes(b"corrupt png")
+                    camera2.write_bytes(b"corrupt png")
+                else:
+                    Image.new("RGB", (512, 512), (10, 20, 30)).save(camera1)
+                    Image.new("RGB", (512, 512), (40, 50, 60)).save(camera2)
+                return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+            with mock.patch.object(module.subprocess, "run", side_effect=fake_blender):
+                rendered = module._flush_blender_pending(
+                    [item],
+                    output_dir=root,
+                    driver_path=root / "driver.py",
+                    blender_bin="blender",
+                    duplicate_camera3_from_camera2=False,
+                    batch_mode=True,
+                    output_width=256,
+                    output_height=256,
+                    policy_resize="direct_square_render",
+                )
+
+            manifests = sorted(root.glob("blender_*.json"))
+            logs = sorted(root.glob("blender_*.log"))
+            self.assertEqual(calls, 2)
+            self.assertEqual(len(manifests), 2)
+            self.assertEqual(len({path.name for path in manifests}), 2)
+            self.assertTrue(all(f"pid{module.os.getpid()}" in path.name for path in manifests))
+            self.assertEqual(len(logs), 2)
+            self.assertEqual(rendered[0]["episode"], 0)
+            with Image.open(camera1) as rendered_camera1, Image.open(camera2) as rendered_camera2:
+                self.assertEqual(rendered_camera1.size, (256, 256))
+                self.assertEqual(rendered_camera2.size, (256, 256))
+
+    def test_skip_existing_rejects_old_direct_256_render_contract(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "render_so101_dataset_blender_preview",
+            "scripts/render_so101_dataset_blender_preview.py",
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            frame_dir = Path(tmp)
+            image_path = frame_dir / "camera1.png"
+            Image.new("RGB", (256, 256), (10, 20, 30)).save(image_path)
+            (frame_dir / "blender_scene_spec.json").write_text(
+                json.dumps(
+                    {
+                        "width": 256,
+                        "height": 256,
+                        "samples": 256,
+                        "denoise": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            matches = module._existing_render_matches_contract(
+                frame_dir=frame_dir,
+                image_paths={"observation.images.camera1": str(image_path)},
+                source_width=512,
+                source_height=512,
+                output_width=256,
+                output_height=256,
+                policy_resize="direct_square_render",
+                samples=256,
+                denoise=False,
+                camera_rig_config_hash="a" * 64,
+            )
+
+        self.assertFalse(matches)
 
     def test_robot_material_config_is_editable_and_valid(self) -> None:
         spec = importlib.util.spec_from_file_location(

@@ -20,7 +20,12 @@ class FromScratchSourceSpec(StrictModel):
 class FromExistingDatasetSourceSpec(StrictModel):
     mode: Literal["from_existing_dataset"]
     datasets: list[str] = Field(min_length=1)
-    operation: Literal["regenerate_teacher", "render_derivative", "episode_subset"]
+    operation: Literal[
+        "regenerate_teacher",
+        "render_derivative",
+        "episode_subset",
+        "phase_subset",
+    ]
 
 
 class FromSpawnCatalogSourceSpec(StrictModel):
@@ -127,10 +132,26 @@ class GripperFloorClearanceGateSpec(StrictModel):
     geom_scope: Literal["all_gripper_collision_geoms"] = "all_gripper_collision_geoms"
 
 
+class InitialTargetVisibilityGateSpec(StrictModel):
+    kind: Literal["initial_target_visibility"]
+    camera_keys: list[
+        Literal["observation.images.camera1", "observation.images.camera2"]
+    ] = Field(min_length=1)
+    mode: Literal["any"] = "any"
+    min_area_pixels: int = Field(default=20, gt=0)
+
+    @model_validator(mode="after")
+    def validate_camera_keys(self) -> InitialTargetVisibilityGateSpec:
+        if len(self.camera_keys) != len(set(self.camera_keys)):
+            raise ValueError("initial_target_visibility camera_keys must be unique")
+        return self
+
+
 InspectionGateSpec = Annotated[
     GeometryContactAlignmentGateSpec
     | Camera2VisualAlignmentGateSpec
-    | GripperFloorClearanceGateSpec,
+    | GripperFloorClearanceGateSpec
+    | InitialTargetVisibilityGateSpec,
     Field(discriminator="kind"),
 ]
 
@@ -146,10 +167,12 @@ class ExporterCommonSpec(StrictModel):
     close_steps: int | None = Field(default=None, ge=0)
     lift_steps: int | None = Field(default=None, ge=0)
     lift_target_height: float | None = None
+    lift_success_height: float | None = Field(default=None, gt=0.0)
     lift_controller_z_error: float | None = Field(default=None, ge=0)
     trajectory_variant: str | None = None
     start_mode: str | None = None
     grip_the_cube_start_profile: str | None = None
+    initial_qpos_mode: Literal["exact", "reset_only"] | None = None
     move_target_z_offset: float | None = None
     near_target_joint_std: float | None = Field(default=None, ge=0)
     near_target_xy_std: float | None = Field(default=None, ge=0)
@@ -179,6 +202,8 @@ class ExporterCommonSpec(StrictModel):
     target_object_yaw_deg: float | None = Field(default=None, ge=-180.0, le=180.0)
     object_half_sizes: str | None = None
     camera_rig_config: str | None = None
+    include_camera3_duplicate: bool | None = None
+    workspace_spawn_catalog: str | None = None
 
     @model_validator(mode="after")
     def validate_common_contract(self) -> ExporterCommonSpec:
@@ -190,6 +215,12 @@ class ExporterCommonSpec(StrictModel):
             and self.spawn_max_radius < self.spawn_min_radius
         ):
             raise ValueError("spawn radius range is invalid")
+        if (
+            self.lift_success_height is not None
+            and self.lift_target_height is not None
+            and self.lift_success_height > self.lift_target_height
+        ):
+            raise ValueError("lift_success_height cannot exceed lift_target_height")
         if self.contact_alignment is not None and (
             self.close_alignment_gate_mode is not None
             or self.edge_contact_parallel_success_threshold_deg is not None
@@ -211,6 +242,16 @@ class ExporterCommonSpec(StrictModel):
                 "inspection_gates replace close_alignment_gate_mode and "
                 "edge_contact_parallel_success_threshold_deg"
             )
+        if self.workspace_spawn_catalog is not None:
+            if self.target_object_yaw_deg is not None:
+                raise ValueError(
+                    "workspace_spawn_catalog supplies candidate-specific object yaw; "
+                    "target_object_yaw_deg must be omitted"
+                )
+            if self.grid_balance_spawn_lookup or self.deterministic_camera_bin_lookup:
+                raise ValueError(
+                    "workspace_spawn_catalog cannot be combined with camera-bin spawn lookup"
+                )
         return self
 
 
@@ -220,15 +261,106 @@ class BinSpec(StrictModel):
     seed: int = Field(ge=0)
     lookup_start_index: int = Field(ge=0)
     shard: str | None = None
+    workspace_candidate_count: int | None = Field(default=None, gt=0)
+
+
+class DistributionReportSpec(StrictModel):
+    enabled: bool = True
+    output_dir: str = "meta/distribution"
+    require_all_successful: bool = True
+    require_unique_seeds: bool = True
+    max_camera1_invisible_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_all_policy_cameras_invisible_fraction: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+    )
+    min_workspace_cell_coverage_ratio: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_workspace_cell_total_variation: float = Field(
+        default=1.0, ge=0.0, le=1.0
+    )
+    max_radial_total_variation: float = Field(default=1.0, ge=0.0, le=1.0)
+    radial_histogram_bin_width_m: float = Field(default=0.0001, gt=0.0)
+    require_distance_decay_nonincreasing: bool = False
+    min_radius_span_m: float = Field(default=0.0, ge=0.0)
+    min_angle_span_deg: float = Field(default=0.0, ge=0.0, le=360.0)
+    polar_radial_bins: int = Field(default=0, ge=0, le=64)
+    polar_angular_bins: int = Field(default=0, ge=0, le=72)
+    min_polar_cell_coverage_ratio: float = Field(
+        default=0.0, ge=0.0, le=1.0
+    )
+    max_polar_cell_count_cv: float = Field(default=10.0, ge=0.0)
+    min_nearest_neighbor_min_m: float = Field(default=0.0, ge=0.0)
+    min_nearest_neighbor_median_m: float = Field(default=0.0, ge=0.0)
+    object_yaw_histogram_bins: int = Field(default=0, ge=0, le=72)
+    min_object_yaw_span_deg: float = Field(default=0.0, ge=0.0, le=360.0)
+    min_object_yaw_bin_coverage_ratio: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+    max_object_yaw_bin_count_cv: float = Field(default=10.0, ge=0.0)
+    object_yaw_periodicity_deg: float = Field(default=90.0, gt=0.0, le=360.0)
+    relative_object_yaw_histogram_bins: int = Field(default=0, ge=0, le=72)
+    min_relative_object_yaw_bin_coverage_ratio: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+    max_relative_object_yaw_bin_count_cv: float = Field(default=10.0, ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_polar_grid(self) -> DistributionReportSpec:
+        if (self.polar_radial_bins == 0) != (self.polar_angular_bins == 0):
+            raise ValueError(
+                "polar_radial_bins and polar_angular_bins must both be zero "
+                "or both be positive"
+            )
+        if (
+            self.min_polar_cell_coverage_ratio > 0.0
+            and self.polar_radial_bins == 0
+        ):
+            raise ValueError(
+                "polar bins are required when min_polar_cell_coverage_ratio "
+                "is positive"
+            )
+        if (
+            self.min_object_yaw_bin_coverage_ratio > 0.0
+            and self.object_yaw_histogram_bins == 0
+        ):
+            raise ValueError(
+                "object_yaw_histogram_bins is required when "
+                "min_object_yaw_bin_coverage_ratio is positive"
+            )
+        if (
+            self.min_relative_object_yaw_bin_coverage_ratio > 0.0
+            and self.relative_object_yaw_histogram_bins == 0
+        ):
+            raise ValueError(
+                "relative_object_yaw_histogram_bins is required when "
+                "min_relative_object_yaw_bin_coverage_ratio is positive"
+            )
+        return self
 
 
 class ClosedLoopSpec(StrictModel):
     episodes: int = Field(gt=0)
-    bins: list[int] = Field(min_length=1)
+    steps: int = Field(default=200, gt=0)
+    seed: int = 98100
+    bins: list[int] = Field(default_factory=list)
+    bin_selection: Literal["declared", "all_visible"] = "declared"
     output: str
     success_metric: str | None = None
     lift_success_height: float | None = None
     exclude_source_reports: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_bin_selection(self) -> ClosedLoopSpec:
+        if self.bin_selection == "declared" and not self.bins:
+            raise ValueError("declared closed-loop bin selection requires bins")
+        if self.bin_selection == "all_visible" and self.bins:
+            raise ValueError("all_visible closed-loop bin selection must not declare bins")
+        return self
 
 
 class ObjectPoolEntry(StrictModel):
@@ -287,11 +419,24 @@ class RenderProfileSpec(StrictModel):
     mode: Literal["blender_cycles"] = "blender_cycles"
     output_dir: str
     material_profile: str | None = None
-    scene_profile: Literal["neutral", "black_table_clutter"] = "neutral"
+    scene_profile: Literal[
+        "neutral",
+        "black_table_clutter",
+        "pbr_workbench_v4",
+        "pbr_workshop_v4",
+    ] = "neutral"
     asset_root: str = "_workspace/photoreal_assets"
     blender_bin: str = "blender"
     width: int = Field(default=256, gt=0)
     height: int = Field(default=256, gt=0)
+    source_width: int | None = Field(default=None, gt=0)
+    source_height: int | None = Field(default=None, gt=0)
+    policy_resize: Literal[
+        "direct_square_render",
+        "center_crop_square_then_resize",
+    ] = "direct_square_render"
+    profile_from_camera_rig: bool = False
+    preserve_pinhole_renders: bool = False
     samples: int = Field(default=32, gt=0)
     denoise: bool = True
     cycles_seed: int = 98200
@@ -303,7 +448,11 @@ class RenderProfileSpec(StrictModel):
     skip_existing: bool = True
     blender_batch_size: int = Field(default=4, gt=0)
     robot_material: Literal["plastic", "matte_pla", "metal"] = "matte_pla"
-    lighting_profile: Literal["studio_small_08", "flat"] = "studio_small_08"
+    lighting_profile: Literal[
+        "studio_small_08",
+        "flat",
+        "directional_key_fill_rim_v4",
+    ] = "studio_small_08"
     key_light_power: float = Field(default=42.0, ge=0)
     fill_light_power: float = Field(default=5.0, ge=0)
     world_strength: float = Field(default=0.28, ge=0)
@@ -321,6 +470,14 @@ class RenderProfileSpec(StrictModel):
     def enforce_policy_resolution(self) -> RenderProfileSpec:
         if (self.width, self.height) != (256, 256):
             raise ValueError("SO101 rendered training derivatives must be 256x256")
+        if (self.source_width is None) != (self.source_height is None):
+            raise ValueError("render source_width and source_height must be declared together")
+        source_width = self.source_width or self.width
+        source_height = self.source_height or self.height
+        if source_width < self.width or source_height < self.height:
+            raise ValueError("render source resolution cannot be smaller than policy output")
+        if self.policy_resize == "direct_square_render" and source_width != source_height:
+            raise ValueError("direct_square_render requires a square source resolution")
         return self
 
 
@@ -332,8 +489,74 @@ class EpisodeSubsetSpec(StrictModel):
     selection_source_root: str | None = None
 
 
+class PhaseSubsetSourceSpec(StrictModel):
+    source_dataset_root: str
+    phase_order: list[str] = Field(min_length=1)
+    phases: list[str] = Field(min_length=1)
+    trajectory_variants: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_phase_window(self) -> PhaseSubsetSourceSpec:
+        if len(self.phase_order) != len(set(self.phase_order)):
+            raise ValueError("phase_subset source phase_order must not contain duplicates")
+        if len(self.phases) != len(set(self.phases)):
+            raise ValueError("phase_subset source phases must not contain duplicates")
+        if len(self.trajectory_variants) != len(set(self.trajectory_variants)):
+            raise ValueError(
+                "phase_subset source trajectory_variants must not contain duplicates"
+            )
+        missing = [phase for phase in self.phases if phase not in self.phase_order]
+        if missing:
+            raise ValueError(
+                f"phase_subset source phases are missing from phase_order: {missing}"
+            )
+        indices = [self.phase_order.index(phase) for phase in self.phases]
+        if indices != list(range(indices[0], indices[0] + len(indices))):
+            raise ValueError("phase_subset source phases must form one contiguous window")
+        return self
+
+
+class PhaseSubsetSpec(StrictModel):
+    phase_id: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    sources: list[PhaseSubsetSourceSpec] = Field(min_length=1)
+    reconstruct_sim_snapshots: bool = True
+    entry_replay_qpos_rmse_max: float = Field(default=0.001, gt=0)
+
+    @model_validator(mode="after")
+    def validate_sources(self) -> PhaseSubsetSpec:
+        variants_by_root: dict[str, set[str]] = {}
+        counts_by_root: dict[str, int] = {}
+        for source in self.sources:
+            root = source.source_dataset_root
+            counts_by_root[root] = counts_by_root.get(root, 0) + 1
+            if counts_by_root[root] > 1 and not source.trajectory_variants:
+                raise ValueError(
+                    "repeated phase_subset roots require explicit trajectory_variants"
+                )
+            variants = set(source.trajectory_variants)
+            overlap = variants_by_root.setdefault(root, set()) & variants
+            if overlap:
+                raise ValueError(
+                    "repeated phase_subset roots must use disjoint trajectory_variants: "
+                    f"root={root} overlap={sorted(overlap)}"
+                )
+            variants_by_root[root].update(variants)
+        for source in self.sources:
+            if counts_by_root[source.source_dataset_root] > 1 and not source.trajectory_variants:
+                raise ValueError(
+                    "all repeated phase_subset root entries require trajectory_variants"
+                )
+        return self
+
+
 class SplitSpec(StrictModel):
-    kind: Literal["generated", "render_derivative", "episode_subset"] = "generated"
+    kind: Literal[
+        "generated",
+        "render_derivative",
+        "episode_subset",
+        "phase_subset",
+    ] = "generated"
     output_root: str
     repo_id: str
     bins: list[BinSpec] = Field(default_factory=list)
@@ -346,6 +569,7 @@ class SplitSpec(StrictModel):
     render: RenderProfileSpec | None = None
     expected_episodes: int | None = Field(default=None, gt=0)
     subset: EpisodeSubsetSpec | None = None
+    phase_subset: PhaseSubsetSpec | None = None
 
     @model_validator(mode="after")
     def validate_kind(self) -> SplitSpec:
@@ -368,17 +592,44 @@ class SplitSpec(StrictModel):
                 if not self.expected_bins:
                     raise ValueError("external render source requires expected_bins")
         if self.kind == "episode_subset":
-            if not self.source_dataset_root or self.expected_episodes is None or self.subset is None:
+            if (
+                not self.source_dataset_root
+                or self.expected_episodes is None
+                or self.subset is None
+            ):
                 raise ValueError(
-                    "episode_subset split requires source_dataset_root, expected_episodes, and subset"
+                    "episode_subset split requires source_dataset_root, expected_episodes, "
+                    "and subset"
                 )
-            if self.bins or self.source_split or self.render is not None or self.render_replay_sidecar:
+            if (
+                self.bins
+                or self.source_split
+                or self.render is not None
+                or self.render_replay_sidecar
+            ):
                 raise ValueError(
                     "episode_subset split must not declare bins, source_split, render, or "
                     "render_replay_sidecar"
                 )
             if not self.expected_bins:
                 raise ValueError("episode_subset split requires expected_bins")
+        if self.kind == "phase_subset":
+            if self.expected_episodes is None or self.phase_subset is None:
+                raise ValueError(
+                    "phase_subset split requires expected_episodes and phase_subset"
+                )
+            if (
+                self.bins
+                or self.source_split
+                or self.source_dataset_root
+                or self.render is not None
+                or self.render_replay_sidecar
+                or self.subset is not None
+            ):
+                raise ValueError(
+                    "phase_subset split must declare sources only through "
+                    "phase_subset.sources"
+                )
         return self
 
 
@@ -428,6 +679,7 @@ class DatasetGenerationRecipe(StrictModel):
     exporter_revision: str
     exporter: str
     subset_script: str = "scripts/filter_so101_lerobot_visual_alignment.py"
+    phase_subset_script: str = "scripts/materialize_so101_phase_dataset.py"
     lookup_builder_script: str | None = None
     merge_script: str
     sidecar_script: str
@@ -436,10 +688,20 @@ class DatasetGenerationRecipe(StrictModel):
     render_replay_script: str = "scripts/build_so101_render_replay_sidecar.py"
     photoreal_builder_script: str = "scripts/build_so101_photoreal_lerobot_dataset.py"
     render_determinism_script: str = "scripts/verify_so101_render_determinism.py"
+    workspace_catalog_distribution_report_script: str = (
+        "scripts/build_so101_workspace_catalog_distribution_report.py"
+    )
+    workspace_catalog_distribution_report_root: str = (
+        "_workspace/so101_workspace_catalog_reports"
+    )
+    distribution_report_script: str = "scripts/build_so101_dataset_distribution_report.py"
     lookup_cache: str | None = None
     lookup_builders: list[LookupBuilderSpec] = Field(default_factory=list)
     common: ExporterCommonSpec
     sidecar: SidecarSpec
+    distribution_report: DistributionReportSpec = Field(
+        default_factory=DistributionReportSpec
+    )
     render_replay: RenderReplaySpec | None = None
     splits: dict[str, SplitSpec]
     audit: AuditSpec
@@ -451,7 +713,15 @@ class DatasetGenerationRecipe(StrictModel):
             raise ValueError("recipe must define at least one split")
         self._validate_source_contract()
         if self.schema_version == 2:
-            if self.common.skill_mode == "grip_the_cube_v1":
+            if not self.distribution_report.enabled:
+                raise ValueError(
+                    "schema_version 2 requires the post-generation distribution report"
+                )
+            if self.common.skill_mode in {
+                "grip_the_cube_v1",
+                "grip_the_cube_near_v1",
+                "grip_the_cube_continuous_v1",
+            }:
                 geometry_gates = [
                     gate
                     for gate in self.common.inspection_gates
@@ -459,7 +729,7 @@ class DatasetGenerationRecipe(StrictModel):
                 ]
                 if self.common.contact_alignment is None and len(geometry_gates) != 1:
                     raise ValueError(
-                        "schema_version 2 grip_the_cube_v1 recipes require "
+                        "schema_version 2 full-grip recipes require "
                         "one common.inspection_gates geometry_contact_alignment gate"
                     )
             if self.common.close_alignment_gate_mode is not None:
@@ -468,6 +738,48 @@ class DatasetGenerationRecipe(StrictModel):
                     "of close_alignment_gate_mode"
                 )
         for name, split in self.splits.items():
+            if self.schema_version == 2 and split.closed_loop is not None:
+                required = (
+                    "target_object_color",
+                    "object_half_sizes",
+                    "camera_rig_config",
+                    "spawn_center_x",
+                    "spawn_center_y",
+                    "spawn_min_radius",
+                    "spawn_max_radius",
+                    "spawn_angle_half_range_deg",
+                )
+                missing = [
+                    key for key in required if getattr(self.common, key) is None
+                ]
+                if missing:
+                    raise ValueError(
+                        f"{name}.closed_loop executable contract requires "
+                        f"common fields: {missing}"
+                    )
+            if (
+                split.kind == "phase_subset"
+                and split.phase_subset is not None
+                and split.phase_subset.reconstruct_sim_snapshots
+            ):
+                required = (
+                    "target_object_color",
+                    "object_half_sizes",
+                    "camera_rig_config",
+                    "spawn_center_x",
+                    "spawn_center_y",
+                    "spawn_min_radius",
+                    "spawn_max_radius",
+                    "spawn_angle_half_range_deg",
+                )
+                missing = [
+                    key for key in required if getattr(self.common, key) is None
+                ]
+                if missing:
+                    raise ValueError(
+                        f"{name}.phase_subset snapshot reconstruction requires "
+                        f"common fields: {missing}"
+                    )
             if split.kind == "render_derivative":
                 if split.source_split:
                     source = self.splits.get(split.source_split)
@@ -480,6 +792,15 @@ class DatasetGenerationRecipe(StrictModel):
                         )
                 if self.render_replay is None or not self.render_replay.enabled:
                     raise ValueError("render_derivative requires enabled render_replay")
+                if (
+                    split.render is not None
+                    and split.render.profile_from_camera_rig
+                    and not self.common.camera_rig_config
+                ):
+                    raise ValueError(
+                        f"{name}.render.profile_from_camera_rig requires "
+                        "common.camera_rig_config"
+                    )
                 if (
                     split.source_dataset_root
                     and self.render_replay.capture_mode != "verified_action_replay"
@@ -555,10 +876,16 @@ class DatasetGenerationRecipe(StrictModel):
             for split in self.splits.values()
             if split.kind == "episode_subset" and split.source_dataset_root
         }
+        phase_subset_roots = {
+            source.source_dataset_root
+            for split in self.splits.values()
+            if split.kind == "phase_subset" and split.phase_subset is not None
+            for source in split.phase_subset.sources
+        }
         if self.source.mode == "from_scratch":
             if self.lookup_builders:
                 raise ValueError("from_scratch must not read lookup source_reports")
-            if external_render_roots or subset_roots:
+            if external_render_roots or subset_roots or phase_subset_roots:
                 raise ValueError("from_scratch must not reference an external dataset root")
             return
 
@@ -567,11 +894,27 @@ class DatasetGenerationRecipe(StrictModel):
                 raise ValueError("from_spawn_catalog requires generated splits")
             if self.lookup_builders:
                 raise ValueError("from_spawn_catalog must not run lookup_builders")
-            if external_render_roots or subset_roots:
+            if external_render_roots or subset_roots or phase_subset_roots:
                 raise ValueError("from_spawn_catalog cannot use external render sources")
-            referenced = {
-                str(Path(split.lookup_cache or self.lookup_cache)) for split in generated
-            }
+            if self.common.workspace_spawn_catalog:
+                if any(split.lookup_cache for split in generated) or self.lookup_cache:
+                    raise ValueError(
+                        "workspace_spawn_catalog replaces generated split lookup_cache"
+                    )
+                if any(
+                    row.workspace_candidate_count is None
+                    for split in generated
+                    for row in split.bins
+                ):
+                    raise ValueError(
+                        "workspace spawn generated bins require workspace_candidate_count"
+                    )
+                referenced = {str(Path(self.common.workspace_spawn_catalog))}
+            else:
+                referenced = {
+                    str(Path(split.lookup_cache or self.lookup_cache))
+                    for split in generated
+                }
             declared = {str(Path(value)) for value in self.source.catalogs}
             if referenced != declared:
                 raise ValueError(
@@ -598,10 +941,12 @@ class DatasetGenerationRecipe(StrictModel):
                 raise ValueError("regenerate_teacher cannot use external render sources")
             if subset_roots:
                 raise ValueError("regenerate_teacher cannot contain episode subsets")
+            if phase_subset_roots:
+                raise ValueError("regenerate_teacher cannot contain phase subsets")
             return
 
         if self.source.operation == "episode_subset":
-            if generated or self.lookup_builders or external_render_roots:
+            if generated or self.lookup_builders or external_render_roots or phase_subset_roots:
                 raise ValueError(
                     "episode_subset source mode may contain only episode_subset splits"
                 )
@@ -611,7 +956,18 @@ class DatasetGenerationRecipe(StrictModel):
                 )
             return
 
-        if generated or subset_roots:
+        if self.source.operation == "phase_subset":
+            if generated or self.lookup_builders or external_render_roots or subset_roots:
+                raise ValueError(
+                    "phase_subset source mode may contain only phase_subset splits"
+                )
+            if not phase_subset_roots or phase_subset_roots != declared:
+                raise ValueError(
+                    "source.datasets must exactly match phase_subset source roots"
+                )
+            return
+
+        if generated or subset_roots or phase_subset_roots:
             raise ValueError("render_derivative source mode cannot contain generated splits")
         if self.lookup_builders:
             raise ValueError("render_derivative source mode must not run lookup_builders")

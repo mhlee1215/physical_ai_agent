@@ -543,7 +543,14 @@ def _build_robot_xml(
     )
 
     ET.indent(tree, space="  ")
-    tree.write(output_xml, encoding="unicode")
+    temporary_xml = output_xml.with_name(
+        f".{output_xml.name}.{os.getpid()}.tmp"
+    )
+    try:
+        tree.write(temporary_xml, encoding="unicode")
+        os.replace(temporary_xml, output_xml)
+    finally:
+        temporary_xml.unlink(missing_ok=True)
 
 
 def _convert_ascii_stl_to_binary(source: Path, output: Path) -> None:
@@ -570,16 +577,24 @@ def _convert_ascii_stl_to_binary(source: Path, output: Path) -> None:
 
     if not triangles:
         raise ValueError(f"no triangles found in ASCII STL: {source}")
-    with output.open("wb") as stream:
-        header = b"SO101 integrated 32x32 UVC wrist camera mount"
-        stream.write(header.ljust(80, b"\0"))
-        stream.write(struct.pack("<I", len(triangles)))
-        for facet_normal, facet_vertices in triangles:
-            values = [*facet_normal]
-            for vertex in facet_vertices:
-                values.extend(vertex)
-            stream.write(struct.pack("<12fH", *values, 0))
-    stamp.write_text(source_sha + "\n", encoding="ascii")
+    temporary_output = output.with_name(f".{output.name}.{os.getpid()}.tmp")
+    temporary_stamp = stamp.with_name(f".{stamp.name}.{os.getpid()}.tmp")
+    try:
+        with temporary_output.open("wb") as stream:
+            header = b"SO101 integrated 32x32 UVC wrist camera mount"
+            stream.write(header.ljust(80, b"\0"))
+            stream.write(struct.pack("<I", len(triangles)))
+            for facet_normal, facet_vertices in triangles:
+                values = [*facet_normal]
+                for vertex in facet_vertices:
+                    values.extend(vertex)
+                stream.write(struct.pack("<12fH", *values, 0))
+        os.replace(temporary_output, output)
+        temporary_stamp.write_text(source_sha + "\n", encoding="ascii")
+        os.replace(temporary_stamp, stamp)
+    finally:
+        temporary_output.unlink(missing_ok=True)
+        temporary_stamp.unlink(missing_ok=True)
 
 
 def _sha256(path: Path) -> str:

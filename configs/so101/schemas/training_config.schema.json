@@ -1,5 +1,78 @@
 {
   "$defs": {
+    "ActionOverlapConsistencyConfig": {
+      "additionalProperties": true,
+      "properties": {
+        "offset": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offset"
+        },
+        "horizon": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Horizon"
+        },
+        "weight": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weight"
+        }
+      },
+      "title": "ActionOverlapConsistencyConfig",
+      "type": "object"
+    },
+    "ActionRequeryConsistencyConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "offset": {
+          "exclusiveMinimum": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "horizon": {
+          "exclusiveMinimum": 0,
+          "title": "Horizon",
+          "type": "integer"
+        },
+        "weight": {
+          "minimum": 0,
+          "title": "Weight",
+          "type": "number"
+        }
+      },
+      "required": [
+        "offset",
+        "horizon",
+        "weight"
+      ],
+      "title": "ActionRequeryConsistencyConfig",
+      "type": "object"
+    },
     "ActionRmseSweepConfig": {
       "additionalProperties": true,
       "properties": {
@@ -28,6 +101,31 @@
           "default": null,
           "title": "Episodes"
         },
+        "tensorboard_tag": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tensorboard Tag"
+        },
+        "y_axis_max": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Y Axis Max"
+        },
         "n_action_steps": {
           "anyOf": [
             {
@@ -44,26 +142,7 @@
           "default": null,
           "title": "N Action Steps"
         },
-        "tensorboard_tag": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Tensorboard Tag"
-        }
-      },
-      "title": "ActionRmseSweepConfig",
-      "type": "object"
-    },
-    "ActionSmoothnessConfig": {
-      "additionalProperties": true,
-      "properties": {
-        "include_gripper": {
+        "render_policy_inference_only": {
           "anyOf": [
             {
               "type": "boolean"
@@ -73,8 +152,58 @@
             }
           ],
           "default": null,
-          "title": "Include Gripper"
+          "title": "Render Policy Inference Only"
         },
+        "timeline_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "start_dataset",
+                "phase_chain"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeline Mode"
+        },
+        "test_cases": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Test Cases"
+        },
+        "phase_contract_test_case_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Phase Contract Test Case Id"
+        }
+      },
+      "title": "ActionRmseSweepConfig",
+      "type": "object"
+    },
+    "ActionSmoothnessConfig": {
+      "additionalProperties": true,
+      "properties": {
         "weight": {
           "anyOf": [
             {
@@ -87,15 +216,8 @@
           ],
           "default": null,
           "title": "Weight"
-        }
-      },
-      "title": "ActionSmoothnessConfig",
-      "type": "object"
-    },
-    "AugmentationConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "gpu_image_augmentation": {
+        },
+        "include_gripper": {
           "anyOf": [
             {
               "type": "boolean"
@@ -105,9 +227,43 @@
             }
           ],
           "default": null,
-          "title": "Gpu Image Augmentation"
+          "title": "Include Gripper"
+        }
+      },
+      "title": "ActionSmoothnessConfig",
+      "type": "object"
+    },
+    "ActionWristRollCircularConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "weight": {
+          "minimum": 0,
+          "title": "Weight",
+          "type": "number"
         },
-        "image_affine_degrees": {
+        "joint_index": {
+          "minimum": 0,
+          "title": "Joint Index",
+          "type": "integer"
+        },
+        "period_radians": {
+          "exclusiveMinimum": 0,
+          "title": "Period Radians",
+          "type": "number"
+        }
+      },
+      "required": [
+        "weight",
+        "joint_index",
+        "period_radians"
+      ],
+      "title": "ActionWristRollCircularConfig",
+      "type": "object"
+    },
+    "AugmentationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "state_jitter_std": {
           "anyOf": [
             {
               "minimum": 0,
@@ -118,11 +274,12 @@
             }
           ],
           "default": null,
-          "title": "Image Affine Degrees"
+          "title": "State Jitter Std"
         },
-        "image_affine_translate": {
+        "state_jitter_prob": {
           "anyOf": [
             {
+              "maximum": 1,
               "minimum": 0,
               "type": "number"
             },
@@ -131,22 +288,21 @@
             }
           ],
           "default": null,
-          "title": "Image Affine Translate"
+          "title": "State Jitter Prob"
         },
-        "image_blur_kernel_size": {
+        "state_jitter_arm_only": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0,
-              "type": "integer"
+              "type": "boolean"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Image Blur Kernel Size"
+          "title": "State Jitter Arm Only"
         },
-        "image_blur_prob": {
+        "state_dropout_prob": {
           "anyOf": [
             {
               "exclusiveMaximum": 1,
@@ -158,7 +314,19 @@
             }
           ],
           "default": null,
-          "title": "Image Blur Prob"
+          "title": "State Dropout Prob"
+        },
+        "state_dropout_keep_gripper": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State Dropout Keep Gripper"
         },
         "image_camera_dropout_prob": {
           "anyOf": [
@@ -173,71 +341,6 @@
           ],
           "default": null,
           "title": "Image Camera Dropout Prob"
-        },
-        "image_color_jitter": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Image Color Jitter"
-        },
-        "image_color_jitter_strength": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Image Color Jitter Strength"
-        },
-        "image_motion_blur_kernel_size": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Image Motion Blur Kernel Size"
-        },
-        "image_motion_blur_prob": {
-          "anyOf": [
-            {
-              "exclusiveMaximum": 1,
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Image Motion Blur Prob"
-        },
-        "image_noise_std": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Image Noise Std"
         },
         "image_patch_dropout_prob": {
           "anyOf": [
@@ -267,6 +370,31 @@
           "default": null,
           "title": "Image Patch Mask Ratio"
         },
+        "image_color_jitter": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Color Jitter"
+        },
+        "image_color_jitter_strength": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Color Jitter Strength"
+        },
         "image_sharpness_jitter": {
           "anyOf": [
             {
@@ -279,19 +407,46 @@
           "default": null,
           "title": "Image Sharpness Jitter"
         },
-        "state_dropout_keep_gripper": {
+        "image_affine_degrees": {
           "anyOf": [
             {
-              "type": "boolean"
+              "minimum": 0,
+              "type": "number"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "State Dropout Keep Gripper"
+          "title": "Image Affine Degrees"
         },
-        "state_dropout_prob": {
+        "image_affine_translate": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Affine Translate"
+        },
+        "image_noise_std": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Noise Std"
+        },
+        "image_blur_prob": {
           "anyOf": [
             {
               "exclusiveMaximum": 1,
@@ -303,9 +458,49 @@
             }
           ],
           "default": null,
-          "title": "State Dropout Prob"
+          "title": "Image Blur Prob"
         },
-        "state_jitter_arm_only": {
+        "image_blur_kernel_size": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Blur Kernel Size"
+        },
+        "image_motion_blur_prob": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Motion Blur Prob"
+        },
+        "image_motion_blur_kernel_size": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Motion Blur Kernel Size"
+        },
+        "gpu_image_augmentation": {
           "anyOf": [
             {
               "type": "boolean"
@@ -315,20 +510,7 @@
             }
           ],
           "default": null,
-          "title": "State Jitter Arm Only"
-        },
-        "state_jitter_std": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "State Jitter Std"
+          "title": "Gpu Image Augmentation"
         }
       },
       "title": "AugmentationConfig",
@@ -371,9 +553,13 @@
     "ClosedLoopConfig": {
       "additionalProperties": true,
       "properties": {
-        "action_contract_mode": {
+        "runner": {
           "anyOf": [
             {
+              "enum": [
+                "picklift",
+                "qwen_chain"
+              ],
               "type": "string"
             },
             {
@@ -381,54 +567,7 @@
             }
           ],
           "default": null,
-          "title": "Action Contract Mode"
-        },
-        "action_rmse_sweep": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ActionRmseSweepConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "base_seed": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Base Seed"
-        },
-        "env_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Env Id"
-        },
-        "env_object_color": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Env Object Color"
+          "title": "Runner"
         },
         "eval_skill_mode": {
           "anyOf": [
@@ -454,6 +593,42 @@
           "default": null,
           "title": "Execution Policy"
         },
+        "scenario": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scenario"
+        },
+        "env_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env Id"
+        },
+        "task_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Prompt"
+        },
         "qwen_object": {
           "anyOf": [
             {
@@ -466,6 +641,42 @@
           "default": null,
           "title": "Qwen Object"
         },
+        "env_object_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env Object Color"
+        },
+        "action_contract_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Contract Mode"
+        },
+        "base_seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Seed"
+        },
         "record_rollout_gif": {
           "anyOf": [
             {
@@ -477,34 +688,6 @@
           ],
           "default": null,
           "title": "Record Rollout Gif"
-        },
-        "runner": {
-          "anyOf": [
-            {
-              "enum": [
-                "picklift",
-                "qwen_chain"
-              ],
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Runner"
-        },
-        "scenario": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scenario"
         },
         "success_metric": {
           "anyOf": [
@@ -530,7 +713,7 @@
           "default": null,
           "title": "Success Threshold"
         },
-        "task_prompt": {
+        "valid_mask_checkpoint": {
           "anyOf": [
             {
               "type": "string"
@@ -540,7 +723,51 @@
             }
           ],
           "default": null,
-          "title": "Task Prompt"
+          "title": "Valid Mask Checkpoint"
+        },
+        "action_rmse_sweep": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionRmseSweepConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "temporal_ensemble": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TemporalEnsembleConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "observation_renderer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClosedLoopObservationRendererConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tensorboard_media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClosedLoopTensorBoardMediaConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "test_cases": {
           "anyOf": [
@@ -556,8 +783,153 @@
           ],
           "default": null,
           "title": "Test Cases"
+        }
+      },
+      "title": "ClosedLoopConfig",
+      "type": "object"
+    },
+    "ClosedLoopEnvironmentConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "camera_rig_config": {
+          "title": "Camera Rig Config",
+          "type": "string"
         },
-        "valid_mask_checkpoint": {
+        "target_object_color": {
+          "enum": [
+            "red",
+            "blue",
+            "green"
+          ],
+          "title": "Target Object Color",
+          "type": "string"
+        },
+        "object_half_sizes": {
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1,
+          "title": "Object Half Sizes",
+          "type": "array"
+        },
+        "spawn_center": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Spawn Center",
+          "type": "array"
+        },
+        "spawn_min_radius": {
+          "minimum": 0,
+          "title": "Spawn Min Radius",
+          "type": "number"
+        },
+        "spawn_max_radius": {
+          "minimum": 0,
+          "title": "Spawn Max Radius",
+          "type": "number"
+        },
+        "spawn_angle_half_range_deg": {
+          "minimum": 0,
+          "title": "Spawn Angle Half Range Deg",
+          "type": "number"
+        }
+      },
+      "required": [
+        "camera_rig_config",
+        "target_object_color",
+        "object_half_sizes",
+        "spawn_center",
+        "spawn_min_radius",
+        "spawn_max_radius",
+        "spawn_angle_half_range_deg"
+      ],
+      "title": "ClosedLoopEnvironmentConfig",
+      "type": "object"
+    },
+    "ClosedLoopObservationRendererConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "blender_cycles_live",
+          "title": "Mode",
+          "type": "string"
+        },
+        "render_policy_inference_only": {
+          "title": "Render Policy Inference Only",
+          "type": "boolean"
+        },
+        "camera_keys": {
+          "items": {
+            "enum": [
+              "observation.images.camera1",
+              "observation.images.camera2"
+            ],
+            "type": "string"
+          },
+          "title": "Camera Keys",
+          "type": "array"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "source_width": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Width"
+        },
+        "source_height": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Height"
+        },
+        "policy_resize": {
+          "anyOf": [
+            {
+              "enum": [
+                "direct_square_render",
+                "center_crop_square_then_resize"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Resize"
+        },
+        "camera_rig_config": {
           "anyOf": [
             {
               "type": "string"
@@ -567,15 +939,518 @@
             }
           ],
           "default": null,
-          "title": "Valid Mask Checkpoint"
+          "title": "Camera Rig Config"
+        },
+        "profile_from_camera_rig": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile From Camera Rig"
+        },
+        "samples": {
+          "exclusiveMinimum": 0,
+          "title": "Samples",
+          "type": "integer"
+        },
+        "denoise": {
+          "title": "Denoise",
+          "type": "boolean"
+        },
+        "compute_device_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compute Device Type"
+        },
+        "cycles_seed": {
+          "title": "Cycles Seed",
+          "type": "integer"
+        },
+        "lighting_profile": {
+          "enum": [
+            "studio_small_08",
+            "flat",
+            "directional_key_fill_rim_v4"
+          ],
+          "title": "Lighting Profile",
+          "type": "string"
+        },
+        "key_light_power": {
+          "minimum": 0,
+          "title": "Key Light Power",
+          "type": "number"
+        },
+        "fill_light_power": {
+          "minimum": 0,
+          "title": "Fill Light Power",
+          "type": "number"
+        },
+        "world_strength": {
+          "minimum": 0,
+          "title": "World Strength",
+          "type": "number"
+        },
+        "hdri_rotation_deg": {
+          "title": "Hdri Rotation Deg",
+          "type": "number"
+        },
+        "exposure": {
+          "title": "Exposure",
+          "type": "number"
+        },
+        "color_management": {
+          "enum": [
+            "Filmic",
+            "Standard",
+            "AgX"
+          ],
+          "title": "Color Management",
+          "type": "string"
+        },
+        "color_look": {
+          "title": "Color Look",
+          "type": "string"
+        },
+        "gamma": {
+          "title": "Gamma",
+          "type": "number"
+        },
+        "output_format": {
+          "enum": [
+            "PNG",
+            "JPEG"
+          ],
+          "title": "Output Format",
+          "type": "string"
+        },
+        "sample_clamp_indirect": {
+          "minimum": 0,
+          "title": "Sample Clamp Indirect",
+          "type": "number"
+        },
+        "background_wall": {
+          "title": "Background Wall",
+          "type": "boolean"
+        },
+        "stable_tabletop": {
+          "title": "Stable Tabletop",
+          "type": "boolean"
+        },
+        "scene_profile": {
+          "enum": [
+            "neutral",
+            "black_table_clutter",
+            "pbr_workbench_v4",
+            "pbr_workshop_v4"
+          ],
+          "title": "Scene Profile",
+          "type": "string"
+        },
+        "robot_material": {
+          "enum": [
+            "plastic",
+            "matte_pla",
+            "metal"
+          ],
+          "title": "Robot Material",
+          "type": "string"
+        },
+        "material_profile": {
+          "title": "Material Profile",
+          "type": "string"
+        },
+        "camera_lens": {
+          "title": "Camera Lens",
+          "type": "number"
+        },
+        "asset_root": {
+          "title": "Asset Root",
+          "type": "string"
+        },
+        "blender_bin": {
+          "title": "Blender Bin",
+          "type": "string"
+        },
+        "max_mesh_geoms": {
+          "exclusiveMinimum": 0,
+          "title": "Max Mesh Geoms",
+          "type": "integer"
+        },
+        "preserve_pinhole_renders": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preserve Pinhole Renders"
+        },
+        "bevel_width_range_m": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "minimum": 0,
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bevel Width Range M"
+        },
+        "bevel_segments": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bevel Segments"
+        },
+        "lens_distortion": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lens Distortion"
+        },
+        "visual_props": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visual Props"
+        },
+        "lights": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lights"
         }
       },
-      "title": "ClosedLoopConfig",
+      "required": [
+        "mode",
+        "render_policy_inference_only",
+        "camera_keys",
+        "width",
+        "height",
+        "samples",
+        "denoise",
+        "cycles_seed",
+        "lighting_profile",
+        "key_light_power",
+        "fill_light_power",
+        "world_strength",
+        "hdri_rotation_deg",
+        "exposure",
+        "color_management",
+        "color_look",
+        "gamma",
+        "output_format",
+        "sample_clamp_indirect",
+        "background_wall",
+        "stable_tabletop",
+        "scene_profile",
+        "robot_material",
+        "material_profile",
+        "camera_lens",
+        "asset_root",
+        "blender_bin",
+        "max_mesh_geoms"
+      ],
+      "title": "ClosedLoopObservationRendererConfig",
+      "type": "object"
+    },
+    "ClosedLoopPhaseConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "enum": [
+            "approach",
+            "alignment",
+            "grip_lift"
+          ],
+          "title": "Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "max_steps": {
+          "exclusiveMinimum": 0,
+          "title": "Max Steps",
+          "type": "integer"
+        },
+        "reference_length_multiplier": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Length Multiplier"
+        },
+        "reference_report_path": {
+          "title": "Reference Report Path",
+          "type": "string"
+        },
+        "verifier": {
+          "$ref": "#/$defs/ClosedLoopPhaseVerifierConfig"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "max_steps",
+        "reference_report_path",
+        "verifier"
+      ],
+      "title": "ClosedLoopPhaseConfig",
+      "type": "object"
+    },
+    "ClosedLoopPhaseContractConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "primitive",
+            "chain"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "handoff_mode": {
+          "enum": [
+            "continuous",
+            "oracle_reset"
+          ],
+          "title": "Handoff Mode",
+          "type": "string"
+        },
+        "phases": {
+          "items": {
+            "$ref": "#/$defs/ClosedLoopPhaseConfig"
+          },
+          "minItems": 1,
+          "title": "Phases",
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode",
+        "handoff_mode",
+        "phases"
+      ],
+      "title": "ClosedLoopPhaseContractConfig",
+      "type": "object"
+    },
+    "ClosedLoopPhaseVerifierConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "approach",
+            "alignment",
+            "grip_lift"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "tcp_position_tolerance_m": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tcp Position Tolerance M"
+        },
+        "gripper_open_tolerance_rad": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gripper Open Tolerance Rad"
+        },
+        "edge_xy_tolerance_m": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Edge Xy Tolerance M"
+        },
+        "jaw_angle_tolerance_deg": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Jaw Angle Tolerance Deg"
+        },
+        "lift_height_m": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lift Height M"
+        },
+        "hold_steps": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Hold Steps",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "ClosedLoopPhaseVerifierConfig",
+      "type": "object"
+    },
+    "ClosedLoopTensorBoardMediaConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "train_reference_frequency": {
+          "enum": [
+            "once_per_run",
+            "every_checkpoint",
+            "disabled"
+          ],
+          "title": "Train Reference Frequency",
+          "type": "string"
+        },
+        "chain_rollout_layout": {
+          "anyOf": [
+            {
+              "enum": [
+                "per_episode",
+                "combined"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chain Rollout Layout"
+        },
+        "render_test_cases": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Render Test Cases"
+        }
+      },
+      "required": [
+        "train_reference_frequency"
+      ],
+      "title": "ClosedLoopTensorBoardMediaConfig",
       "type": "object"
     },
     "ClosedLoopTestCaseConfig": {
       "additionalProperties": true,
       "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
         "description": {
           "anyOf": [
             {
@@ -588,17 +1463,15 @@
           "default": null,
           "title": "Description"
         },
-        "env_object_color": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
+        "schedule": {
+          "default": "periodic",
+          "enum": [
+            "periodic",
+            "final",
+            "manual"
           ],
-          "default": null,
-          "title": "Env Object Color"
+          "title": "Schedule",
+          "type": "string"
         },
         "episodes": {
           "anyOf": [
@@ -613,33 +1486,48 @@
           "default": null,
           "title": "Episodes"
         },
-        "id": {
-          "title": "Id",
-          "type": "string"
-        },
-        "plan_json": {
+        "episode_indices": {
           "anyOf": [
             {
-              "type": "string"
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Plan Json"
+          "title": "Episode Indices"
         },
-        "qwen_object": {
+        "source_grid_bins": {
           "anyOf": [
             {
-              "type": "string"
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Qwen Object"
+          "title": "Source Grid Bins"
+        },
+        "steps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Steps"
         },
         "seed": {
           "anyOf": [
@@ -665,18 +1553,7 @@
           "default": null,
           "title": "Start Contract"
         },
-        "start_dataset": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DatasetConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "start_report_path": {
+        "task_prompt": {
           "anyOf": [
             {
               "type": "string"
@@ -686,20 +1563,31 @@
             }
           ],
           "default": null,
-          "title": "Start Report Path"
+          "title": "Task Prompt"
         },
-        "steps": {
+        "qwen_object": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0,
-              "type": "integer"
+              "type": "string"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Steps"
+          "title": "Qwen Object"
+        },
+        "env_object_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env Object Color"
         },
         "success_metric": {
           "anyOf": [
@@ -713,7 +1601,7 @@
           "default": null,
           "title": "Success Metric"
         },
-        "task_prompt": {
+        "start_report_path": {
           "anyOf": [
             {
               "type": "string"
@@ -723,7 +1611,52 @@
             }
           ],
           "default": null,
-          "title": "Task Prompt"
+          "title": "Start Report Path"
+        },
+        "plan_json": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Json"
+        },
+        "start_dataset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatasetConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "env_config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClosedLoopEnvironmentConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "phase_contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClosedLoopPhaseContractConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -735,118 +1668,6 @@
     "DatasetConfig": {
       "additionalProperties": true,
       "properties": {
-        "expected_episodes": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Expected Episodes"
-        },
-        "expected_frames": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Expected Frames"
-        },
-        "grid_balance": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GridBalanceConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "grid_bin_sidecar": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Grid Bin Sidecar"
-        },
-        "hf_merge_sources": {
-          "anyOf": [
-            {
-              "items": {
-                "$ref": "#/$defs/HfMergeSourceConfig"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Hf Merge Sources"
-        },
-        "hf_path_in_repo": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Hf Path In Repo"
-        },
-        "hf_repo_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Hf Repo Id"
-        },
-        "hf_repo_type": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Hf Repo Type"
-        },
-        "image_cache_dir": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Image Cache Dir"
-        },
         "name": {
           "anyOf": [
             {
@@ -894,48 +1715,10 @@
           ],
           "default": null,
           "title": "Split"
-        }
-      },
-      "title": "DatasetConfig",
-      "type": "object"
-    },
-    "GridBalanceConfig": {
-      "additionalProperties": true,
-      "properties": {
-        "bin_counts": {
-          "anyOf": [
-            {
-              "additionalProperties": {
-                "type": "integer"
-              },
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Bin Counts"
         },
-        "bins": {
+        "hf_repo_id": {
           "anyOf": [
             {
-              "items": {
-                "type": "integer"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Bins"
-        },
-        "camera_key": {
-          "anyOf": [
-            {
-              "const": "observation.images.camera1",
               "type": "string"
             },
             {
@@ -943,79 +1726,44 @@
             }
           ],
           "default": null,
-          "title": "Camera Key"
+          "title": "Hf Repo Id"
         },
-        "episodes_per_bin": {
+        "hf_repo_type": {
           "anyOf": [
             {
-              "minimum": 0,
-              "type": "number"
+              "type": "string"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Episodes Per Bin"
+          "title": "Hf Repo Type"
         },
-        "frame_index": {
+        "hf_path_in_repo": {
           "anyOf": [
             {
-              "minimum": 0,
-              "type": "number"
+              "type": "string"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Frame Index"
+          "title": "Hf Path In Repo"
         },
-        "grid_size": {
+        "grid_bin_sidecar": {
           "anyOf": [
             {
-              "minimum": 0,
-              "type": "number"
+              "type": "string"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Grid Size"
+          "title": "Grid Bin Sidecar"
         },
-        "min_area": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Min Area"
-        },
-        "visible_episodes": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Visible Episodes"
-        }
-      },
-      "title": "GridBalanceConfig",
-      "type": "object"
-    },
-    "HfMergeSourceConfig": {
-      "additionalProperties": true,
-      "properties": {
         "expected_episodes": {
           "anyOf": [
             {
@@ -1042,12 +1790,179 @@
           "default": null,
           "title": "Expected Frames"
         },
-        "hf_path_in_repo": {
-          "title": "Hf Path In Repo",
+        "image_cache_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Cache Dir"
+        },
+        "hf_merge_sources": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/HfMergeSourceConfig"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hf Merge Sources"
+        },
+        "grid_balance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GridBalanceConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "DatasetConfig",
+      "type": "object"
+    },
+    "GridBalanceConfig": {
+      "additionalProperties": true,
+      "properties": {
+        "camera_key": {
+          "anyOf": [
+            {
+              "const": "observation.images.camera1",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Key"
+        },
+        "grid_size": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grid Size"
+        },
+        "frame_index": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Index"
+        },
+        "min_area": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Area"
+        },
+        "bins": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bins"
+        },
+        "visible_episodes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visible Episodes"
+        },
+        "episodes_per_bin": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Episodes Per Bin"
+        },
+        "bin_counts": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bin Counts"
+        }
+      },
+      "title": "GridBalanceConfig",
+      "type": "object"
+    },
+    "HfMergeSourceConfig": {
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "repo_id": {
+          "title": "Repo Id",
           "type": "string"
         },
         "hf_repo_id": {
           "title": "Hf Repo Id",
+          "type": "string"
+        },
+        "hf_path_in_repo": {
+          "title": "Hf Path In Repo",
           "type": "string"
         },
         "hf_repo_type": {
@@ -1062,13 +1977,31 @@
           "default": null,
           "title": "Hf Repo Type"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
+        "expected_episodes": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Episodes"
         },
-        "repo_id": {
-          "title": "Repo Id",
-          "type": "string"
+        "expected_frames": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Frames"
         }
       },
       "required": [
@@ -1080,21 +2013,85 @@
       "title": "HfMergeSourceConfig",
       "type": "object"
     },
-    "PredecodedImageCacheConfig": {
+    "ModelInputsConfig": {
       "additionalProperties": false,
       "properties": {
-        "default_root": {
+        "active_image_features": {
+          "items": {
+            "enum": [
+              "observation.images.camera1",
+              "observation.images.camera2",
+              "observation.images.camera3"
+            ],
+            "type": "string"
+          },
+          "title": "Active Image Features",
+          "type": "array"
+        }
+      },
+      "required": [
+        "active_image_features"
+      ],
+      "title": "ModelInputsConfig",
+      "type": "object"
+    },
+    "PeftTrainingConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "method_type": {
+          "const": "LORA",
+          "title": "Method Type",
+          "type": "string"
+        },
+        "base_model_name_or_path": {
+          "title": "Base Model Name Or Path",
+          "type": "string"
+        },
+        "target_modules": {
           "anyOf": [
             {
               "type": "string"
             },
             {
-              "type": "null"
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             }
           ],
-          "default": null,
-          "title": "Default Root"
+          "title": "Target Modules"
         },
+        "full_training_modules": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Full Training Modules",
+          "type": "array"
+        },
+        "r": {
+          "exclusiveMinimum": 0,
+          "title": "R",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled",
+        "method_type",
+        "base_model_name_or_path",
+        "target_modules",
+        "full_training_modules",
+        "r"
+      ],
+      "title": "PeftTrainingConfig",
+      "type": "object"
+    },
+    "PredecodedImageCacheConfig": {
+      "additionalProperties": false,
+      "properties": {
         "root_env": {
           "anyOf": [
             {
@@ -1106,6 +2103,18 @@
           ],
           "default": null,
           "title": "Root Env"
+        },
+        "default_root": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Root"
         },
         "train": {
           "anyOf": [
@@ -1156,61 +2165,6 @@
     "SO101DatasetSectionConfig": {
       "additionalProperties": false,
       "properties": {
-        "camera_contract": {
-          "$ref": "#/$defs/CameraContractConfig"
-        },
-        "generation": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Generation"
-        },
-        "generation_augmentation": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Generation Augmentation"
-        },
-        "prompt_contract": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Prompt Contract"
-        },
-        "reachable_bin_filter": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Reachable Bin Filter"
-        },
         "train_dataset": {
           "anyOf": [
             {
@@ -1238,11 +2192,88 @@
           "title": "Train Datasets"
         },
         "validation_dataset": {
-          "$ref": "#/$defs/DatasetConfig"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatasetConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "validation_datasets": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/DatasetConfig"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validation Datasets"
+        },
+        "camera_contract": {
+          "$ref": "#/$defs/CameraContractConfig"
+        },
+        "prompt_contract": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Contract"
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generation"
+        },
+        "generation_augmentation": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generation Augmentation"
+        },
+        "reachable_bin_filter": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reachable Bin Filter"
         }
       },
       "required": [
-        "validation_dataset",
         "camera_contract"
       ],
       "title": "SO101DatasetSectionConfig",
@@ -1251,10 +2282,10 @@
     "SO101RuntimeTrainingConfig": {
       "additionalProperties": false,
       "properties": {
-        "augmentation": {
+        "training": {
           "anyOf": [
             {
-              "$ref": "#/$defs/AugmentationConfig"
+              "$ref": "#/$defs/TrainingConfig"
             },
             {
               "type": "null"
@@ -1262,10 +2293,21 @@
           ],
           "default": null
         },
-        "closed_loop": {
+        "model_inputs": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ClosedLoopConfig"
+              "$ref": "#/$defs/ModelInputsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "peft": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PeftTrainingConfig"
             },
             {
               "type": "null"
@@ -1295,10 +2337,21 @@
           ],
           "default": null
         },
-        "training": {
+        "augmentation": {
           "anyOf": [
             {
-              "$ref": "#/$defs/TrainingConfig"
+              "$ref": "#/$defs/AugmentationConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "closed_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClosedLoopConfig"
             },
             {
               "type": "null"
@@ -1321,6 +2374,26 @@
         }
       },
       "title": "SO101RuntimeTrainingConfig",
+      "type": "object"
+    },
+    "TemporalEnsembleConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "decay": {
+          "minimum": 0,
+          "title": "Decay",
+          "type": "number"
+        }
+      },
+      "required": [
+        "enabled",
+        "decay"
+      ],
+      "title": "TemporalEnsembleConfig",
       "type": "object"
     },
     "TensorBoardConfig": {
@@ -1360,35 +2433,6 @@
           "default": null,
           "title": "Batch Size"
         },
-        "checkpoint_retention_policy": {
-          "anyOf": [
-            {
-              "enum": [
-                "best_val_and_closed_loop",
-                "keep_all",
-                "none"
-              ],
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Checkpoint Retention Policy"
-        },
-        "lightning_precision": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Lightning Precision"
-        },
         "num_workers": {
           "anyOf": [
             {
@@ -1402,6 +2446,18 @@
           "default": null,
           "title": "Num Workers"
         },
+        "policy_repo_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Repo Id"
+        },
         "policy_push_to_hub": {
           "anyOf": [
             {
@@ -1414,7 +2470,7 @@
           "default": null,
           "title": "Policy Push To Hub"
         },
-        "policy_repo_id": {
+        "lightning_precision": {
           "anyOf": [
             {
               "type": "string"
@@ -1424,7 +2480,7 @@
             }
           ],
           "default": null,
-          "title": "Policy Repo Id"
+          "title": "Lightning Precision"
         },
         "steps_per_epoch": {
           "anyOf": [
@@ -1451,6 +2507,23 @@
           ],
           "default": null,
           "title": "Validation Max Batches"
+        },
+        "checkpoint_retention_policy": {
+          "anyOf": [
+            {
+              "enum": [
+                "best_val_and_closed_loop",
+                "keep_all",
+                "none"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkpoint Retention Policy"
         }
       },
       "title": "TrainingConfig",
@@ -1488,17 +2561,6 @@
     "TrainingLossesConfig": {
       "additionalProperties": true,
       "properties": {
-        "action_chunk_consistency": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WeightedStepsConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "action_prefix": {
           "anyOf": [
             {
@@ -1510,10 +2572,54 @@
           ],
           "default": null
         },
+        "action_chunk_consistency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WeightedStepsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "action_overlap_consistency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionOverlapConsistencyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "action_requery_consistency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionRequeryConsistencyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "action_smoothness": {
           "anyOf": [
             {
               "$ref": "#/$defs/ActionSmoothnessConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "action_wrist_roll_circular": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionWristRollCircularConfig"
             },
             {
               "type": "null"
@@ -1576,16 +2682,65 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "action_chunk_consistency": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "default_config": {
       "anyOf": [
         {
-          "$ref": "#/$defs/WeightedStepsConfig"
+          "type": "string"
         },
         {
           "type": "null"
         }
       ],
-      "default": null
+      "default": null,
+      "title": "Default Config"
+    },
+    "scenario": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scenario"
+    },
+    "execution_policy": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Execution Policy"
+    },
+    "task": {
+      "title": "Task",
+      "type": "string"
+    },
+    "prompt": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Prompt"
     },
     "action_mode": {
       "anyOf": [
@@ -1603,6 +2758,155 @@
       "default": null,
       "title": "Action Mode"
     },
+    "delta_action_source": {
+      "anyOf": [
+        {},
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delta Action Source"
+    },
+    "debug_notes": {
+      "anyOf": [
+        {},
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Debug Notes"
+    },
+    "dataset": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SO101DatasetSectionConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "training_config": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SO101RuntimeTrainingConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "train_dataset": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DatasetConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "train_datasets": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/DatasetConfig"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Train Datasets"
+    },
+    "validation_dataset": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DatasetConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "validation_datasets": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/DatasetConfig"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Validation Datasets"
+    },
+    "camera_contract": {
+      "$ref": "#/$defs/CameraContractConfig"
+    },
+    "prompt_contract": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Prompt Contract"
+    },
+    "training": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TrainingConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "predecoded_image_cache": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PredecodedImageCacheConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "tensorboard": {
+      "$ref": "#/$defs/TensorBoardConfig"
+    },
+    "closed_loop": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClosedLoopConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "augmentation": {
+      "$ref": "#/$defs/AugmentationConfig"
+    },
     "action_prefix": {
       "anyOf": [
         {
@@ -1614,10 +2918,54 @@
       ],
       "default": null
     },
+    "action_chunk_consistency": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WeightedStepsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "action_overlap_consistency": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionOverlapConsistencyConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "action_requery_consistency": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionRequeryConsistencyConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "action_smoothness": {
       "anyOf": [
         {
           "$ref": "#/$defs/ActionSmoothnessConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "action_wrist_roll_circular": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionWristRollCircularConfig"
         },
         {
           "type": "null"
@@ -1638,16 +2986,10 @@
       "default": null,
       "title": "Action Teacher Importance"
     },
-    "augmentation": {
-      "$ref": "#/$defs/AugmentationConfig"
-    },
-    "camera_contract": {
-      "$ref": "#/$defs/CameraContractConfig"
-    },
-    "closed_loop": {
+    "model_inputs": {
       "anyOf": [
         {
-          "$ref": "#/$defs/ClosedLoopConfig"
+          "$ref": "#/$defs/ModelInputsConfig"
         },
         {
           "type": "null"
@@ -1655,10 +2997,10 @@
       ],
       "default": null
     },
-    "dataset": {
+    "peft": {
       "anyOf": [
         {
-          "$ref": "#/$defs/SO101DatasetSectionConfig"
+          "$ref": "#/$defs/PeftTrainingConfig"
         },
         {
           "type": "null"
@@ -1692,94 +3034,6 @@
       "default": null,
       "title": "Dataset Generation Augmentation"
     },
-    "debug_notes": {
-      "anyOf": [
-        {},
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Debug Notes"
-    },
-    "default_config": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Default Config"
-    },
-    "delta_action_source": {
-      "anyOf": [
-        {},
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Delta Action Source"
-    },
-    "description": {
-      "title": "Description",
-      "type": "string"
-    },
-    "execution_policy": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Execution Policy"
-    },
-    "name": {
-      "title": "Name",
-      "type": "string"
-    },
-    "predecoded_image_cache": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/PredecodedImageCacheConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "prompt": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Prompt"
-    },
-    "prompt_contract": {
-      "anyOf": [
-        {
-          "additionalProperties": true,
-          "type": "object"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Prompt Contract"
-    },
     "reachable_bin_filter": {
       "anyOf": [
         {
@@ -1792,76 +3046,6 @@
       ],
       "default": null,
       "title": "Reachable Bin Filter"
-    },
-    "scenario": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Scenario"
-    },
-    "task": {
-      "title": "Task",
-      "type": "string"
-    },
-    "tensorboard": {
-      "$ref": "#/$defs/TensorBoardConfig"
-    },
-    "train_dataset": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/DatasetConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "train_datasets": {
-      "anyOf": [
-        {
-          "items": {
-            "$ref": "#/$defs/DatasetConfig"
-          },
-          "type": "array"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Train Datasets"
-    },
-    "training": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/TrainingConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "training_config": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SO101RuntimeTrainingConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "validation_dataset": {
-      "$ref": "#/$defs/DatasetConfig"
     },
     "visual_servo": {
       "anyOf": [
@@ -1881,7 +3065,6 @@
     "name",
     "description",
     "task",
-    "validation_dataset",
     "camera_contract",
     "tensorboard",
     "augmentation"

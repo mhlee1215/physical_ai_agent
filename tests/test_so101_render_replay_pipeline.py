@@ -192,6 +192,12 @@ class SO101RenderReplayPipelineTests(unittest.TestCase):
                     / "episode_0000_frame_0000"
                     / f"episode_0000_frame_0000_{camera}.png"
                 )
+            Image.fromarray(np.full_like(reference, 255)).save(
+                root
+                / "reference"
+                / "episode_0000_frame_0000"
+                / "episode_0000_frame_0000_camera1_pinhole.png"
+            )
 
             accepted = verify_render_determinism(
                 reference_dir=root / "reference",
@@ -207,6 +213,7 @@ class SO101RenderReplayPipelineTests(unittest.TestCase):
             )
 
         self.assertTrue(accepted["passed"])
+        self.assertEqual(set(accepted["cameras"]), {"camera1", "camera2"})
         self.assertFalse(rejected["passed"])
 
     def test_sidecar_scene_uses_frame_transform_and_visibility(self) -> None:

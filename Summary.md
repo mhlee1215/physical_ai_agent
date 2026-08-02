@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-07-16
+Last updated: 2026-08-02
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -42,6 +42,10 @@ lightweight VLA policy.
   append-only derivative. A full render is blocked until an all-episode replay
   preflight and representative-frame canary pass; probe renders and partial
   sidecars are diagnostics, not training datasets.
+- Production photoreal recipes keep `preserve_pinhole_renders: false`. The
+  512px pre-distortion PNG is an opt-in camera-calibration diagnostic only;
+  disabling its retention must not change the final distorted 256px policy
+  image or the frozen camera-rig hash.
 - Current `v2_5` replay audit is not full-rerender ready. All 300 episodes have
   snapshots and the source contains 50,456 frames, but the default renderer
   exposes 9 RGB object slots while the recorded report expects 3 green cubes,
@@ -58,6 +62,24 @@ lightweight VLA policy.
   skips the expensive full trajectory. `grip_the_cube_v3` and
   `grip_the_cube_v3_align` are the first recipes using both gates and exact
   teacher-time render-replay capture.
+- The unified SO101 full-grasp teacher is
+  `skill_mode=grip_the_cube_continuous_v1` with
+  `trajectory_variant=auto`. It shares one candidate factory between workspace
+  probes and dataset export, uses the near-contact solver below 18 cm, tries
+  both solver families over 18-22 cm, and uses the mid fixed-jaw solver above
+  22 cm. Executable probes verify a stable 10-30 cm radius envelope from the
+  shoulder-pan axis; 30.5 cm is a boundary-only canary and 31 cm or farther is
+  currently unsupported. The 8-episode representative canary at
+  `_workspace/so101_lerobot/grip_the_cube_continuous_v1_canary` passed audit,
+  distribution, registry, and viewer gates with `training_ready=true`.
+- `grip_the_cube_v4_4` is the current continuous 10-30 cm dataset: 500 train
+  and 50 held-out validation episodes, 100% teacher success, unique seeds and
+  workspace positions, full absolute and robot-relative yaw-bin coverage, and
+  radial total variation 0.016/0.020 from the declared train/validation target.
+  Its review report and figure are
+  `docs/research/2026_08_02/so101_grip_the_cube_v4_4_distribution.md`.
+  The `move`, `align`, and `grip_lift` materializations are supervision-only;
+  the parent validation split owns the single 10-episode end-to-end loop test.
 
 The immediate collaboration goal is to produce manuscript-table experiment data
 as quickly and efficiently as possible. Research and orchestration choices should
@@ -106,6 +128,26 @@ paper-facing concepts:
   the SO101 training lane. The training process should own the sequence:
   train, run supervised evaluation, save checkpoint, then run the scheduled
   loop test. Do not replace this with an external polling monitor.
+- The prepared hardware-locked photoreal phase lane is
+  `configs/so101/training/grip_the_cube_v3_hardware_locked_photoreal_phases_v1.json`.
+  It virtually combines three train splits (approach 300 episodes, alignment
+  500, grip/lift 500) and their three held-out validation splits (50 episodes
+  each). Primitive phase datasets are supervision-only and do not own loop
+  tests. Automatic periodic closed-loop evaluation runs the single continuous
+  chain on fixed parent validation episodes
+  `[0,6,12,18,24,25,31,37,43,49]`, five each from source camera1 grid bins 9
+  and 10. Final automatic evaluation runs only the continuous chain over all
+  50 episodes. Do not materialize phase-specific loop-test sidecars.
+- The parent continuous-chain loop restores the selected validation episode
+  `sim_snapshot` and never resets to teacher state between phases:
+  valid-mask proposes a boundary and the geometric verifier confirms it. A
+  rejected proposal continues the same phase instead of failing the episode;
+  at the phase cap, a passing verifier still advances/completes while a failing
+  verifier records `hard_cap`. Phase caps are
+  `ceil(reference episode frames * 1.5)`: approach 66, alignment 66,
+  grip/lift 134, and continuous chain 266. The actual policy-created state
+  enters the next phase. Policy input remains camera1, camera2, motor state,
+  and prompt; simulator object pose is verifier-only.
 - Current observed best validation checkpoint is `001490` (`val_loss=0.083125`).
   Checkpoint `002682` saved and validated but did not improve
   (`val_loss=0.139522`), so training was stopped as likely overfitting.
@@ -166,6 +208,15 @@ paper-facing concepts:
 - User policy: SO101 training-time closed-loop validation must run exactly 10
   episodes by default. Keep `--closed-loop-episodes 10` in launcher and monitor
   paths unless the user explicitly asks for a labeled one-off smoke/debug count.
+- Current `grip_the_cube_v2` loop termination uses the checkpoint's jointly
+  trained valid-mask sidecar on the exact predicted action chunk being executed.
+  Joint training feeds the detached SmolVLA `action_hat` to the valid-mask head;
+  silently substituting teacher actions is forbidden because inference sees
+  predicted chunks.
+  Two consecutive re-query termination predictions are required before an
+  episode stops, while 200 environment steps remain the hard safety cap. Report
+  boundary-index MAE, stop precision/recall, premature-stop rate, and terminal
+  sample fraction; per-action valid-mask accuracy alone is not termination proof.
 - User policy: local SO101 training visibility must use one TensorBoard process
   only. The default launcher surface is exactly the training process plus one
   TensorBoard process. Do not start extra dashboards, GPU monitors, progress
@@ -229,14 +280,56 @@ paper-facing concepts:
   sweep is mandatory training-result evidence unless a clearly named
   smoke/debug command explicitly disables it. The canonical rollout tag must be
   generated from side-by-side camera1=egocentric and camera2=wrist policy-input
-  traces; raw GIFs are debug media only under `extra/closed_loop` and must not
-  replace canonical rollout evidence. Rollout frames should show
+  traces. Do not create duplicate
+  `extra/closed_loop/<test_id>/raw_rollout_gif_episode_*` TensorBoard tags.
+  Rollout frames should show
   episode/frame, prompt, phase/primitive, active camera/servo state, target
   overlays and dx/dy values when available, terminal success/failure context,
   and a green border on model inference/re-query frames. Training-time
   loop-test result generation must go through the canonical
   `write_so101_training_loop_test_results(run_dir, row, report)` function;
   do not create runner-specific TensorBoard/video writers.
+- User policy: `training_config.closed_loop.tensorboard_media.render_test_cases`
+  is the explicit allowlist for TensorBoard rollout and train-reference media.
+  Tests outside the allowlist still run and publish scalar/RMSE diagnostics but
+  must not publish rollout videos. For the phase-split grip experiment, only
+  the periodic and final continuous-chain tests are allowlisted. A continuous
+  chain uses `chain_rollout_layout=per_episode` and publishes one long,
+  time-ordered `closed_loop/<test_id>/rollout_episode_<NNN>` video for each
+  evaluated episode. Never concatenate different episodes into one tag and
+  never tile phases or episodes into a spatial grid. The matching train
+  reference concatenates the same source episode's approach, alignment, and
+  grip/lift teacher trajectories in phase order. Every frame preserves the
+  side-by-side camera1/camera2 view, episode/frame, prompt, phase, inference
+  borders, and termination cues. A failed rollout remains partial at the phase
+  where it terminated; visualization must not fabricate later phases.
+- Phase-split photoreal runs use
+  `observation_renderer.render_policy_inference_only=true`: TensorBoard rollout
+  media and RMSE sweeps include fresh policy-query frames only. Their periodic
+  RMSE sweep uses `n_action_steps=[5,15,30,50]` and fixes the plot range with
+  `action_rmse_sweep.y_axis_max=0.2` so checkpoints remain visually comparable.
+  The phase-chain RMSE diagnostic
+  runs the aligned approach, alignment, and grip/lift primitive starts, joins
+  them into one 177-frame teacher timeline, marks the 44/88 transition frames,
+  and reports overall plus per-phase RMSE in one table. Attach it only to the
+  parent dataset's single end-to-end continuous-chain loop. Set the renderer
+  value to `false` only when the user
+  explicitly requests full environment-step rendering.
+- User policy: static loop-test train-reference media is generated once per
+  run/test by default, controlled by
+  `training_config.closed_loop.tensorboard_media.train_reference_frequency`.
+  Supported values are `once_per_run`, `every_checkpoint`, and `disabled`.
+  `once_per_run` is invalidated when its TensorBoard event files are removed.
+  Inference rollout capture is independently controlled by
+  `observation_renderer.render_policy_inference_only`. `true` captures policy
+  query frames only; `false` captures every environment step.
+- User policy: canonical rollout media draws a red outer border on the final
+  frame only when the report confirms `termination.reason=valid_mask_stop`, and
+  a blue outer border for `termination.reason=env_success`. Hard-cap and failure
+  termination frames use neither terminal border.
+- User policy: closed-loop success criteria live in the main JSON training
+  config. Post-checkpoint evaluation must refresh the selected test case's
+  `success_metric` from that config so stale launch-time arguments cannot win.
 - User policy: whenever TensorBoard is started or reported, provide the
   TensorBoard access set together: local URL, same-Wi-Fi mobile URL, and an
   external-access URL. Use `cloudflared` quick tunnel for the external URL when
@@ -287,6 +380,19 @@ paper-facing concepts:
   LeRobot concat at training time. Physical merged train roots under
   `_workspace/so101_lerobot_merged/` are fallback/debug artifacts, not the
   canonical training path.
+- The Experiment Manager owns persistent, completion-gated dataset-role
+  selections at `_workspace/so101_training/dataset_role_selection.json` for
+  training, validation, and executable loop-test inputs.
+  `scripts/start_so101_training.py start --use-marked-dataset-set` consumes all
+  three roles together and fails closed if any role is missing. Catalog pages
+  are cached by filter/sort/page in the browser and invalidated after role or
+  delete operations.
+- Schema-v2 datasets with `splits.<name>.closed_loop` are not complete with a
+  start-state report alone. Generation writes a sibling executable contract
+  containing the exact prompt, environment, action horizon, and camera renderer;
+  completion and catalog role marking fail closed when it is missing. Marked
+  loop-test launch also promotes that renderer contract so evaluation cannot
+  silently use a preset camera pipeline that differs from the dataset.
 - SO101 dataset camera1 contract: `camera1` is the real-hardware-aligned
   `egocentric_cam`, not `top_down`. Current approved camera1 pose is
   `{"type":"free","lookat":[0.245,0.11,0.035],"distance":0.63,"azimuth":270,"elevation":-82,"rotation_degrees":90}`;
@@ -304,7 +410,20 @@ paper-facing concepts:
   `splits.<name>.output_root`, not through per-dataset edits to the viewer's
   static training-config list. Sign-off requires export/merge/audit evidence,
   required sidecars/loop starts, presence in `/api/datasets`, and a successful
-  sample `/api/frame` response for every intended split.
+  sample `/api/frame` response for every intended split. Every schema-v2 split
+  must also pass the mandatory post-generation distribution gate and retain
+  `meta/distribution/distribution.json`, `.md`, and `.html`. The report covers
+  success/seed uniqueness, episode lengths, camera1 visibility and 4x4
+  occupancy, prompt counts, and available world-XY/radius/workspace-cell
+  statistics. Area-sampled workspace datasets must additionally gate radius
+  span, angle span, two-dimensional polar-cell coverage/balance, and median
+  nearest-neighbor spacing; source-cell coverage alone is not evidence of a
+  spatially broad dataset. Cube orientation is checked in both world yaw and
+  robot-relative yaw `(object_yaw - angle_from_base) mod symmetry_period`, so
+  rotating the cube and spawn position together cannot masquerade as face
+  diversity. JSON statistics produce the canonical Markdown
+  record, and the HTML visualization is generated from that Markdown;
+  completion verifies the Markdown SHA-256 across all three artifacts.
 - SO101 dataset inventory and training readiness now use the shared registry
   `src/physical_ai_agent/so101_dataset_registry.py` through
   `scripts/so101_dataset_registry.py`. The recipe directory is the only
@@ -319,13 +438,18 @@ paper-facing concepts:
   launchctl-managed Robot Experiment Manager so no stale Pydantic schema remains
   loaded, and rejects completion unless every selected split is present in
   `/api/datasets` and episode 0/frame 0 returns prompt plus camera1/camera2 from
-  `/api/frame`. A registry-only pass is not a completed dataset handoff.
+  `/api/frame`. It also rechecks that the JSON/Markdown/HTML distribution
+  report exists and records a passed gate. A registry-only pass is not a
+  completed dataset handoff.
 - User policy: all newly authored SO101 generation recipes use Pydantic recipe
   schema v2. They explicitly choose `source.mode=from_scratch`,
   `source.mode=from_spawn_catalog`, or `source.mode=from_existing_dataset`.
-  `from_spawn_catalog` is the default when only object placement is reused: its
-  checked-in catalog contains seed-free `bin -> world [x, y]` candidates, and
-  the new export creates new simulator state, trajectories, images, and seeds.
+  `from_spawn_catalog` is the default when only object placement is reused. A
+  checked-in catalog may contain seed-free `bin -> world [x, y]` candidates or
+  typed workspace candidates with `world_xy_m`, candidate-specific
+  `object_yaw_deg`, distance/sampling metadata, and camera-bin diagnostics. It
+  must never contain source frames/actions/states/seeds; the new export creates
+  all simulator state, trajectories, images, and seeds.
   `from_existing_dataset` additionally chooses `operation=regenerate_teacher`,
   `render_derivative`, or `episode_subset` and lists every source dataset root.
   Episode subsets materialize retained episodes unchanged into a new append-only
@@ -335,6 +459,12 @@ paper-facing concepts:
   geometry and camera2 close-trace limits into teacher episode acceptance, so a
   dataset cannot be declared aligned only by a later filtering pass. Existing
   schema-v1 recipes stay immutable and readable for historical reproduction.
+- The `grip_the_cube_v4_2` audit found that all 500 episodes used
+  `object_yaw_deg = angle_from_base_deg - 80`, so the world yaw varied while
+  the same cube face always faced the robot. Preserve v4.2 for reproducibility
+  but do not treat it as orientation-randomized training data. The corrected
+  catalog contract stratifies robot-relative cube yaw and rejects coupled yaw
+  through pre-export and post-export distribution gates.
 
 ### What We Have Learned
 

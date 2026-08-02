@@ -94,6 +94,19 @@
           ],
           "default": null,
           "title": "Shard"
+        },
+        "workspace_candidate_count": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Candidate Count"
         }
       },
       "required": [
@@ -243,13 +256,32 @@
           "title": "Episodes",
           "type": "integer"
         },
+        "steps": {
+          "default": 200,
+          "exclusiveMinimum": 0,
+          "title": "Steps",
+          "type": "integer"
+        },
+        "seed": {
+          "default": 98100,
+          "title": "Seed",
+          "type": "integer"
+        },
         "bins": {
           "items": {
             "type": "integer"
           },
-          "minItems": 1,
           "title": "Bins",
           "type": "array"
+        },
+        "bin_selection": {
+          "default": "declared",
+          "enum": [
+            "declared",
+            "all_visible"
+          ],
+          "title": "Bin Selection",
+          "type": "string"
         },
         "output": {
           "title": "Output",
@@ -289,7 +321,6 @@
       },
       "required": [
         "episodes",
-        "bins",
         "output"
       ],
       "title": "ClosedLoopSpec",
@@ -326,6 +357,185 @@
         "max_pre_close_error_deg"
       ],
       "title": "ContactAlignmentSpec",
+      "type": "object"
+    },
+    "DistributionReportSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "output_dir": {
+          "default": "meta/distribution",
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "require_all_successful": {
+          "default": true,
+          "title": "Require All Successful",
+          "type": "boolean"
+        },
+        "require_unique_seeds": {
+          "default": true,
+          "title": "Require Unique Seeds",
+          "type": "boolean"
+        },
+        "max_camera1_invisible_fraction": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Max Camera1 Invisible Fraction",
+          "type": "number"
+        },
+        "max_all_policy_cameras_invisible_fraction": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Max All Policy Cameras Invisible Fraction",
+          "type": "number"
+        },
+        "min_workspace_cell_coverage_ratio": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Min Workspace Cell Coverage Ratio",
+          "type": "number"
+        },
+        "max_workspace_cell_total_variation": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Max Workspace Cell Total Variation",
+          "type": "number"
+        },
+        "max_radial_total_variation": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Max Radial Total Variation",
+          "type": "number"
+        },
+        "radial_histogram_bin_width_m": {
+          "default": 0.0001,
+          "exclusiveMinimum": 0.0,
+          "title": "Radial Histogram Bin Width M",
+          "type": "number"
+        },
+        "require_distance_decay_nonincreasing": {
+          "default": false,
+          "title": "Require Distance Decay Nonincreasing",
+          "type": "boolean"
+        },
+        "min_radius_span_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Min Radius Span M",
+          "type": "number"
+        },
+        "min_angle_span_deg": {
+          "default": 0.0,
+          "maximum": 360.0,
+          "minimum": 0.0,
+          "title": "Min Angle Span Deg",
+          "type": "number"
+        },
+        "polar_radial_bins": {
+          "default": 0,
+          "maximum": 64,
+          "minimum": 0,
+          "title": "Polar Radial Bins",
+          "type": "integer"
+        },
+        "polar_angular_bins": {
+          "default": 0,
+          "maximum": 72,
+          "minimum": 0,
+          "title": "Polar Angular Bins",
+          "type": "integer"
+        },
+        "min_polar_cell_coverage_ratio": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Min Polar Cell Coverage Ratio",
+          "type": "number"
+        },
+        "max_polar_cell_count_cv": {
+          "default": 10.0,
+          "minimum": 0.0,
+          "title": "Max Polar Cell Count Cv",
+          "type": "number"
+        },
+        "min_nearest_neighbor_min_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Min Nearest Neighbor Min M",
+          "type": "number"
+        },
+        "min_nearest_neighbor_median_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Min Nearest Neighbor Median M",
+          "type": "number"
+        },
+        "object_yaw_histogram_bins": {
+          "default": 0,
+          "maximum": 72,
+          "minimum": 0,
+          "title": "Object Yaw Histogram Bins",
+          "type": "integer"
+        },
+        "min_object_yaw_span_deg": {
+          "default": 0.0,
+          "maximum": 360.0,
+          "minimum": 0.0,
+          "title": "Min Object Yaw Span Deg",
+          "type": "number"
+        },
+        "min_object_yaw_bin_coverage_ratio": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Min Object Yaw Bin Coverage Ratio",
+          "type": "number"
+        },
+        "max_object_yaw_bin_count_cv": {
+          "default": 10.0,
+          "minimum": 0.0,
+          "title": "Max Object Yaw Bin Count Cv",
+          "type": "number"
+        },
+        "object_yaw_periodicity_deg": {
+          "default": 90.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 360.0,
+          "title": "Object Yaw Periodicity Deg",
+          "type": "number"
+        },
+        "relative_object_yaw_histogram_bins": {
+          "default": 0,
+          "maximum": 72,
+          "minimum": 0,
+          "title": "Relative Object Yaw Histogram Bins",
+          "type": "integer"
+        },
+        "min_relative_object_yaw_bin_coverage_ratio": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Min Relative Object Yaw Bin Coverage Ratio",
+          "type": "number"
+        },
+        "max_relative_object_yaw_bin_count_cv": {
+          "default": 10.0,
+          "minimum": 0.0,
+          "title": "Max Relative Object Yaw Bin Count Cv",
+          "type": "number"
+        }
+      },
+      "title": "DistributionReportSpec",
       "type": "object"
     },
     "EpisodeSubsetSpec": {
@@ -475,6 +685,19 @@
           "default": null,
           "title": "Lift Target Height"
         },
+        "lift_success_height": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lift Success Height"
+        },
         "lift_controller_z_error": {
           "anyOf": [
             {
@@ -523,6 +746,22 @@
           ],
           "default": null,
           "title": "Grip The Cube Start Profile"
+        },
+        "initial_qpos_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "exact",
+                "reset_only"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Initial Qpos Mode"
         },
         "move_target_z_offset": {
           "anyOf": [
@@ -591,7 +830,8 @@
               "mapping": {
                 "camera2_visual_alignment": "#/$defs/Camera2VisualAlignmentGateSpec",
                 "geometry_contact_alignment": "#/$defs/GeometryContactAlignmentGateSpec",
-                "gripper_floor_clearance": "#/$defs/GripperFloorClearanceGateSpec"
+                "gripper_floor_clearance": "#/$defs/GripperFloorClearanceGateSpec",
+                "initial_target_visibility": "#/$defs/InitialTargetVisibilityGateSpec"
               },
               "propertyName": "kind"
             },
@@ -604,6 +844,9 @@
               },
               {
                 "$ref": "#/$defs/GripperFloorClearanceGateSpec"
+              },
+              {
+                "$ref": "#/$defs/InitialTargetVisibilityGateSpec"
               }
             ]
           },
@@ -875,6 +1118,30 @@
           ],
           "default": null,
           "title": "Camera Rig Config"
+        },
+        "include_camera3_duplicate": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Include Camera3 Duplicate"
+        },
+        "workspace_spawn_catalog": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Spawn Catalog"
         }
       },
       "required": [
@@ -903,7 +1170,8 @@
           "enum": [
             "regenerate_teacher",
             "render_derivative",
-            "episode_subset"
+            "episode_subset",
+            "phase_subset"
           ],
           "title": "Operation",
           "type": "string"
@@ -1111,6 +1379,46 @@
       "title": "HardwareStartPoseSpec",
       "type": "object"
     },
+    "InitialTargetVisibilityGateSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "initial_target_visibility",
+          "title": "Kind",
+          "type": "string"
+        },
+        "camera_keys": {
+          "items": {
+            "enum": [
+              "observation.images.camera1",
+              "observation.images.camera2"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Camera Keys",
+          "type": "array"
+        },
+        "mode": {
+          "const": "any",
+          "default": "any",
+          "title": "Mode",
+          "type": "string"
+        },
+        "min_area_pixels": {
+          "default": 20,
+          "exclusiveMinimum": 0,
+          "title": "Min Area Pixels",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "camera_keys"
+      ],
+      "title": "InitialTargetVisibilityGateSpec",
+      "type": "object"
+    },
     "LookupBuilderSpec": {
       "additionalProperties": false,
       "properties": {
@@ -1251,6 +1559,86 @@
       "title": "OverlapAuditSpec",
       "type": "object"
     },
+    "PhaseSubsetSourceSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "source_dataset_root": {
+          "title": "Source Dataset Root",
+          "type": "string"
+        },
+        "phase_order": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Phase Order",
+          "type": "array"
+        },
+        "phases": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Phases",
+          "type": "array"
+        },
+        "trajectory_variants": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Trajectory Variants",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_dataset_root",
+        "phase_order",
+        "phases"
+      ],
+      "title": "PhaseSubsetSourceSpec",
+      "type": "object"
+    },
+    "PhaseSubsetSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "phase_id": {
+          "minLength": 1,
+          "title": "Phase Id",
+          "type": "string"
+        },
+        "prompt": {
+          "minLength": 1,
+          "title": "Prompt",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/PhaseSubsetSourceSpec"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "reconstruct_sim_snapshots": {
+          "default": true,
+          "title": "Reconstruct Sim Snapshots",
+          "type": "boolean"
+        },
+        "entry_replay_qpos_rmse_max": {
+          "default": 0.001,
+          "exclusiveMinimum": 0,
+          "title": "Entry Replay Qpos Rmse Max",
+          "type": "number"
+        }
+      },
+      "required": [
+        "phase_id",
+        "prompt",
+        "sources"
+      ],
+      "title": "PhaseSubsetSpec",
+      "type": "object"
+    },
     "RenderEnvironmentSpec": {
       "additionalProperties": false,
       "properties": {
@@ -1387,7 +1775,9 @@
           "default": "neutral",
           "enum": [
             "neutral",
-            "black_table_clutter"
+            "black_table_clutter",
+            "pbr_workbench_v4",
+            "pbr_workshop_v4"
           ],
           "title": "Scene Profile",
           "type": "string"
@@ -1413,6 +1803,51 @@
           "exclusiveMinimum": 0,
           "title": "Height",
           "type": "integer"
+        },
+        "source_width": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Width"
+        },
+        "source_height": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Height"
+        },
+        "policy_resize": {
+          "default": "direct_square_render",
+          "enum": [
+            "direct_square_render",
+            "center_crop_square_then_resize"
+          ],
+          "title": "Policy Resize",
+          "type": "string"
+        },
+        "profile_from_camera_rig": {
+          "default": false,
+          "title": "Profile From Camera Rig",
+          "type": "boolean"
+        },
+        "preserve_pinhole_renders": {
+          "default": false,
+          "title": "Preserve Pinhole Renders",
+          "type": "boolean"
         },
         "samples": {
           "default": 32,
@@ -1468,7 +1903,8 @@
           "default": "studio_small_08",
           "enum": [
             "studio_small_08",
-            "flat"
+            "flat",
+            "directional_key_fill_rim_v4"
           ],
           "title": "Lighting Profile",
           "type": "string"
@@ -1653,7 +2089,8 @@
           "enum": [
             "generated",
             "render_derivative",
-            "episode_subset"
+            "episode_subset",
+            "phase_subset"
           ],
           "title": "Kind",
           "type": "string"
@@ -1773,6 +2210,17 @@
             }
           ],
           "default": null
+        },
+        "phase_subset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PhaseSubsetSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -1874,6 +2322,11 @@
       "title": "Subset Script",
       "type": "string"
     },
+    "phase_subset_script": {
+      "default": "scripts/materialize_so101_phase_dataset.py",
+      "title": "Phase Subset Script",
+      "type": "string"
+    },
     "lookup_builder_script": {
       "anyOf": [
         {
@@ -1925,6 +2378,21 @@
       "title": "Render Determinism Script",
       "type": "string"
     },
+    "workspace_catalog_distribution_report_script": {
+      "default": "scripts/build_so101_workspace_catalog_distribution_report.py",
+      "title": "Workspace Catalog Distribution Report Script",
+      "type": "string"
+    },
+    "workspace_catalog_distribution_report_root": {
+      "default": "_workspace/so101_workspace_catalog_reports",
+      "title": "Workspace Catalog Distribution Report Root",
+      "type": "string"
+    },
+    "distribution_report_script": {
+      "default": "scripts/build_so101_dataset_distribution_report.py",
+      "title": "Distribution Report Script",
+      "type": "string"
+    },
     "lookup_cache": {
       "anyOf": [
         {
@@ -1949,6 +2417,9 @@
     },
     "sidecar": {
       "$ref": "#/$defs/SidecarSpec"
+    },
+    "distribution_report": {
+      "$ref": "#/$defs/DistributionReportSpec"
     },
     "render_replay": {
       "anyOf": [

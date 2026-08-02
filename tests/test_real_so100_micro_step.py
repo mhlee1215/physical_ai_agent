@@ -3,10 +3,28 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
-from scripts.real_so100_micro_step import _probe_motion_video, run_micro_step
+from scripts.real_so100_micro_step import _enable_torque_at_current_pose, _probe_motion_video, run_micro_step
 
 
 class RealSO100MicroStepTest(TestCase):
+    def test_current_goal_is_preloaded_before_torque_enable(self) -> None:
+        class FakeBus:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def sync_write(self, register, values, **kwargs):
+                self.calls.append(("sync_write", register, values, kwargs))
+
+            def enable_torque(self, **kwargs):
+                self.calls.append(("enable_torque", kwargs))
+
+        bus = FakeBus()
+        targets = _enable_torque_at_current_pose(bus, {"shoulder_pan": 2161.2, "wrist_roll": 2027.0})
+
+        self.assertEqual(targets, {"shoulder_pan": 2161, "wrist_roll": 2027})
+        self.assertEqual(bus.calls[0][0:3], ("sync_write", "Goal_Position", targets))
+        self.assertEqual(bus.calls[1], ("enable_torque", {"num_retry": 3}))
+
     def test_dry_run_does_not_connect_or_send_action(self) -> None:
         with TemporaryDirectory() as tmpdir:
             plan_path = Path(tmpdir) / "plan.json"

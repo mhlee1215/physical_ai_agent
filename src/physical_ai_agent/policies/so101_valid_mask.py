@@ -68,6 +68,66 @@ def execution_horizon_from_valid_probs(
     return max(1, min(horizon, int(stop_index))), "valid_mask_stop"
 
 
+def valid_mask_boundary_metrics(
+    valid_probs: Any,
+    valid_labels: Any,
+    *,
+    threshold: float = 0.5,
+    consecutive: int = 2,
+) -> dict[str, Any]:
+    """Measure termination-boundary quality instead of token accuracy alone."""
+
+    probs = torch.as_tensor(valid_probs).detach().float()
+    labels = torch.as_tensor(valid_labels, device=probs.device).detach().float()
+    if probs.ndim == 1:
+        probs = probs.unsqueeze(0)
+    if labels.ndim == 1:
+        labels = labels.unsqueeze(0)
+    horizon = min(int(probs.shape[1]), int(labels.shape[1]))
+    probs = probs[:, :horizon]
+    labels = labels[:, :horizon]
+
+    predicted_horizons = []
+    target_horizons = []
+    for predicted_row, target_row in zip(probs, labels, strict=True):
+        predicted_stop = first_invalid_step(
+            predicted_row,
+            threshold=threshold,
+            consecutive=consecutive,
+        )
+        target_stop = first_invalid_step(target_row, threshold=0.5, consecutive=1)
+        predicted_horizons.append(horizon if predicted_stop is None else int(predicted_stop))
+        target_horizons.append(horizon if target_stop is None else int(target_stop))
+
+    predicted = torch.tensor(predicted_horizons, dtype=torch.float32, device=probs.device)
+    target = torch.tensor(target_horizons, dtype=torch.float32, device=probs.device)
+    predicted_stop = predicted < horizon
+    target_stop = target < horizon
+    true_positive = (predicted_stop & target_stop).float().sum()
+    precision = true_positive / predicted_stop.float().sum().clamp_min(1.0)
+    recall = true_positive / target_stop.float().sum().clamp_min(1.0)
+    return {
+        "valid_mask_boundary_mae_steps": (predicted - target).abs().mean(),
+        "valid_mask_stop_precision": precision,
+        "valid_mask_stop_recall": recall,
+        "valid_mask_premature_stop_rate": (predicted < target).float().mean(),
+        "valid_mask_terminal_sample_fraction": target_stop.float().mean(),
+    }
+
+
+def update_valid_mask_requery_stop(
+    current_streak: int,
+    *,
+    predicted_stop: bool,
+    required_confirmations: int,
+) -> tuple[int, bool]:
+    """Debounce a chunk-end prediction across consecutive policy re-queries."""
+
+    required = max(1, int(required_confirmations))
+    streak = int(current_streak) + 1 if predicted_stop else 0
+    return streak, streak >= required
+
+
 class SO101ValidMaskHead(torch.nn.Module):
     """Small termination head trained from action_is_pad labels.
 

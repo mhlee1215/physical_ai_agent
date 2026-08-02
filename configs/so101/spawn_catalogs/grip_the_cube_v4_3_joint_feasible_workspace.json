@@ -1,0 +1,1428 @@
+{
+  "base_contract": {
+    "base_world_rotation_xy": [
+      [
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "reference": "shoulder_pan_axis_projection",
+    "world_xyz_m": [
+      0.015478381254367828,
+      5.256023430000001e-06,
+      0.0696
+    ]
+  },
+  "camera1_bin_counts": {
+    "10": 3,
+    "11": 2,
+    "12": 11,
+    "13": 2,
+    "5": 3,
+    "6": 11,
+    "7": 11,
+    "9": 22
+  },
+  "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+  "catalog_id": "grip_the_cube_v4_3_joint_feasibility_map_v1_strict_dataset_contract",
+  "cell_count": 65,
+  "cells": [
+    {
+      "angle_from_base_deg": -19.999999999999996,
+      "base_xy_m": [
+        0.20673237657289986,
+        -0.07524443153164712
+      ],
+      "camera1_grid_bin": 11,
+      "camera1_normalized_centroid": [
+        0.8836158192090395,
+        0.5528414755732801
+      ],
+      "cell_area_m2": 0.0014398966328953218,
+      "object_yaw_deg": -20.0,
+      "point_id": "r000_a000_yaw00",
+      "radius_from_base_m": 0.22,
+      "uniform_area_weight": 0.013114754098360656,
+      "world_xy_m": [
+        0.22221075782726768,
+        -0.07523917550821711
+      ]
+    },
+    {
+      "angle_from_base_deg": -19.999999999999996,
+      "base_xy_m": [
+        0.22082776588468847,
+        -0.08037473368153214
+      ],
+      "camera1_grid_bin": 11,
+      "camera1_normalized_centroid": [
+        0.8827670198514188,
+        0.5234685178419193
+      ],
+      "cell_area_m2": 0.0015380714033200026,
+      "object_yaw_deg": -20.0,
+      "point_id": "r001_a000_yaw00",
+      "radius_from_base_m": 0.235,
+      "uniform_area_weight": 0.014008941877794334,
+      "world_xy_m": [
+        0.2363061471390563,
+        -0.08036947765810214
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2349231551964771,
+        -0.08550503583141718
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8808459628392842,
+        0.49793646716328455
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": -20.0,
+      "point_id": "r002_a000_yaw00",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.25040153645084495,
+        -0.08549977980798718
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2349231551964771,
+        -0.08550503583141718
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8803921568627451,
+        0.4977777777777778
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 2.5,
+      "point_id": "r002_a000_yaw01",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.25040153645084495,
+        -0.08549977980798718
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2349231551964771,
+        -0.08550503583141718
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8809363392934265,
+        0.4968299213958711
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 25.0,
+      "point_id": "r002_a000_yaw02",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.25040153645084495,
+        -0.08549977980798718
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2349231551964771,
+        -0.08550503583141718
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8817191523073876,
+        0.495702119231531
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 47.5,
+      "point_id": "r002_a000_yaw03",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.25040153645084495,
+        -0.08549977980798718
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.24901854450826574,
+        -0.09063533798130222
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8811683006535947,
+        0.47822712418300656
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": -20.0,
+      "point_id": "r003_a000_yaw00",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.26449692576263356,
+        -0.09063008195787221
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.24901854450826574,
+        -0.09063533798130222
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8807869456507436,
+        0.4777733912356889
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 2.5,
+      "point_id": "r003_a000_yaw01",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.26449692576263356,
+        -0.09063008195787221
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.24901854450826574,
+        -0.09063533798130222
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.880238238640166,
+        0.4774944790202771
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 25.0,
+      "point_id": "r003_a000_yaw02",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.26449692576263356,
+        -0.09063008195787221
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.24901854450826574,
+        -0.09063533798130222
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8799385425812116,
+        0.47790459467369034
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 47.5,
+      "point_id": "r003_a000_yaw03",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.26449692576263356,
+        -0.09063008195787221
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2631139338200544,
+        -0.09576564013118725
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8845525389643036,
+        0.4578682755153344
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": -20.0,
+      "point_id": "r004_a000_yaw00",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.2785923150744222,
+        -0.09576038410775725
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2631139338200544,
+        -0.09576564013118725
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8840438927864724,
+        0.45797205732445884
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 2.5,
+      "point_id": "r004_a000_yaw01",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.2785923150744222,
+        -0.09576038410775725
+      ]
+    },
+    {
+      "angle_from_base_deg": -20.0,
+      "base_xy_m": [
+        0.2631139338200544,
+        -0.09576564013118725
+      ],
+      "camera1_grid_bin": 7,
+      "camera1_normalized_centroid": [
+        0.8837496642492613,
+        0.45746709642761213
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 47.5,
+      "point_id": "r004_a000_yaw03",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.2785923150744222,
+        -0.09576038410775725
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.219162833580184,
+        0.019174263404484797
+      ],
+      "camera1_grid_bin": 10,
+      "camera1_normalized_centroid": [
+        0.6819314044836176,
+        0.5308552085329246
+      ],
+      "cell_area_m2": 0.0014398966328953218,
+      "object_yaw_deg": 5.0,
+      "point_id": "r000_a001_yaw00",
+      "radius_from_base_m": 0.22,
+      "uniform_area_weight": 0.013114754098360656,
+      "world_xy_m": [
+        0.23464121483455183,
+        0.019179519427914796
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2341057540515602,
+        0.02048159954569967
+      ],
+      "camera1_grid_bin": 10,
+      "camera1_normalized_centroid": [
+        0.6772497078301519,
+        0.5053499545513569
+      ],
+      "cell_area_m2": 0.0015380714033200026,
+      "object_yaw_deg": 5.0,
+      "point_id": "r001_a001_yaw00",
+      "radius_from_base_m": 0.235,
+      "uniform_area_weight": 0.014008941877794334,
+      "world_xy_m": [
+        0.24958413530592802,
+        0.02048685556912967
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2490486745229364,
+        0.02178893568691454
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.6729832872746414,
+        0.48036583761021184
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 5.0,
+      "point_id": "r002_a001_yaw00",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.26452705577730423,
+        0.02179419171034454
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2490486745229364,
+        0.02178893568691454
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.6728181468665898,
+        0.4803921568627451
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 27.5,
+      "point_id": "r002_a001_yaw01",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.26452705577730423,
+        0.02179419171034454
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2490486745229364,
+        0.02178893568691454
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.6724823262638389,
+        0.48031212484994
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 50.0,
+      "point_id": "r002_a001_yaw02",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.26452705577730423,
+        0.02179419171034454
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2490486745229364,
+        0.02178893568691454
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.6730015082956259,
+        0.48061481002657475
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 72.5,
+      "point_id": "r002_a001_yaw03",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.26452705577730423,
+        0.02179419171034454
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2639915949943126,
+        0.023096271828129414
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.6691743364012271,
+        0.4563291983460051
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 5.0,
+      "point_id": "r003_a001_yaw00",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.2794699762486804,
+        0.023101527851559413
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2639915949943126,
+        0.023096271828129414
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.6684766214177978,
+        0.45596432552954297
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 27.5,
+      "point_id": "r003_a001_yaw01",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.2794699762486804,
+        0.023101527851559413
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2639915949943126,
+        0.023096271828129414
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.6682703321878579,
+        0.45584529344383806
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 50.0,
+      "point_id": "r003_a001_yaw02",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.2794699762486804,
+        0.023101527851559413
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.2639915949943126,
+        0.023096271828129414
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.668715247292947,
+        0.45633596722270997
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 72.5,
+      "point_id": "r003_a001_yaw03",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.2794699762486804,
+        0.023101527851559413
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.27893451546568876,
+        0.02440360796934429
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.6649645969498911,
+        0.43247549019607845
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 5.0,
+      "point_id": "r004_a001_yaw00",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.2944128967200566,
+        0.02440886399277429
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.27893451546568876,
+        0.02440360796934429
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.6642847743124096,
+        0.4322410843532044
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 27.5,
+      "point_id": "r004_a001_yaw01",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.2944128967200566,
+        0.02440886399277429
+      ]
+    },
+    {
+      "angle_from_base_deg": 5.0,
+      "base_xy_m": [
+        0.27893451546568876,
+        0.02440360796934429
+      ],
+      "camera1_grid_bin": 6,
+      "camera1_normalized_centroid": [
+        0.664520902700703,
+        0.43233444321124676
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 72.5,
+      "point_id": "r004_a001_yaw03",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.2944128967200566,
+        0.02440886399277429
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.1905255888325765,
+        0.10999999999999999
+      ],
+      "camera1_grid_bin": 10,
+      "camera1_normalized_centroid": [
+        0.5119711042311662,
+        0.5806888544891641
+      ],
+      "cell_area_m2": 0.0014398966328953218,
+      "object_yaw_deg": 30.0,
+      "point_id": "r000_a002_yaw00",
+      "radius_from_base_m": 0.22,
+      "uniform_area_weight": 0.013114754098360656,
+      "world_xy_m": [
+        0.20600397008694432,
+        0.11000525602342999
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.2035159698893431,
+        0.11749999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.49716339869281045,
+        0.557437908496732
+      ],
+      "cell_area_m2": 0.0015380714033200026,
+      "object_yaw_deg": 30.0,
+      "point_id": "r001_a002_yaw00",
+      "radius_from_base_m": 0.235,
+      "uniform_area_weight": 0.014008941877794334,
+      "world_xy_m": [
+        0.2189943511437109,
+        0.11750525602342998
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.21650635094610968,
+        0.12499999999999999
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.4835109882879326,
+        0.53501776549546
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 30.0,
+      "point_id": "r002_a002_yaw00",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.2319847322004775,
+        0.12500525602343
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.21650635094610968,
+        0.12499999999999999
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.48326883384932917,
+        0.535061919504644
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 52.5,
+      "point_id": "r002_a002_yaw01",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.2319847322004775,
+        0.12500525602343
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.21650635094610968,
+        0.12499999999999999
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.48257080610021785,
+        0.5352668845315903
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 75.0,
+      "point_id": "r002_a002_yaw02",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.2319847322004775,
+        0.12500525602343
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.21650635094610968,
+        0.12499999999999999
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.4838341091832416,
+        0.5354775003526591
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 97.5,
+      "point_id": "r002_a002_yaw03",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.2319847322004775,
+        0.12500525602343
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.22949673200287626,
+        0.13249999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.46967716379481084,
+        0.5129464580444972
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 30.0,
+      "point_id": "r003_a002_yaw00",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.24497511325724408,
+        0.13250525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.22949673200287626,
+        0.13249999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.46905882352941175,
+        0.5130065359477124
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 52.5,
+      "point_id": "r003_a002_yaw01",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.24497511325724408,
+        0.13250525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.22949673200287626,
+        0.13249999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.46895761741122566,
+        0.5131864429620645
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 75.0,
+      "point_id": "r003_a002_yaw02",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.24497511325724408,
+        0.13250525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.22949673200287626,
+        0.13249999999999998
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.46978642758218525,
+        0.5128653691960054
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 97.5,
+      "point_id": "r003_a002_yaw03",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.24497511325724408,
+        0.13250525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.24248711305964285,
+        0.13999999999999999
+      ],
+      "camera1_grid_bin": 5,
+      "camera1_normalized_centroid": [
+        0.4559504357298475,
+        0.4912990196078431
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 30.0,
+      "point_id": "r004_a002_yaw00",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.25796549431401067,
+        0.14000525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.24248711305964285,
+        0.13999999999999999
+      ],
+      "camera1_grid_bin": 5,
+      "camera1_normalized_centroid": [
+        0.45594423816038043,
+        0.49104292879942674
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 52.5,
+      "point_id": "r004_a002_yaw01",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.25796549431401067,
+        0.14000525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 29.999999999999996,
+      "base_xy_m": [
+        0.24248711305964285,
+        0.13999999999999999
+      ],
+      "camera1_grid_bin": 5,
+      "camera1_normalized_centroid": [
+        0.4563834422657952,
+        0.4916485112563544
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 97.5,
+      "point_id": "r004_a002_yaw03",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.25796549431401067,
+        0.14000525602342997
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.0,
+      "base_xy_m": [
+        0.12618681599723014,
+        0.1802134497435782
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.37097306212204506,
+        0.7017164498198033
+      ],
+      "cell_area_m2": 0.0014398966328953218,
+      "object_yaw_deg": 55.0,
+      "point_id": "r000_a003_yaw00",
+      "radius_from_base_m": 0.22,
+      "uniform_area_weight": 0.013114754098360656,
+      "world_xy_m": [
+        0.14166519725159796,
+        0.18021870576700819
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.0,
+      "base_xy_m": [
+        0.13479046254249583,
+        0.19250073040791307
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.3473459165597703,
+        0.6848207195650846
+      ],
+      "cell_area_m2": 0.0015380714033200026,
+      "object_yaw_deg": 55.0,
+      "point_id": "r001_a003_yaw00",
+      "radius_from_base_m": 0.235,
+      "uniform_area_weight": 0.014008941877794334,
+      "world_xy_m": [
+        0.15026884379686364,
+        0.19250598643134306
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1433941090877615,
+        0.20478801107224795
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.32410539215686274,
+        0.6682107843137255
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 55.0,
+      "point_id": "r002_a003_yaw00",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.15887249034212933,
+        0.20479326709567794
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1433941090877615,
+        0.20478801107224795
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.3236250597800096,
+        0.6681731229076996
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 77.5,
+      "point_id": "r002_a003_yaw01",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.15887249034212933,
+        0.20479326709567794
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1433941090877615,
+        0.20478801107224795
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.32349194454852004,
+        0.6685025602597727
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 100.0,
+      "point_id": "r002_a003_yaw02",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.15887249034212933,
+        0.20479326709567794
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1433941090877615,
+        0.20478801107224795
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.3241787206685953,
+        0.6684924461587913
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 122.5,
+      "point_id": "r002_a003_yaw03",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.15887249034212933,
+        0.20479326709567794
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1519977556330272,
+        0.21707529173658283
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.30111783030969397,
+        0.6517866959868059
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 55.0,
+      "point_id": "r003_a003_yaw00",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.16747613688739502,
+        0.21708054776001282
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1519977556330272,
+        0.21707529173658283
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.30062200106628756,
+        0.6518689651087021
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 77.5,
+      "point_id": "r003_a003_yaw01",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.16747613688739502,
+        0.21708054776001282
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1519977556330272,
+        0.21707529173658283
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.30042411949105663,
+        0.6521728440592538
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 100.0,
+      "point_id": "r003_a003_yaw02",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.16747613688739502,
+        0.21708054776001282
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.00000000000001,
+      "base_xy_m": [
+        0.1519977556330272,
+        0.21707529173658283
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.3007830194784184,
+        0.6521710994628874
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 122.5,
+      "point_id": "r003_a003_yaw03",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.16747613688739502,
+        0.21708054776001282
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.0,
+      "base_xy_m": [
+        0.1606014021782929,
+        0.22936257240091773
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.2782359049538819,
+        0.6355628855903732
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 55.0,
+      "point_id": "r004_a003_yaw00",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.17607978343266073,
+        0.22936782842434772
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.0,
+      "base_xy_m": [
+        0.1606014021782929,
+        0.22936257240091773
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.27800226473568146,
+        0.6357470647833602
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 77.5,
+      "point_id": "r004_a003_yaw01",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.17607978343266073,
+        0.22936782842434772
+      ]
+    },
+    {
+      "angle_from_base_deg": 55.0,
+      "base_xy_m": [
+        0.1606014021782929,
+        0.22936257240091773
+      ],
+      "camera1_grid_bin": 9,
+      "camera1_normalized_centroid": [
+        0.2778730035060382,
+        0.6357096480976496
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 122.5,
+      "point_id": "r004_a003_yaw03",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.17607978343266073,
+        0.22936782842434772
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.038202599086724694,
+        0.21665770566268577
+      ],
+      "camera1_grid_bin": 13,
+      "camera1_normalized_centroid": [
+        0.28236377423897735,
+        0.8889069439930669
+      ],
+      "cell_area_m2": 0.0014398966328953218,
+      "object_yaw_deg": 80.0,
+      "point_id": "r000_a004_yaw00",
+      "radius_from_base_m": 0.22,
+      "uniform_area_weight": 0.013114754098360656,
+      "world_xy_m": [
+        0.05368098034109252,
+        0.21666296168611576
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.040807321751728645,
+        0.23142982195786888
+      ],
+      "camera1_grid_bin": 13,
+      "camera1_normalized_centroid": [
+        0.25083160635527924,
+        0.8830331048408523
+      ],
+      "cell_area_m2": 0.0015380714033200026,
+      "object_yaw_deg": 80.0,
+      "point_id": "r001_a004_yaw00",
+      "radius_from_base_m": 0.235,
+      "uniform_area_weight": 0.014008941877794334,
+      "world_xy_m": [
+        0.05628570300609648,
+        0.23143507798129886
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.043412044416732604,
+        0.246201938253052
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.2194823529411765,
+        0.8772287581699346
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 80.0,
+      "point_id": "r002_a004_yaw00",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.058890425671100435,
+        0.246207194276482
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.043412044416732604,
+        0.246201938253052
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.2195775996774031,
+        0.87743333837391
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 102.5,
+      "point_id": "r002_a004_yaw01",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.058890425671100435,
+        0.246207194276482
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.043412044416732604,
+        0.246201938253052
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.21905337970663843,
+        0.8779676394979586
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 125.0,
+      "point_id": "r002_a004_yaw02",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.058890425671100435,
+        0.246207194276482
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.043412044416732604,
+        0.246201938253052
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.21908216369657782,
+        0.8782736687168164
+      ],
+      "cell_area_m2": 0.0016362461737446838,
+      "object_yaw_deg": 147.5,
+      "point_id": "r002_a004_yaw03",
+      "radius_from_base_m": 0.25,
+      "uniform_area_weight": 0.014903129657228018,
+      "world_xy_m": [
+        0.058890425671100435,
+        0.246207194276482
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04601676708173656,
+        0.26097405454823513
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.18848428260192965,
+        0.8712937026662517
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 80.0,
+      "point_id": "r003_a004_yaw00",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.061495148336104394,
+        0.2609793105716651
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04601676708173656,
+        0.26097405454823513
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.18839374133491782,
+        0.8718756189344424
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 102.5,
+      "point_id": "r003_a004_yaw01",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.061495148336104394,
+        0.2609793105716651
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04601676708173656,
+        0.26097405454823513
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.18826500297088533,
+        0.8724598930481283
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 125.0,
+      "point_id": "r003_a004_yaw02",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.061495148336104394,
+        0.2609793105716651
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04601676708173656,
+        0.26097405454823513
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.18805002315886984,
+        0.8722145025989398
+      ],
+      "cell_area_m2": 0.001734420944169365,
+      "object_yaw_deg": 147.5,
+      "point_id": "r003_a004_yaw03",
+      "radius_from_base_m": 0.265,
+      "uniform_area_weight": 0.0157973174366617,
+      "world_xy_m": [
+        0.061495148336104394,
+        0.2609793105716651
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04862148974674052,
+        0.2757461708434183
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.1576247079142538,
+        0.8654576856649396
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 80.0,
+      "point_id": "r004_a004_yaw00",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.06409987100110835,
+        0.2757514268668483
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04862148974674052,
+        0.2757461708434183
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.1575581956920699,
+        0.8657683763160438
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 102.5,
+      "point_id": "r004_a004_yaw01",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.06409987100110835,
+        0.2757514268668483
+      ]
+    },
+    {
+      "angle_from_base_deg": 80.0,
+      "base_xy_m": [
+        0.04862148974674052,
+        0.2757461708434183
+      ],
+      "camera1_grid_bin": 12,
+      "camera1_normalized_centroid": [
+        0.15737820901556498,
+        0.8664645239539115
+      ],
+      "cell_area_m2": 0.0018325957145940463,
+      "object_yaw_deg": 147.5,
+      "point_id": "r004_a004_yaw03",
+      "radius_from_base_m": 0.28,
+      "uniform_area_weight": 0.016691505216095383,
+      "world_xy_m": [
+        0.06409987100110835,
+        0.2757514268668483
+      ]
+    }
+  ],
+  "format": "so101_grasp_workspace_catalog_v1",
+  "home_qpos": [
+    0.0,
+    -1.5707963267948966,
+    1.5707963267948966,
+    0.66,
+    1.5707963267948966,
+    -0.17453
+  ],
+  "object_color": "green",
+  "object_half_size_m": 0.015,
+  "sampling_contract": {
+    "camera_grid_size": 4,
+    "note": "Do not drop object_yaw_deg: feasibility is coupled to the contacted cube face at each base-relative position.",
+    "object_yaw": "use_each_cell_object_yaw_deg",
+    "position": "probed_cell_center",
+    "strategy": "sample_cells_by_uniform_area_weight"
+  },
+  "source_config": "/Users/minhaeng/workspace/physical_ai_agent/configs/so101/workspace_probes/grip_the_cube_v4_3_joint_feasibility_map_v1.json",
+  "source_config_sha256": "3646297cab0f3d37ef6d16f51e8606eb7ac8a51f3ddb3c26391e0ba0ca6da2ed",
+  "success_contract": {
+    "dataset_contract_required": true,
+    "grasp_required": true,
+    "lift_height_m": 0.065,
+    "minimum_gripper_floor_clearance_m": 0.01,
+    "terminal_hold_steps": 12
+  },
+  "total_estimated_area_m2": 0.10979211825826829
+}

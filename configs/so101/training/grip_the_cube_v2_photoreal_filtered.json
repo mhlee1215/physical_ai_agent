@@ -1,0 +1,181 @@
+{
+  "name": "grip_the_cube_v2_photoreal_filtered",
+  "description": "SO101 grip/lift v2.5 continuation training with photoreal train, validation, and live closed-loop policy-camera rendering.",
+  "default_config": "configs/so101/training_defaults/grip_the_cube_v2_default.json",
+  "scenario": "grip_the_cube",
+  "execution_policy": "single_smolvla_teacher",
+  "task": "grip_the_cube_v2_5_photoreal_filtered",
+  "action_mode": "absolute_qpos",
+  "dataset": {
+    "train_datasets": [
+      {
+        "name": "grip_the_cube_v2_5_photoreal_filtered",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v2-5-photoreal-filtered",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v2_5_photoreal_filtered",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v2_5_photoreal_filtered/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 266,
+        "expected_frames": 44712,
+        "quality_note": "Photoreal filtered derivative with 266 visible camera1 starts; source frame/action/state values and terminal holds are preserved.",
+        "grid_balance": {
+          "camera_key": "observation.images.camera1",
+          "grid_size": 4,
+          "frame_index": 0,
+          "min_area": 20,
+          "bins": [5, 6, 9, 10],
+          "visible_episodes": 266,
+          "bin_source": "report",
+          "bin_counts": {
+            "5": 70,
+            "6": 70,
+            "9": 66,
+            "10": 60
+          }
+        }
+      },
+      {
+        "name": "grip_the_cube_v2_5_align_trajectory_photoreal_filtered",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v2-5-align-trajectory-photoreal-filtered",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v2_5_align_trajectory_photoreal_filtered",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v2_5_align_trajectory_photoreal_filtered/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 132,
+        "expected_frames": 19595,
+        "quality_note": "Photoreal filtered near-target correction derivative with 132 visible camera1 starts; source frame/action/state values and terminal holds are preserved.",
+        "grid_balance": {
+          "camera_key": "observation.images.camera1",
+          "grid_size": 4,
+          "frame_index": 0,
+          "min_area": 20,
+          "bins": [5, 6, 9, 10],
+          "visible_episodes": 132,
+          "bin_source": "report",
+          "bin_counts": {
+            "5": 36,
+            "6": 29,
+            "9": 33,
+            "10": 34
+          }
+        }
+      }
+    ],
+    "validation_dataset": {
+      "name": "grip_the_cube_v2_5_photoreal_validation",
+      "repo_id": "physical-ai-agent/so101-grip-the-cube-v2-5-photoreal-validation",
+      "root": "_workspace/so101_lerobot/grip_the_cube_v2_5_photoreal_validation",
+      "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v2_5_photoreal_validation/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+      "expected_episodes": 50,
+      "expected_frames": 8396,
+      "quality_note": "Photoreal held-out home-start validation derivative with 50 successful lift trajectories; state/action/timing and the clean closed-loop start subset are preserved from v2.5 validation."
+    },
+    "camera_contract": {
+      "observation.images.camera1": "egocentric_cam",
+      "observation.images.camera2": "wrist_cam",
+      "observation.images.camera3": "wrist_cam duplicate"
+    },
+    "prompt_contract": {
+      "task": "grip the {color} {shape} and lift",
+      "generated_task": "grip the green cube and lift",
+      "applies_to": [
+        "grip_the_cube_v2_5_photoreal_filtered",
+        "grip_the_cube_v2_5_align_trajectory_photoreal_filtered",
+        "grip_the_cube_v2_5_photoreal_validation"
+      ]
+    },
+    "generation": {
+      "source_dataset": "photoreal_filtered_derivatives_of_v2_5_teacher_trajectories",
+      "skill_mode": "grip_the_cube_v1",
+      "target_object_color": "green",
+      "target_object_shape": "cube",
+      "phases": [
+        "move_to_cube",
+        "roll_align_with_cube_edge",
+        "gripper_descend",
+        "settle_aligned",
+        "close",
+        "lift",
+        "terminal_hold"
+      ],
+      "alignment_contract": {
+        "authoritative_geometry": "jaw_line_parallel_to_contact_face_normal_through_cube_center",
+        "authoritative_geometry_metric": "cube_face_normal_parallel_error_deg",
+        "maximum_error_deg": 3.0,
+        "roll_alignment_phase": "roll_align_with_cube_edge",
+        "roll_alignment_meaning": "adjust wrist_roll above the cube so the gripper jaw axis aligns with the selected contact face normal before descending",
+        "descend_phase": "gripper_descend",
+        "pre_close_required": true,
+        "pre_close_edge_parallel_threshold_deg": 3.0,
+        "pre_close_static_finger_xy_threshold": 0.012,
+        "diagonal_edge_candidates_allowed": false,
+        "teacher_time_wrist_roll_refinement": true,
+        "close_phase_contact_edge_gate": true
+      },
+      "dataset_generation_augmentation": {
+        "kind": "photoreal_rerender_and_quality_filter",
+        "terminal_hold_included": true,
+        "balanced_camera1_bins": [5, 6, 9, 10]
+      }
+    }
+  },
+  "training_config": {
+    "data_loading": {
+      "predecoded_image_cache": {
+        "root_env": "SO101_PREDECODED_CACHE_ROOT",
+        "default_root": "_workspace/so101_image_cache",
+        "train": false,
+        "validation": "grip_the_cube_v2_5_photoreal_validation"
+      }
+    },
+    "closed_loop": {
+      "observation_renderer": {
+        "mode": "blender_cycles_live",
+        "render_policy_inference_only": true,
+        "camera_keys": [
+          "observation.images.camera1",
+          "observation.images.camera2"
+        ],
+        "width": 256,
+        "height": 256,
+        "samples": 4,
+        "denoise": true,
+        "cycles_seed": 98200,
+        "lighting_profile": "studio_small_08",
+        "key_light_power": 42.0,
+        "fill_light_power": 5.0,
+        "world_strength": 0.28,
+        "hdri_rotation_deg": 35.0,
+        "exposure": -1.3,
+        "color_management": "Filmic",
+        "color_look": "Medium High Contrast",
+        "gamma": 1.0,
+        "output_format": "PNG",
+        "sample_clamp_indirect": 0.85,
+        "background_wall": false,
+        "stable_tabletop": true,
+        "scene_profile": "black_table_clutter",
+        "robot_material": "matte_pla",
+        "material_profile": "configs/so101/render_profiles/black_arm_green_white_gripper.json",
+        "camera_lens": 48.0,
+        "asset_root": "_workspace/photoreal_assets",
+        "blender_bin": "blender",
+        "max_mesh_geoms": 128
+      },
+      "test_cases": [
+        {
+          "id": "grip_the_cube_v2_5_photoreal_clean_valid_mask_200",
+          "description": "Photoreal held-out starts and live Blender policy cameras with two-confirmation valid-mask early stop and a 200-step hard cap.",
+          "episodes": 10,
+          "steps": 200,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "grip the green cube and lift",
+          "env_object_color": "green",
+          "success_metric": "grasped",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v2_5_photoreal_validation/meta/closed_loop/grip_the_cube_v2_5_validation_clean_start10.json",
+          "start_dataset": {
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v2-5-photoreal-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v2_5_photoreal_validation"
+          }
+        }
+      ]
+    }
+  }
+}

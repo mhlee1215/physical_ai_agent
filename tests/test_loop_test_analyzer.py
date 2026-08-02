@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
 import io
+import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
-
-import sys
 
 sys.path.insert(0, str(Path("scripts").resolve()))
 
@@ -151,6 +151,324 @@ class LoopTestAnalyzerTest(unittest.TestCase):
 
         self.assertEqual(item["status"], "available")
         self.assertEqual(item["frames"], 20)
+
+    def test_dataset_catalog_exposes_explicit_creation_date(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "cube"
+            (root / "meta").mkdir(parents=True)
+            (root / "meta" / "info.json").write_text(
+                json.dumps({"created_at": "2026-07-28T12:34:56Z"}),
+                encoding="utf-8",
+            )
+            dataset = {
+                "root": root,
+                "info": {
+                    "total_episodes": 1,
+                    "total_frames": 10,
+                    "fps": 12,
+                    "features": {
+                        "observation.images.camera1": {"shape": [256, 256, 3]}
+                    },
+                },
+                "camera_keys": ["observation.images.camera1"],
+                "episode_lengths": [10],
+                "size_bytes": 100,
+                "data_bytes": 60,
+                "image_bytes": 40,
+            }
+            with patch.object(dataset_viewer, "_dataset_metadata", return_value=dataset):
+                item = dataset_viewer._dataset_catalog_item(
+                    Path(tmpdir), "cube", root, category="generated"
+                )
+
+        self.assertEqual(item["created_at"], "2026-07-28T12:34:56Z")
+        self.assertEqual(item["created_at_source"], "meta/info.json:created_at")
+        self.assertEqual(item["summary"]["created_at"], "2026-07-28T12:34:56Z")
+        self.assertGreater(item["created_at_epoch"], 0)
+
+    def test_dataset_catalog_progress_reports_each_processed_dataset(self) -> None:
+        repo_root = Path("/tmp/progress-repo")
+        first_root = repo_root / "first"
+        second_root = repo_root / "second"
+        progress_events: list[tuple[int, int, str]] = []
+
+        def catalog_item(_repo_root: Path, split: str, root: Path, *, category: str):
+            summary = {"name": split, "root": str(root), "episodes": 1, "frames": 1}
+            return {
+                "name": split,
+                "status": "available",
+                "category": category,
+                "summary": summary,
+            }
+
+        with (
+            patch.object(dataset_viewer, "_official_dataset_roots", return_value={"first": first_root}),
+            patch.object(dataset_viewer, "_skill_dataset_roots", return_value={}),
+            patch.object(dataset_viewer, "_generation_recipe_dataset_roots", return_value={"second": second_root}),
+            patch.object(dataset_viewer, "_discover_so101_photoreal_datasets", return_value={}),
+            patch.object(dataset_viewer, "_discover_so101_photoreal_lerobot_datasets", return_value={}),
+            patch.object(dataset_viewer, "_generation_closed_loop_views", return_value={}),
+            patch.object(dataset_viewer, "_discover_temporary_datasets", return_value={}),
+            patch.object(dataset_viewer, "_discover_mycobot_datasets", return_value={}),
+            patch.object(dataset_viewer, "_dataset_catalog_item", side_effect=catalog_item),
+            patch.object(dataset_viewer, "ARCHIVED_DATASET_SPLITS", []),
+        ):
+            payload = dataset_viewer._build_datasets_payload(
+                repo_root,
+                progress=lambda completed, total, message: progress_events.append(
+                    (completed, total, message)
+                ),
+            )
+
+        self.assertEqual(set(payload["datasets"]), {"first", "second"})
+        self.assertEqual(progress_events[0], (0, 2, "Reading dataset metadata"))
+        self.assertEqual(progress_events[-1], (2, 2, "Finalizing catalog"))
+        self.assertEqual([event[0] for event in progress_events[1:3]], [1, 2])
+
+    def test_dataset_catalog_progress_endpoint_exposes_current_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            cache_key = str(repo_root.resolve())
+            with dataset_viewer.DATASETS_PROGRESS_LOCK:
+                dataset_viewer.DATASETS_PROGRESS.pop(cache_key, None)
+            idle = _handle_viewer_request(repo_root, "/api/datasets/progress")
+            dataset_viewer._set_datasets_progress(
+                repo_root,
+                status="loading",
+                percent=42,
+                completed=21,
+                total=50,
+                message="Reading cube_train (21/50)",
+            )
+            loading = _handle_viewer_request(repo_root, "/api/datasets/progress")
+            with dataset_viewer.DATASETS_PROGRESS_LOCK:
+                dataset_viewer.DATASETS_PROGRESS.pop(cache_key, None)
+
+        self.assertEqual(idle["status"], "idle")
+        self.assertEqual(idle["percent"], 0)
+        self.assertEqual(loading["status"], "loading")
+        self.assertEqual(loading["percent"], 42)
+        self.assertEqual(loading["completed"], 21)
+        self.assertEqual(loading["total"], 50)
+
+    def test_dataset_catalog_remote_page_loads_only_requested_ten_summaries(self) -> None:
+        candidates = [
+            {
+                "name": f"cube_{index:02d}",
+                "root": Path(f"/tmp/cube_{index:02d}"),
+                "category": "generated",
+                "loader": "lerobot",
+                "platform": "so101",
+                "platform_label": "SO101",
+                "split_key": "train",
+                "split_label": "Train",
+                "render_key": "simulation",
+                "render_label": "Standard sim",
+                "created_at": f"2026-07-{index + 1:02d}T00:00:00Z",
+                "created_at_epoch": float(index + 1),
+            }
+            for index in range(25)
+        ]
+
+        def load_candidate(_repo_root: Path, candidate: dict[str, object]) -> dict[str, object]:
+            name = str(candidate["name"])
+            return {
+                "status": "available",
+                "detail": "ready",
+                "summary": {
+                    "name": name,
+                    "root": str(candidate["root"]),
+                    "episodes": 2,
+                    "frames": 20,
+                    "episode_lengths": [10, 10],
+                },
+            }
+
+        with (
+            patch.object(dataset_viewer, "_dataset_catalog_candidates", return_value=candidates),
+            patch.object(dataset_viewer, "_load_dataset_catalog_candidate", side_effect=load_candidate) as loader,
+        ):
+            payload = dataset_viewer._dataset_catalog_page_payload(
+                Path("/tmp/catalog-repo"),
+                {"page": ["2"], "size": ["10"], "sort": ["createdEpoch"], "dir": ["desc"]},
+            )
+
+        self.assertEqual(payload["total"], 25)
+        self.assertEqual(payload["last_page"], 3)
+        self.assertEqual(payload["page"], 2)
+        self.assertEqual(len(payload["data"]), 10)
+        self.assertEqual(loader.call_count, 10)
+        self.assertEqual(payload["data"][0]["name"], "cube_14")
+        self.assertEqual(payload["data"][-1]["name"], "cube_05")
+
+    def test_dataset_catalog_row_exposes_persistent_trainable_mark(self) -> None:
+        root = Path("/tmp/marked_train").resolve()
+        candidate = {
+            "name": "marked_train",
+            "root": root,
+            "category": "generated",
+            "loader": "lerobot",
+            "platform": "so101",
+            "platform_label": "SO101",
+            "split_key": "train",
+            "split_label": "Train",
+            "render_key": "simulation",
+            "render_label": "Standard sim",
+            "created_at": "2026-08-01T00:00:00Z",
+            "created_at_epoch": 1.0,
+        }
+        row = dataset_viewer._dataset_catalog_remote_row(
+            candidate,
+            {
+                "status": "available",
+                "summary": {"root": str(root), "episodes": 4, "frames": 40},
+            },
+            registry_by_root={},
+            marked_trainable_roots={root},
+        )
+
+        self.assertTrue(row["markedTrainable"])
+        self.assertEqual(row["markedRoles"], ["training"])
+        self.assertIn("validation", row["roleEligibility"])
+        self.assertIn("loop_test", row["roleEligibility"])
+        self.assertFalse(row["trainingEligible"])
+        self.assertIn("not registered", row["trainingEligibilityReason"])
+
+    def test_dataset_catalog_splits_family_and_version_without_rewriting_data(self) -> None:
+        cases = {
+            "grip_the_cube_v4_3": ("grip_the_cube", "grip the cube", "v4.3"),
+            "grip_the_cube_v4_3_at_validation": (
+                "grip_the_cube",
+                "grip the cube",
+                "v4.3_at",
+            ),
+            "grip_the_cube_v4_3_near": (
+                "grip_the_cube",
+                "grip the cube",
+                "v4.3_near",
+            ),
+            "grip_the_cube_near_v1_train200": (
+                "grip_the_cube",
+                "grip the cube",
+                "v1_near",
+            ),
+            "grip_the_cube_real_pose_canary_v1": (
+                "grip_the_cube",
+                "grip the cube",
+                "v1_real_pose_canary",
+            ),
+            "grip_the_cube_v2_5_align_trajectory_photoreal_validation": (
+                "grip_the_cube",
+                "grip the cube",
+                "v2.5_align_trajectory",
+            ),
+            "pick_cube_train": ("pick_cube", "pick cube", "Unversioned"),
+        }
+
+        for name, expected in cases.items():
+            with self.subTest(name=name):
+                identity = dataset_viewer._dataset_catalog_identity(name)
+                self.assertEqual(
+                    (
+                        identity["family_key"],
+                        identity["family_label"],
+                        identity["version_label"],
+                    ),
+                    expected,
+                )
+
+    def test_dataset_catalog_remote_filters_before_loading_summaries(self) -> None:
+        candidates = [
+            {
+                "name": f"cube_{index}",
+                "root": Path(f"/tmp/cube_{index}"),
+                "category": "generated",
+                "loader": "lerobot",
+                "platform": "so101",
+                "platform_label": "SO101",
+                "split_key": "valid" if index % 2 else "train",
+                "split_label": "Validation" if index % 2 else "Train",
+                "render_key": "photoreal" if index % 3 == 1 else "simulation",
+                "render_label": "Photoreal" if index % 3 == 1 else "Standard sim",
+                "created_at": "2026-07-01T00:00:00Z",
+                "created_at_epoch": float(index),
+            }
+            for index in range(30)
+        ]
+
+        def load_candidate(_repo_root: Path, candidate: dict[str, object]) -> dict[str, object]:
+            return {
+                "status": "available",
+                "summary": {
+                    "name": candidate["name"],
+                    "root": str(candidate["root"]),
+                    "episodes": 1,
+                    "frames": 1,
+                    "episode_lengths": [1],
+                },
+            }
+
+        with (
+            patch.object(dataset_viewer, "_dataset_catalog_candidates", return_value=candidates),
+            patch.object(dataset_viewer, "_load_dataset_catalog_candidate", side_effect=load_candidate) as loader,
+        ):
+            payload = dataset_viewer._dataset_catalog_page_payload(
+                Path("/tmp/catalog-repo"),
+                {"page": ["1"], "size": ["10"], "status": ["Validation"], "type": ["Photoreal"]},
+            )
+
+        self.assertEqual(payload["total"], 5)
+        self.assertEqual(loader.call_count, 5)
+        self.assertTrue(all(row["splitLabel"] == "Validation" for row in payload["data"]))
+        self.assertTrue(all(row["renderLabel"] == "Photoreal" for row in payload["data"]))
+
+    def test_dataset_catalog_filters_family_and_version_before_loading(self) -> None:
+        candidates = [
+            {
+                "name": name,
+                "root": Path(f"/tmp/{name}"),
+                "category": "generated",
+                "loader": "lerobot",
+                "platform": "so101",
+                "platform_label": "SO101",
+                "split_key": "train",
+                "split_label": "Train",
+                "render_key": "simulation",
+                "render_label": "Standard sim",
+                "created_at": "2026-08-01T00:00:00Z",
+                "created_at_epoch": 1.0,
+            }
+            for name in (
+                "grip_the_cube_v4_3",
+                "grip_the_cube_v4_3_at",
+                "grip_the_cube_v4_3_near",
+                "pick_cube_v1",
+            )
+        ]
+
+        def load_candidate(_repo_root: Path, candidate: dict[str, object]) -> dict[str, object]:
+            return {
+                "status": "available",
+                "summary": {
+                    "name": candidate["name"],
+                    "root": str(candidate["root"]),
+                    "episodes": 1,
+                },
+            }
+
+        with (
+            patch.object(dataset_viewer, "_dataset_catalog_candidates", return_value=candidates),
+            patch.object(dataset_viewer, "_load_dataset_catalog_candidate", side_effect=load_candidate) as loader,
+        ):
+            payload = dataset_viewer._dataset_catalog_page_payload(
+                Path("/tmp/catalog-repo"),
+                {"family": ["grip the cube"], "version": ["v4.3_at"]},
+            )
+
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(loader.call_count, 1)
+        self.assertEqual(payload["data"][0]["familyLabel"], "grip the cube")
+        self.assertEqual(payload["data"][0]["versionLabel"], "v4.3_at")
 
     def test_recipe_catalog_name_replaces_legacy_alias_for_same_root(self) -> None:
         root = Path("/tmp/canonical")
@@ -606,12 +924,80 @@ class LoopTestAnalyzerTest(unittest.TestCase):
 
         self.assertIn('id="loopPolicyCameras"', html)
         self.assertIn('id="loopStartCameras"', html)
-        self.assertIn('id="viewKind"', html)
-        self.assertIn('value="train" selected>Train datasets', html)
-        self.assertIn('value="valid">Validation datasets', html)
-        self.assertIn('value="photoreal">Photoreal datasets', html)
-        self.assertIn('!name.includes("_validation")', html)
-        self.assertIn('value="closed_loop">closed loop test case', html)
+        self.assertIn('href="/vendor/tabulator.min.css"', html)
+        self.assertIn('src="/vendor/tabulator.min.js"', html)
+        self.assertIn('id="datasetCatalogGrid"', html)
+        self.assertIn('id="catalogLoading"', html)
+        self.assertIn('id="catalogLoadingBar"', html)
+        self.assertIn('id="catalogLoadingPercent"', html)
+        self.assertIn('fetch("/api/datasets/progress"', html)
+        self.assertIn("function renderCatalogLoading(progress = {})", html)
+        self.assertIn("function finishCatalogLoading()", html)
+        self.assertIn("generation === catalogLoadGeneration", html)
+        self.assertIn('ajaxURL: "/api/datasets/catalog"', html)
+        self.assertIn("ajaxRequestFunc: requestDatasetCatalogPage", html)
+        self.assertIn('paginationMode: "remote"', html)
+        self.assertIn('filterMode: "remote"', html)
+        self.assertIn('sortMode: "remote"', html)
+        self.assertIn("paginationSize: 10", html)
+        self.assertNotIn('fetch("/api/datasets",', html)
+        self.assertIn('id="catalogPreviousPage"', html)
+        self.assertIn('id="catalogNextPage"', html)
+        self.assertIn('id="catalogPageStatus"', html)
+        self.assertIn('id="catalogBulkAction"', html)
+        self.assertIn('id="catalogApplyBulkAction"', html)
+        self.assertIn('className = "dataset-select-checkbox dataset-select-page-checkbox"', html)
+        self.assertIn('className = "dataset-select-checkbox dataset-row-select-checkbox"', html)
+        self.assertIn("Mark as training set", html)
+        self.assertIn("Remove from training set", html)
+        self.assertIn("Mark as validation set", html)
+        self.assertIn("Remove from validation set", html)
+        self.assertIn("Mark as loop test set", html)
+        self.assertIn("Remove from loop test set", html)
+        self.assertIn("Delete selected datasets", html)
+        self.assertIn('fetch("/api/datasets/role-selection"', html)
+        self.assertIn('fetch("/api/datasets/bulk-delete"', html)
+        self.assertIn('class="trainable-set-badge"', html)
+        self.assertIn('class="trainable-set-badge validation-role"', html)
+        self.assertIn('class="trainable-set-badge loop-test-role"', html)
+        self.assertIn("not eligible for a dataset role", html)
+        self.assertNotIn("no selectable training role", html)
+        self.assertIn("const datasetCatalogPageCache = new Map()", html)
+        self.assertIn("function getCachedCatalogPage(key)", html)
+        self.assertIn("function cacheCatalogPage(key, payload)", html)
+        self.assertIn("function clearCatalogPageCache()", html)
+        self.assertIn("restored from page cache", html)
+        self.assertIn('class="dataset-catalog-shell">\n\t        <div id="catalogLoading"', html)
+        self.assertIn('class="playback-actions"', html)
+        self.assertIn('class="playback-icon-button"', html)
+        self.assertNotIn("initialSort:", html)
+        self.assertIn('title: "Status"', html)
+        self.assertIn('title: "Type"', html)
+        self.assertIn('title: "Dataset"', html)
+        self.assertIn('field: "familyLabel"', html)
+        self.assertIn('title: "Version"', html)
+        self.assertIn('field: "versionLabel"', html)
+        self.assertIn('query.set("family", filters.familyLabel)', html)
+        self.assertIn('query.set("version", filters.versionLabel)', html)
+        self.assertIn('class="dataset-id"', html)
+        self.assertIn("function catalogSelectHeaderFilter(values)", html)
+        self.assertIn('headerFilter: catalogSelectHeaderFilter(["Train", "Validation", "Closed loop"])', html)
+        self.assertIn('title: "Created"', html)
+        self.assertIn('class="dataset-delete-button"', html)
+        self.assertIn('fetch("/api/datasets/delete"', html)
+        self.assertIn("window.confirm(", html)
+        self.assertIn("window.prompt(", html)
+        self.assertIn("function isPrivateViewerHost()", html)
+        self.assertIn('id="split" hidden', html)
+        self.assertIn('id="episodeValue"', html)
+        self.assertIn('id="frameValue"', html)
+        self.assertIn('function splitForDataset(name)', html)
+        self.assertIn('function renderTypeForDataset(name)', html)
+        self.assertIn('Split: ${escapeHtml(splitLabel(datasetSplitByName[name]))}', html)
+        self.assertIn('Render: ${escapeHtml(renderTypeLabel(datasetRenderTypeByName[name]))}', html)
+        self.assertIn('function selectDataset(name)', html)
+        self.assertNotIn('id="platformKind"', html)
+        self.assertNotIn('id="viewKind"', html)
         self.assertNotIn('id="datasetTab"', html)
         self.assertNotIn('id="loopTab"', html)
         self.assertIn("Episode start images", html)
@@ -632,6 +1018,16 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertIn("top_down", preview["images"]["robot_frames"])
         self.assertIn("top_down", preview["start_images"]["robot_frames"])
         self.assertTrue(preview["images"]["policy_inputs"]["egocentric_cam"].startswith("data:image/png;base64,"))
+
+    def test_dataset_viewer_serves_vendored_tabulator_assets(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+
+        javascript = _handle_viewer_request(repo_root, "/vendor/tabulator.min.js")
+        stylesheet = _handle_viewer_request(repo_root, "/vendor/tabulator.min.css")
+
+        self.assertIn("Tabulator", javascript[:1000])
+        self.assertIn(".tabulator", stylesheet[:1000])
+        self.assertTrue((repo_root / "third_party/tabulator/LICENSE").is_file())
 
     def test_dataset_viewer_does_not_rewrite_report_plan_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

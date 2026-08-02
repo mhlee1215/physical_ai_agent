@@ -1,0 +1,738 @@
+{
+  "name": "grip_the_cube_v3_hardware_locked_photoreal_phases_v1",
+  "description": "SO101 SmolVLA phase training on hardware-locked photoreal approach, alignment, and grip/lift datasets with aligned primitive and continuous-chain validation.",
+  "default_config": "configs/so101/training_defaults/grip_the_cube_v2_default.json",
+  "scenario": "grip_the_cube",
+  "execution_policy": "phase_conditioned_smolvla",
+  "task": "grip_the_cube_v3_hardware_locked_photoreal_phases_v1",
+  "action_mode": "absolute_qpos",
+  "dataset": {
+    "train_datasets": [
+      {
+        "name": "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-approach-phase-v1",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 300,
+        "expected_frames": 13200,
+        "quality_note": "Hardware-locked photoreal approach phase, preserving source validation ordering and balanced source bins 9/10.",
+        "grid_balance": {
+          "camera_key": "observation.images.camera1",
+          "grid_size": 4,
+          "frame_index": 0,
+          "bins": [9, 10],
+          "visible_episodes": 300,
+          "bin_source": "report",
+          "bin_counts": {
+            "9": 150,
+            "10": 150
+          }
+        }
+      },
+      {
+        "name": "grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-alignment-phase-v1",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 500,
+        "expected_frames": 24800,
+        "quality_note": "Hardware-locked photoreal alignment phase with open jaws and balanced source bins 9/10.",
+        "grid_balance": {
+          "camera_key": "observation.images.camera1",
+          "grid_size": 4,
+          "frame_index": 0,
+          "bins": [9, 10],
+          "visible_episodes": 500,
+          "bin_source": "report",
+          "bin_counts": {
+            "9": 250,
+            "10": 250
+          }
+        }
+      },
+      {
+        "name": "grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-grip-lift-phase-v1",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 500,
+        "expected_frames": 44500,
+        "quality_note": "Hardware-locked photoreal grip/lift phase with grasp, lift, and 12-step terminal hold.",
+        "grid_balance": {
+          "camera_key": "observation.images.camera1",
+          "grid_size": 4,
+          "frame_index": 0,
+          "bins": [9, 10],
+          "visible_episodes": 500,
+          "bin_source": "report",
+          "bin_counts": {
+            "9": 250,
+            "10": 250
+          }
+        }
+      }
+    ],
+    "validation_datasets": [
+      {
+        "name": "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-approach-phase-v1-validation",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 50,
+        "expected_frames": 2200,
+        "quality_note": "Held-out approach phase; source episodes 0-24 are bin 9 and 25-49 are bin 10."
+      },
+      {
+        "name": "grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-alignment-phase-v1-validation",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 50,
+        "expected_frames": 2200,
+        "quality_note": "Held-out alignment phase with one-to-one source episode ordering."
+      },
+      {
+        "name": "grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation",
+        "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-grip-lift-phase-v1-validation",
+        "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation",
+        "grid_bin_sidecar": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation/meta/camera_grid_bins/observation_images_camera1_4x4_frame0.parquet",
+        "expected_episodes": 50,
+        "expected_frames": 4450,
+        "quality_note": "Held-out grip/lift phase with one-to-one source episode ordering and terminal hold."
+      }
+    ],
+    "camera_contract": {
+      "observation.images.camera1": "egocentric_cam",
+      "observation.images.camera2": "wrist_cam",
+      "observation.images.camera3": "wrist_cam duplicate"
+    },
+    "prompt_contract": {
+      "task": "phase-specific dataset-native prompt",
+      "generated_tasks": [
+        "Open the gripper and move it above the visible green cube.",
+        "Align the open gripper jaws with the visible green cube edge.",
+        "Close the aligned gripper on the visible green cube and lift it."
+      ],
+      "applies_to": [
+        "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1",
+        "grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1",
+        "grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1",
+        "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+        "grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation",
+        "grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation"
+      ]
+    },
+    "generation": {
+      "source_recipes": [
+        "configs/so101/dataset_generation/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1.json",
+        "configs/so101/dataset_generation/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1.json",
+        "configs/so101/dataset_generation/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1.json"
+      ],
+      "source_validation_dataset": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_v1_validation",
+      "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+      "target_object_color": "green",
+      "target_object_shape": "cube",
+      "object_half_sizes": [0.015],
+      "terminal_hold_steps": 12,
+      "balanced_source_camera1_bins": [9, 10]
+    }
+  },
+  "training_config": {
+    "data_loading": {
+      "predecoded_image_cache": {
+        "root_env": "SO101_PREDECODED_CACHE_ROOT",
+        "default_root": "_workspace/so101_image_cache",
+        "train": false,
+        "validation": false
+      }
+    },
+    "closed_loop": {
+      "tensorboard_media": {
+        "train_reference_frequency": "once_per_run",
+        "chain_rollout_layout": "per_episode",
+        "render_test_cases": [
+          "grip_chain_continuous_periodic10",
+          "grip_chain_continuous_final50"
+        ]
+      },
+      "action_rmse_sweep": {
+        "n_action_steps": [5, 15, 30, 50],
+        "render_policy_inference_only": true,
+        "timeline_mode": "phase_chain",
+        "test_cases": [
+          "grip_chain_continuous_periodic10",
+          "grip_chain_continuous_final50"
+        ],
+        "phase_contract_test_case_id": "grip_chain_continuous_periodic10"
+      },
+      "observation_renderer": {
+        "mode": "blender_cycles_live",
+        "render_policy_inference_only": true,
+        "camera_keys": [
+          "observation.images.camera1",
+          "observation.images.camera2"
+        ],
+        "width": 256,
+        "height": 256,
+        "source_width": 512,
+        "source_height": 512,
+        "policy_resize": "direct_square_render",
+        "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+        "profile_from_camera_rig": true,
+        "samples": 256,
+        "denoise": false,
+        "compute_device_type": "METAL",
+        "cycles_seed": 98200,
+        "lighting_profile": "directional_key_fill_rim_v4",
+        "key_light_power": 0.0,
+        "fill_light_power": 0.0,
+        "world_strength": 0.015,
+        "hdri_rotation_deg": 90.0,
+        "exposure": -1.6,
+        "color_management": "AgX",
+        "color_look": "AgX - Medium High Contrast",
+        "gamma": 1.0,
+        "output_format": "PNG",
+        "sample_clamp_indirect": 0.85,
+        "background_wall": false,
+        "stable_tabletop": true,
+        "scene_profile": "pbr_workshop_v4",
+        "robot_material": "matte_pla",
+        "material_profile": "configs/so101/render_profiles/black_arm_green_white_gripper_white_mount_locked_v1.json",
+        "camera_lens": 48.0,
+        "asset_root": "_workspace/photoreal_assets",
+        "blender_bin": "blender",
+        "max_mesh_geoms": 128,
+        "preserve_pinhole_renders": true,
+        "bevel_width_range_m": [0.00024, 0.00032],
+        "bevel_segments": 3
+      },
+      "test_cases": [
+        {
+          "id": "approach_phase_periodic10",
+          "description": "Fixed held-out approach snapshots: five source-bin 9 and five source-bin 10 episodes.",
+      "schedule": "manual",
+          "episodes": 10,
+          "episode_indices": [0, 6, 12, 18, 24, 25, 31, 37, 43, 49],
+          "source_grid_bins": [9, 10],
+          "steps": 66,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "Open the gripper and move it above the visible green cube.",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-approach-phase-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 2200
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          },
+          "phase_contract": {
+            "mode": "primitive",
+            "handoff_mode": "continuous",
+            "phases": [
+              {
+                "id": "approach",
+                "prompt": "Open the gripper and move it above the visible green cube.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "approach",
+                  "tcp_position_tolerance_m": 0.022,
+                  "gripper_open_tolerance_rad": 0.05,
+                  "hold_steps": 0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "alignment_phase_periodic10",
+          "description": "Fixed held-out alignment snapshots matched one-to-one to the source validation episodes.",
+      "schedule": "manual",
+          "episodes": 10,
+          "episode_indices": [0, 6, 12, 18, 24, 25, 31, 37, 43, 49],
+          "source_grid_bins": [9, 10],
+          "steps": 66,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "Align the open gripper jaws with the visible green cube edge.",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation/so101_lerobot_export_report.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-alignment-phase-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 2200
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          },
+          "phase_contract": {
+            "mode": "primitive",
+            "handoff_mode": "continuous",
+            "phases": [
+              {
+                "id": "alignment",
+                "prompt": "Align the open gripper jaws with the visible green cube edge.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "alignment",
+                  "gripper_open_tolerance_rad": 0.05,
+                  "edge_xy_tolerance_m": 0.011,
+                  "jaw_angle_tolerance_deg": 1.5,
+                  "hold_steps": 0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "grip_lift_phase_periodic10",
+          "description": "Fixed held-out grip/lift snapshots matched one-to-one to the source validation episodes.",
+      "schedule": "manual",
+          "episodes": 10,
+          "episode_indices": [0, 6, 12, 18, 24, 25, 31, 37, 43, 49],
+          "source_grid_bins": [9, 10],
+          "steps": 134,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "Close the aligned gripper on the visible green cube and lift it.",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation/so101_lerobot_export_report.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-grip-lift-phase-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 4450
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          },
+          "phase_contract": {
+            "mode": "primitive",
+            "handoff_mode": "continuous",
+            "phases": [
+              {
+                "id": "grip_lift",
+                "prompt": "Close the aligned gripper on the visible green cube and lift it.",
+                "max_steps": 134,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "grip_lift",
+                  "lift_height_m": 0.065,
+                  "hold_steps": 12
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "grip_chain_continuous_periodic10",
+          "description": "Continuous approach-to-alignment-to-grip/lift chain without teacher-state resets between primitives.",
+          "schedule": "periodic",
+          "episodes": 10,
+          "episode_indices": [0, 6, 12, 18, 24, 25, 31, 37, 43, 49],
+          "source_grid_bins": [9, 10],
+          "steps": 266,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "Open the gripper and move it above the visible green cube.",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-approach-phase-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 2200
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          },
+          "phase_contract": {
+            "mode": "chain",
+            "handoff_mode": "continuous",
+            "phases": [
+              {
+                "id": "approach",
+                "prompt": "Open the gripper and move it above the visible green cube.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "approach",
+                  "tcp_position_tolerance_m": 0.022,
+                  "gripper_open_tolerance_rad": 0.05,
+                  "hold_steps": 0
+                }
+              },
+              {
+                "id": "alignment",
+                "prompt": "Align the open gripper jaws with the visible green cube edge.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "alignment",
+                  "gripper_open_tolerance_rad": 0.05,
+                  "edge_xy_tolerance_m": 0.011,
+                  "jaw_angle_tolerance_deg": 1.5,
+                  "hold_steps": 0
+                }
+              },
+              {
+                "id": "grip_lift",
+                "prompt": "Close the aligned gripper on the visible green cube and lift it.",
+                "max_steps": 134,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "grip_lift",
+                  "lift_height_m": 0.065,
+                  "hold_steps": 12
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "approach_phase_final50",
+          "description": "Final full held-out approach evaluation over all 50 validation episodes.",
+      "schedule": "manual",
+          "episodes": 50,
+          "source_grid_bins": [9, 10],
+          "steps": 66,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "Open the gripper and move it above the visible green cube.",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-approach-phase-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 2200
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          },
+          "phase_contract": {
+            "mode": "primitive",
+            "handoff_mode": "continuous",
+            "phases": [
+              {
+                "id": "approach",
+                "prompt": "Open the gripper and move it above the visible green cube.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "approach",
+                  "tcp_position_tolerance_m": 0.022,
+                  "gripper_open_tolerance_rad": 0.05,
+                  "hold_steps": 0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "alignment_phase_final50",
+          "description": "Final full held-out alignment evaluation over all 50 validation episodes.",
+      "schedule": "manual",
+          "episodes": 50,
+          "source_grid_bins": [9, 10],
+          "steps": 66,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "Align the open gripper jaws with the visible green cube edge.",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation/so101_lerobot_export_report.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-alignment-phase-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 2200
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          },
+          "phase_contract": {
+            "mode": "primitive",
+            "handoff_mode": "continuous",
+            "phases": [
+              {
+                "id": "alignment",
+                "prompt": "Align the open gripper jaws with the visible green cube edge.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "alignment",
+                  "gripper_open_tolerance_rad": 0.05,
+                  "edge_xy_tolerance_m": 0.011,
+                  "jaw_angle_tolerance_deg": 1.5,
+                  "hold_steps": 0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "grip_lift_phase_final50",
+          "description": "Final full held-out grip/lift evaluation over all 50 validation episodes.",
+      "schedule": "manual",
+          "episodes": 50,
+          "source_grid_bins": [9, 10],
+          "steps": 134,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "Close the aligned gripper on the visible green cube and lift it.",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation/so101_lerobot_export_report.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-grip-lift-phase-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 4450
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          },
+          "phase_contract": {
+            "mode": "primitive",
+            "handoff_mode": "continuous",
+            "phases": [
+              {
+                "id": "grip_lift",
+                "prompt": "Close the aligned gripper on the visible green cube and lift it.",
+                "max_steps": 134,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "grip_lift",
+                  "lift_height_m": 0.065,
+                  "hold_steps": 12
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "grip_chain_continuous_final50",
+          "description": "Final full held-out continuous chain evaluation over all 50 aligned validation episodes.",
+          "schedule": "final",
+          "episodes": 50,
+          "source_grid_bins": [9, 10],
+          "steps": 266,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "Open the gripper and move it above the visible green cube.",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-approach-phase-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 2200
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          },
+          "phase_contract": {
+            "mode": "chain",
+            "handoff_mode": "continuous",
+            "phases": [
+              {
+                "id": "approach",
+                "prompt": "Open the gripper and move it above the visible green cube.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "approach",
+                  "tcp_position_tolerance_m": 0.022,
+                  "gripper_open_tolerance_rad": 0.05,
+                  "hold_steps": 0
+                }
+              },
+              {
+                "id": "alignment",
+                "prompt": "Align the open gripper jaws with the visible green cube edge.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "alignment",
+                  "gripper_open_tolerance_rad": 0.05,
+                  "edge_xy_tolerance_m": 0.011,
+                  "jaw_angle_tolerance_deg": 1.5,
+                  "hold_steps": 0
+                }
+              },
+              {
+                "id": "grip_lift",
+                "prompt": "Close the aligned gripper on the visible green cube and lift it.",
+                "max_steps": 134,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "grip_lift",
+                  "lift_height_m": 0.065,
+                  "hold_steps": 12
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "grip_chain_oracle_handoff_debug10",
+          "description": "Manual diagnostic only: reset to the aligned next-phase validation snapshot after each verified primitive.",
+          "schedule": "manual",
+          "episodes": 10,
+          "episode_indices": [0, 6, 12, 18, 24, 25, 31, 37, 43, 49],
+          "source_grid_bins": [9, 10],
+          "steps": 266,
+          "seed": 98100,
+          "start_contract": "dataset_episode_start",
+          "task_prompt": "Open the gripper and move it above the visible green cube.",
+          "env_object_color": "green",
+          "success_metric": "env_success",
+          "start_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+          "start_dataset": {
+            "name": "grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "repo_id": "physical-ai-agent/so101-grip-the-cube-v3-hardware-locked-photoreal-approach-phase-v1-validation",
+            "root": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation",
+            "expected_episodes": 50,
+            "expected_frames": 2200
+          },
+          "env_config": {
+            "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+            "target_object_color": "green",
+            "object_half_sizes": [0.015],
+            "spawn_center": [0.146478375, 0.000005265],
+            "spawn_min_radius": 0.1,
+            "spawn_max_radius": 0.3,
+            "spawn_angle_half_range_deg": 90.0
+          },
+          "phase_contract": {
+            "mode": "chain",
+            "handoff_mode": "oracle_reset",
+            "phases": [
+              {
+                "id": "approach",
+                "prompt": "Open the gripper and move it above the visible green cube.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_approach_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "approach",
+                  "tcp_position_tolerance_m": 0.022,
+                  "gripper_open_tolerance_rad": 0.05,
+                  "hold_steps": 0
+                }
+              },
+              {
+                "id": "alignment",
+                "prompt": "Align the open gripper jaws with the visible green cube edge.",
+                "max_steps": 66,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_alignment_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "alignment",
+                  "gripper_open_tolerance_rad": 0.05,
+                  "edge_xy_tolerance_m": 0.011,
+                  "jaw_angle_tolerance_deg": 1.5,
+                  "hold_steps": 0
+                }
+              },
+              {
+                "id": "grip_lift",
+                "prompt": "Close the aligned gripper on the visible green cube and lift it.",
+                "max_steps": 134,
+                "reference_length_multiplier": 1.5,
+                "reference_report_path": "_workspace/so101_lerobot/grip_the_cube_v3_hardware_locked_photoreal_grip_lift_phase_v1_validation/so101_lerobot_export_report.json",
+                "verifier": {
+                  "kind": "grip_lift",
+                  "lift_height_m": 0.065,
+                  "hold_steps": 12
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "name": "grip_the_cube_v4_3_candidate_envelope_a_v2",
+  "description": "Strict production-contract canary over the v4.3 r02/a02 candidate envelope after constraining evidence-centered spatial and yaw jitter.",
+  "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+  "base_reference": "shoulder_pan_axis_projection",
+  "home_qpos": [0.0, -1.5707963267948966, 1.5707963267948966, 0.66, 1.5707963267948966, -0.17453],
+  "object_half_size_m": 0.015,
+  "object_color": "green",
+  "object_yaw_mode": "radial_face_normal",
+  "object_yaw_degrees": [],
+  "radial_yaw_offsets_degrees": [47.0, 48.0],
+  "seed_base": 359000000,
+  "polar_grid": {
+    "radius": {"min_m": 0.2425, "max_m": 0.2575, "step_m": 0.015},
+    "angle": {"min_deg": 26.0, "max_deg": 34.0, "step_deg": 8.0}
+  },
+  "evaluate_dataset_contract": true,
+  "teacher": {
+    "skill_mode": "grip_the_cube_v1",
+    "trajectory_variant": "standard",
+    "task_prompt": "grip the green cube and lift",
+    "approach_steps": 34,
+    "settle_steps": 10,
+    "close_steps": 42,
+    "lift_steps": 70,
+    "terminal_hold_steps": 12,
+    "lift_target_height_m": 0.065,
+    "operational_lift_height_m": 0.06,
+    "lift_controller_z_error_m": 0.015,
+    "move_target_z_offset_m": 0.075,
+    "edge_contact_xy_threshold_m": 0.012,
+    "edge_parallel_threshold_deg": 3.0,
+    "min_gripper_floor_clearance_m": 0.01,
+    "camera2_gate_mode": "preclose_and_early_trace",
+    "camera2_pre_close_max_deg": 25.0,
+    "camera2_close_25_max_deg": 25.0,
+    "camera2_close_50_max_deg": 25.0
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "diagnostic_id": "grip_the_cube_v3_alignment_v1",
+  "training_config_path": "configs/so101/training/grip_the_cube_v3_hardware_locked_photoreal_v1.json",
+  "checkpoint_path": "_workspace/so101_training/runs/grip_the_cube_v3_hardware_locked_photoreal_v1_from_041376/model/checkpoints/best_val_loss/pretrained_model",
+  "output_dir": "_workspace/so101_diagnostics/grip_the_cube_v3_alignment_v1",
+  "episode_count": 10,
+  "methods": [
+    "teacher_replay",
+    "gt_waypoint_controller",
+    "policy"
+  ],
+  "alignment_window": {
+    "entry_replay_qpos_rmse_max": 0.001,
+    "phases_before": [
+      "open_from_hardware_start",
+      "move_to_cube"
+    ],
+    "phases": [
+      "roll_align_with_cube_edge",
+      "gripper_descend",
+      "settle_aligned"
+    ]
+  },
+  "success": {
+    "static_edge_xy_error_max_m": 0.012,
+    "jaw_face_parallel_error_max_deg": 3.0
+  },
+  "gt_controller": {
+    "max_delta_per_joint": [
+      0.06,
+      0.06,
+      0.06,
+      0.06,
+      0.06,
+      0.0
+    ],
+    "hold_gripper_from_reset": true
+  },
+  "policy": {
+    "device": "mps",
+    "n_action_steps": 15,
+    "num_steps": 10,
+    "task_prompt": "grip the green cube and lift",
+    "torch_seed": 98200,
+    "use_exact_loop_renderer": true,
+    "reuse_rendered_policy_inputs": true
+  },
+  "media": {
+    "write_policy_query_gif": true,
+    "gif_fps": 2
+  }
+}

@@ -91,6 +91,27 @@ Each summary should include at least:
 - `image_shapes`
 - `episode_lengths`
 
+### Catalog Selection And Page Cache
+
+The catalog uses server-side pagination and loads 10 rows at a time. Cache each
+loaded filter/sort/page response in the browser session so returning to a page
+does not rescan or reload it. Invalidate this page cache after any operation
+that changes catalog membership or dataset-role marks.
+
+The leftmost checkbox selects rows for a bulk action. Training, validation, and
+loop-test roles persist independently in
+`_workspace/so101_training/dataset_role_selection.json`; role changes do not
+edit the dataset itself. Training and validation roles require a matching,
+completion-gated SO101 LeRobot split. Loop-test roles require a closed-loop
+catalog row with an exact executable test-case contract, including its start
+dataset/report and observation renderer. Schema-v2 dataset generation must
+write this contract beside the start report and the completion gate must reject
+missing contracts. When marked loop tests are launched, their renderer contract
+must replace the preset renderer together with their test cases; do not combine
+a generated start state with an unrelated preset camera pipeline. Bulk deletion
+remains limited to localhost or the same private network and must preflight
+every selected root before deleting any root.
+
 `GET /api/frame?split=<name>&episode=<i>&frame=<j>` returns:
 
 - `split`
@@ -209,6 +230,22 @@ For SO101 training, use:
 ```bash
 PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start --preset <preset>
 ```
+
+To use the complete training, validation, and loop-test role set marked in the
+Data Viewer, use:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/start_so101_training.py start \
+  --preset <preset> \
+  --use-marked-dataset-set
+```
+
+All three roles must be non-empty. The launcher replaces `train_datasets`,
+`validation_datasets`, and `closed_loop.test_cases` together while retaining
+the preset's non-dataset runtime/controller settings. The legacy
+`--use-marked-trainable-set` flag remains training-only for compatibility.
+The persistent selection file is authoritative. Do not infer any role from the
+newest datasets, visible catalog page, or UI cache.
 
 Do not add another shell wrapper with the same purpose. If a launch shape becomes
 common, add a preset to `scripts/start_so101_training.py`.
@@ -343,4 +380,3 @@ http://127.0.0.1:8768/
 
 Use Browser/in-app browser verification when the user asks to see the dashboard
 or when visual layout/interaction is the actual deliverable.
-
