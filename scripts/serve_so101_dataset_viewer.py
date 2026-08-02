@@ -239,6 +239,20 @@ def make_handler(repo_root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/datasets/catalog":
                 self._send_json(_dataset_catalog_page_payload(repo_root, parse_qs(parsed.query)))
                 return
+            if parsed.path == "/api/datasets/catalog/item":
+                query = parse_qs(parsed.query)
+                try:
+                    self._send_json(
+                        _dataset_catalog_named_item_payload(
+                            repo_root,
+                            _query_str(query, "name", ""),
+                        )
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                except FileNotFoundError as exc:
+                    self._send_json({"error": str(exc)}, status=404)
+                return
             if parsed.path == "/api/datasets/progress":
                 self._send_json(_datasets_progress_payload(repo_root))
                 return
@@ -1166,6 +1180,34 @@ def _dataset_catalog_page_payload(
         "platform_count": len({candidate["platform"] for candidate in filtered}),
         "selection_counts": selection_counts,
         "trainable_set_count": selection_counts["training"],
+    }
+
+
+def _dataset_catalog_named_item_payload(repo_root: Path, name: str) -> dict[str, Any]:
+    requested_name = name.strip()
+    if not requested_name:
+        raise ValueError("dataset name is required")
+    candidate = next(
+        (
+            item
+            for item in _dataset_catalog_candidates(repo_root)
+            if str(item.get("name") or "") == requested_name
+        ),
+        None,
+    )
+    if candidate is None:
+        raise FileNotFoundError(f"dataset is not registered: {requested_name}")
+    marked_names_by_role = {
+        role: selected_catalog_names(repo_root, role)
+        for role in ("training", "validation", "loop_test")
+    }
+    return {
+        "data": _dataset_catalog_remote_row(
+            candidate,
+            _load_dataset_catalog_candidate(repo_root, candidate),
+            registry_by_root=_training_registry_entries_by_root(repo_root),
+            marked_names_by_role=marked_names_by_role,
+        )
     }
 
 
@@ -3707,6 +3749,9 @@ def _index_html() -> str:
       gap: 5px;
       white-space: normal;
       min-width: 0;
+      color: inherit;
+      text-decoration: none;
+      cursor: pointer;
     }
     .run-item * { min-width: 0; overflow-wrap: anywhere; }
     .run-item.active { border-color: var(--train); background: var(--train-soft); box-shadow: inset 4px 0 0 var(--train); }
@@ -4110,26 +4155,136 @@ def _index_html() -> str:
 	    const simPreview = document.getElementById("simPreview");
 	    const fmt = value => Number(value).toFixed(4);
 	    let timer = null;
-	    let loading = false;
+	    let frameLoadGeneration = 0;
 	    let simProcessingTimer = null;
 	    let simTimelineRows = [];
 	    let simTimelineTimer = null;
 	    let simContinuationStartReportPath = null;
 	    let trainingRunRows = [];
-	    let selectedTrainingId = null;
 	    let catalogProgressTimer = null;
 	    let catalogLoadingHideTimer = null;
 	    let catalogProgressRequestInFlight = false;
 	    let catalogLoadGeneration = 0;
 	    let datasetCatalogTable = null;
-	    let catalogCurrentPage = 1;
+
+	    function boundedUrlInteger(params, key, fallback = 0) {
+	      const value = Number(params.get(key));
+	      return Number.isInteger(value) && value >= 0 ? value : fallback;
+	    }
+
+	    function initialViewStateFromUrl() {
+	      const params = new URLSearchParams(window.location.search);
+	      const requestedView = String(params.get("view") || params.get("tab") || "viewer").toLowerCase();
+	      const viewAliases = {
+	        data: "viewer",
+	        viewer: "viewer",
+	        training: "training",
+	        loop: "loop",
+	        analyzer: "loop",
+	        simulator: "simulator",
+	      };
+	      const allowedSortFields = new Set([
+	        "createdEpoch", "name", "familyLabel", "versionLabel",
+	        "platformLabel", "splitLabel", "renderLabel",
+	      ]);
+	      const requestedSort = String(params.get("sort") || "createdEpoch");
+	      const requestedFps = String(params.get("fps") || "");
+	      return {
+	        view: viewAliases[requestedView] || "viewer",
+	        dataset: String(params.get("dataset") || ""),
+	        episode: boundedUrlInteger(params, "episode", 0),
+	        frame: boundedUrlInteger(params, "frame", 0),
+	        fps: new Set(["6", "12", "24", "30"]).has(requestedFps) ? requestedFps : "",
+	        catalogPage: Math.max(1, boundedUrlInteger(params, "page", 1)),
+	        markedOnly: new Set(["1", "true", "yes", "on"]).has(
+	          String(params.get("marked") || "").toLowerCase(),
+	        ),
+	        catalogFilters: {
+	          platformLabel: String(params.get("platform") || ""),
+	          splitLabel: String(params.get("status") || ""),
+	          renderLabel: String(params.get("type") || ""),
+	          familyLabel: String(params.get("family") || ""),
+	          versionLabel: String(params.get("version") || ""),
+	        },
+	        catalogSort: allowedSortFields.has(requestedSort) ? requestedSort : "createdEpoch",
+	        catalogSortDirection: String(params.get("dir") || "desc").toLowerCase() === "asc" ? "asc" : "desc",
+	        trainingId: String(params.get("run") || ""),
+	      };
+	    }
+
+	    function catalogQueryFromViewState(state) {
+	      const query = new URLSearchParams({
+	        page: String(state.catalogPage),
+	        size: "10",
+	        sort: state.catalogSort,
+	        dir: state.catalogSortDirection,
+	      });
+	      const urlKeyByField = {
+	        platformLabel: "platform",
+	        splitLabel: "status",
+	        renderLabel: "type",
+	        familyLabel: "family",
+	        versionLabel: "version",
+	      };
+	      Object.entries(state.catalogFilters).forEach(([field, value]) => {
+	        if (value) query.set(urlKeyByField[field], value);
+	      });
+	      if (state.markedOnly) query.set("marked", "1");
+	      return query;
+	    }
+
+	    function initialCatalogHeaderFilters() {
+	      return Object.entries(initialViewState.catalogFilters)
+	        .filter(([, value]) => Boolean(value))
+	        .map(([field, value]) => ({field, value}));
+	    }
+
+	    const initialViewState = initialViewStateFromUrl();
+	    let currentAppTab = initialViewState.view;
+	    let viewStateRestoring = true;
+	    let initialViewRestoreStarted = false;
+	    let selectedTrainingId = initialViewState.trainingId || null;
+	    let catalogUrlQuery = catalogQueryFromViewState(initialViewState);
+	    let catalogCurrentPage = initialViewState.catalogPage;
 	    let catalogLastPage = 1;
 	    let catalogTotalRows = 0;
-	    let catalogMarkedOnly = false;
+	    let catalogMarkedOnly = initialViewState.markedOnly;
 	    let catalogSelectionCounts = {training: 0, validation: 0, loop_test: 0};
 	    const catalogSelectedNames = new Set();
 	    const datasetCatalogPageCache = new Map();
 	    const catalogPageCacheLimit = 20;
+
+	    function syncCurrentViewUrl() {
+	      if (viewStateRestoring) return;
+	      const params = new URLSearchParams();
+	      params.set("view", currentAppTab);
+	      if (currentAppTab === "viewer") {
+	        if (split.value) {
+	          params.set("dataset", split.value);
+	          params.set("episode", String(Math.max(0, Number(episode.value || 0))));
+	          params.set("frame", String(Math.max(0, Number(frame.value || 0))));
+	        }
+	        params.set("page", String(Math.max(1, catalogCurrentPage)));
+	        if (catalogMarkedOnly) params.set("marked", "1");
+	        for (const key of ["platform", "status", "type", "family", "version", "sort", "dir"]) {
+	          const value = catalogUrlQuery.get(key);
+	          if (value) params.set(key, value);
+	        }
+	        if (fps.value) params.set("fps", fps.value);
+	      } else if (currentAppTab === "training" && selectedTrainingId) {
+	        params.set("run", selectedTrainingId);
+	      }
+	      const query = params.toString();
+	      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}`;
+	      if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+	        window.history.replaceState({experimentManagerView: true}, "", nextUrl);
+	      }
+	    }
+
+	    function trainingRunUrl(trainingId) {
+	      const params = new URLSearchParams({view: "training", run: String(trainingId)});
+	      return `${window.location.pathname}?${params.toString()}`;
+	    }
 
 	    function renderCatalogLoading(progress = {}) {
 	      const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
@@ -4207,7 +4362,8 @@ def _index_html() -> str:
       }
     }
 
-	    function syncAppTab(tabName) {
+	    function syncAppTab(tabName, options = {}) {
+	      currentAppTab = tabName;
 	      const showData = tabName === "viewer";
 	      const showTraining = tabName === "training";
 	      const showLoop = tabName === "loop";
@@ -4223,17 +4379,21 @@ def _index_html() -> str:
 	      simPanel.hidden = !showSim;
 	      if (showSim) {
 	        if (!simulatorConfig.presets.length) initSimulator();
+	        if (options.updateUrl !== false) syncCurrentViewUrl();
 	        return;
 	      }
 	      if (showTraining) {
 	        loadTrainingRuns();
+	        if (options.updateUrl !== false) syncCurrentViewUrl();
 	        return;
 	      }
 	      if (showLoop) {
 	        initLoopAnalyzer();
+	        if (options.updateUrl !== false) syncCurrentViewUrl();
 	        return;
 	      }
 	      syncDataViewer();
+	      if (options.updateUrl !== false) syncCurrentViewUrl();
 	    }
 
 	    function syncDataViewer() {
@@ -4255,6 +4415,43 @@ def _index_html() -> str:
         photorealCameras.innerHTML = "";
         jointRows.innerHTML = "";
         selectedDatasetMeta.innerHTML = "";
+	      }
+	    }
+
+	    async function ensureDeepLinkedDataset(name) {
+	      if (!name || datasets[name]) return Boolean(datasets[name]);
+	      const response = await fetch(`/api/datasets/catalog/item?name=${encodeURIComponent(name)}`, {
+	        cache: "no-store",
+	      });
+	      const payload = await response.json();
+	      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+	      if (!payload.data) throw new Error(`dataset catalog item is missing: ${name}`);
+	      registerCatalogRow(payload.data);
+	      return Boolean(datasets[name]);
+	    }
+
+	    async function restoreInitialViewState() {
+	      if (initialViewRestoreStarted) return;
+	      initialViewRestoreStarted = true;
+	      try {
+	        if (initialViewState.fps) fps.value = initialViewState.fps;
+	        if (initialViewState.dataset) {
+	          await ensureDeepLinkedDataset(initialViewState.dataset);
+	          selectDataset(initialViewState.dataset, {
+	            episode: initialViewState.episode,
+	            frame: initialViewState.frame,
+	            fps: initialViewState.fps,
+	          });
+	        }
+	      } catch (error) {
+	        setDatasetActionStatus(`Deep link could not load ${initialViewState.dataset}: ${error.message || error}`, "error");
+	        const firstReady = datasetCatalogTable?.getRows()
+	          .map(row => row.getData())
+	          .find(row => row.availability === "available" && datasets[row.name]);
+	        if (firstReady) selectDataset(firstReady.name);
+	      } finally {
+	        viewStateRestoring = false;
+	        syncCurrentViewUrl();
 	      }
 	    }
 
@@ -4437,6 +4634,7 @@ def _index_html() -> str:
 	      const hadSelection = Boolean(split.value && datasets[split.value]);
 	      (payload.data || []).forEach(registerCatalogRow);
 	      catalogCurrentPage = Number(payload.page || requestedPage);
+	      catalogUrlQuery.set("page", String(catalogCurrentPage));
 	      catalogLastPage = Number(payload.last_page || 1);
 	      catalogTotalRows = Number(payload.total || payload.last_row || 0);
 	      catalogSelectionCounts = {
@@ -4450,17 +4648,19 @@ def _index_html() -> str:
 	        + (fromCache ? " · restored from page cache" : "")
 	      );
 	      updateCatalogPager();
-	      if (!hadSelection) {
+	      if (!hadSelection && !initialViewState.dataset) {
 	        const firstReady = (payload.data || []).find(row => row.availability === "available" && datasets[row.name]);
 	        if (firstReady) selectDataset(firstReady.name);
 	      }
 	      updateBulkActionUi();
+	      syncCurrentViewUrl();
 	      return payload;
 	    }
 
 	    async function requestDatasetCatalogPage(url, _config, params) {
 	      const requestedPage = Number(params?.page || 1);
 	      const query = catalogQueryFromParams(params);
+	      catalogUrlQuery = new URLSearchParams(query);
 	      const cacheKey = catalogCacheKey(url, query);
 	      const cachedPayload = getCachedCatalogPage(cacheKey);
 	      if (cachedPayload) {
@@ -4510,8 +4710,11 @@ def _index_html() -> str:
 	          pagination: true,
 	          paginationMode: "remote",
 	          paginationSize: 10,
+	          paginationInitialPage: initialViewState.catalogPage,
 	          filterMode: "remote",
 	          sortMode: "remote",
+	          initialHeaderFilter: initialCatalogHeaderFilters(),
+	          initialSort: [{column: initialViewState.catalogSort, dir: initialViewState.catalogSortDirection}],
 	          placeholder: "No datasets match the current filters.",
 	          headerFilterLiveFilterDelay: 300,
 	          rowFormatter: row => {
@@ -4641,11 +4844,14 @@ def _index_html() -> str:
 	      datasetCatalogTable.on("dataLoaded", () => {
 	        syncDatasetCatalogSelection();
 	        updateBulkActionUi();
+	        restoreInitialViewState();
 	      });
 	      datasetCatalogTable.on("pageLoaded", page => {
 	        catalogCurrentPage = Number(page || 1);
+	        catalogUrlQuery.set("page", String(catalogCurrentPage));
 	        updateCatalogPager();
 	        updateBulkActionUi();
+	        syncCurrentViewUrl();
 	      });
 	    }
 
@@ -4676,7 +4882,7 @@ def _index_html() -> str:
 	      play.setAttribute("aria-label", running ? "Pause" : "Play");
 	    }
 
-	    function selectDataset(name) {
+	    function selectDataset(name, options = {}) {
 	      if (!datasets[name]) return;
 	      if (timer) {
 	        clearInterval(timer);
@@ -4684,13 +4890,24 @@ def _index_html() -> str:
 	        setPlaybackRunning(false);
 	      }
 	      split.value = name;
-	      episode.value = "0";
-	      frame.value = "0";
 	      syncDatasetCatalogSelection();
 	      renderSelectedDatasetMeta();
 	      syncEpisodeRange();
+	      episode.value = String(Math.min(
+	        Number(episode.max),
+	        Math.max(0, Number(options.episode ?? 0)),
+	      ));
+	      episodeValue.value = episode.value;
+	      syncFrameRange();
+	      frame.value = String(Math.min(
+	        Number(frame.max),
+	        Math.max(0, Number(options.frame ?? 0)),
+	      ));
+	      frameValue.value = frame.value;
+	      if (options.fps) fps.value = String(options.fps);
 	      renderPhotorealShortcuts();
 	      loadFrame();
+	      syncCurrentViewUrl();
 	    }
 
 	    function isPrivateViewerHost() {
@@ -4908,21 +5125,25 @@ def _index_html() -> str:
 	      trainingActiveChip.innerHTML = `active: <strong>loading</strong>`;
 	      const payload = await fetch("/api/training/runs").then(r => r.json());
 	      trainingRunRows = payload.runs || [];
+	      if (selectedTrainingId && !trainingRunRows.some(row => row.training_id === selectedTrainingId)) {
+	        selectedTrainingId = null;
+	      }
+	      if (!selectedTrainingId && payload.active_training_id) selectedTrainingId = payload.active_training_id;
+	      if (!selectedTrainingId && trainingRunRows.length) selectedTrainingId = trainingRunRows[0].training_id;
 	      trainingActiveChip.innerHTML = `active: <strong>${payload.active_training_id || "none"}</strong>`;
 	      trainingRuns.innerHTML = trainingRunRows.map(row => `
-	        <button class="run-item ${row.training_id === selectedTrainingId ? "active" : ""}" type="button" data-training-id="${escapeAttr(row.training_id)}">
+	        <a class="run-item ${row.training_id === selectedTrainingId ? "active" : ""}" href="${escapeAttr(trainingRunUrl(row.training_id))}" data-training-id="${escapeAttr(row.training_id)}">
 	          <div class="run-id">${escapeHtml(row.training_id)} ${row.active ? '<span class="chip">active</span>' : ''}</div>
 	          <div class="meta">${escapeHtml(row.dataset_config_name || "")}</div>
 	          <div class="meta">train ${fmtMaybe(row.latest_train_loss)} · val ${fmtMaybe(row.latest_val_loss)} · ckpt ${row.checkpoint_count || 0}</div>
-	        </button>
+	        </a>
 	      `).join("") || `<p class="empty">No training runs found.</p>`;
-	      if (!selectedTrainingId && payload.active_training_id) selectedTrainingId = payload.active_training_id;
-	      if (!selectedTrainingId && trainingRunRows.length) selectedTrainingId = trainingRunRows[0].training_id;
 	      if (selectedTrainingId) await loadTrainingDetail(selectedTrainingId);
 	    }
 
 	    async function loadTrainingDetail(trainingId) {
 	      selectedTrainingId = trainingId;
+	      syncCurrentViewUrl();
 	      trainingRuns.querySelectorAll(".run-item").forEach(button => {
 	        button.classList.toggle("active", button.dataset.trainingId === selectedTrainingId);
 	      });
@@ -5040,18 +5261,26 @@ def _index_html() -> str:
 	    }
 
 	    async function loadFrame() {
-      if (loading) return;
-      loading = true;
-      syncFrameRange();
-      const url = `/api/frame?split=${split.value}&episode=${episode.value}&frame=${frame.value}`;
-      const row = await fetch(url).then(r => r.json()).finally(() => { loading = false; });
-      meta.textContent = `${row.split} | episode ${row.episode}/${datasets[row.split].episodes - 1} | frame ${row.frame}/${row.episode_length - 1} | row ${row.row_index} | task_index ${row.task_index ?? "n/a"} | t=${row.timestamp.toFixed(3)}s`;
+	      const generation = ++frameLoadGeneration;
+	      syncFrameRange();
+	      const requestedSplit = split.value;
+	      const requestedEpisode = episode.value;
+	      const requestedFrame = frame.value;
+	      const url = `/api/frame?split=${encodeURIComponent(requestedSplit)}&episode=${requestedEpisode}&frame=${requestedFrame}`;
+	      const row = await fetch(url).then(r => r.json());
+	      if (generation !== frameLoadGeneration) return;
+	      episode.value = String(row.episode);
+	      episodeValue.value = episode.value;
+	      frame.value = String(row.frame);
+	      frameValue.value = frame.value;
+	      meta.textContent = `${row.split} | episode ${row.episode}/${datasets[row.split].episodes - 1} | frame ${row.frame}/${row.episode_length - 1} | row ${row.row_index} | task_index ${row.task_index ?? "n/a"} | t=${row.timestamp.toFixed(3)}s`;
       promptText.textContent = row.prompt || row.task || "(no prompt stored)";
       cameras.innerHTML = cameraFigures(row.images);
       renderPhotorealPanel(row);
-      jointRows.innerHTML = Object.keys(row.state).map(joint => `
-        <tr><td>${joint}</td><td>${fmt(row.state[joint])}</td><td>${fmt(row.action[joint])}</td></tr>
+	      jointRows.innerHTML = Object.keys(row.state).map(joint => `
+	        <tr><td>${joint}</td><td>${fmt(row.state[joint])}</td><td>${fmt(row.action[joint])}</td></tr>
 	      `).join("");
+	      syncCurrentViewUrl();
 	    }
 
 	    function renderPhotorealPanel(row) {
@@ -5381,7 +5610,10 @@ def _index_html() -> str:
 	    trainingReload.addEventListener("click", loadTrainingRuns);
 	    trainingRuns.addEventListener("click", event => {
 	      const button = event.target.closest?.(".run-item");
-	      if (button?.dataset?.trainingId) loadTrainingDetail(button.dataset.trainingId);
+	      if (!button?.dataset?.trainingId) return;
+	      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+	      event.preventDefault();
+	      loadTrainingDetail(button.dataset.trainingId);
 	    });
 	    simPreset.addEventListener("change", syncSimulatorPreset);
 	    simTrainingRun.addEventListener("change", syncSimulatorCheckpoints);
@@ -5431,6 +5663,7 @@ def _index_html() -> str:
 	      frameValue.value = frame.value;
 	      loadFrame();
 	    });
+	    fps.addEventListener("change", syncCurrentViewUrl);
     play.addEventListener("click", () => {
       if (timer) {
         clearInterval(timer);
@@ -5476,7 +5709,9 @@ def _index_html() -> str:
 	      }
 	    });
 	    loopAnalyzerReload.addEventListener("click", () => initLoopAnalyzer(true));
+	    window.addEventListener("popstate", () => window.location.reload());
 	    init();
+	    syncAppTab(initialViewState.view, {updateUrl: false});
   </script>
 </body>
 </html>"""
