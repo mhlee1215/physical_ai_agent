@@ -903,7 +903,7 @@ def _dataset_catalog_candidates(repo_root: Path) -> list[dict[str, Any]]:
         resolved = _resolve_dataset_path(repo_root, root)
         category = (
             "photoreal"
-            if (resolved / "photoreal_lerobot_manifest.json").is_file()
+            if _is_photoreal_lerobot_dataset(resolved)
             else "official"
             if resolved in official_paths
             else "skill"
@@ -959,6 +959,7 @@ _CATALOG_NAME_SUFFIXES = (
 )
 _CATALOG_RENDER_TOKENS = {"photoreal", "simulation"}
 _CATALOG_FAMILY_PREFIXES = ("grip_the_cube",)
+_PHOTOREAL_LEROBOT_FORMAT = "so101_photoreal_lerobot_v1"
 
 
 def _dataset_catalog_identity(name: str) -> dict[str, str]:
@@ -1036,6 +1037,17 @@ def _dataset_catalog_render_key(name: str, root: Path, category: str, loader: st
         if "real_camera" in dataset_format or "hardware" in dataset_format:
             return "real"
     return "simulation"
+
+
+def _is_photoreal_lerobot_dataset(root: Path) -> bool:
+    manifest_path = root / "photoreal_lerobot_manifest.json"
+    if not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return manifest.get("format") == _PHOTOREAL_LEROBOT_FORMAT
 
 
 def _dataset_catalog_render_label(key: str) -> str:
@@ -1380,7 +1392,7 @@ def _build_datasets_payload(
     skill_paths = {_resolve_dataset_path(repo_root, root) for root in skill_roots.values()}
     for split, root in recipe_roots.items():
         resolved = _resolve_dataset_path(repo_root, root)
-        if (resolved / "photoreal_lerobot_manifest.json").is_file():
+        if _is_photoreal_lerobot_dataset(resolved):
             category = "photoreal"
         else:
             category = (
@@ -1874,11 +1886,7 @@ def _discover_so101_photoreal_lerobot_datasets(repo_root: Path) -> dict[str, Pat
             resolved = dataset_root.resolve()
             if resolved in seen:
                 continue
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if manifest.get("format") != "so101_photoreal_lerobot_v1":
+            if not _is_photoreal_lerobot_dataset(dataset_root):
                 continue
             split = _unique_split_name("photoreal_lerobot_" + _slug(dataset_root.name), discovered)
             discovered[split] = dataset_root

@@ -533,6 +533,45 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertEqual(groups["photoreal"][0]["name"], "photoreal_derivative")
         self.assertEqual(groups["photoreal"][0]["category"], "photoreal")
 
+    def test_standard_sim_phase_manifest_does_not_mark_dataset_photoreal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "standard_phase"
+            root.mkdir()
+            (root / "photoreal_lerobot_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "operation": "phase_subset",
+                        "source_dataset_name": "grip_the_cube_v4_4",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(dataset_viewer, "_official_dataset_roots", return_value={}),
+                patch.object(dataset_viewer, "_skill_dataset_roots", return_value={}),
+                patch.object(
+                    dataset_viewer,
+                    "_generation_recipe_dataset_roots",
+                    return_value={"grip_the_cube_v4_4_move_phase_v1": root},
+                ),
+                patch.object(dataset_viewer, "_generation_closed_loop_views", return_value={}),
+                patch.object(dataset_viewer, "_discover_temporary_datasets", return_value={}),
+                patch.object(dataset_viewer, "_discover_so101_photoreal_datasets", return_value={}),
+                patch.object(
+                    dataset_viewer, "_discover_so101_photoreal_lerobot_datasets", return_value={}
+                ),
+                patch.object(dataset_viewer, "_discover_mycobot_datasets", return_value={}),
+                patch.object(dataset_viewer, "_official_closed_loop_test_cases", return_value=[]),
+                patch.object(dataset_viewer, "ARCHIVED_DATASET_SPLITS", []),
+            ):
+                candidates = dataset_viewer._dataset_catalog_candidates(Path(tmpdir))
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["category"], "generated")
+        self.assertEqual(candidates[0]["render_key"], "simulation")
+        self.assertEqual(candidates[0]["render_label"], "Standard sim")
+
     def test_qwen_chain_loop_test_id_keeps_nact15_variant_distinct(self) -> None:
         self.assertEqual(
             exporter._loop_test_id_from_report_path(

@@ -32,6 +32,8 @@ NUMERIC_KEYS = (
     "index",
     "task_index",
 )
+PHOTOREAL_LEROBOT_FORMAT = "so101_photoreal_lerobot_v1"
+PHASE_SUBSET_LEROBOT_FORMAT = "so101_phase_subset_lerobot_v1"
 
 
 @dataclass(frozen=True)
@@ -1024,7 +1026,9 @@ def _write_reports(
         "replaced_images": total_frames * len(camera_keys),
         "training_ready": True,
     }
-    (output_root / "photoreal_lerobot_manifest.json").write_text(
+    if source_manifest.get("format") != PHOTOREAL_LEROBOT_FORMAT:
+        manifest["format"] = PHASE_SUBSET_LEROBOT_FORMAT
+    _phase_subset_manifest_path(output_root, source_manifest).write_text(
         json.dumps(manifest, indent=2, sort_keys=True),
         encoding="utf-8",
     )
@@ -1072,9 +1076,10 @@ def _episode_matches_source(episode: dict[str, Any], source: SourceSpec) -> bool
 
 
 def _source_dataset_manifest(root: Path) -> dict[str, Any]:
-    manifest_path = root / "photoreal_lerobot_manifest.json"
-    if manifest_path.is_file():
-        return _read_json(manifest_path)
+    for name in ("photoreal_lerobot_manifest.json", "phase_subset_manifest.json"):
+        manifest_path = root / name
+        if manifest_path.is_file():
+            return _read_json(manifest_path)
     info = _read_json(root / "meta" / "info.json")
     camera_keys = [
         key
@@ -1090,6 +1095,15 @@ def _source_dataset_manifest(root: Path) -> dict[str, Any]:
         "frames": int(info["total_frames"]),
         "training_ready": True,
     }
+
+
+def _phase_subset_manifest_path(output_root: Path, source_manifest: dict[str, Any]) -> Path:
+    filename = (
+        "photoreal_lerobot_manifest.json"
+        if source_manifest.get("format") == PHOTOREAL_LEROBOT_FORMAT
+        else "phase_subset_manifest.json"
+    )
+    return output_root / filename
 
 
 def _float_list(value: str) -> list[float]:

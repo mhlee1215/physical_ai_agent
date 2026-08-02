@@ -25,6 +25,7 @@ from materialize_so101_phase_dataset import (  # noqa: E402
     SourceSpec,
     _episode_matches_source,
     _observation_state_replay_rmse,
+    _phase_subset_manifest_path,
     _phase_start_policy_camera_visibility,
     _source_dataset_manifest,
     phase_frame_window,
@@ -184,6 +185,20 @@ class SO101PhaseDatasetMaterializationTests(unittest.TestCase):
             ["observation.images.camera1", "observation.images.camera2"],
         )
         self.assertEqual(manifest["episodes"], 2)
+
+    def test_phase_manifest_filename_preserves_render_type(self) -> None:
+        root = Path("/tmp/phase-output")
+        self.assertEqual(
+            _phase_subset_manifest_path(root, {"operation": "phase_subset_source"}),
+            root / "phase_subset_manifest.json",
+        )
+        self.assertEqual(
+            _phase_subset_manifest_path(
+                root,
+                {"format": "so101_photoreal_lerobot_v1"},
+            ),
+            root / "photoreal_lerobot_manifest.json",
+        )
 
     def test_phase_window_must_be_contiguous(self) -> None:
         counts = {"approach": 3, "align": 2, "grip": 4}
