@@ -1065,6 +1065,11 @@ def _dataset_catalog_page_payload(
         raise ValueError("catalog page and size must be integers") from exc
 
     candidates = _dataset_catalog_candidates(repo_root)
+    marked_names_by_role = {
+        role: selected_catalog_names(repo_root, role)
+        for role in ("training", "validation", "loop_test")
+    }
+    marked_names = set().union(*marked_names_by_role.values())
     filters = {
         "platform_label": _query_str(query, "platform", "").strip().casefold(),
         "split_label": _query_str(query, "status", "").strip().casefold(),
@@ -1072,9 +1077,13 @@ def _dataset_catalog_page_payload(
         "family_label": _query_str(query, "family", "").strip().casefold(),
         "version_label": _query_str(query, "version", "").strip().casefold(),
         "name": _query_str(query, "name", "").strip().casefold(),
+        "marked_only": _query_str(query, "marked", "").strip().casefold()
+        in {"1", "true", "yes", "on"},
     }
 
     def matches(candidate: dict[str, Any]) -> bool:
+        if filters["marked_only"] and str(candidate["name"]) not in marked_names:
+            return False
         identity = _dataset_catalog_identity(str(candidate["name"]))
         for field in ("platform_label", "split_label", "render_label"):
             expected = filters[field]
@@ -1110,10 +1119,6 @@ def _dataset_catalog_page_payload(
     page = min(requested_page, last_page)
     page_candidates = filtered[(page - 1) * page_size : page * page_size]
     registry_by_root = _training_registry_entries_by_root(repo_root)
-    marked_names_by_role = {
-        role: selected_catalog_names(repo_root, role)
-        for role in ("training", "validation", "loop_test")
-    }
     selection_counts = dataset_role_counts(repo_root)
     _set_datasets_progress(
         repo_root,
@@ -1157,6 +1162,7 @@ def _dataset_catalog_page_payload(
         "page": page,
         "size": page_size,
         "total": total,
+        "marked_only": bool(filters["marked_only"]),
         "platform_count": len({candidate["platform"] for candidate in filtered}),
         "selection_counts": selection_counts,
         "trainable_set_count": selection_counts["training"],
@@ -3621,6 +3627,18 @@ def _index_html() -> str:
     }
     .dataset-bulk-toolbar select { min-height: 34px; min-width: 220px; padding: 5px 8px; }
     .dataset-bulk-toolbar button { min-height: 34px; padding: 5px 11px; }
+    .dataset-filter-toggle {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+      color: #1e3a8a;
+      white-space: nowrap;
+    }
+    .dataset-filter-toggle[aria-pressed="true"] {
+      border-color: #2563eb;
+      background: #2563eb;
+      color: #fff;
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+    }
     .dataset-bulk-count { color: #334155; font-size: 12px; font-weight: 800; }
     .dataset-bulk-spacer { flex: 1 1 auto; }
     .dataset-cache-note { color: #64748b; font-size: 11px; }
@@ -3848,6 +3866,7 @@ def _index_html() -> str:
 	          <option value="delete">Delete selected datasets</option>
 	        </select>
 	        <button id="catalogApplyBulkAction" type="button" disabled>Apply</button>
+	        <button id="catalogMarkedOnly" class="dataset-filter-toggle" type="button" aria-pressed="false">Marked only</button>
 	        <span class="dataset-bulk-spacer"></span>
 	        <span id="catalogTrainingCount" class="dataset-bulk-count">Training 0</span>
 	        <span id="catalogValidationCount" class="dataset-bulk-count">Validation 0</span>
@@ -4049,6 +4068,7 @@ def _index_html() -> str:
 	    const catalogSelectedCount = document.getElementById("catalogSelectedCount");
 	    const catalogBulkAction = document.getElementById("catalogBulkAction");
 	    const catalogApplyBulkAction = document.getElementById("catalogApplyBulkAction");
+	    const catalogMarkedOnlyButton = document.getElementById("catalogMarkedOnly");
 	    const catalogTrainingCount = document.getElementById("catalogTrainingCount");
 	    const catalogValidationCount = document.getElementById("catalogValidationCount");
 	    const catalogLoopTestCount = document.getElementById("catalogLoopTestCount");
@@ -4105,6 +4125,7 @@ def _index_html() -> str:
 	    let catalogCurrentPage = 1;
 	    let catalogLastPage = 1;
 	    let catalogTotalRows = 0;
+	    let catalogMarkedOnly = false;
 	    let catalogSelectionCounts = {training: 0, validation: 0, loop_test: 0};
 	    const catalogSelectedNames = new Set();
 	    const datasetCatalogPageCache = new Map();
@@ -4282,6 +4303,7 @@ def _index_html() -> str:
 	      if (filters.familyLabel) query.set("family", filters.familyLabel);
 	      if (filters.versionLabel) query.set("version", filters.versionLabel);
 	      if (filters.name) query.set("name", filters.name);
+	      if (catalogMarkedOnly) query.set("marked", "1");
 	      const sorters = params.sorters || params.sort || [];
 	      if (Array.isArray(sorters) && sorters.length) {
 	        query.set("sort", sorters[0].field || "createdEpoch");
@@ -4350,6 +4372,10 @@ def _index_html() -> str:
 	      catalogValidationCount.textContent = `Validation ${Number(catalogSelectionCounts.validation || 0).toLocaleString()}`;
 	      catalogLoopTestCount.textContent = `Loop test ${Number(catalogSelectionCounts.loop_test || 0).toLocaleString()}`;
 	      catalogCacheNote.textContent = `${datasetCatalogPageCache.size.toLocaleString()} cached pages`;
+	      catalogMarkedOnlyButton.setAttribute("aria-pressed", String(catalogMarkedOnly));
+	      catalogMarkedOnlyButton.title = catalogMarkedOnly
+	        ? "Show all datasets"
+	        : "Show datasets marked for training, validation, or loop testing";
 	      catalogApplyBulkAction.disabled = (
 	        catalogSelectedNames.size === 0
 	        || !catalogBulkAction.value
@@ -4420,6 +4446,7 @@ def _index_html() -> str:
 	      };
 	      catalogMeta.textContent = (
 	        `${catalogTotalRows.toLocaleString()} matching datasets · server-loaded 10 per page · newest first`
+	        + (catalogMarkedOnly ? " · marked only" : "")
 	        + (fromCache ? " · restored from page cache" : "")
 	      );
 	      updateCatalogPager();
@@ -5437,6 +5464,17 @@ def _index_html() -> str:
 	    });
 	    catalogBulkAction.addEventListener("change", updateBulkActionUi);
 	    catalogApplyBulkAction.addEventListener("click", applyCatalogBulkAction);
+	    catalogMarkedOnlyButton.addEventListener("click", async () => {
+	      catalogMarkedOnly = !catalogMarkedOnly;
+	      updateBulkActionUi();
+	      if (!datasetCatalogTable) return;
+	      try {
+	        if (catalogCurrentPage === 1) await datasetCatalogTable.setData();
+	        else await datasetCatalogTable.setPage(1);
+	      } catch (error) {
+	        setDatasetActionStatus(`Dataset filter failed: ${error?.message || error}`, "error");
+	      }
+	    });
 	    loopAnalyzerReload.addEventListener("click", () => initLoopAnalyzer(true));
 	    init();
   </script>
