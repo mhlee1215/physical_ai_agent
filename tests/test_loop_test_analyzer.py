@@ -301,6 +301,77 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertEqual(payload["data"][0]["name"], "cube_14")
         self.assertEqual(payload["data"][-1]["name"], "cube_05")
 
+    def test_dataset_catalog_marked_filter_runs_before_page_loading(self) -> None:
+        candidates = [
+            {
+                "name": f"cube_{index}",
+                "root": Path(f"/tmp/cube_{index}"),
+                "category": "generated",
+                "loader": "lerobot",
+                "platform": "so101",
+                "platform_label": "SO101",
+                "split_key": "train",
+                "split_label": "Train",
+                "render_key": "simulation",
+                "render_label": "Standard sim",
+                "created_at": "2026-08-01T00:00:00Z",
+                "created_at_epoch": float(index),
+            }
+            for index in range(6)
+        ]
+
+        def load_candidate(
+            _repo_root: Path,
+            candidate: dict[str, object],
+        ) -> dict[str, object]:
+            return {
+                "status": "available",
+                "summary": {
+                    "name": candidate["name"],
+                    "root": str(candidate["root"]),
+                    "episodes": 1,
+                    "frames": 1,
+                    "episode_lengths": [1],
+                },
+            }
+
+        marked = {
+            "training": {"cube_1"},
+            "validation": {"cube_3"},
+            "loop_test": {"cube_5"},
+        }
+        with (
+            patch.object(dataset_viewer, "_dataset_catalog_candidates", return_value=candidates),
+            patch.object(
+                dataset_viewer,
+                "selected_catalog_names",
+                side_effect=lambda _root, role: marked[role],
+            ),
+            patch.object(
+                dataset_viewer,
+                "dataset_role_counts",
+                return_value={"training": 1, "validation": 1, "loop_test": 1},
+            ),
+            patch.object(
+                dataset_viewer,
+                "_load_dataset_catalog_candidate",
+                side_effect=load_candidate,
+            ) as loader,
+        ):
+            payload = dataset_viewer._dataset_catalog_page_payload(
+                Path("/tmp/catalog-repo"),
+                {"page": ["1"], "size": ["10"], "marked": ["1"]},
+            )
+
+        self.assertTrue(payload["marked_only"])
+        self.assertEqual(payload["total"], 3)
+        self.assertEqual(loader.call_count, 3)
+        self.assertEqual(
+            [row["name"] for row in payload["data"]],
+            ["cube_5", "cube_3", "cube_1"],
+        )
+        self.assertTrue(all(row["markedRoles"] for row in payload["data"]))
+
     def test_dataset_catalog_row_exposes_persistent_trainable_mark(self) -> None:
         root = Path("/tmp/marked_train").resolve()
         candidate = {
@@ -985,6 +1056,9 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertIn('id="catalogPageStatus"', html)
         self.assertIn('id="catalogBulkAction"', html)
         self.assertIn('id="catalogApplyBulkAction"', html)
+        self.assertIn('id="catalogMarkedOnly"', html)
+        self.assertIn('if (catalogMarkedOnly) query.set("marked", "1")', html)
+        self.assertIn('catalogMarkedOnlyButton.addEventListener("click"', html)
         self.assertIn('className = "dataset-select-checkbox dataset-select-page-checkbox"', html)
         self.assertIn('className = "dataset-select-checkbox dataset-row-select-checkbox"', html)
         self.assertIn("Mark as training set", html)

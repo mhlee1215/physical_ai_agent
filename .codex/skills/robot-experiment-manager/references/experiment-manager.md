@@ -98,6 +98,11 @@ loaded filter/sort/page response in the browser session so returning to a page
 does not rescan or reload it. Invalidate this page cache after any operation
 that changes catalog membership or dataset-role marks.
 
+The `Marked only` toggle is also a server-side filter and shows the union of
+training, validation, and loop-test role marks. Include its state in the page
+cache key; toggling it off should restore an already cached unfiltered page
+without loading the entire catalog.
+
 The leftmost checkbox selects rows for a bulk action. Training, validation, and
 loop-test roles persist independently in
 `_workspace/so101_training/dataset_role_selection.json`; role changes do not
