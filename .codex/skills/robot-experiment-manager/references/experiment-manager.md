@@ -103,6 +103,13 @@ training, validation, and loop-test role marks. Include its state in the page
 cache key; toggling it off should restore an already cached unfiltered page
 without loading the entire catalog.
 
+The browser URL is the durable Data Viewer deep link. Keep `view`, selected
+`dataset`, `episode`, `frame`, catalog `page`, role/filter/sort state, and
+playback `fps` synchronized with the visible controls using `history.replaceState`.
+Opening that URL in a fresh tab must restore the same dataset frame without
+loading the full catalog. Use the exact-name catalog item endpoint when the
+selected dataset is not present on the currently paginated catalog page.
+
 The leftmost checkbox selects rows for a bulk action. Training, validation, and
 loop-test roles persist independently in
 `_workspace/so101_training/dataset_role_selection.json`; role changes do not

@@ -372,6 +372,62 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         )
         self.assertTrue(all(row["markedRoles"] for row in payload["data"]))
 
+    def test_dataset_catalog_named_item_supports_deep_links_outside_current_page(self) -> None:
+        candidate = {
+            "name": "grip_the_cube_v4_4_train",
+            "root": Path("/tmp/grip_the_cube_v4_4_train"),
+            "category": "generated",
+            "loader": "lerobot",
+            "platform": "so101",
+            "platform_label": "SO101",
+            "split_key": "train",
+            "split_label": "Train",
+            "render_key": "photoreal",
+            "render_label": "Photoreal",
+            "created_at": "2026-08-01T00:00:00Z",
+            "created_at_epoch": 1.0,
+        }
+        loaded = {
+            "status": "available",
+            "summary": {
+                "name": candidate["name"],
+                "root": str(candidate["root"]),
+                "episodes": 2,
+                "frames": 20,
+                "episode_lengths": [10, 10],
+            },
+        }
+        marked = {
+            "training": {candidate["name"]},
+            "validation": set(),
+            "loop_test": set(),
+        }
+        with (
+            patch.object(dataset_viewer, "_dataset_catalog_candidates", return_value=[candidate]),
+            patch.object(dataset_viewer, "_load_dataset_catalog_candidate", return_value=loaded) as loader,
+            patch.object(dataset_viewer, "_training_registry_entries_by_root", return_value={}),
+            patch.object(
+                dataset_viewer,
+                "selected_catalog_names",
+                side_effect=lambda _root, role: marked[role],
+            ),
+        ):
+            payload = dataset_viewer._dataset_catalog_named_item_payload(
+                Path("/tmp/catalog-repo"),
+                "grip_the_cube_v4_4_train",
+            )
+
+        self.assertEqual(loader.call_count, 1)
+        self.assertEqual(payload["data"]["name"], "grip_the_cube_v4_4_train")
+        self.assertEqual(payload["data"]["markedRoles"], ["training"])
+
+        with patch.object(dataset_viewer, "_dataset_catalog_candidates", return_value=[candidate]):
+            with self.assertRaises(FileNotFoundError):
+                dataset_viewer._dataset_catalog_named_item_payload(
+                    Path("/tmp/catalog-repo"),
+                    "missing_dataset",
+                )
+
     def test_dataset_catalog_row_exposes_persistent_trainable_mark(self) -> None:
         root = Path("/tmp/marked_train").resolve()
         candidate = {
@@ -1059,6 +1115,15 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertIn('id="catalogMarkedOnly"', html)
         self.assertIn('if (catalogMarkedOnly) query.set("marked", "1")', html)
         self.assertIn('catalogMarkedOnlyButton.addEventListener("click"', html)
+        self.assertIn("function initialViewStateFromUrl()", html)
+        self.assertIn("function syncCurrentViewUrl()", html)
+        self.assertIn("window.history.replaceState", html)
+        self.assertIn('fetch(`/api/datasets/catalog/item?name=${encodeURIComponent(name)}`', html)
+        self.assertIn("paginationInitialPage: initialViewState.catalogPage", html)
+        self.assertIn("initialHeaderFilter: initialCatalogHeaderFilters()", html)
+        self.assertIn("restoreInitialViewState()", html)
+        self.assertIn("fps: initialViewState.fps", html)
+        self.assertIn("if (options.fps) fps.value = String(options.fps)", html)
         self.assertIn('className = "dataset-select-checkbox dataset-select-page-checkbox"', html)
         self.assertIn('className = "dataset-select-checkbox dataset-row-select-checkbox"', html)
         self.assertIn("Mark as training set", html)
@@ -1083,7 +1148,7 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertIn('class="dataset-catalog-shell">\n\t        <div id="catalogLoading"', html)
         self.assertIn('class="playback-actions"', html)
         self.assertIn('class="playback-icon-button"', html)
-        self.assertNotIn("initialSort:", html)
+        self.assertIn("initialSort:", html)
         self.assertIn('title: "Status"', html)
         self.assertIn('title: "Type"', html)
         self.assertIn('title: "Dataset"', html)
@@ -1108,7 +1173,7 @@ class LoopTestAnalyzerTest(unittest.TestCase):
         self.assertIn('function renderTypeForDataset(name)', html)
         self.assertIn('Split: ${escapeHtml(splitLabel(datasetSplitByName[name]))}', html)
         self.assertIn('Render: ${escapeHtml(renderTypeLabel(datasetRenderTypeByName[name]))}', html)
-        self.assertIn('function selectDataset(name)', html)
+        self.assertIn('function selectDataset(name, options = {})', html)
         self.assertNotIn('id="platformKind"', html)
         self.assertNotIn('id="viewKind"', html)
         self.assertNotIn('id="datasetTab"', html)
