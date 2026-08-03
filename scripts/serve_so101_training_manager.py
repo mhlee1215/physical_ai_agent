@@ -5,6 +5,8 @@ import argparse
 import html
 import json
 import os
+import shutil
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -103,6 +105,172 @@ def _runs_payload(repo_root: Path) -> dict[str, Any]:
         runs.append(row_payload)
     runs.sort(key=lambda row: str(row.get("started_at_utc") or row.get("written_at_utc") or ""), reverse=True)
     return {"active_training_id": _active_training_id(active), "runs": runs}
+
+
+def _delete_runs(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    training_ids = _unique_training_ids(payload.get("training_ids"))
+    confirmation = str(payload.get("confirmation") or "").strip()
+    expected_confirmation = f"DELETE {len(training_ids)} TRAINING RUNS"
+    if confirmation != expected_confirmation:
+        raise ValueError(
+            f"bulk deletion confirmation must exactly match: {expected_confirmation}"
+        )
+
+    records = _training_run_records(repo_root)
+    missing = [training_id for training_id in training_ids if training_id not in records]
+    if missing:
+        raise ValueError(f"unknown training runs: {', '.join(missing)}")
+
+    active = _active_record(repo_root)
+    active_id = _active_training_id(active)
+    active_run_dir = (
+        Path(str(active.get("run_dir"))).resolve()
+        if active.get("run_dir")
+        else None
+    )
+    runs_root = (repo_root / DEFAULT_ROOT / "runs").resolve()
+    selected_ids = set(training_ids)
+    target_dirs: dict[Path, dict[str, Any]] = {}
+    ids_by_dir: dict[Path, set[str]] = {}
+    for training_id, run_dirs in records.items():
+        for run_dir in run_dirs:
+            ids_by_dir.setdefault(run_dir, set()).add(training_id)
+
+    for training_id in training_ids:
+        run_dirs = records[training_id]
+        if len(run_dirs) != 1:
+            raise ValueError(
+                f"training run id is ambiguous: {training_id} resolves to {len(run_dirs)} directories"
+            )
+        run_dir = next(iter(run_dirs))
+        if training_id == active_id or (active_run_dir is not None and run_dir == active_run_dir):
+            raise PermissionError(f"refusing to delete active training run: {training_id}")
+        try:
+            run_dir.relative_to(runs_root)
+        except ValueError as exc:
+            raise PermissionError(
+                f"refusing to delete a training run outside {runs_root}: {run_dir}"
+            ) from exc
+        if run_dir == runs_root:
+            raise PermissionError("refusing to delete the training runs root")
+        aliases = ids_by_dir.get(run_dir, set()) - selected_ids
+        if aliases:
+            raise ValueError(
+                f"training run directory is also registered as: {', '.join(sorted(aliases))}"
+            )
+        if run_dir.exists():
+            if not run_dir.is_dir():
+                raise ValueError(f"training run path is not a directory: {run_dir}")
+            target_dirs[run_dir] = {
+                "run_dir": str(run_dir),
+                "size_bytes": _directory_size(run_dir),
+            }
+
+    selected_dirs = set(target_dirs)
+    for run_dir in selected_dirs:
+        for other_id, other_dirs in records.items():
+            if other_id in selected_ids:
+                continue
+            for other_dir in other_dirs:
+                if other_dir == run_dir:
+                    continue
+                try:
+                    other_dir.relative_to(run_dir)
+                except ValueError:
+                    continue
+                raise ValueError(
+                    f"refusing to delete {run_dir}: it contains unselected run {other_id}"
+                )
+
+    total_size = sum(int(item["size_bytes"]) for item in target_dirs.values())
+    for run_dir in sorted(target_dirs, key=lambda path: len(path.parts), reverse=True):
+        shutil.rmtree(run_dir)
+    _remove_training_registry_rows(
+        repo_root,
+        selected_ids=selected_ids,
+        selected_dirs=selected_dirs,
+    )
+    return {
+        "status": "deleted",
+        "deleted_training_ids": training_ids,
+        "deleted_directories": list(target_dirs.values()),
+        "size_bytes": total_size,
+        "size_human": _format_bytes(total_size),
+    }
+
+
+def _unique_training_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("training_ids must be a non-empty list")
+    training_ids = sorted({str(item).strip() for item in value if str(item).strip()})
+    if not training_ids:
+        raise ValueError("training_ids must be a non-empty list")
+    return training_ids
+
+
+def _training_run_records(repo_root: Path) -> dict[str, set[Path]]:
+    records: dict[str, set[Path]] = {}
+    for summary_path in _summary_paths(repo_root):
+        summary = _read_json(summary_path)
+        if not isinstance(summary, dict):
+            continue
+        training_id = _summary_training_id(summary_path, summary)
+        run_dir = Path(str(summary.get("run_dir") or summary_path.parent)).resolve()
+        records.setdefault(training_id, set()).add(run_dir)
+    for row in _registry_rows(repo_root):
+        training_id = str(row.get("training_id") or "").strip()
+        run_dir = str(row.get("run_dir") or "").strip()
+        if training_id and run_dir:
+            records.setdefault(training_id, set()).add(Path(run_dir).resolve())
+    return records
+
+
+def _remove_training_registry_rows(
+    repo_root: Path,
+    *,
+    selected_ids: set[str],
+    selected_dirs: set[Path],
+) -> None:
+    path = repo_root / DEFAULT_ROOT / "training_runs_index.json"
+    payload = _read_json(path)
+    if not isinstance(payload, dict) or not isinstance(payload.get("runs"), list):
+        return
+    retained = []
+    for row in payload["runs"]:
+        if not isinstance(row, dict):
+            retained.append(row)
+            continue
+        training_id = str(row.get("training_id") or "")
+        run_dir = Path(str(row.get("run_dir"))).resolve() if row.get("run_dir") else None
+        if training_id in selected_ids or (run_dir is not None and run_dir in selected_dirs):
+            continue
+        retained.append(row)
+    payload["runs"] = retained
+    payload["updated_at_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _directory_size(root: Path) -> int:
+    total = 0
+    for path in root.rglob("*"):
+        try:
+            if path.is_file() and not path.is_symlink():
+                total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _format_bytes(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024.0 or unit == "TB":
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} TB"
 
 
 def _run_detail(repo_root: Path, training_id: str) -> dict[str, Any]:
