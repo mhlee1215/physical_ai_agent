@@ -328,6 +328,22 @@ def make_handler(repo_root: Path) -> type[BaseHTTPRequestHandler]:
                 except (FileNotFoundError, ValueError) as exc:
                     self._send_json({"status": "error", "message": str(exc)}, status=400)
                 return
+            if parsed.path == "/api/training/runs/bulk-delete":
+                body = self._read_json_body()
+                try:
+                    if not _trusted_dataset_delete_request(self.client_address[0], self.headers):
+                        raise PermissionError(
+                            "training run deletion is only available from localhost or the same private network"
+                        )
+                    confirmation = str(body.get("confirmation") or "")
+                    if self.headers.get("X-Training-Delete-Confirmation", "") != confirmation:
+                        raise PermissionError("missing bulk training deletion confirmation header")
+                    self._send_json(_delete_training_runs(repo_root, body))
+                except PermissionError as exc:
+                    self._send_json({"status": "error", "message": str(exc)}, status=403)
+                except (FileNotFoundError, ValueError) as exc:
+                    self._send_json({"status": "error", "message": str(exc)}, status=400)
+                return
             if parsed.path in {
                 "/api/datasets/role-selection",
                 "/api/datasets/trainable-selection",
@@ -1583,6 +1599,11 @@ def _training_run_detail_payload(repo_root: Path, training_id: str) -> dict[str,
         return manager._run_detail(repo_root, training_id)  # noqa: SLF001
     except Exception as exc:
         return {"error": str(exc)}
+
+
+def _delete_training_runs(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    manager = _training_manager_module()
+    return manager._delete_runs(repo_root, payload)  # noqa: SLF001
 
 
 def _loop_analyzer_module() -> Any:
@@ -3737,25 +3758,114 @@ def _index_html() -> str:
 	    .sim-policy-controls { grid-template-columns: minmax(300px, 1.1fr) minmax(260px, 1fr) minmax(120px, 0.4fr); }
 	    .sim-run-controls { grid-template-columns: repeat(3, minmax(115px, 160px)) repeat(2, minmax(120px, auto)); justify-content: start; }
 	    .sim-play-controls { grid-template-columns: minmax(90px, auto) minmax(260px, 1fr) minmax(220px, 0.8fr); align-items: center; margin-bottom: 12px; }
-    .manager-grid { display: grid; grid-template-columns: minmax(300px, 410px) minmax(0, 1fr); gap: 14px; align-items: start; }
-    .run-list { display: grid; gap: 9px; max-height: 70vh; overflow: auto; padding-right: 2px; }
-    .run-item {
-      text-align: left;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: linear-gradient(180deg, #fff, #fbfdff);
-      padding: 11px;
-      display: grid;
-      gap: 5px;
-      white-space: normal;
-      min-width: 0;
-      color: inherit;
-      text-decoration: none;
-      cursor: pointer;
-    }
-    .run-item * { min-width: 0; overflow-wrap: anywhere; }
-    .run-item.active { border-color: var(--train); background: var(--train-soft); box-shadow: inset 4px 0 0 var(--train); }
-    .run-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-weight: 800; overflow-wrap: anywhere; }
+	    .training-runs-shell {
+	      border: 1px solid var(--line);
+	      border-radius: 10px;
+	      background: #fff;
+	      overflow: hidden;
+	    }
+	    .training-runs-scroll { overflow-x: auto; }
+	    #trainingRuns { min-width: 1120px; }
+	    #trainingRuns.tabulator {
+	      border: 0;
+	      background: #fff;
+	      color: var(--ink);
+	      font-size: 12px;
+	    }
+	    #trainingRuns .tabulator-header {
+	      border-bottom: 1px solid var(--line);
+	      background: var(--train-soft);
+	      color: #3b2a61;
+	      font-weight: 800;
+	    }
+	    #trainingRuns .tabulator-header .tabulator-col { background: var(--train-soft); }
+	    #trainingRuns .tabulator-header .tabulator-col:hover { background: #e8ddff; }
+	    #trainingRuns .tabulator-header-filter input,
+	    #trainingRuns .tabulator-header-filter select {
+	      min-height: 30px;
+	      padding: 4px 7px;
+	      border: 1px solid #c8b8e8;
+	      border-radius: 6px;
+	      background: #fff;
+	      color: #302348;
+	      font: inherit;
+	    }
+	    #trainingRuns .tabulator-row {
+	      cursor: pointer;
+	      border-bottom: 1px solid #e7e1f2;
+	      background: #fff;
+	      transition: background 120ms ease, box-shadow 120ms ease;
+	    }
+	    #trainingRuns .tabulator-row:nth-child(even) { background: #fdfcff; }
+	    #trainingRuns .tabulator-row:hover { background: #faf7ff; }
+	    #trainingRuns .tabulator-row.training-current {
+	      background: var(--train-soft);
+	      box-shadow: inset 4px 0 0 var(--train);
+	    }
+	    #trainingRuns .tabulator-row.training-active-row { font-weight: 650; }
+	    #trainingRuns .tabulator-cell { padding: 8px 9px; border-right-color: #f0ecf7; }
+	    #trainingRuns .tabulator-placeholder { min-height: 120px; color: var(--text-soft); }
+	    .training-select-checkbox { width: 16px; height: 16px; margin: 0; accent-color: var(--train); cursor: pointer; }
+	    .training-select-checkbox:disabled { cursor: not-allowed; opacity: 0.35; }
+	    .training-bulk-toolbar {
+	      display: flex;
+	      flex-wrap: wrap;
+	      align-items: center;
+	      gap: 8px;
+	      margin: 8px 0;
+	      padding: 8px 10px;
+	      border: 1px solid #ddd0ff;
+	      border-radius: 9px;
+	      background: #faf7ff;
+	    }
+	    .training-bulk-count { color: #4c1d95; font-size: 12px; font-weight: 800; }
+	    .training-bulk-note { color: #6b5a83; font-size: 11px; }
+	    .training-bulk-spacer { flex: 1 1 auto; }
+	    .training-run-id {
+	      display: block;
+	      color: #3b1f6d;
+	      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	      font-size: 11px;
+	      font-weight: 820;
+	      overflow-wrap: anywhere;
+	    }
+	    .training-run-subtitle { display: block; margin-top: 2px; color: #756987; font-size: 10px; font-weight: 560; }
+	    .training-status-badge {
+	      display: inline-flex;
+	      align-items: center;
+	      min-height: 24px;
+	      padding: 3px 8px;
+	      border: 1px solid #d7cce9;
+	      border-radius: 999px;
+	      background: #f8f5fc;
+	      color: #625473;
+	      font-size: 10px;
+	      font-weight: 850;
+	      white-space: nowrap;
+	    }
+	    .training-status-badge.active { border-color: #86efac; background: #ecfdf5; color: #047857; }
+	    button.training-delete-button {
+	      min-height: 34px;
+	      padding: 5px 11px;
+	      border-color: #fecaca;
+	      background: #fff5f5;
+	      color: var(--bad);
+	    }
+	    button.training-delete-button:hover:not(:disabled) { border-color: #f87171; background: #fee2e2; transform: none; }
+	    button.training-delete-button:disabled { cursor: not-allowed; color: #94a3b8; border-color: #e2e8f0; background: #f8fafc; }
+	    .training-action-status {
+	      margin: 10px 0 0;
+	      padding: 9px 11px;
+	      border: 1px solid var(--line);
+	      border-radius: 8px;
+	      background: var(--surface-muted);
+	      color: #334155;
+	      font-size: 12px;
+	      font-weight: 750;
+	    }
+	    .training-action-status[hidden] { display: none; }
+	    .training-action-status.success { border-color: #86efac; background: #f0fdf4; color: var(--ok); }
+	    .training-action-status.error { border-color: #fca5a5; background: #fef2f2; color: var(--bad); }
     .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 10px; margin: 10px 0; }
     .metric-card { border: 1px solid var(--line); border-radius: 12px; padding: 11px; background: linear-gradient(180deg, #fff, var(--surface-muted)); min-width: 0; }
     .metric-label { color: var(--text-soft); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -3858,7 +3968,7 @@ def _index_html() -> str:
       main { padding: 12px; }
       header { padding: 18px 16px; }
       h1 { font-size: 25px; }
-	      .app-tabs, .controls, .cameras, .loop-grid, .manager-grid, .metric-grid, .loop-controls, .sim-controls, .sim-start-controls, .sim-policy-controls, .sim-run-controls { grid-template-columns: 1fr; }
+	      .app-tabs, .controls, .cameras, .loop-grid, .metric-grid, .loop-controls, .sim-controls, .sim-start-controls, .sim-policy-controls, .sim-run-controls { grid-template-columns: 1fr; }
       .playback-controls { grid-template-columns: 1fr; }
       .playback-actions { justify-content: flex-start; }
       .catalog-loading { padding: 16px; }
@@ -3871,7 +3981,12 @@ def _index_html() -> str:
       .dataset-bulk-toolbar { align-items: stretch; }
       .dataset-bulk-toolbar select { min-width: 0; flex: 1 1 190px; }
       .dataset-bulk-spacer { display: none; }
-      button.dataset-delete-button { padding: 4px 5px; font-size: 10px; }
+	      button.dataset-delete-button { padding: 4px 5px; font-size: 10px; }
+	      #trainingRuns { min-width: 1000px; }
+	      #trainingRuns.tabulator { font-size: 11px; }
+	      #trainingRuns .tabulator-cell { padding: 7px 5px; }
+	      .training-bulk-toolbar { align-items: stretch; }
+	      .training-bulk-spacer { display: none; }
       .quick-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .rollout-row, .thumb-row { grid-template-columns: minmax(220px, 1fr); }
       .kv { grid-template-columns: 1fr; }
@@ -3990,15 +4105,29 @@ def _index_html() -> str:
 	        <button id="trainingReload">Reload</button>
 	      </div>
 	    </section>
-	    <section class="manager-grid">
-	      <div>
-	        <div class="prompt-label">Training runs</div>
-	        <div id="trainingRuns" class="run-list"></div>
+	    <section>
+	      <div class="dataset-catalog-header">
+	        <div>
+	          <div class="prompt-label">Training runs</div>
+	          <p class="meta">Select a row for details. Select inactive rows with checkboxes to remove their checkpoints, logs, TensorBoard data, and rollout artifacts.</p>
+	        </div>
 	      </div>
-	      <div>
-	        <div class="prompt-label">Training detail</div>
-	        <div id="trainingDetail" class="prompt-text">Select a training run.</div>
+	      <div class="training-bulk-toolbar" role="toolbar" aria-label="Training run bulk actions">
+	        <span id="trainingSelectedCount" class="training-bulk-count">0 selected</span>
+	        <span class="training-bulk-note">The active training run is protected.</span>
+	        <span class="training-bulk-spacer"></span>
+	        <button id="trainingDeleteSelected" class="training-delete-button" type="button" disabled>Delete selected runs</button>
 	      </div>
+	      <div class="training-runs-shell">
+	        <div class="training-runs-scroll">
+	          <div id="trainingRuns" aria-label="Training runs"></div>
+	        </div>
+	      </div>
+	      <p id="trainingActionStatus" class="training-action-status" role="status" hidden></p>
+	    </section>
+	    <section>
+	      <div class="prompt-label">Training detail</div>
+	      <div id="trainingDetail" class="prompt-text">Select a training run.</div>
 	    </section>
 	    </div>
 	    <div id="loopPanel" class="panel" hidden>
@@ -4127,6 +4256,9 @@ def _index_html() -> str:
 	    const trainingDetail = document.getElementById("trainingDetail");
 	    const trainingActiveChip = document.getElementById("trainingActiveChip");
 	    const trainingReload = document.getElementById("trainingReload");
+	    const trainingSelectedCount = document.getElementById("trainingSelectedCount");
+	    const trainingDeleteSelected = document.getElementById("trainingDeleteSelected");
+	    const trainingActionStatus = document.getElementById("trainingActionStatus");
 	    const loopPanel = document.getElementById("loopPanel");
 	    const simPanel = document.getElementById("simPanel");
 	    const loopAnalyzerFrame = document.getElementById("loopAnalyzerFrame");
@@ -4161,6 +4293,8 @@ def _index_html() -> str:
 	    let simTimelineTimer = null;
 	    let simContinuationStartReportPath = null;
 	    let trainingRunRows = [];
+	    let trainingRunsTable = null;
+	    const trainingSelectedIds = new Set();
 	    let catalogProgressTimer = null;
 	    let catalogLoadingHideTimer = null;
 	    let catalogProgressRequestInFlight = false;
@@ -4383,7 +4517,7 @@ def _index_html() -> str:
 	        return;
 	      }
 	      if (showTraining) {
-	        loadTrainingRuns();
+	        loadTrainingRuns().catch(error => setTrainingActionStatus(`Training runs failed to load: ${error.message || error}`, "error"));
 	        if (options.updateUrl !== false) syncCurrentViewUrl();
 	        return;
 	      }
@@ -5123,30 +5257,269 @@ def _index_html() -> str:
 
 	    async function loadTrainingRuns() {
 	      trainingActiveChip.innerHTML = `active: <strong>loading</strong>`;
-	      const payload = await fetch("/api/training/runs").then(r => r.json());
-	      trainingRunRows = payload.runs || [];
-	      if (selectedTrainingId && !trainingRunRows.some(row => row.training_id === selectedTrainingId)) {
-	        selectedTrainingId = null;
-	      }
+	      const response = await fetch("/api/training/runs", {cache: "no-store"});
+	      const payload = await response.json();
+	      if (!response.ok || payload.error) throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+	      trainingRunRows = (payload.runs || []).map(row => ({
+	        ...row,
+	        startedEpoch: Date.parse(row.started_at_utc || row.written_at_utc || "") || 0,
+	        closedLoopSuccess: typeof row.latest_closed_loop?.success_rate === "number"
+	          ? row.latest_closed_loop.success_rate
+	          : null,
+	      }));
+	      const knownIds = new Set(trainingRunRows.map(row => row.training_id));
+	      [...trainingSelectedIds].forEach(trainingId => {
+	        const row = trainingRunRows.find(candidate => candidate.training_id === trainingId);
+	        if (!knownIds.has(trainingId) || row?.active) trainingSelectedIds.delete(trainingId);
+	      });
+	      if (selectedTrainingId && !knownIds.has(selectedTrainingId)) selectedTrainingId = null;
 	      if (!selectedTrainingId && payload.active_training_id) selectedTrainingId = payload.active_training_id;
 	      if (!selectedTrainingId && trainingRunRows.length) selectedTrainingId = trainingRunRows[0].training_id;
-	      trainingActiveChip.innerHTML = `active: <strong>${payload.active_training_id || "none"}</strong>`;
-	      trainingRuns.innerHTML = trainingRunRows.map(row => `
-	        <a class="run-item ${row.training_id === selectedTrainingId ? "active" : ""}" href="${escapeAttr(trainingRunUrl(row.training_id))}" data-training-id="${escapeAttr(row.training_id)}">
-	          <div class="run-id">${escapeHtml(row.training_id)} ${row.active ? '<span class="chip">active</span>' : ''}</div>
-	          <div class="meta">${escapeHtml(row.dataset_config_name || "")}</div>
-	          <div class="meta">train ${fmtMaybe(row.latest_train_loss)} · val ${fmtMaybe(row.latest_val_loss)} · ckpt ${row.checkpoint_count || 0}</div>
-	        </a>
-	      `).join("") || `<p class="empty">No training runs found.</p>`;
+	      trainingActiveChip.innerHTML = `active: <strong>${escapeHtml(payload.active_training_id || "none")}</strong>`;
+	      const tableCreated = renderTrainingRunsTable();
+	      if (!tableCreated && trainingRunsTable) {
+	        await trainingRunsTable.replaceData(trainingRunRows);
+	        syncTrainingRunTableSelection();
+	        updateTrainingBulkUi();
+	      }
 	      if (selectedTrainingId) await loadTrainingDetail(selectedTrainingId);
+	      else trainingDetail.textContent = "No training runs found.";
+	    }
+
+	    function renderTrainingRunsTable() {
+	      if (trainingRunsTable) return false;
+	      trainingRunsTable = new Tabulator(trainingRuns, {
+	        index: "training_id",
+	        layout: "fitColumns",
+	        data: trainingRunRows,
+	        pagination: true,
+	        paginationMode: "local",
+	        paginationSize: 10,
+	        paginationSizeSelector: [10, 25, 50, 100],
+	        placeholder: "No training runs found.",
+	        initialSort: [{column: "startedEpoch", dir: "desc"}],
+	        rowFormatter: row => {
+	          const data = row.getData();
+	          const element = row.getElement();
+	          element.classList.toggle("training-current", data.training_id === selectedTrainingId);
+	          element.classList.toggle("training-active-row", Boolean(data.active));
+	          element.setAttribute("aria-selected", String(data.training_id === selectedTrainingId));
+	        },
+	        columns: [
+	          {
+	            title: "",
+	            field: "training_id",
+	            width: 42,
+	            minWidth: 42,
+	            headerSort: false,
+	            hozAlign: "center",
+	            headerHozAlign: "center",
+	            titleFormatter: () => {
+	              const checkbox = document.createElement("input");
+	              checkbox.type = "checkbox";
+	              checkbox.className = "training-select-checkbox training-select-page-checkbox";
+	              checkbox.setAttribute("aria-label", "Select all inactive training runs on this page");
+	              checkbox.addEventListener("click", event => event.stopPropagation());
+	              checkbox.addEventListener("change", () => selectCurrentTrainingPage(checkbox.checked));
+	              return checkbox;
+	            },
+	            formatter: cell => {
+	              const row = cell.getRow().getData();
+	              const checkbox = document.createElement("input");
+	              checkbox.type = "checkbox";
+	              checkbox.className = "training-select-checkbox training-row-select-checkbox";
+	              checkbox.dataset.trainingId = row.training_id;
+	              checkbox.checked = trainingSelectedIds.has(row.training_id);
+	              checkbox.disabled = Boolean(row.active);
+	              checkbox.title = row.active
+	                ? "The active training run cannot be deleted"
+	                : `Select ${row.training_id}`;
+	              checkbox.setAttribute("aria-label", checkbox.title);
+	              checkbox.addEventListener("click", event => event.stopPropagation());
+	              checkbox.addEventListener("change", () => toggleTrainingRunSelection(row.training_id, checkbox.checked));
+	              return checkbox;
+	            },
+	          },
+	          {
+	            title: "Status",
+	            field: "active",
+	            width: 92,
+	            headerFilter: catalogSelectHeaderFilter(["Active", "Past"]),
+	            headerFilterFunc: (filterValue, rowValue) => !filterValue || (filterValue === "Active") === Boolean(rowValue),
+	            formatter: cell => cell.getValue()
+	              ? '<span class="training-status-badge active">Active</span>'
+	              : '<span class="training-status-badge">Past</span>',
+	          },
+	          {
+	            title: "Training run",
+	            field: "training_id",
+	            minWidth: 290,
+	            widthGrow: 3,
+	            headerFilter: "input",
+	            formatter: cell => {
+	              const row = cell.getRow().getData();
+	              const subtitle = row.task ? `<span class="training-run-subtitle">${escapeHtml(row.task)}</span>` : "";
+	              return `<span class="training-run-id" title="${escapeAttr(row.training_id)}">${escapeHtml(row.training_id)}</span>${subtitle}`;
+	            },
+	          },
+	          {
+	            title: "Dataset config",
+	            field: "dataset_config_name",
+	            minWidth: 220,
+	            widthGrow: 2,
+	            headerFilter: "input",
+	            formatter: cell => escapeHtml(cell.getValue() || "n/a"),
+	          },
+	          {
+	            title: "Started",
+	            field: "startedEpoch",
+	            minWidth: 150,
+	            sorter: "number",
+	            formatter: cell => {
+	              const row = cell.getRow().getData();
+	              const startedAt = row.started_at_utc || row.written_at_utc || "";
+	              return `<time datetime="${escapeAttr(startedAt)}" title="${escapeAttr(startedAt || "Start time unavailable")}">${escapeHtml(formatDatasetCreatedAt(startedAt))}</time>`;
+	            },
+	          },
+	          {title: "Train loss", field: "latest_train_loss", width: 104, sorter: "number", hozAlign: "right", headerHozAlign: "right", formatter: cell => fmtMaybe(cell.getValue())},
+	          {title: "Val loss", field: "latest_val_loss", width: 100, sorter: "number", hozAlign: "right", headerHozAlign: "right", formatter: cell => fmtMaybe(cell.getValue())},
+	          {title: "Loop success", field: "closedLoopSuccess", width: 118, sorter: "number", hozAlign: "right", headerHozAlign: "right", formatter: cell => formatPercent(cell.getValue())},
+	          {title: "Checkpoints", field: "checkpoint_count", width: 112, sorter: "number", hozAlign: "right", headerHozAlign: "right"},
+	        ],
+	      });
+	      trainingRunsTable.on("rowClick", (event, row) => {
+	        if (event.target.closest(".training-select-checkbox")) return;
+	        loadTrainingDetail(row.getData().training_id);
+	      });
+	      for (const eventName of ["tableBuilt", "dataLoaded", "pageLoaded", "dataFiltered", "dataSorted"]) {
+	        trainingRunsTable.on(eventName, () => {
+	          syncTrainingRunTableSelection();
+	          updateTrainingBulkUi();
+	        });
+	      }
+	      return true;
+	    }
+
+	    function currentTrainingPageRows() {
+	      if (!trainingRunsTable) return [];
+	      try {
+	        return trainingRunsTable.getRows("visible").map(row => row.getData()).filter(row => !row.active);
+	      } catch (_error) {
+	        // Tabulator emits dataLoaded before local pagination has created visibleRows.
+	        return [];
+	      }
+	    }
+
+	    function syncTrainingRunTableSelection() {
+	      if (!trainingRunsTable) return;
+	      trainingRunsTable.getRows().forEach(row => {
+	        const data = row.getData();
+	        const element = row.getElement();
+	        element.classList.toggle("training-current", data.training_id === selectedTrainingId);
+	        element.setAttribute("aria-selected", String(data.training_id === selectedTrainingId));
+	      });
+	      trainingRuns.querySelectorAll(".training-row-select-checkbox").forEach(checkbox => {
+	        checkbox.checked = trainingSelectedIds.has(checkbox.dataset.trainingId || "");
+	      });
+	    }
+
+	    function updateTrainingBulkUi() {
+	      const pageRows = currentTrainingPageRows();
+	      const selectedOnPage = pageRows.filter(row => trainingSelectedIds.has(row.training_id));
+	      const pageCheckbox = trainingRuns.querySelector(".training-select-page-checkbox");
+	      if (pageCheckbox) {
+	        pageCheckbox.checked = pageRows.length > 0 && selectedOnPage.length === pageRows.length;
+	        pageCheckbox.indeterminate = selectedOnPage.length > 0 && selectedOnPage.length < pageRows.length;
+	        pageCheckbox.disabled = pageRows.length === 0;
+	      }
+	      trainingSelectedCount.textContent = `${trainingSelectedIds.size.toLocaleString()} selected`;
+	      trainingDeleteSelected.disabled = trainingSelectedIds.size === 0 || !isPrivateViewerHost();
+	      trainingDeleteSelected.title = isPrivateViewerHost()
+	        ? "Permanently delete selected inactive training runs"
+	        : "Training runs can only be deleted from localhost or the same Wi-Fi";
+	    }
+
+	    function toggleTrainingRunSelection(trainingId, checked) {
+	      const row = trainingRunRows.find(candidate => candidate.training_id === trainingId);
+	      if (!row || row.active) return;
+	      if (checked) trainingSelectedIds.add(trainingId);
+	      else trainingSelectedIds.delete(trainingId);
+	      updateTrainingBulkUi();
+	    }
+
+	    function selectCurrentTrainingPage(checked) {
+	      currentTrainingPageRows().forEach(row => {
+	        if (checked) trainingSelectedIds.add(row.training_id);
+	        else trainingSelectedIds.delete(row.training_id);
+	      });
+	      syncTrainingRunTableSelection();
+	      updateTrainingBulkUi();
+	    }
+
+	    function setTrainingActionStatus(message, tone = "") {
+	      trainingActionStatus.textContent = message || "";
+	      trainingActionStatus.className = `training-action-status ${tone}`.trim();
+	      trainingActionStatus.hidden = !message;
+	    }
+
+	    async function deleteSelectedTrainingRuns() {
+	      const trainingIds = [...trainingSelectedIds].sort((left, right) => left.localeCompare(right));
+	      if (!trainingIds.length) return;
+	      if (!isPrivateViewerHost()) {
+	        setTrainingActionStatus("Training runs can only be deleted from localhost or the same Wi-Fi.", "error");
+	        return;
+	      }
+	      const activeIds = trainingIds.filter(trainingId => trainingRunRows.find(row => row.training_id === trainingId)?.active);
+	      if (activeIds.length) {
+	        setTrainingActionStatus(`Active training runs cannot be deleted: ${activeIds.join(", ")}`, "error");
+	        return;
+	      }
+	      const preview = trainingIds.slice(0, 8).join("\\n");
+	      const remainder = trainingIds.length > 8 ? `\\n...and ${trainingIds.length - 8} more` : "";
+	      if (!window.confirm(
+	        `Delete ${trainingIds.length} selected training run${trainingIds.length === 1 ? "" : "s"} permanently?\\n\\n${preview}${remainder}\\n\\nCheckpoints, logs, TensorBoard data, and rollout artifacts will be removed. This cannot be undone.`,
+	      )) return;
+	      const required = `DELETE ${trainingIds.length} TRAINING RUNS`;
+	      const confirmation = window.prompt(
+	        `One more confirmation is required.\\n\\nType exactly:\\n${required}`,
+	        "",
+	      );
+	      if (confirmation === null) return;
+	      if (confirmation.trim() !== required) {
+	        setTrainingActionStatus("Bulk deletion cancelled: the confirmation text did not match.", "error");
+	        return;
+	      }
+	      trainingDeleteSelected.disabled = true;
+	      setTrainingActionStatus(`Deleting ${trainingIds.length} selected training runs...`);
+	      try {
+	        const response = await fetch("/api/training/runs/bulk-delete", {
+	          method: "POST",
+	          headers: {
+	            "Content-Type": "application/json",
+	            "X-Training-Delete-Confirmation": required,
+	          },
+	          body: JSON.stringify({training_ids: trainingIds, confirmation: required}),
+	        });
+	        const result = await response.json();
+	        if (!response.ok) throw new Error(result.message || "bulk training run deletion failed");
+	        if (selectedTrainingId && trainingSelectedIds.has(selectedTrainingId)) selectedTrainingId = null;
+	        trainingSelectedIds.clear();
+	        await loadTrainingRuns();
+	        setTrainingActionStatus(
+	          `Deleted ${result.deleted_training_ids?.length || trainingIds.length} training run${(result.deleted_training_ids?.length || trainingIds.length) === 1 ? "" : "s"} (${result.size_human || "size unavailable"}).`,
+	          "success",
+	        );
+	      } catch (error) {
+	        setTrainingActionStatus(`Delete failed: ${error.message || error}`, "error");
+	      } finally {
+	        updateTrainingBulkUi();
+	      }
 	    }
 
 	    async function loadTrainingDetail(trainingId) {
 	      selectedTrainingId = trainingId;
 	      syncCurrentViewUrl();
-	      trainingRuns.querySelectorAll(".run-item").forEach(button => {
-	        button.classList.toggle("active", button.dataset.trainingId === selectedTrainingId);
-	      });
+	      syncTrainingRunTableSelection();
 	      trainingDetail.innerHTML = "Loading...";
 	      const payload = await fetch(`/api/training/run?id=${encodeURIComponent(trainingId)}`).then(r => r.json());
 	      if (payload.error) {
@@ -5212,6 +5585,10 @@ def _index_html() -> str:
 
 	    function fmtMaybe(value) {
 	      return typeof value === "number" ? value.toFixed(5) : "n/a";
+	    }
+
+	    function formatPercent(value) {
+	      return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "n/a";
 	    }
 
 	    function escapeHtml(value) {
@@ -5607,14 +5984,11 @@ def _index_html() -> str:
 	    tabTrainingManager.addEventListener("click", () => syncAppTab("training"));
 	    tabLoopAnalyzer.addEventListener("click", () => syncAppTab("loop"));
 	    tabSimulator.addEventListener("click", () => syncAppTab("simulator"));
-	    trainingReload.addEventListener("click", loadTrainingRuns);
-	    trainingRuns.addEventListener("click", event => {
-	      const button = event.target.closest?.(".run-item");
-	      if (!button?.dataset?.trainingId) return;
-	      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-	      event.preventDefault();
-	      loadTrainingDetail(button.dataset.trainingId);
+	    trainingReload.addEventListener("click", () => {
+	      setTrainingActionStatus("");
+	      loadTrainingRuns().catch(error => setTrainingActionStatus(`Reload failed: ${error.message || error}`, "error"));
 	    });
+	    trainingDeleteSelected.addEventListener("click", deleteSelectedTrainingRuns);
 	    simPreset.addEventListener("change", syncSimulatorPreset);
 	    simTrainingRun.addEventListener("change", syncSimulatorCheckpoints);
 	    simRun.addEventListener("click", () => runSimulator({ continueFromLast: false }));

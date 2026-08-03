@@ -235,6 +235,23 @@ Checkpoint folders are valid policy candidates when they contain:
 */pretrained_model/model.safetensors
 ```
 
+### Run Table And Bulk Delete
+
+Render discovered training runs in a sortable, filterable table. Keep one row
+per stable `training_id` and show at least status, dataset config, start time,
+latest train/validation loss, latest closed-loop success rate, and checkpoint
+count. Selecting a row opens its detail view and updates the `view=training`
+deep link.
+
+The leftmost checkbox is for bulk deletion of historical runs. The active run
+must have a disabled checkbox and must also be rejected by the server if it is
+submitted directly. Deletion is limited to localhost or the same private
+network, requires the exact `DELETE N TRAINING RUNS` confirmation in both the
+request body and header, and must preflight every selected run before deleting
+anything. Only directories below `_workspace/so101_training/runs` may be
+removed. A successful deletion removes the selected run directories and their
+entries from `training_runs_index.json`.
+
 ### Training Launcher Rule
 
 For SO101 training, use:
