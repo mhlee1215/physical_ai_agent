@@ -2457,3 +2457,6 @@ Required checkpoint-local record:
 
 - Add a short disclosure note to the checkpoint evidence bundle whenever AI or coding-agent outputs were used during manuscript preparation.
 - Add the same note to final response artifacts when publishing claims or benchmark tables are produced.
+## myCobot 280 Randomized Ground-Pickup Source Gate
+
+`scripts/check_mycobot_280_ground_pickup_randomized_dataset.py --existing-dataset-root <dataset-root>` is the storage-safe, no-regeneration gate for an existing randomized myCobot 280 ground-pickup dataset. It must validate all source JSONL rows, the fixed close-up camera contract, phase-stratified cube visibility, row-level contact and mat guards, terminal lift and post-lift hold, accepted/rejected attempt provenance, and train/validation isolation. The 2026-07-31 50-train/10-validation corpus passed with 31,800 rows checked, 600 visibility samples, zero sampled border touches, 73 unique attempt seeds and indices, and zero split overlap. Evidence and the exact command are in `docs/research/mycobot_280_randomized_ground_pickup_source_audit_2026_07_31.md`. The focused unit gate is `PYTHONPATH=src:. MUJOCO_GL=egl <python> -m unittest -v tests.test_mycobot_280_ground_pickup_randomized_dataset`.
