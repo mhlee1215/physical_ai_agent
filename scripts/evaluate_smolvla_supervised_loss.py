@@ -12,9 +12,11 @@ import torch
 from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.policies.factory import make_pre_post_processors
 from lerobot.utils.constants import ACTION
 
+from physical_ai_agent.policies.mycobot280_smolvla_contract import (
+    make_mycobot280_pre_post_processors,
+)
 from physical_ai_agent.policies.smolvla_real import (
     _load_pretrained_policy,
     _policy_device_metadata,
@@ -28,6 +30,15 @@ def main() -> None:
     parser.add_argument("--policy-path", required=True)
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--dataset-repo-id", required=True)
+    parser.add_argument(
+        "--processor-dataset-root",
+        type=Path,
+        help="Optional dataset root supplying training-split normalization statistics.",
+    )
+    parser.add_argument(
+        "--processor-dataset-repo-id",
+        help="Repo id paired with --processor-dataset-root.",
+    )
     parser.add_argument("--output-path", type=Path, required=True)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -48,6 +59,8 @@ def main() -> None:
         device=args.device,
         local_files_only=args.local_files_only,
         torch_seed=args.torch_seed,
+        processor_dataset_root=args.processor_dataset_root,
+        processor_dataset_repo_id=args.processor_dataset_repo_id,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 
@@ -64,12 +77,25 @@ def evaluate_supervised_loss(
     device: str,
     local_files_only: bool,
     torch_seed: int,
+    processor_dataset_root: Path | None = None,
+    processor_dataset_repo_id: str | None = None,
 ) -> dict[str, Any]:
     started = perf_counter()
     torch.manual_seed(int(torch_seed))
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(int(torch_seed))
 
+    metadata = LeRobotDatasetMetadata(dataset_repo_id, root=dataset_root)
+    if (processor_dataset_root is None) != (processor_dataset_repo_id is None):
+        raise ValueError(
+            "--processor-dataset-root and --processor-dataset-repo-id must be provided together"
+        )
+    processor_metadata = metadata
+    if processor_dataset_root is not None and processor_dataset_repo_id is not None:
+        processor_metadata = LeRobotDatasetMetadata(
+            processor_dataset_repo_id,
+            root=processor_dataset_root,
+        )
     policy = _load_pretrained_policy(
         model_id=policy_path,
         local_files_only=local_files_only,
@@ -82,13 +108,13 @@ def evaluate_supervised_loss(
         if hasattr(policy, "to"):
             policy.to(selected_device)
     policy.eval()
-    preprocessor, _postprocessor = make_pre_post_processors(
-        policy.config,
-        pretrained_path=str(policy_path),
-        preprocessor_overrides={"device_processor": {"device": selected_device}},
+    preprocessor, _postprocessor, contract_report = make_mycobot280_pre_post_processors(
+        policy=policy,
+        dataset_meta=processor_metadata,
+        policy_path=policy_path,
+        selected_device=selected_device,
     )
 
-    metadata = LeRobotDatasetMetadata(dataset_repo_id, root=dataset_root)
     delta_timestamps = resolve_delta_timestamps(policy.config, metadata)
     dataset = LeRobotDataset(
         dataset_repo_id,
@@ -110,6 +136,7 @@ def evaluate_supervised_loss(
     postprocessed_action_global_squared_errors: list[float] = []
     postprocessed_action_step0_rmses: list[float] = []
     postprocessed_action_max_frame_rmses: list[float] = []
+    postprocessed_action_dims: set[int] = set()
     samples_seen = 0
     with torch.inference_mode():
         for batch_index, batch in enumerate(dataloader):
@@ -136,6 +163,7 @@ def evaluate_supervised_loss(
                     postprocessed_action_step0_rmses.append(float(rmse_metrics["step0_rmse"]))
                 if rmse_metrics.get("max_frame_rmse") is not None:
                     postprocessed_action_max_frame_rmses.append(float(rmse_metrics["max_frame_rmse"]))
+                postprocessed_action_dims.add(int(rmse_metrics["action_dim"]))
             batch_size_seen = _batch_size(batch)
             samples_seen += batch_size_seen
 
@@ -148,6 +176,8 @@ def evaluate_supervised_loss(
         "policy_path": policy_path,
         "dataset_root": str(dataset_root),
         "dataset_repo_id": dataset_repo_id,
+        "processor_dataset_root": str(processor_dataset_root or dataset_root),
+        "processor_dataset_repo_id": processor_dataset_repo_id or dataset_repo_id,
         "dataset_num_frames": int(dataset.num_frames),
         "dataset_num_episodes": int(dataset.num_episodes),
         "batch_size": int(batch_size),
@@ -163,6 +193,8 @@ def evaluate_supervised_loss(
         "postprocessed_action_rmse_step0_mean": _mean(postprocessed_action_step0_rmses),
         "postprocessed_action_global_rmse": _sqrt_mean(postprocessed_action_global_squared_errors),
         "postprocessed_action_rmse_frame_count": len(postprocessed_action_frame_rmses),
+        "postprocessed_action_dim": next(iter(postprocessed_action_dims)) if postprocessed_action_dims else None,
+        "contract": contract_report,
         "postprocessed_action_rmse_note": (
             "RMSE compares policy.predict_action_chunk after the saved postprocessor against dataset teacher actions; "
             "postprocessed_action_rmse_mean averages per-frame RMSE over action dims and is the closest validation "
@@ -205,11 +237,19 @@ def _postprocessed_action_rmse_metrics(
         if predicted is None or predicted.ndim != 3 or teacher_action.ndim != 3:
             return {}
         horizon = min(int(predicted.shape[1]), int(teacher_action.shape[1]))
-        dim = min(int(predicted.shape[2]), int(teacher_action.shape[2]))
+        predicted_dim = int(predicted.shape[2])
+        teacher_dim = int(teacher_action.shape[2])
+        if predicted_dim != teacher_dim:
+            raise ValueError(
+                f"Policy action dimension {predicted_dim} does not match teacher dimension {teacher_dim}"
+            )
+        dim = predicted_dim
+        if dim != 7:
+            raise ValueError(f"myCobot supervised evaluation requires 7D actions, got {dim}D")
         if horizon <= 0 or dim <= 0:
             return {}
-        predicted = predicted[:, :horizon, :dim]
-        teacher = teacher_action[:, :horizon, :dim]
+        predicted = predicted[:, :horizon, :]
+        teacher = teacher_action[:, :horizon, :]
         squared = (predicted - teacher).pow(2)
         valid_mask = _valid_action_mask(action_is_pad, batch_size=predicted.shape[0], horizon=horizon)
         frame_rmse = squared.mean(dim=-1).sqrt()
@@ -229,6 +269,7 @@ def _postprocessed_action_rmse_metrics(
         return {
             "frame_rmses": [float(value) for value in frame_rmse.detach().cpu().tolist()],
             "squared_errors": [float(value) for value in squared.reshape(-1).detach().cpu().tolist()],
+            "action_dim": dim,
             "step0_rmse": float(step0_rmse.mean().item()) if step0_rmse.numel() else None,
             "max_frame_rmse": float(frame_rmse.max().item()),
         }

@@ -1,6 +1,6 @@
 # Project Summary
 
-Last updated: 2026-08-02
+Last updated: 2026-08-03
 
 This repository is currently being used to build and evaluate an agentic
 physical-AI wrapper around lightweight vision-language-action policies. The
@@ -111,6 +111,61 @@ paper-facing concepts:
 - oracle/proxy evaluation boundary
 
 ## Current Evidence State
+
+### myCobot 280 SmolVLA Evaluation
+
+- Branch `codex/mycobot280-randomized-smolvla-eval` owns the current
+  deterministic-close versus randomized-close fine-tuning comparison, matched
+  policy-only closed-loop evaluation, and penetration audit.
+- Three paired 100-step training seeds improved strict success with randomized
+  training in 3/3 seeds under nominal and fresh-randomized evaluation. Pooled
+  fresh-randomized strict success is 4/33 deterministic-trained versus 14/33
+  randomized-trained; this is replicated engineering evidence, not statistical
+  significance (`p=0.25` for the three paired signs).
+- The matched unfine-tuned close-camera fresh-randomized control is 0/11 strict
+  and 0/11 pickup/hold, versus 3/11 and 11/11 for deterministic fine-tuning and
+  5/11 and 11/11 for randomized fine-tuning at seed 20260731.
+- Claim the comparison in two layers: fine-tuning changes functional task
+  behavior on the matched 11-episode schedule; randomized training improves
+  strict penetration-gated success directionally in 3/3 paired training seeds.
+  Without the penetration gate, fresh-randomized pickup/hold is nearly tied at
+  32/33 deterministic-trained versus 33/33 randomized-trained, so do not claim
+  a material randomized advantage in generic pickup-and-hold.
+- Randomized source demonstrations come from PR #33 commits `f9c7569`,
+  `1a2ac84`, and `5ddb73b` and are teacher-success-conditioned (60 accepted of
+  73 attempted). Closed-loop evaluation is different: it uses direct unfiltered
+  candidates and retains every policy rollout, including failures.
+- Trace audit over 143 episodes found 100 pad-cube penetration-cap crossings;
+  91 were penetration-only. Every peak was on the right pad during
+  `approach_down_to_cube_on_mat`; mean peak was 3.305 mm, median crossing
+  duration seven steps, and maximum consecutive duration 12 steps.
+- Keep the 3 mm gate unchanged. Current placement fixes the cube at +1.5 mm
+  along the jaw axis and +5 mm perpendicular to it, both with zero jitter. The
+  +5 mm side offset cannot explain right-versus-left pad identity. A separate
+  three-pair jaw-axis development diagnostic on the agentic branch produced
+  3/3 peak-side flips, so placement must be centered or explicitly stratified
+  before retry calibration. This is debugging evidence, not a benchmark or
+  agentic-improvement result. Current traces do not log force/impulse.
+- Agentic changes are routed to a separate
+  `codex/mycobot280-agentic-readiness` branch/worktree. The randomized-eval PR
+  must not absorb retry orchestration or intervention code.
+- The agentic branch must first adapt the myCobot verifier/failure taxonomy,
+  then compare policy-only, equal-budget blind retry, and verifier-routed retry.
+  A routing smoke is readiness only; no agentic benefit may be claimed until a
+  retry executes in closed loop on matched seeds.
+- PR evidence package, figures, video, and statistics:
+  `docs/research/2026_08_01/mycobot280_training_evaluation_pr_package.md`.
+- Copy-paste PR body with explicit `3 x 11` sample-count semantics:
+  `docs/research/2026_08_01/mycobot280_training_evaluation_pr_body.md`.
+- Main shared-base-to-fine-tuning progression figure:
+  `docs/research/2026_08_01/mycobot280_policy_progression_main.png`.
+- Explicit policy claim matrix and x/y paradigm figure:
+  `docs/research/2026_08_01/mycobot280_policy_claims_evidence.md` and
+  `docs/research/2026_08_01/mycobot280_policy_paradigm_claims.png`.
+- Underlying dated evidence:
+  `docs/research/2026_07_31/mycobot280_randomized_training_multiseed_evidence.md`
+  and
+  `docs/research/2026_07_31/mycobot280_penetration_failure_audit.md`.
 
 ### Active SO101 SmolVLA Fine-Tuning Lane
 

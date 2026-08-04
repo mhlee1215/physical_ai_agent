@@ -5,7 +5,9 @@ import argparse
 import hashlib
 import json
 import shutil
+import struct
 import sys
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +89,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=240)
     parser.add_argument("--render-every", type=int, default=4)
+    parser.add_argument(
+        "--render-camera-profile",
+        choices=("full_robot", "ground_pickup_closeup"),
+        default="full_robot",
+    )
+    parser.add_argument(
+        "--image-format",
+        choices=("bmp", "png"),
+        default="bmp",
+        help=(
+            "Lossless output format. PNG substantially reduces storage for all-frame "
+            "camera-ablation datasets."
+        ),
+    )
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--max-attempts", type=int, default=0)
     parser.add_argument("--yaw-min", type=float, default=DEFAULT_YAW_MIN)
@@ -112,6 +128,8 @@ def main() -> None:
         max_attempts=args.max_attempts,
         yaw_min=args.yaw_min,
         yaw_max=args.yaw_max,
+        render_camera_profile=args.render_camera_profile,
+        image_format=args.image_format,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     if report["accepted_episodes"] != report["requested_episodes"] or report["failed_episodes"]:
@@ -133,9 +151,14 @@ def export_dataset(
     max_attempts: int,
     yaw_min: float,
     yaw_max: float,
+    render_camera_profile: str = "full_robot",
+    image_format: str = "bmp",
 ) -> dict[str, Any]:
     if train_episodes < 0 or val_episodes < 0:
         raise ValueError("episode counts must be non-negative")
+    camera_contract = _camera_contract(render_camera_profile, width=width, height=height)
+    if image_format not in {"bmp", "png"}:
+        raise ValueError(f"unsupported image format: {image_format}")
     requested = train_episodes + val_episodes
     if requested <= 0:
         raise ValueError("at least one train or validation episode is required")
@@ -153,46 +176,63 @@ def export_dataset(
     total_rows = 0
     split_schedule = _split_schedule(train_episodes, val_episodes)
 
-    for attempt_index, yaw_delta in enumerate(_candidate_yaws(max_attempts=max_attempts, yaw_min=yaw_min, yaw_max=yaw_max)):
-        if len(accepted_summaries) >= requested:
-            break
-        split = split_schedule[len(accepted_summaries)]
-        split_episode_index = split_counts[split]
-        try:
-            summary = _export_attempt(
-                output_dir=output_dir,
-                split=split,
-                split_episode_index=split_episode_index,
-                global_episode_index=len(accepted_summaries),
-                attempt_index=attempt_index,
-                seed=seed + attempt_index,
-                yaw_delta=float(yaw_delta),
-                asset_root=asset_root,
-                official_gripper_root=official_gripper_root,
-                width=width,
-                height=height,
-                fps=fps,
-                render_every=render_every,
-            )
-        except Exception as exc:  # noqa: BLE001
-            rejected_attempts.append(
-                {
-                    "attempt_index": attempt_index,
-                    "split_target": split,
-                    "seed": seed + attempt_index,
-                    "yaw_delta_rad": float(yaw_delta),
-                    "success": False,
-                    "reason": f"exception: {exc}",
-                }
-            )
-            continue
-        if not summary["success"]:
-            rejected_attempts.append(_rejection_from_summary(summary))
-            continue
-        split_counts[split] += 1
-        split_episode_summaries[split].append(summary)
-        accepted_summaries.append(summary)
-        total_rows += int(summary["frames"])
+    shared_scene_cache = output_dir / "scene_cache" / "shared"
+    env = _make_env(
+        asset_root=asset_root,
+        official_gripper_root=official_gripper_root,
+        work_dir=shared_scene_cache,
+        width=width,
+        height=height,
+    )
+    try:
+        for attempt_index, yaw_delta in enumerate(
+            _candidate_yaws(max_attempts=max_attempts, yaw_min=yaw_min, yaw_max=yaw_max)
+        ):
+            if len(accepted_summaries) >= requested:
+                break
+            split = split_schedule[len(accepted_summaries)]
+            split_episode_index = split_counts[split]
+            try:
+                summary = _export_attempt(
+                    output_dir=output_dir,
+                    split=split,
+                    split_episode_index=split_episode_index,
+                    global_episode_index=len(accepted_summaries),
+                    attempt_index=attempt_index,
+                    seed=seed + attempt_index,
+                    yaw_delta=float(yaw_delta),
+                    asset_root=asset_root,
+                    official_gripper_root=official_gripper_root,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    render_every=render_every,
+                    env=env,
+                    render_camera_profile=render_camera_profile,
+                    image_format=image_format,
+                )
+            except Exception as exc:  # noqa: BLE001
+                rejected_attempts.append(
+                    {
+                        "attempt_index": attempt_index,
+                        "split_target": split,
+                        "seed": seed + attempt_index,
+                        "yaw_delta_rad": float(yaw_delta),
+                        "success": False,
+                        "reason": f"exception: {exc}",
+                    }
+                )
+                continue
+            if not summary["success"]:
+                rejected_attempts.append(_rejection_from_summary(summary))
+                continue
+            split_counts[split] += 1
+            split_episode_summaries[split].append(summary)
+            accepted_summaries.append(summary)
+            total_rows += int(summary["frames"])
+    finally:
+        env.close()
+        shutil.rmtree(shared_scene_cache, ignore_errors=True)
 
     failed_episodes = [
         {
@@ -261,7 +301,8 @@ def export_dataset(
         "failed_episodes": failed_episodes,
         "fps": fps,
         "render_every": render_every,
-        "image_mime_type": "image/bmp",
+        "image_mime_type": f"image/{image_format}",
+        "observation_camera": camera_contract,
         "joint_names": JOINT_NAMES,
         "action_names": JOINT_NAMES,
         "viewer": {
@@ -337,6 +378,27 @@ def _split_schedule(train_episodes: int, val_episodes: int) -> list[str]:
     return schedule
 
 
+def _make_env(
+    *,
+    asset_root: Path,
+    official_gripper_root: Path,
+    work_dir: Path,
+    width: int,
+    height: int,
+) -> nexus.MyCobotNexusEnv:
+    return nexus.MyCobotNexusEnv(
+        nexus.MyCobotNexusConfig(
+            asset_root=asset_root,
+            work_dir=work_dir,
+            official_gripper_root=official_gripper_root,
+            model_profile=nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
+            width=width,
+            height=height,
+            teacher_grasp_attachment_enabled=False,
+        )
+    )
+
+
 def _export_attempt(
     *,
     output_dir: Path,
@@ -360,9 +422,11 @@ def _export_attempt(
     pad_friction: float = PAD_FRICTION,
     candidate_metadata: dict[str, Any] | None = None,
     render_camera_profile: str = "full_robot",
+    image_format: str = "bmp",
     refresh_model_constants: bool = False,
     lift_scale: float = 1.0,
     contact_solref: tuple[float, float] | None = None,
+    env: nexus.MyCobotNexusEnv | None = None,
 ) -> dict[str, Any]:
     episode_path = output_dir / "splits" / split / "episodes" / f"episode_{split_episode_index:04d}.jsonl"
     final_frame_dir = output_dir / "splits" / split / "frames" / f"episode_{split_episode_index:04d}"
@@ -384,17 +448,15 @@ def _export_attempt(
         "pad_friction": float(pad_friction),
         **(candidate_metadata or {}),
     }
-    env = nexus.MyCobotNexusEnv(
-        nexus.MyCobotNexusConfig(
+    owns_env = env is None
+    if env is None:
+        env = _make_env(
             asset_root=asset_root,
             work_dir=scene_cache,
             official_gripper_root=official_gripper_root,
-            model_profile=nexus.MODEL_PROFILE_280_PI_ADAPTIVE_GRIPPER,
             width=width,
             height=height,
-            teacher_grasp_attachment_enabled=False,
         )
-    )
     try:
         env.reset(seed=seed)
         env._diagnostic_cube_half_size = CUBE_HALF_SIZE
@@ -455,9 +517,10 @@ def _export_attempt(
                 contact_stop_command = max(-1.0, min(1.0, float(command)))
             image = ""
             if step_index % max(1, render_every) == 0:
-                final_image_path = final_frame_dir / f"frame_{step_index:04d}.bmp"
-                attempt_image_path = attempt_frame_dir / f"frame_{step_index:04d}.bmp"
-                _write_bmp(attempt_image_path, _render_observation(env, render_camera))
+                suffix = f".{image_format}"
+                final_image_path = final_frame_dir / f"frame_{step_index:04d}{suffix}"
+                attempt_image_path = attempt_frame_dir / f"frame_{step_index:04d}{suffix}"
+                _write_dataset_image(attempt_image_path, _render_observation(env, render_camera), image_format)
                 image = str(final_image_path.relative_to(output_dir))
             rows.append(
                 {
@@ -485,8 +548,9 @@ def _export_attempt(
                 }
             )
     finally:
-        env.close()
-        shutil.rmtree(scene_cache, ignore_errors=True)
+        if owns_env:
+            env.close()
+            shutil.rmtree(scene_cache, ignore_errors=True)
 
     records = [row["info"]["ground_pickup"] for row in rows]
     lift_records = [record for record in records if record["phase"] == "lift_from_mat"]
@@ -524,6 +588,56 @@ def _export_attempt(
     else:
         shutil.rmtree(attempt_frame_dir, ignore_errors=True)
     return summary
+
+
+def _camera_contract(profile: str, *, width: int, height: int) -> dict[str, Any]:
+    if width <= 0 or height <= 0:
+        raise ValueError("camera width and height must be positive")
+    contract: dict[str, Any] = {
+        "profile": profile,
+        "resolution_hw": [int(height), int(width)],
+    }
+    if profile == "full_robot":
+        return {
+            **contract,
+            "mode": "environment_default",
+        }
+    if profile == "ground_pickup_closeup":
+        return {
+            **contract,
+            "mode": "free_camera",
+            "target": "initial_cube_xyz_plus_[0,0,0.035]_m",
+            "distance_m": 0.24,
+            "azimuth_deg": 215.0,
+            "elevation_deg": -10.0,
+        }
+    raise ValueError(f"unsupported render camera profile: {profile}")
+
+
+def _write_dataset_image(path: Path, rgb: Any, image_format: str) -> None:
+    if image_format == "bmp":
+        _write_bmp(path, rgb)
+        return
+    if image_format != "png":
+        raise ValueError(f"unsupported image format: {image_format}")
+
+    array = np.asarray(rgb, dtype=np.uint8)
+    if array.ndim != 3 or array.shape[2] != 3:
+        raise ValueError(f"expected HxWx3 RGB image, got shape {array.shape}")
+    height, width, _ = array.shape
+    rows = b"".join(b"\x00" + np.ascontiguousarray(row).tobytes() for row in array)
+    signature = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    payload = signature + _png_chunk(b"IHDR", ihdr)
+    payload += _png_chunk(b"IDAT", zlib.compress(rows, level=6))
+    payload += _png_chunk(b"IEND", b"")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+
+
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    checksum = zlib.crc32(kind + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", checksum)
 
 
 def _dataset_render_camera(env: Any, initial_cube: list[float], profile: str) -> Any | None:

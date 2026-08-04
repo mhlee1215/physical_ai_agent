@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "name": "ground_pickup_randomized_closecam_v1",
+  "description": "Camera-matched randomized myCobot 280 SmolVLA pilot using the audited 50-train/10-validation source corpus.",
+  "robot": {
+    "name": "myCobot 280 Pi + adaptive gripper",
+    "model_profile": "mycobot_280_pi_adaptive_gripper",
+    "state_dim": 7,
+    "action_dim": 7,
+    "joint_names": [
+      "joint2_to_joint1",
+      "joint3_to_joint2",
+      "joint4_to_joint3",
+      "joint5_to_joint4",
+      "joint6_to_joint5",
+      "joint7_to_joint6",
+      "gripper_controller"
+    ],
+    "gripper_semantics": "lower command closes in the current ground-pickup POC"
+  },
+  "scenario": "ground_pickup_cube",
+  "task_prompt": "pick up the cube from the work mat with the myCobot 280 Pi adaptive gripper",
+  "object_suite": {
+    "name": "object_suite_v0",
+    "profile": "cube_from_mat_medium_randomized_mass_friction_pose",
+    "cube_half_size_m": 0.015,
+    "cube_mass_kg_range": [
+      0.028,
+      0.036
+    ],
+    "cube_friction_range": [
+      3.4,
+      4.0
+    ],
+    "cube_yaw_delta_rad_range": [
+      -0.2,
+      0.2
+    ],
+    "note": "Cube size, pad friction, and support friction stay fixed; mass, cube friction, spawn pose, and yaw vary under the audited seeded sampler.",
+    "randomized_contact_solref": [
+      0.01,
+      1.0
+    ],
+    "randomized_teacher_lift_scale": 1.05
+  },
+  "feature_contract": {
+    "base_checkpoint": "lerobot/smolvla_base",
+    "image_shape_chw": [
+      3,
+      256,
+      256
+    ],
+    "state_key": "observation.state",
+    "action_key": "action",
+    "camera_contract": {
+      "observation.images.camera1": {
+        "profile": "ground_pickup_closeup",
+        "resolution_hw": [
+          256,
+          256
+        ],
+        "target": "initial_cube_plus_35mm_z",
+        "distance_m": 0.24,
+        "azimuth_deg": 215.0,
+        "elevation_deg": -10.0
+      }
+    },
+    "state_names": [
+      "joint2_to_joint1",
+      "joint3_to_joint2",
+      "joint4_to_joint3",
+      "joint5_to_joint4",
+      "joint6_to_joint5",
+      "joint7_to_joint6",
+      "gripper_controller"
+    ],
+    "action_names": [
+      "joint2_to_joint1",
+      "joint3_to_joint2",
+      "joint4_to_joint3",
+      "joint5_to_joint4",
+      "joint6_to_joint5",
+      "joint7_to_joint6",
+      "gripper_controller"
+    ]
+  },
+  "source_dataset": {
+    "format": "mycobot_jsonl_v1",
+    "root": "_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_randomized_v1_50train_10val_allframes_verified_20260731",
+    "expected_episodes": 60,
+    "expected_splits": {
+      "train": 50,
+      "validation": 10
+    },
+    "expected_min_frames": 31800,
+    "expected_generation_mode": "seeded_randomized_teacher_aligned_rejection_sampled",
+    "expected_randomization_enabled": true,
+    "expected_teacher_attachment_enabled": false,
+    "expected_object_teleport_during_pickup_lift": false,
+    "expected_image_mime_type": "image/bmp",
+    "expected_observation_camera": {
+      "azimuth_deg": 215.0,
+      "distance_m": 0.24,
+      "elevation_deg": -10.0,
+      "profile": "ground_pickup_closeup",
+      "target": "initial_cube_plus_35mm_z"
+    },
+    "required_success_criteria": {
+      "final_cube_lift_m": 0.05,
+      "final_gripper_cube_contact_pads": 2,
+      "lift_best_sustained_two_pad_steps": 60,
+      "post_lift_hold_best_sustained_two_pad_steps": 300,
+      "post_lift_hold_min_cube_lift_m": 0.045,
+      "max_pad_cube_penetration_m": 0.003
+    },
+    "generation_command": [
+      "PYTHONPATH=src:.",
+      "MUJOCO_GL=egl",
+      "_workspace/worktrees/mycobot-280pi-adaptive/_workspace/venvs/mycobot-mujoco-py312/bin/python",
+      "scripts/export_mycobot_280_ground_pickup_randomized_dataset.py",
+      "--output-dir",
+      "_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_randomized_v1_50train_10val_allframes_verified_20260731",
+      "--train-episodes",
+      "50",
+      "--val-episodes",
+      "10",
+      "--root-seed",
+      "2800",
+      "--width",
+      "256",
+      "--height",
+      "256",
+      "--render-every",
+      "1",
+      "--render-camera-profile",
+      "ground_pickup_closeup"
+    ],
+    "expected_all_frames_rendered": true,
+    "strict_audit_command": [
+      "python",
+      "scripts/check_mycobot_280_ground_pickup_randomized_dataset.py",
+      "--existing-dataset-root",
+      "_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_randomized_v1_50train_10val_allframes_verified_20260731"
+    ],
+    "selection_caveat": {
+      "distribution": "teacher_success_conditioned_not_uniform",
+      "accepted_attempts": 60,
+      "total_attempts": 73,
+      "highest_mass_quartile_kg": [
+        0.034,
+        0.036
+      ],
+      "highest_mass_quartile_accepted": 2,
+      "highest_mass_quartile_attempted": 15,
+      "highest_mass_quartile_validation_examples": 0,
+      "validation_empty_friction_quartiles": [
+        1,
+        2
+      ],
+      "claim_boundary": "Accepted demonstrations do not establish uniform coverage or policy robustness across the declared mass and friction ranges."
+    }
+  },
+  "lerobot_conversion": {
+    "output_root": "_workspace/mycobot280_lerobot/ground_pickup_randomized_closecam_v1_train",
+    "split_output_roots": {
+      "train": "_workspace/mycobot280_lerobot/ground_pickup_randomized_closecam_v1_train",
+      "validation": "_workspace/mycobot280_lerobot/ground_pickup_randomized_closecam_v1_validation"
+    },
+    "native_output_roots": {
+      "train": "_workspace/mycobot280_lerobot/ground_pickup_randomized_closecam_v1_train_native",
+      "validation": "_workspace/mycobot280_lerobot/ground_pickup_randomized_closecam_v1_validation_native"
+    },
+    "repo_id": "physical-ai-agent/mycobot-280-ground-pickup-randomized-closecam-v1-train",
+    "validation_repo_id": "physical-ai-agent/mycobot-280-ground-pickup-randomized-closecam-v1-validation",
+    "converter_script": "scripts/export_mycobot_280_ground_pickup_lerobot_dataset.py",
+    "native_converter_script": "scripts/convert_mycobot_280_pi_adaptive_jsonl_to_lerobot.py",
+    "claim_boundary": "Teacher-success-conditioned randomized-source training pilot with the same close camera and optimizer recipe as the deterministic close-camera condition."
+  },
+  "training_smoke": {
+    "policy_path": "lerobot/smolvla_base",
+    "output_dir": "_workspace/mycobot280_training/ground_pickup_randomized_closecam_v1_100step_seed20260731",
+    "batch_size": 1,
+    "steps": 100,
+    "learning_rate": 1e-05,
+    "torch_seed": 20260731,
+    "max_batches": 100,
+    "device": "cuda",
+    "tensorboard_dir": "_workspace/mycobot280_training/ground_pickup_randomized_closecam_v1_100step_seed20260731/tensorboard",
+    "checkpoint_dir": "_workspace/mycobot280_training/ground_pickup_randomized_closecam_v1_100step_seed20260731/checkpoints",
+    "claim_boundary": "One matched 100-step engineering run on a teacher-success-conditioned corpus; publication estimates require stratified source coverage, multiple training seeds, and a fresh randomized test schedule."
+  },
+  "closed_loop_stub": {
+    "script": "scripts/evaluate_mycobot280_smolvla_policy.py",
+    "output_dir": "_workspace/mycobot280_eval/ground_pickup_randomized_closecam_v1",
+    "render_camera_profile": "ground_pickup_closeup",
+    "episodes": 11,
+    "metrics": [
+      "success",
+      "final_cube_lift_m",
+      "post_lift_hold_steps",
+      "two_pad_contact_retention_steps",
+      "max_pad_cube_penetration_m",
+      "failure_reason"
+    ],
+    "future_comparison_rows": [
+      "deterministic_closecam_finetuned_nominal",
+      "randomized_closecam_finetuned_nominal",
+      "deterministic_closecam_finetuned_randomized_test",
+      "randomized_closecam_finetuned_randomized_test"
+    ],
+    "claim_boundary": "Nominal fixed-physics evaluation only measures retained nominal performance; robustness requires matched fresh randomized conditions not used for training or validation.",
+    "fresh_randomized_schedule": {
+      "source_manifest": "_workspace/mycobot_teacher_datasets/mycobot_280_ground_pickup_randomized_v1_50train_10val_allframes_verified_20260731/manifest.json",
+      "seed_start": 92000,
+      "episodes": 11,
+      "candidate_selection": "direct_unfiltered_draws_without_teacher_rejection",
+      "required_source_seed_overlap_count": 0
+    }
+  }
+}
