@@ -27,6 +27,7 @@ from physical_ai_agent.so101_resolution_contract import (
     SO101_IMAGE_WIDTH,
     require_lerobot_dataset_256,
     require_so101_image_resolution,
+    resolve_lerobot_root_for_start_report,
 )
 from physical_ai_agent.so101_visual_servo import (
     VisualServoError,
@@ -180,7 +181,7 @@ def run_closed_loop_plan(
     output_dir.mkdir(parents=True, exist_ok=True)
     if start_report_path is not None:
         require_lerobot_dataset_256(
-            Path(start_report_path).parent,
+            resolve_lerobot_root_for_start_report(start_report_path),
             context="Qwen SO101 closed-loop start dataset",
         )
     primitive_policy_paths = primitive_policy_paths or {}

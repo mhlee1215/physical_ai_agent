@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "name": "grip_the_cube_continuous_v1_bridge_probe",
+  "description": "Validate the adaptive full-grip teacher across the 18-22 cm bridge band with multiple bearings and robot-relative cube yaws.",
+  "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+  "base_reference": "shoulder_pan_axis_projection",
+  "home_qpos": [
+    0.0,
+    -1.5707963267948966,
+    1.5707963267948966,
+    0.66,
+    1.5707963267948966,
+    -0.17453
+  ],
+  "object_half_size_m": 0.015,
+  "object_color": "green",
+  "object_yaw_mode": "radial_face_normal",
+  "radial_yaw_offsets_degrees": [0.0, 45.0],
+  "seed_base": 532000000,
+  "polar_grid": {
+    "radius": {"min_m": 0.18, "max_m": 0.22, "step_m": 0.01},
+    "angle": {"min_deg": -60.0, "max_deg": 60.0, "step_deg": 30.0}
+  },
+  "evaluate_dataset_contract": true,
+  "teacher": {
+    "skill_mode": "grip_the_cube_continuous_v1",
+    "trajectory_variant": "standard",
+    "task_prompt": "grip the green cube and lift",
+    "approach_steps": 34,
+    "settle_steps": 10,
+    "close_steps": 42,
+    "lift_steps": 90,
+    "terminal_hold_steps": 12,
+    "lift_target_height_m": 0.06,
+    "operational_lift_height_m": 0.05,
+    "lift_controller_z_error_m": 0.015,
+    "move_target_z_offset_m": 0.07,
+    "edge_contact_xy_threshold_m": 0.012,
+    "edge_parallel_threshold_deg": 3.0,
+    "min_gripper_floor_clearance_m": 0.01,
+    "camera2_gate_mode": "geometry_only",
+    "camera2_pre_close_max_deg": 25.0,
+    "camera2_close_25_max_deg": 25.0,
+    "camera2_close_50_max_deg": 25.0
+  }
+}

@@ -10,6 +10,7 @@ from typing import Any
 @dataclass(frozen=True)
 class SamplingAugmentationConfig:
     state_jitter_std: float = 0.0
+    state_jitter_prob: float = 1.0
     state_jitter_arm_only: bool = True
     state_dropout_prob: float = 0.0
     state_dropout_keep_gripper: bool = True
@@ -34,6 +35,7 @@ class SamplingAugmentationConfig:
     @classmethod
     def from_env(cls) -> "SamplingAugmentationConfig":
         state_jitter_std = float(os.environ.get("SO101_STATE_JITTER_STD", "0.0"))
+        state_jitter_prob = float(os.environ.get("SO101_STATE_JITTER_PROB", "1.0"))
         state_jitter_arm_only = os.environ.get("SO101_STATE_JITTER_ARM_ONLY", "1") not in {
             "0",
             "false",
@@ -73,6 +75,7 @@ class SamplingAugmentationConfig:
         }
         return cls(
             state_jitter_std=state_jitter_std,
+            state_jitter_prob=state_jitter_prob,
             state_jitter_arm_only=state_jitter_arm_only,
             state_dropout_prob=state_dropout_prob,
             state_dropout_keep_gripper=state_dropout_keep_gripper,
@@ -151,9 +154,16 @@ class PredecodedImageCacheDataset:
         if not manifest_path.exists():
             raise FileNotFoundError(f"SO101 image cache manifest not found: {manifest_path}")
         self.manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.image_keys = list(self.manifest["image_keys"])
+        all_image_keys = list(self.manifest["image_keys"])
+        self.all_image_keys = set(all_image_keys)
+        active = {
+            value.strip()
+            for value in os.environ.get("SO101_ACTIVE_IMAGE_FEATURES", "").split(",")
+            if value.strip()
+        }
+        self.image_keys = [key for key in all_image_keys if not active or key in active]
         self.cache_arrays = self._load_arrays(cache_dir, self.image_keys)
-        self.tabular_dataset = dataset.hf_dataset.remove_columns(self.image_keys)
+        self.tabular_dataset = dataset.hf_dataset.remove_columns(all_image_keys)
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -189,6 +199,8 @@ class PredecodedImageCacheDataset:
 
         result = {}
         for key, query_index in query_indices.items():
+            if key in self.all_image_keys and key not in self.image_keys:
+                continue
             relative_indices = (
                 query_index
                 if reader._absolute_to_relative_idx is None
@@ -288,6 +300,11 @@ def augment_state_tensor(value: Any, config: SamplingAugmentationConfig) -> Any:
         if config.state_jitter_arm_only and noise.shape[-1] >= 6:
             noise = noise.clone()
             noise[..., 5] = 0.0
+        probability = min(1.0, max(0.0, float(config.state_jitter_prob)))
+        if probability < 1.0:
+            sample_shape = (*result.shape[:-1], 1)
+            apply = torch.rand(sample_shape, dtype=torch.float32, device=result.device) < probability
+            noise = noise * apply.to(dtype=noise.dtype)
         result = result + noise
     if config.state_dropout_prob > 0.0:
         mask = torch.rand_like(result, dtype=torch.float32) >= float(config.state_dropout_prob)
@@ -421,8 +438,6 @@ def _patch_mask_ratio(image: Any, ratio: float) -> Any:
 
 
 def _color_jitter(image: Any, *, strength: float = 0.08) -> Any:
-    import torch
-
     strength = max(0.0, float(strength))
     if strength <= 0.0:
         return image

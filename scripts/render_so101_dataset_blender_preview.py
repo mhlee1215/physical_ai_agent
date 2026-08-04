@@ -7,11 +7,13 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import random
 import re
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,11 @@ from physical_ai_agent.sim.so101_camera_input import (
     _make_camera,
     apply_brown_conrady_distortion,
     brown_conrady_overscan_fovy,
+)
+from physical_ai_agent.sim.so101_camera_rig_render_config import (
+    blender_render_profile,
+    config_sha256,
+    load_so101_camera_rig_render_config,
 )
 
 try:
@@ -56,13 +63,92 @@ if __name__ == "__main__":
 )
 
 
+def _resolve_live_renderer_config(config: dict[str, Any]) -> dict[str, Any]:
+    resolved = dict(config)
+    if not bool(resolved.get("profile_from_camera_rig")):
+        return resolved
+    rig_path = Path(str(resolved["camera_rig_config"])).expanduser().resolve()
+    profile = blender_render_profile(load_so101_camera_rig_render_config(rig_path))
+    profile_to_live = {
+        "mode": "mode",
+        "camera_keys": "camera_keys",
+        "policy_width": "width",
+        "policy_height": "height",
+        "source_width": "source_width",
+        "source_height": "source_height",
+        "policy_resize": "policy_resize",
+        "samples": "samples",
+        "denoise": "denoise",
+        "compute_device_type": "compute_device_type",
+        "cycles_seed": "cycles_seed",
+        "lighting_profile": "lighting_profile",
+        "key_light_power": "key_light_power",
+        "fill_light_power": "fill_light_power",
+        "world_strength": "world_strength",
+        "hdri_rotation_deg": "hdri_rotation_deg",
+        "exposure": "exposure",
+        "color_management": "color_management",
+        "color_look": "color_look",
+        "gamma": "gamma",
+        "output_format": "output_format",
+        "sample_clamp_indirect": "sample_clamp_indirect",
+        "background_wall": "background_wall",
+        "stable_tabletop": "stable_tabletop",
+        "scene_profile": "scene_profile",
+        "robot_material": "robot_material",
+        "material_profile": "material_profile",
+        "camera_lens": "camera_lens",
+        "asset_root": "asset_root",
+        "blender_bin": "blender_bin",
+        "max_mesh_geoms": "max_mesh_geoms",
+        "preserve_pinhole_renders": "preserve_pinhole_renders",
+        "bevel_width_range_m": "bevel_width_range_m",
+        "bevel_segments": "bevel_segments",
+        "lens_distortion": "lens_distortion",
+        "visual_props": "visual_props",
+        "lights": "lights",
+    }
+    for profile_key, live_key in profile_to_live.items():
+        expected = profile[profile_key]
+        if live_key in resolved and resolved[live_key] is not None:
+            if not _renderer_config_values_equal(live_key, resolved[live_key], expected):
+                raise ValueError(
+                    "live renderer config disagrees with camera-rig profile: "
+                    f"{live_key}={resolved[live_key]!r} profile={expected!r}"
+                )
+        resolved[live_key] = expected
+    if resolved.get("render_policy_inference_only") is None:
+        resolved["render_policy_inference_only"] = profile["render_policy_inference_only"]
+    resolved["camera_rig_config"] = str(rig_path)
+    resolved["camera_rig_config_sha256"] = config_sha256(rig_path)
+    return resolved
+
+
+def _renderer_config_values_equal(key: str, actual: Any, expected: Any) -> bool:
+    if key in {"asset_root", "material_profile"}:
+        return Path(str(actual)).expanduser().resolve() == Path(str(expected)).expanduser().resolve()
+    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+        return math.isclose(float(actual), float(expected), rel_tol=0.0, abs_tol=1e-12)
+    if isinstance(actual, (list, tuple)) and isinstance(expected, (list, tuple)):
+        return len(actual) == len(expected) and all(
+            _renderer_config_values_equal("", left, right)
+            for left, right in zip(actual, expected, strict=True)
+        )
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            _renderer_config_values_equal("", actual[item_key], expected[item_key])
+            for item_key in actual
+        )
+    return actual == expected
+
+
 class LiveBlenderCyclesPolicyRenderer:
     """Render the current MuJoCo state with the dataset's Blender profile."""
 
     def __init__(self, *, output_dir: Path, config: dict[str, Any]) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.config = dict(config)
+        self.config = _resolve_live_renderer_config(config)
         self.driver_path = self.output_dir / "blender_driver.py"
         self.driver_path.write_text(BLENDER_DRIVER, encoding="utf-8")
         self.texture_path = _write_photo_tabletop_texture(self.output_dir / "tabletop_texture.png")
@@ -75,6 +161,10 @@ class LiveBlenderCyclesPolicyRenderer:
         self.table_pbr_dir = self.asset_root / "ambientcg" / "Wood008_1K-JPG"
         self.plastic_pbr_dir = self.asset_root / "ambientcg" / "Plastic013A_1K-JPG"
         self.records: list[dict[str, Any]] = []
+
+    @property
+    def render_policy_inference_only(self) -> bool:
+        return bool(self.config["render_policy_inference_only"])
 
     def render(
         self,
@@ -91,6 +181,11 @@ class LiveBlenderCyclesPolicyRenderer:
         frame_dir = self.output_dir / f"episode_{episode:03d}_seed_{seed}" / f"step_{step:04d}"
         mesh_dir = frame_dir / "ply"
         mesh_dir.mkdir(parents=True, exist_ok=True)
+        output_width = int(self.config["width"])
+        output_height = int(self.config["height"])
+        source_width = int(self.config.get("source_width") or output_width)
+        source_height = int(self.config.get("source_height") or output_height)
+        policy_resize = str(self.config.get("policy_resize") or "direct_square_render")
         mujoco.mj_forward(env.unwrapped.model, env.unwrapped.data)
         exported = _export_mesh_geoms(
             env.unwrapped.model,
@@ -106,15 +201,20 @@ class LiveBlenderCyclesPolicyRenderer:
             env,
             mujoco_renderers,
             camera_lens=float(self.config["camera_lens"]),
-            width=int(self.config["width"]),
-            height=int(self.config["height"]),
+            width=source_width,
+            height=source_height,
+        )
+        camera_specs = _camera_specs_for_resolution(
+            camera_specs,
+            width=source_width,
+            height=source_height,
         )
         distortion_profiles = dict(self.config.get("lens_distortion", {}))
         render_camera_specs = _camera_specs_with_distortion_overscan(
             camera_specs,
             distortion_profiles=distortion_profiles,
-            width=int(self.config["width"]),
-            height=int(self.config["height"]),
+            width=source_width,
+            height=source_height,
         )
         extension = ".png" if self.config["output_format"] == "PNG" else ".jpg"
         image_paths = {
@@ -146,8 +246,11 @@ class LiveBlenderCyclesPolicyRenderer:
             visual_props = list(configured_props)
         spec_path = frame_dir / "blender_scene_spec.json"
         spec = {
-            "width": int(self.config["width"]),
-            "height": int(self.config["height"]),
+            "width": source_width,
+            "height": source_height,
+            "output_width": output_width,
+            "output_height": output_height,
+            "policy_resize": policy_resize,
             "samples": int(self.config["samples"]),
             "denoise": bool(self.config["denoise"]),
             "compute_device_type": str(
@@ -185,6 +288,8 @@ class LiveBlenderCyclesPolicyRenderer:
             "primitives": primitives,
             "target_site": None,
             "renders": renders,
+            "camera_rig_config": self.config.get("camera_rig_config"),
+            "camera_rig_config_sha256": self.config.get("camera_rig_config_sha256"),
         }
         spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True), encoding="utf-8")
         rendered = _flush_blender_pending(
@@ -194,6 +299,11 @@ class LiveBlenderCyclesPolicyRenderer:
                     "frame_dir": frame_dir,
                     "mesh_dir": mesh_dir,
                     "camera_specs": camera_specs,
+                    "render_camera_specs": render_camera_specs,
+                    "distortion_profiles": distortion_profiles,
+                    "preserve_pinhole_renders": bool(
+                        self.config.get("preserve_pinhole_renders", False)
+                    ),
                     "image_paths": image_paths,
                     "rendered_item": {
                         "episode": int(episode),
@@ -210,16 +320,10 @@ class LiveBlenderCyclesPolicyRenderer:
             blender_bin=self.blender_bin,
             duplicate_camera3_from_camera2=False,
             batch_mode=False,
+            output_width=output_width,
+            output_height=output_height,
+            policy_resize=policy_resize,
         )[0]
-        camera_postprocess = _apply_lens_distortion_to_images(
-            image_paths,
-            target_camera_specs=camera_specs,
-            render_camera_specs=render_camera_specs,
-            distortion_profiles=distortion_profiles,
-            preserve_pinhole=bool(self.config.get("preserve_pinhole_renders", False)),
-        )
-        if camera_postprocess:
-            rendered["camera_postprocess"] = camera_postprocess
         pixels = {
             "egocentric_cam": np.asarray(
                 Image.open(image_paths["observation.images.camera1"]).convert("RGB")
@@ -273,10 +377,25 @@ def main() -> None:
     parser.add_argument("--seed-base", type=int, help="Reset seed base. Defaults to seedNNN parsed from dataset root.")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
+    parser.add_argument(
+        "--source-width",
+        type=int,
+        help="Internal Cycles render width before policy-image resizing.",
+    )
+    parser.add_argument(
+        "--source-height",
+        type=int,
+        help="Internal Cycles render height before policy-image resizing.",
+    )
+    parser.add_argument(
+        "--policy-resize",
+        choices=("direct_square_render", "center_crop_square_then_resize"),
+        default="direct_square_render",
+    )
     parser.add_argument("--samples", type=int, default=192)
     parser.add_argument("--denoise", action="store_true")
     parser.add_argument("--cycles-seed", type=int, default=98200)
-    parser.add_argument("--lighting-profile", choices=("studio_small_08", "flat"), default="studio_small_08")
+    parser.add_argument("--lighting-profile", default="studio_small_08")
     parser.add_argument("--key-light-power", type=float, default=42.0)
     parser.add_argument("--fill-light-power", type=float, default=5.0)
     parser.add_argument("--world-strength", type=float, default=0.28)
@@ -299,9 +418,31 @@ def main() -> None:
     )
     parser.add_argument(
         "--scene-profile",
-        choices=("neutral", "black_table_clutter"),
+        choices=(
+            "neutral",
+            "black_table_clutter",
+            "pbr_workbench_v4",
+            "pbr_workshop_v4",
+        ),
         default="neutral",
         help="Blender-only tabletop and visual-prop profile. It never changes MuJoCo collisions.",
+    )
+    parser.add_argument(
+        "--camera-rig-config",
+        type=Path,
+        help=(
+            "Use the reviewed camera-rig render profile as the authoritative "
+            "Cycles/material/lighting/distortion contract."
+        ),
+    )
+    parser.add_argument(
+        "--preserve-pinhole-renders",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Keep the 512px pre-distortion camera images for diagnostics. "
+            "This does not affect final policy-image pixels."
+        ),
     )
     parser.add_argument("--camera-lens", type=float, default=48.0)
     parser.add_argument("--asset-root", type=Path, default=Path("_workspace/photoreal_assets"))
@@ -326,6 +467,71 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    source_width = int(args.source_width or args.width)
+    source_height = int(args.source_height or args.height)
+    renderer_profile: dict[str, Any] = {}
+    camera_rig_config_path: Path | None = None
+    camera_rig_config_hash: str | None = None
+    if args.camera_rig_config is not None:
+        camera_rig_config_path = args.camera_rig_config.expanduser().resolve()
+        rig_config = load_so101_camera_rig_render_config(camera_rig_config_path)
+        renderer_profile = blender_render_profile(rig_config)
+        expected_policy = (
+            int(renderer_profile["policy_width"]),
+            int(renderer_profile["policy_height"]),
+        )
+        expected_source = (
+            int(renderer_profile["source_width"]),
+            int(renderer_profile["source_height"]),
+        )
+        if (args.width, args.height) != expected_policy:
+            raise ValueError(
+                "recipe policy output resolution does not match camera-rig profile: "
+                f"recipe={(args.width, args.height)} profile={expected_policy}"
+            )
+        if (source_width, source_height) != expected_source:
+            raise ValueError(
+                "recipe source render resolution does not match camera-rig profile: "
+                f"recipe={(source_width, source_height)} profile={expected_source}"
+            )
+        source_width, source_height = expected_source
+        args.policy_resize = str(renderer_profile["policy_resize"])
+        args.samples = int(renderer_profile["samples"])
+        args.denoise = bool(renderer_profile["denoise"])
+        args.cycles_seed = int(renderer_profile["cycles_seed"])
+        args.lighting_profile = str(renderer_profile["lighting_profile"])
+        args.key_light_power = float(renderer_profile["key_light_power"])
+        args.fill_light_power = float(renderer_profile["fill_light_power"])
+        args.world_strength = float(renderer_profile["world_strength"])
+        args.hdri_rotation_deg = float(renderer_profile["hdri_rotation_deg"])
+        args.exposure = float(renderer_profile["exposure"])
+        args.color_management = str(renderer_profile["color_management"])
+        args.color_look = str(renderer_profile["color_look"])
+        args.gamma = float(renderer_profile["gamma"])
+        args.output_format = str(renderer_profile["output_format"])
+        args.robot_material = str(renderer_profile["robot_material"])
+        args.robot_material_config = Path(str(renderer_profile["material_profile"]))
+        args.scene_profile = str(renderer_profile["scene_profile"])
+        args.camera_lens = float(renderer_profile["camera_lens"])
+        args.asset_root = Path(str(renderer_profile["asset_root"]))
+        args.blender_bin = str(renderer_profile["blender_bin"])
+        args.max_mesh_geoms = int(renderer_profile["max_mesh_geoms"])
+        profile_camera_keys = list(renderer_profile["camera_keys"])
+        requested_camera_keys = [
+            item.strip() for item in args.camera_keys.split(",") if item.strip()
+        ]
+        if requested_camera_keys != profile_camera_keys:
+            raise ValueError(
+                "recipe camera keys do not match camera-rig profile: "
+                f"recipe={requested_camera_keys} profile={profile_camera_keys}"
+            )
+        camera_rig_config_hash = config_sha256(camera_rig_config_path)
+
+    if args.preserve_pinhole_renders is not None:
+        renderer_profile["preserve_pinhole_renders"] = bool(
+            args.preserve_pinhole_renders
+        )
+
     blender_bin = shutil.which(args.blender_bin) or args.blender_bin
     episodes = _parse_int_csv(args.episodes) if args.episodes else [int(args.episode)]
     frame_tokens = [item.strip() for item in args.frames.split(",") if item.strip()]
@@ -341,6 +547,9 @@ def main() -> None:
         seed_base=args.seed_base,
         width=args.width,
         height=args.height,
+        source_width=source_width,
+        source_height=source_height,
+        policy_resize=args.policy_resize,
         samples=args.samples,
         denoise=args.denoise,
         cycles_seed=args.cycles_seed,
@@ -365,6 +574,9 @@ def main() -> None:
         skip_existing=args.skip_existing,
         contact_sheet_limit=args.contact_sheet_limit,
         blender_batch_size=args.blender_batch_size,
+        renderer_profile=renderer_profile,
+        camera_rig_config_path=camera_rig_config_path,
+        camera_rig_config_hash=camera_rig_config_hash,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
@@ -382,6 +594,9 @@ def render_dataset_preview(
     seed_base: int | None,
     width: int,
     height: int,
+    source_width: int,
+    source_height: int,
+    policy_resize: str,
     samples: int,
     denoise: bool,
     cycles_seed: int,
@@ -406,12 +621,33 @@ def render_dataset_preview(
     skip_existing: bool,
     contact_sheet_limit: int,
     blender_batch_size: int,
+    renderer_profile: dict[str, Any] | None = None,
+    camera_rig_config_path: Path | None = None,
+    camera_rig_config_hash: str | None = None,
 ) -> dict[str, Any]:
     import gymnasium as gym
     import mujoco
     import numpy as np
     import pyarrow.parquet as pq
     import so101_nexus_mujoco  # noqa: F401 - registers Gymnasium env ids.
+
+    if source_width < width or source_height < height:
+        raise ValueError(
+            "source render resolution cannot be smaller than policy output: "
+            f"source={source_width}x{source_height} output={width}x{height}"
+        )
+    if policy_resize == "direct_square_render" and source_width != source_height:
+        raise ValueError("direct_square_render requires a square source image")
+    profile = dict(renderer_profile or {})
+    sample_clamp_indirect = float(profile.get("sample_clamp_indirect", 0.85))
+    background_wall = bool(profile.get("background_wall", False))
+    stable_tabletop = bool(profile.get("stable_tabletop", True))
+    configured_visual_props = profile.get("visual_props")
+    configured_lights = list(profile.get("lights") or [])
+    bevel_width_range_m = profile.get("bevel_width_range_m")
+    bevel_segments = int(profile.get("bevel_segments", 3))
+    distortion_profiles = dict(profile.get("lens_distortion") or {})
+    preserve_pinhole_renders = bool(profile.get("preserve_pinhole_renders", False))
 
     output_dir.mkdir(parents=True, exist_ok=True)
     robot_material_config = _load_robot_material_config(robot_material_config_path)
@@ -472,7 +708,11 @@ def render_dataset_preview(
     try:
         if env is not None:
             for camera_name in ("egocentric_cam", "wrist_cam"):
-                mujoco_renderers[camera_name] = mujoco.Renderer(env.unwrapped.model, height=height, width=width)
+                mujoco_renderers[camera_name] = mujoco.Renderer(
+                    env.unwrapped.model,
+                    height=source_height,
+                    width=source_width,
+                )
         for episode in sorted(rows_by_episode):
             seed = _seed_for_episode(
                 episode,
@@ -511,7 +751,18 @@ def render_dataset_preview(
                         image_paths["observation.images.camera3"] = str(
                             frame_dir / f"episode_{episode:04d}_frame_{frame_index:04d}_camera3{output_extension}"
                         )
-                    if skip_existing and all(Path(path).exists() for path in image_paths.values()):
+                    if skip_existing and _existing_render_matches_contract(
+                        frame_dir=frame_dir,
+                        image_paths=image_paths,
+                        source_width=source_width,
+                        source_height=source_height,
+                        output_width=width,
+                        output_height=height,
+                        policy_resize=policy_resize,
+                        samples=samples,
+                        denoise=denoise,
+                        camera_rig_config_hash=camera_rig_config_hash,
+                    ):
                         rendered.append(
                             {
                                 "episode": episode,
@@ -528,6 +779,9 @@ def render_dataset_preview(
                                 "primitive_geoms_exported": 0,
                                 "render_seconds": 0.0,
                                 "skipped_existing": True,
+                                "source_resolution": [source_width, source_height],
+                                "output_resolution": [width, height],
+                                "policy_resize": policy_resize,
                             }
                         )
                         if env is not None:
@@ -556,21 +810,45 @@ def render_dataset_preview(
                             env,
                             mujoco_renderers,
                             camera_lens=camera_lens,
+                            width=source_width,
+                            height=source_height,
                         )
+                    target_camera_specs = _camera_specs_for_resolution(
+                        camera_specs,
+                        width=source_width,
+                        height=source_height,
+                    )
+                    render_camera_specs = _camera_specs_with_distortion_overscan(
+                        target_camera_specs,
+                        distortion_profiles=distortion_profiles,
+                        width=source_width,
+                        height=source_height,
+                    )
                     render_specs = []
                     for camera_key in camera_keys:
-                        if camera_key not in camera_specs:
+                        if camera_key not in render_camera_specs:
                             raise ValueError(f"unsupported camera key: {camera_key}")
                         image_path = Path(image_paths[camera_key])
-                        render_specs.append({"image_path": str(image_path.resolve()), "camera": camera_specs[camera_key]})
+                        render_specs.append(
+                            {
+                                "image_path": str(image_path.resolve()),
+                                "camera": render_camera_specs[camera_key],
+                            }
+                        )
                         image_paths[camera_key] = str(image_path)
                     blender_report_path = frame_dir / "blender_device_report.json"
                     spec_path = frame_dir / "blender_scene_spec.json"
                     spec = {
-                        "width": width,
-                        "height": height,
+                        "width": source_width,
+                        "height": source_height,
+                        "output_width": width,
+                        "output_height": height,
+                        "policy_resize": policy_resize,
                         "samples": samples,
                         "denoise": denoise,
+                        "compute_device_type": str(
+                            profile.get("compute_device_type", "METAL")
+                        ),
                         "cycles_seed": int(cycles_seed),
                         "lighting_profile": lighting_profile,
                         "key_light_power": float(key_light_power),
@@ -582,11 +860,22 @@ def render_dataset_preview(
                         "color_look": color_look,
                         "gamma": float(gamma),
                         "output_format": output_format,
-                        "sample_clamp_indirect": 0.85,
-                        "background_wall": False,
-                        "stable_tabletop": True,
+                        "sample_clamp_indirect": sample_clamp_indirect,
+                        "background_wall": background_wall,
+                        "stable_tabletop": stable_tabletop,
                         "scene_profile": scene_profile,
-                        "visual_props": _visual_props_for_episode(seed) if scene_profile == "black_table_clutter" else [],
+                        "visual_props": (
+                            list(configured_visual_props)
+                            if configured_visual_props is not None
+                            else (
+                                _visual_props_for_episode(seed)
+                                if scene_profile == "black_table_clutter"
+                                else []
+                            )
+                        ),
+                        "lights": configured_lights,
+                        "bevel_width_range_m": bevel_width_range_m,
+                        "bevel_segments": bevel_segments,
                         "robot_material": robot_material,
                         "robot_material_config": robot_material_config,
                         "camera_lens": camera_lens,
@@ -600,6 +889,12 @@ def render_dataset_preview(
                         "primitives": primitives,
                         "target_site": None,
                         "renders": render_specs,
+                        "camera_rig_config": (
+                            str(camera_rig_config_path)
+                            if camera_rig_config_path is not None
+                            else None
+                        ),
+                        "camera_rig_config_sha256": camera_rig_config_hash,
                     }
                     spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True), encoding="utf-8")
                     pending_blender.append(
@@ -607,7 +902,10 @@ def render_dataset_preview(
                             "spec_path": spec_path,
                             "frame_dir": frame_dir,
                             "mesh_dir": mesh_dir,
-                            "camera_specs": camera_specs,
+                            "camera_specs": target_camera_specs,
+                            "render_camera_specs": render_camera_specs,
+                            "distortion_profiles": distortion_profiles,
+                            "preserve_pinhole_renders": preserve_pinhole_renders,
                             "image_paths": image_paths,
                             "rendered_item": {
                                 "episode": episode,
@@ -622,6 +920,9 @@ def render_dataset_preview(
                                 "image_paths": image_paths,
                                 "mesh_geoms_exported": len(exported),
                                 "primitive_geoms_exported": len(primitives),
+                                "source_resolution": [source_width, source_height],
+                                "output_resolution": [width, height],
+                                "policy_resize": policy_resize,
                             },
                         }
                     )
@@ -634,6 +935,9 @@ def render_dataset_preview(
                                 blender_bin=blender_bin,
                                 duplicate_camera3_from_camera2=duplicate_camera3_from_camera2,
                                 batch_mode=blender_batch_size > 1,
+                                output_width=width,
+                                output_height=height,
+                                policy_resize=policy_resize,
                             )
                         )
                         pending_blender.clear()
@@ -648,6 +952,9 @@ def render_dataset_preview(
                     blender_bin=blender_bin,
                     duplicate_camera3_from_camera2=duplicate_camera3_from_camera2,
                     batch_mode=blender_batch_size > 1,
+                    output_width=width,
+                    output_height=height,
+                    policy_resize=policy_resize,
                 )
             )
             pending_blender.clear()
@@ -687,17 +994,21 @@ def render_dataset_preview(
         else None,
         "scene_profile": scene_profile,
         "visual_props_by_episode": {
-            str(episode): _visual_props_for_episode(
-                _seed_for_episode(
-                    episode,
-                    seed_base=seed_base,
-                    dataset_root=dataset_root,
-                    episode_summaries=episode_summaries,
+            str(episode): (
+                list(configured_visual_props)
+                if configured_visual_props is not None
+                else _visual_props_for_episode(
+                    _seed_for_episode(
+                        episode,
+                        seed_base=seed_base,
+                        dataset_root=dataset_root,
+                        episode_summaries=episode_summaries,
+                    )
                 )
             )
             for episode in episodes
         }
-        if scene_profile == "black_table_clutter"
+        if configured_visual_props is not None or scene_profile == "black_table_clutter"
         else {},
         "camera_lens": camera_lens,
         "samples": samples,
@@ -724,8 +1035,18 @@ def render_dataset_preview(
             str(render_replay_sidecar.resolve()) if render_replay_sidecar is not None else None
         ),
         "physics_replayed": render_replay_sidecar is None,
+        "source_width": source_width,
+        "source_height": source_height,
         "width": width,
         "height": height,
+        "policy_resize": policy_resize,
+        "camera_rig_config": (
+            str(camera_rig_config_path)
+            if camera_rig_config_path is not None
+            else None
+        ),
+        "camera_rig_config_sha256": camera_rig_config_hash,
+        "renderer_profile": profile,
         "contact_sheet": str(contact_sheet) if contact_sheet else None,
         "contact_sheet_limit": contact_sheet_limit,
         "renders": rendered,
@@ -778,38 +1099,63 @@ def _flush_blender_pending(
     blender_bin: str,
     duplicate_camera3_from_camera2: bool,
     batch_mode: bool,
+    output_width: int,
+    output_height: int,
+    policy_resize: str,
 ) -> list[dict[str, Any]]:
     if not pending:
         return []
     started = time.perf_counter()
-    if batch_mode:
-        manifest_path = output_dir / f"blender_batch_{int(started * 1_000_000)}.json"
-        manifest_path.write_text(
-            json.dumps({"spec_paths": [str(item["spec_path"].resolve()) for item in pending]}, indent=2, sort_keys=True),
-            encoding="utf-8",
+    _run_blender_items(
+        pending,
+        output_dir=output_dir,
+        driver_path=driver_path,
+        blender_bin=blender_bin,
+        batch_mode=batch_mode,
+        artifact_label="batch",
+    )
+    missing = [item for item in pending if _missing_render_outputs(item)]
+    for item in missing:
+        _run_blender_items(
+            [item],
+            output_dir=output_dir,
+            driver_path=driver_path,
+            blender_bin=blender_bin,
+            batch_mode=batch_mode,
+            artifact_label="retry",
         )
-        command = [blender_bin, "--background", "--python", str(driver_path), "--", str(manifest_path)]
-        log_path = output_dir / f"blender_batch_{manifest_path.stem.removeprefix('blender_batch_')}.log"
-    else:
-        command = [blender_bin, "--background", "--python", str(driver_path), "--", str(pending[0]["spec_path"])]
-        log_path = pending[0]["frame_dir"] / "blender_render.log"
-    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+        still_missing = _missing_render_outputs(item)
+        if still_missing:
+            raise RuntimeError(
+                "Blender returned success but did not create expected render outputs after retry: "
+                + ", ".join(str(path) for path in still_missing)
+            )
     render_seconds = time.perf_counter() - started
-    log_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
-    if completed.returncode != 0:
-        raise RuntimeError(f"Blender render failed with exit code {completed.returncode}; see {log_path}")
 
     rendered: list[dict[str, Any]] = []
     seconds_per_item = render_seconds / max(1, len(pending))
     for item in pending:
         image_paths = item["image_paths"]
         camera_specs = item["camera_specs"]
+        distortion_records = _apply_lens_distortion_to_images(
+            image_paths,
+            target_camera_specs=camera_specs,
+            render_camera_specs=item.get("render_camera_specs", camera_specs),
+            distortion_profiles=item.get("distortion_profiles", {}),
+            preserve_pinhole=bool(item.get("preserve_pinhole_renders", False)),
+        )
         for camera_key, image_path in image_paths.items():
             if camera_key not in camera_specs:
                 continue
             rotation = camera_specs[camera_key].get("rotation_degrees", 0)
             if rotation:
                 _rotate_image(Path(image_path), int(rotation))
+            _resize_policy_image(
+                Path(image_path),
+                width=output_width,
+                height=output_height,
+                mode=policy_resize,
+            )
         if duplicate_camera3_from_camera2 and "observation.images.camera2" in image_paths:
             camera2_path = Path(image_paths["observation.images.camera2"])
             camera3_path = item["frame_dir"] / f"{item['frame_dir'].name}_camera3{camera2_path.suffix}"
@@ -818,8 +1164,70 @@ def _flush_blender_pending(
         shutil.rmtree(item["mesh_dir"], ignore_errors=True)
         rendered_item = dict(item["rendered_item"])
         rendered_item["render_seconds"] = seconds_per_item
+        if distortion_records:
+            rendered_item["camera_postprocess"] = distortion_records
         rendered.append(rendered_item)
     return rendered
+
+
+def _run_blender_items(
+    items: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    driver_path: Path,
+    blender_bin: str,
+    batch_mode: bool,
+    artifact_label: str,
+) -> Path:
+    artifact_id = f"{time.time_ns()}_pid{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    if batch_mode:
+        manifest_path = output_dir / f"blender_{artifact_label}_{artifact_id}.json"
+        manifest_path.write_text(
+            json.dumps(
+                {"spec_paths": [str(item["spec_path"].resolve()) for item in items]},
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        command = [blender_bin, "--background", "--python", str(driver_path), "--", str(manifest_path)]
+        log_path = output_dir / f"blender_{artifact_label}_{artifact_id}.log"
+    else:
+        if len(items) != 1:
+            raise ValueError("non-batch Blender invocation accepts exactly one render item")
+        command = [blender_bin, "--background", "--python", str(driver_path), "--", str(items[0]["spec_path"])]
+        log_path = items[0]["frame_dir"] / f"blender_render_{artifact_label}_{artifact_id}.log"
+
+    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    log_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
+    if completed.returncode != 0:
+        raise RuntimeError(f"Blender render failed with exit code {completed.returncode}; see {log_path}")
+    return log_path
+
+
+def _missing_render_outputs(item: dict[str, Any]) -> list[Path]:
+    camera_specs = item["camera_specs"]
+    missing: list[Path] = []
+    for camera_key, image_path in item["image_paths"].items():
+        if camera_key not in camera_specs:
+            continue
+        path = Path(image_path)
+        if _render_output_is_valid(path):
+            continue
+        path.unlink(missing_ok=True)
+        missing.append(path)
+    return missing
+
+
+def _render_output_is_valid(path: Path, *, expected_size: tuple[int, int] | None = None) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        with Image.open(path) as image:
+            image.load()
+            return expected_size is None or image.size == expected_size
+    except (OSError, ValueError):
+        return False
 
 
 def _dataset_rows_for_replay(dataset_root: Path, *, episode_frames: dict[int, list[int]]) -> list[dict[str, Any]]:
@@ -1192,6 +1600,105 @@ def _resolve_frame_token(token: str, *, first_frame: int, last_frame: int, summa
 
 def _frame_label(episode_frame_labels: dict[int, dict[int, str]], *, episode: int, frame: int) -> str:
     return episode_frame_labels.get(int(episode), {}).get(int(frame), str(frame))
+
+
+def _camera_specs_for_resolution(
+    camera_specs: dict[str, dict[str, Any]],
+    *,
+    width: int,
+    height: int,
+) -> dict[str, dict[str, Any]]:
+    resolved: dict[str, dict[str, Any]] = {}
+    for camera_key, source in camera_specs.items():
+        spec = dict(source)
+        if spec.get("fovy") is not None:
+            focal = 0.5 * float(height) / math.tan(
+                0.5 * math.radians(float(spec["fovy"]))
+            )
+            spec["intrinsics"] = {
+                "fx": focal,
+                "fy": focal,
+                "cx": width / 2.0,
+                "cy": height / 2.0,
+                "width": width,
+                "height": height,
+            }
+        resolved[camera_key] = spec
+    return resolved
+
+
+def _resize_policy_image(
+    path: Path,
+    *,
+    width: int,
+    height: int,
+    mode: str,
+) -> None:
+    image = Image.open(path).convert("RGB")
+    changed = False
+    if mode == "direct_square_render":
+        if image.width != image.height:
+            raise ValueError(
+                f"direct_square_render received a non-square image: {image.size}"
+            )
+    elif mode == "center_crop_square_then_resize":
+        if width != height:
+            raise ValueError("center-crop policy output must be square")
+        side = min(image.width, image.height)
+        left = (image.width - side) // 2
+        top = (image.height - side) // 2
+        image = image.crop((left, top, left + side, top + side))
+        changed = True
+    else:
+        raise ValueError(f"unsupported policy resize mode: {mode}")
+    if image.size != (width, height):
+        image = image.resize((width, height), Image.Resampling.LANCZOS)
+        changed = True
+    if changed:
+        image.save(path)
+
+
+def _existing_render_matches_contract(
+    *,
+    frame_dir: Path,
+    image_paths: dict[str, str],
+    source_width: int,
+    source_height: int,
+    output_width: int,
+    output_height: int,
+    policy_resize: str,
+    samples: int,
+    denoise: bool,
+    camera_rig_config_hash: str | None,
+) -> bool:
+    spec_path = frame_dir / "blender_scene_spec.json"
+    if not spec_path.is_file() or not all(
+        Path(path).is_file() for path in image_paths.values()
+    ):
+        return False
+    try:
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        expected = {
+            "width": source_width,
+            "height": source_height,
+            "output_width": output_width,
+            "output_height": output_height,
+            "policy_resize": policy_resize,
+            "samples": samples,
+            "denoise": denoise,
+            "camera_rig_config_sha256": camera_rig_config_hash,
+        }
+        if any(spec.get(key) != value for key, value in expected.items()):
+            return False
+        expected_size = (output_width, output_height)
+        if not all(
+            _render_output_is_valid(Path(path), expected_size=expected_size)
+            for path in image_paths.values()
+        ):
+            return False
+        return True
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
 
 
 def _camera_specs_with_distortion_overscan(

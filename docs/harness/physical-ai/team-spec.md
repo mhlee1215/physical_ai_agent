@@ -194,6 +194,10 @@ Required phase order:
 4. Render every declared camera for every frame. Reset once per episode, replay
    pre-action state sequentially, and fail on missing frames. Partial sidecars
    and sample probes remain diagnostic-only.
+   Production recipes must set `preserve_pinhole_renders: false`; enable the
+   512px pre-distortion copies only for an explicit camera-calibration probe.
+   Apply this as a recipe/runtime retention override so the frozen camera-rig
+   config hash and final distorted 256px policy pixels remain unchanged.
 5. Build a new image-only LeRobot derivative. Preserve episode boundaries,
    state, action, timestamps, indices, task prompts, and non-image features;
    replace only declared camera streams.
@@ -303,6 +307,30 @@ policy is:
 - SO101 training, supervised evaluation, and loop test are all mandatory phases.
   The canonical flow is owned by the training process: train, run supervised
   evaluation, save checkpoint, then run the scheduled loop test.
+- Phase-split SO101 runs use virtual lists for both `train_datasets[]` and
+  `validation_datasets[]`; do not physically merge phase datasets. The current
+  hardware-locked photoreal contract is approach, alignment, and grip/lift.
+  Log each validation phase loss separately and aggregate them as `val/loss`.
+- Primitive phase datasets are supervision-only and must not declare or
+  materialize phase-specific closed-loop tests. The parent/full-task dataset
+  owns exactly one official end-to-end closed-loop suite.
+- Its automatic official closed-loop suite runs only the continuous chain.
+  Periodic evaluation uses ten fixed validation source episodes, five from
+  camera1 grid bin 9 and five from bin 10. Final evaluation runs the
+  continuous chain over all 50 held-out episodes. Do not create primitive
+  loop-test sidecars or duplicate per-phase success metrics unless the user
+  explicitly requests a temporary diagnostic exception.
+- The continuous chain starts from the parent validation report's
+  `sim_snapshot` and carries the policy-created state across prompt changes
+  without teacher resets. Valid-mask proposes the
+  boundary; the phase geometric verifier confirms advance/completion. A
+  rejected valid-mask proposal continues the same phase. At a phase cap, a
+  passing verifier advances/completes and only a failing verifier records
+  `hard_cap`. Configure each cap as
+  `ceil(reference episode frames * reference_length_multiplier)` and fail when
+  the declared cap disagrees. The current multiplier is 1.5, yielding
+  approach/alignment/grip-lift/chain caps 66/66/134/266. Simulator object pose
+  is verifier-only, never policy input.
 - Checkpoint, validation, and closed-loop timing must be one aligned step event,
   not three drifting schedules. The launcher and Lightning training entrypoint
   must fail before training unless
@@ -387,6 +415,10 @@ policy is:
   failures for camera contracts, ambiguous `train_dataset` versus
   `train_datasets`, validation dataset shape, TensorBoard settings,
   augmentation settings, or closed-loop test-case shape.
+- Closed-loop `success_metric` is owned by the main JSON training config. The
+  post-checkpoint evaluator must refresh it from that config at evaluation time;
+  a stale launch-time command value must not override an approved config change
+  or force a healthy training process to restart.
 - Loop-test review GIFs must match the TensorBoard closed-loop media rendering.
   If a GIF is checked into a PR, research note, or handoff as closed-loop
   evidence, generate it from the same side-by-side camera1/camera2 renderer that
@@ -413,12 +445,48 @@ policy is:
     generated from the side-by-side camera1=egocentric and camera2=wrist
     policy-input trace. If trace camera frames are unavailable, canonical
     rollout evidence is missing and the evaluator must be fixed;
-  - when policy-input frames are available, debug side-by-side camera media
-    under `extra/closed_loop/<test_id>/rollout_camera_trace_camera1_camera2_episode_<NNN>`
-    with camera1=egocentric and camera2=wrist;
+  - `training_config.closed_loop.tensorboard_media.render_test_cases` is the
+    rollout/train-reference media allowlist. Tests outside it still publish
+    scalar and RMSE diagnostics but no rollout video. The phase-split grip
+    config allowlists only its periodic and final continuous-chain tests;
+  - a continuous phase-chain test uses `chain_rollout_layout=per_episode` and
+    publishes one time-ordered
+    `closed_loop/<test_id>/rollout_episode_<NNN>` video per evaluated episode.
+    Do not concatenate different episodes into one tag or tile phases/episodes
+    into a spatial grid. The matching train reference must concatenate the same
+    source episode's approach, alignment, and grip/lift teacher trajectories
+    in phase order. A rollout that fails a phase remains partial rather than
+    displaying fabricated later phases. Each frame uses the canonical
+    side-by-side policy-input renderer and preserves episode/frame, prompt,
+    phase, inference borders, and termination cues;
+  - phase-split photoreal evaluation uses
+    `observation_renderer.render_policy_inference_only=true`, so rollout media
+    and RMSE sweeps capture fresh policy-query frames only. Its RMSE sweep uses
+    `n_action_steps=[5,15,30,50]` and must set
+    `action_rmse_sweep.y_axis_max=0.2` so every checkpoint uses the same
+    vertical comparison scale. With `timeline_mode=phase_chain`, run the
+    aligned approach, alignment, and grip/lift primitive starts and concatenate
+    their teacher comparisons into one timeline. Mark primitive transitions
+    and put overall plus per-phase RMSE in one table. Use
+    `action_rmse_sweep.test_cases` to allowlist only the periodic/final
+    continuous-chain IDs so primitive evaluations do not duplicate the same
+    diagnostic. Set the renderer value to `false` only for an explicitly
+    requested full environment-step render;
+  - do not duplicate canonical side-by-side rollout videos under
+    `extra/closed_loop/...`; the per-episode canonical tag is sufficient;
   - matching train-reference side-by-side media under
     `closed_loop/<test_id>/train_reference_camera1_camera2_episode_<NNN>`
-    whenever the train/validation dataset root is available.
+    whenever the train/validation dataset root is available. This static media
+    defaults to one write per run/test via
+    `training_config.closed_loop.tensorboard_media.train_reference_frequency=once_per_run`.
+    `every_checkpoint` and `disabled` are explicit alternatives. Deleting the
+    TensorBoard event files invalidates the once-per-run marker and permits one
+    replacement write.
+- Closed-loop rollout frame capture is configured by
+  `training_config.closed_loop.observation_renderer.render_policy_inference_only`.
+  `true` captures policy-query frames only and `false` captures every
+  environment step. This setting must never alter action execution or the
+  policy's `n_action_steps` re-query cadence.
 - Official SO101 loop-test starts must come from the dataset config, not from a
   fresh evaluator-generated reset. When `closed_loop.test_cases[].start_dataset`
   or `--closed-loop-start-report-path` is present, the loop evaluator must load
@@ -434,8 +502,13 @@ policy is:
   available, terminal success/failure context, and a green border exactly on
   frames where model inference/re-query happens. If the runner only produces a
   raw `rollout_gif`, the canonical TensorBoard rollout evidence is incomplete.
-  Raw GIF mirror tags, if kept, must live under `extra/closed_loop/...` and
-  must not replace the canonical camera1/camera2 rollout tag.
+  Draw a red outer border on the final frame only when the report confirms
+  `termination.reason=valid_mask_stop`, and a blue outer border when it confirms
+  `termination.reason=env_success`. Failure and hard-cap termination receive no
+  terminal border. Hold a colored terminal frame for several encoded video
+  frames so TensorBoard's GIF conversion cannot drop the only termination cue.
+  Do not create duplicate `extra/closed_loop/<test_id>/raw_rollout_gif_episode_*`
+  TensorBoard tags; keep the canonical camera1/camera2 rollout only.
 - Action RMSE sweep is part of the default SO101 loop-test diagnostic contract
   for action-chunk policies. Use the configured sweep values, normally
   `n_action_steps=[1,3,5,10,15,30,40,50]`, and attach the plot to TensorBoard
@@ -443,11 +516,20 @@ policy is:
   episode frame index and compare postprocessed policy action to teacher action
   at that frame. Treat a missing sweep plot as missing diagnostic evidence,
   not as a successful loop-test visualization.
+- Joint valid-mask training must use the detached SmolVLA predicted
+  `action_hat`, matching the normalized predicted action chunk consumed at
+  inference. Teacher action chunks may define padding labels but must not be
+  silently substituted as the valid-mask head input.
 - Training-time loop-test result generation has one canonical code entrypoint:
   `write_so101_training_loop_test_results(run_dir, row, report)`. The monitor
-  should append the metrics row and call this function. New runner-specific
-  visualization code, TensorBoard writers, or ad hoc media attachment paths are
-  not allowed; extend this function or its private helpers instead.
+  must call this function before recording a successful `closed_loop_metrics`
+  row. If this function cannot attach the required TensorBoard evidence,
+  including success scalar, per-episode canonical rollout media, RMSE sweep
+  when applicable, and train-reference media, the loop test is failed evidence
+  and must not be marked as a completed successful loop-test record. New
+  runner-specific visualization code, TensorBoard writers, or ad hoc media
+  attachment paths are not allowed; extend this function or its private helpers
+  instead.
 - Whenever TensorBoard is started or reported, include the TensorBoard access
   set together: local URL, same-Wi-Fi mobile URL, and an external-access URL.
   Use a `cloudflared` quick tunnel for the external URL when available; if it
@@ -526,15 +608,46 @@ policy is:
   `scripts/start_so101_training.py`. Missing valid-mask configuration is a
   validation-loop contract failure, not a warning. Lightweight smoke/debug runs
   may bypass this only when explicitly labeled non-authoritative.
+- Picklift valid-mask loop tests must evaluate the exact normalized action chunk
+  that is subsequently postprocessed and executed. A single-policy episode may
+  stop only after the configured number of consecutive re-query termination
+  predictions; keep the configured environment-step hard cap as a safety limit.
+  The canonical `grip_the_cube_v2` values are two confirmations and 200 steps.
+  Record boundary-index MAE, stop precision/recall, premature-stop rate, and
+  terminal-sample fraction because slot accuracy can be dominated by all-valid
+  chunks.
 - SO101 SmolVLA training configs must enable moderate train-time augmentation
-  by default. The current moderate preset is `state_jitter_std=0.003`,
-  `state_dropout_prob=0.02`, `image_patch_mask_ratio=0.15`,
-  `image_affine_degrees=5.0`, `image_affine_translate=0.05`,
-  `gpu_image_augmentation=true`, `image_camera_dropout_prob=0.0`, and
-  `image_patch_dropout_prob=0.0`. Affine augmentation must run on the training
-  device tensor path so CUDA and MPS are both supported. Validation and
+  by default. The current `grip_the_cube_v2` preset is
+  `state_jitter_std=0.01`, `state_jitter_prob=0.35`,
+  `state_dropout_prob=0.02`,
+  `image_patch_mask_ratio=0.0`, `image_affine_degrees=0.0`,
+  `image_affine_translate=0.0`, `image_noise_std=0.01`,
+  `image_motion_blur_prob=0.1`, `gpu_image_augmentation=true`,
+  `image_camera_dropout_prob=0.0`, and `image_patch_dropout_prob=0.0`.
+  Affine augmentation remains an explicit opt-in CUDA/MPS tensor-path knob for
+  ablations, but it is off for this canonical grip training. Validation and
   closed-loop test inputs stay unaugmented. Do not use teacher-action dropout in
   BC runs.
+- For canonical grip runs, `model_inputs.active_image_features` is explicitly
+  camera1 egocentric plus camera2 wrist. Dataset camera3 may remain as a stored
+  compatibility duplicate, but the policy config and predecoded cache must not
+  read it unless a future experiment opts in.
+- Canonical grip PEFT uses LeRobot's built-in wrapper with rank-8 VLM
+  text/vision Q/V LoRA and full training of the action expert and
+  state/action/time projections. Start from checkpoint weights only; do not
+  restore the optimizer state of a non-PEFT run. Loop-test loaders must restore
+  both base policy and adapter, and must construct the base with the adapter
+  directory's saved policy config so the active camera contract cannot revert.
+- Resume an existing LoRA run from the retained checkpoint's
+  `pretrained_model/train_config.json` plus its exact training-state directory.
+  Do not substitute `training.policy_repo_id` as `policy.path`; it is the
+  output `policy.repo_id`. Reactivate the loaded PEFT adapter for training
+  before optimizer state restoration, and verify expected trainable parameter
+  count and resumed step before accepting the launch.
+- The loop-test command created for checkpoint `N` must evaluate checkpoint
+  `N` only. Forward `SO101_CHECKPOINT_DIR` to `--checkpoint-name` and treat any
+  missing requested checkpoint as an error instead of scanning retained
+  aliases.
 - If SO101 action chunks look jittery, handle it as action smoothness, not data
   augmentation. Preferred training-side regularization is explicit temporal
   jerk/smoothness loss on the differentiable SmolVLA flow action estimate
@@ -543,6 +656,29 @@ policy is:
   with a small starting weight such as `0.01`. Preferred inference-side
   mitigation is temporal ensembling or chunk-boundary smoothing. Do not corrupt teacher action
   labels to get smoother motion.
+- For action-chunk re-query stability, use the explicit
+  `action_overlap_consistency` config. It is train-only, uses same-episode
+  `t+offset` teacher actions as detached targets without a second model forward,
+  and must be forwarded through
+  `--so101-action-overlap-consistency-*`; do not add hidden defaults in code.
+- Cross-query prediction consistency is a separate opt-in contract named
+  `action_requery_consistency`. It compares the current chunk tail with the
+  chunk prefix predicted from the same episode's `t+offset` observation. The
+  two SmolVLA forwards must share flow time and aligned overlap noise so the
+  loss measures observation/re-query disagreement instead of random flow
+  sampling noise. The future-observation prediction is a detached target;
+  gradients flow through the current chunk only. Configure and forward offset,
+  horizon, and weight explicitly.
+- Temporal ensembling is an inference-only closed-loop option. When enabled,
+  query on the configured `n_action_steps` cadence and exponentially blend all
+  postprocessed chunks that cover the current step. Same-checkpoint A/B must
+  hold start snapshot, seed, prompt, camera contract, resolution, and rollout
+  horizon fixed.
+- RMSE diagnostics must distinguish teacher-reference drift from rollout
+  discontinuity. Log teacher-reference drift, re-query-boundary action jump,
+  non-boundary action jump, boundary/non-boundary ratio, and overlap RMSE under
+  separate names. Never describe teacher-frame comparison as oracle error at
+  the actual rollout state.
 - Pipeline PRs that touch SO101 SmolVLA training, dataset generation,
   augmentation, caching, validation, or closed-loop scheduling must run:
   `PYTHONPATH=src python3 -B -m unittest tests.test_so101_smolvla_pipeline tests.test_lerobot_sampling_augmentation`.
@@ -585,6 +721,8 @@ policy is:
     viewer tabs even when their names do not end in `_train` or `_val`.
   - Dataset completion requires executable evidence: export/merge/audit report,
     required camera-grid sidecar, requested overlap audit and loop-test starts,
+    and a passed `meta/distribution/` report set (`distribution.json`,
+    `distribution.md`, `distribution.html`),
     `/api/datasets` visibility, and a successful `/api/frame` request for at
     least episode 0/frame 0 of every intended split. Report episode/frame count,
     disk size, prompt/camera contract, sidecar status, and viewer URL.
@@ -598,7 +736,9 @@ policy is:
     metadata, 256x256 RGB camera1/camera2, 6D observation.state/action,
     prompt/tasks and normalization stats, export/merge reports, a passed audit,
     a camera1 grid-bin sidecar for train, and the declared loop-start report for
-    validation. Dataset generation is not complete before this gate passes.
+    validation. The final completion verifier separately requires the
+    schema-v2 distribution report artifacts and `gate.status=passed`. Dataset
+    generation is not complete before both gates pass.
   - Before starting a training experiment, obtain the machine-readable dataset
     selection with
     `scripts/so101_dataset_registry.py training-manifest --dataset-id <id>`.
@@ -607,8 +747,10 @@ policy is:
     must not guess those training settings.
   - New recipes use `schema_version: 2` and an explicit Pydantic-discriminated
     source contract. `from_scratch` forbids external inputs.
-    `from_spawn_catalog` consumes checked-in seed-free `bin -> world [x, y]`
-    placement candidates; it must not run lookup builders or carry source
+    `from_spawn_catalog` consumes a checked-in seed-free placement catalog. It
+    may use camera-bin `bin -> world [x, y]` rows or typed workspace rows with
+    world/base XY, candidate-specific yaw, distance, sampling weight, and
+    camera-bin diagnostics. It must not run lookup builders or carry source
     frames/actions/states/seeds, and every generated split must point at a
     declared catalog. Use it whenever only placement distribution is reused.
     `from_existing_dataset` lists exact roots and chooses `regenerate_teacher`,
@@ -627,6 +769,23 @@ policy is:
     cheap close probe happen before full episode export. A post-export filter
     is an audit or derivative tool,
     not a substitute for constructive generation-time acceptance.
+  - Every schema-v2 split runs a post-generation distribution stage before
+    audit/completion. `scripts/build_so101_dataset_distribution_report.py`
+    computes success and seed integrity, episode length, camera1
+    visibility/4x4 occupancy, prompt counts, unique XY, radial bands, and
+    workspace-cell coverage when placement metadata exists. Area-sampled
+    workspace recipes also declare minimum radius/angle span, polar 2D
+    occupancy and count-balance thresholds, and nearest-neighbor spacing;
+    covering source IDs without filling their 2D area is not sufficient. The
+    recipe owns the thresholds. Cube-orientation randomization additionally
+    requires absolute-yaw and robot-relative-yaw histograms, where relative
+    yaw is `(object_yaw - angle_from_base) mod cube_symmetry_period`. Generate
+    relative-yaw strata directly by default; a broad world-yaw histogram does
+    not pass when the same face always points toward the robot. JSON is the machine gate, Markdown is the
+    research record, and standalone HTML is the visual inspection surface.
+    Generation order is JSON statistics -> canonical Markdown -> HTML, and
+    completion rejects the dataset if the Markdown SHA-256 recorded in JSON or
+    embedded in HTML does not match the current Markdown artifact.
   - Temporary smoke roots may be exposed through `SO101_TEMP_DATASETS`, but
     temporary discovery is not registration and must not be used to sign off a
     durable dataset.
@@ -663,6 +822,23 @@ policy is:
   LeRobot concat at training time. Do not physically merge train shards into a
   canonical `_workspace/so101_lerobot_merged/*` root for normal training.
   Physical merged roots are fallback/debug artifacts only.
+- Robot Experiment Manager dataset-role marks are persisted in
+  `_workspace/so101_training/dataset_role_selection.json` as independent
+  `training`, `validation`, and `loop_test` sets. When the user asks to train
+  with marked datasets, invoke the canonical launcher with
+  `--use-marked-dataset-set`; it must fail closed unless all three roles are
+  present. Do not infer a role from recency, the currently visible catalog
+  page, or the browser page cache. Training/validation marks require matching
+  completion-gated SO101 LeRobot splits; loop-test marks require an executable
+  test-case contract. For schema-v2 recipes, dataset generation must write the
+  executable contract beside the validation start report, including the exact
+  prompt, environment settings, action horizon, and observation renderer. The
+  dataset completion gate fails when this contract is absent or inconsistent.
+  Launching marked datasets must promote the selected loop contract's renderer
+  into the runtime config and fail closed if selected contracts disagree.
+- Cache dataset catalog responses per browser session using the complete
+  filter/sort/page key. Returning to an already loaded page must not issue a
+  catalog request. Mark, unmark, and delete operations invalidate that cache.
 - RunPod experiment-data lifecycle is download, verify, then delete. Past
   remote experiment results are not required. For every new RunPod teacher
   dataset, validation dataset, predecoded cache, checkpoint, rollout video,

@@ -161,7 +161,9 @@ Durable SO101 fine-tuning contract:
   only registry;
 - a dataset-generation request is complete only after: the versioned recipe
   exists; unique output roots are generated; export/merge/audit reports pass;
-  required camera-grid sidecars and loop starts are produced; overlap checks
+  required camera-grid sidecars and loop starts are produced; the mandatory
+  distribution stage writes and passes `meta/distribution/distribution.json`,
+  `.md`, and `.html`; overlap checks
   against protected datasets pass when requested; `/api/datasets` lists every
   intended split; and `/api/frame` succeeds for at least episode 0/frame 0 of
   each split. Report the root, episode/frame count, size, sidecar status, and
@@ -172,15 +174,18 @@ Durable SO101 fine-tuning contract:
   `scripts/verify_so101_dataset_completion.py`, restarts the existing
   launchctl-managed Robot Experiment Manager to evict stale schema code, and
   fails unless each selected split is listed by `/api/datasets` and its first
-  frame exposes prompt, camera1, and camera2 through `/api/frame`. Do not bypass
+  frame exposes prompt, camera1, and camera2 through `/api/frame`. It must also
+  reject missing or failed distribution reports. Do not bypass
   it with `--no-restart-viewer` outside an explicitly labeled unit/debug test;
 - author every new SO101 recipe with Pydantic `schema_version: 2`. Select
   `source.mode=from_scratch` when simulator state and trajectories are newly
   constructed without reusable placement inputs. Select
-  `source.mode=from_spawn_catalog` when only object placement is reused; the
-  checked-in catalog must contain only seed-free `bin -> world [x, y]`
-  candidates, and generated splits create new state, trajectories, images, and
-  seeds. Select `source.mode=from_existing_dataset` with exact roots and
+  `source.mode=from_spawn_catalog` when only object placement is reused. The
+  checked-in catalog may use seed-free camera-bin `[x, y]` candidates or typed
+  workspace candidates containing XY, candidate-specific yaw, and sampling
+  weight, but never source frames/actions/states/seeds. Generated splits create
+  new state, trajectories, images, and seeds. Select
+  `source.mode=from_existing_dataset` with exact roots and
   `operation=regenerate_teacher`, `render_derivative`, or `episode_subset` only
   when the dataset itself is an input. An episode subset writes a new append-only
   root while preserving retained frame/action/state values and source episode
@@ -190,6 +195,24 @@ Durable SO101 fine-tuning contract:
   `constructive_refine_then_probe` before full episode export. Forward all
   declared thresholds into exporter acceptance. Keep schema-v1 recipes
   immutable and readable for reproduction;
+- schema-v2 generation always runs
+  `scripts/build_so101_dataset_distribution_report.py` after sidecar/loop-start
+  materialization and before final audits/completion. Inspect the Markdown or
+  standalone HTML report before sign-off. The canonical order is JSON
+  statistics -> Markdown research record -> HTML visualization; completion
+  verifies the recorded Markdown SHA-256 in both JSON and HTML. At minimum,
+  enforce episode count, teacher success, unique seeds, camera1 visibility,
+  and any recipe-declared workspace-cell/radial-distribution thresholds.
+  For area-sampled workspaces, source-cell coverage is insufficient by itself:
+  also gate radius span, angle span, two-dimensional polar-cell
+  coverage/balance, and median nearest-neighbor spacing so a narrow arc cannot
+  be reported as broad spatial coverage. When cube orientation is randomized,
+  also gate the absolute yaw distribution and the robot-relative face
+  orientation `(object_yaw - angle_from_base) mod symmetry_period`. Do not
+  accept absolute yaw span as a proxy for face diversity: by default generate
+  robot-relative yaw strata directly, and reject a deterministic coupling
+  between placement angle and the face presented to the robot unless the
+  recipe declares a reviewed physical-feasibility exception;
 - the shared registry implementation is
   `src/physical_ai_agent/so101_dataset_registry.py`, and the only operator CLI
   is `scripts/so101_dataset_registry.py`. Run `list` for inventory,
@@ -202,13 +225,49 @@ Durable SO101 fine-tuning contract:
   durable generated datasets belong in generation recipes. Temporary smoke
   roots may use `SO101_TEMP_DATASETS`, but that mechanism is never the canonical
   registration path for a completed dataset;
-- training configs use moderate train-time augmentation by default:
-  `state_jitter_std=0.003`, `state_dropout_prob=0.02`,
-  `image_patch_mask_ratio=0.15`, `gpu_image_augmentation=true`;
+- training configs use explicit train-time augmentation by default. For
+  canonical `grip_the_cube_v2`, affine is off:
+  `state_jitter_std=0.01`, `state_jitter_prob=0.35`,
+  `state_dropout_prob=0.02`,
+  `image_patch_mask_ratio=0.0`, `image_affine_degrees=0.0`,
+  `image_affine_translate=0.0`, `image_noise_std=0.01`,
+  `image_motion_blur_prob=0.1`, `gpu_image_augmentation=true`;
+- canonical grip training exposes only camera1 egocentric and camera2 wrist to
+  the policy; camera3 is a configurable future opt-in, not a duplicate active
+  input;
+- canonical grip LoRA uses LeRobot PEFT with rank 8 on VLM text/vision Q/V
+  projections and keeps the action expert plus state/action/time projections
+  fully trainable. PEFT evaluators must restore the declared base and adapter;
+  the base must use the adapter directory's saved policy config so active
+  cameras cannot silently revert;
+- resume a LoRA run from the retained checkpoint's saved `train_config.json`
+  and exact training-state directory. `policy_repo_id` maps to output
+  `policy.repo_id`, never input `policy.path`; reactivate the loaded adapter as
+  trainable before optimizer restoration and verify resumed step plus trainable
+  parameter count;
+- a checkpoint-triggered loop-test subprocess must receive
+  `SO101_CHECKPOINT_DIR` as an exact `--checkpoint-name`; never rescan and
+  evaluate unrelated retained aliases inside that event;
 - validation and closed-loop test inputs remain unaugmented;
 - SO101 training, supervised evaluation, and loop test are mandatory phases;
   the training process owns the sequence and invokes loop tests directly after
   checkpoint/evaluation events;
+- phase-split SO101 experiments use virtual `train_datasets[]` and
+  `validation_datasets[]`. Their official suite is three primitive tests plus
+  one continuous chain. Periodic evaluation uses ten fixed held-out episodes
+  balanced five/five over the approved source bins; final evaluation uses the
+  complete validation set. Oracle handoff is a manual diagnostic only;
+- phase loop starts restore the selected validation `sim_snapshot`. In an
+  official continuous chain, do not reset between phases: valid-mask proposes
+  termination and the phase verifier confirms it. A rejected stop proposal
+  continues the same phase. At a phase cap, a passing verifier still
+  advances/completes and only a failing verifier records `hard_cap`. Derive the
+  phase cap as `ceil(reference frames * reference_length_multiplier)` and fail
+  when it disagrees with the explicit configured cap. The current phase lane
+  uses multiplier 1.5 and caps 66/66/134/266 for
+  approach/alignment/grip-lift/chain. The policy-created state flows into the
+  next prompt. Camera1, camera2, motor state, and prompt are policy inputs;
+  simulator object pose is verifier-only;
 - checkpoint, validation, and closed-loop timing must be one aligned step
   event: `validation_interval_steps == save_freq ==
   steps_per_epoch * closed_loop_every_epochs`, and total `steps` must be
@@ -218,6 +277,15 @@ Durable SO101 fine-tuning contract:
 - training-time SO101 closed-loop validation defaults to exactly 10 episodes;
   keep `--closed-loop-episodes 10` unless the user explicitly requests a
   labeled one-off smoke/debug count;
+- valid-mask early termination must consume the exact normalized action chunk
+  that will be postprocessed and executed. Require explicit consecutive
+  re-query confirmations and retain an environment-step hard cap. The canonical
+  `grip_the_cube_v2` lane uses two confirmations and a 200-step cap, and logs
+  boundary MAE, stop precision/recall, premature-stop rate, and terminal sample
+  fraction instead of trusting slot accuracy alone. During joint training,
+  feed the detached SmolVLA predicted `action_hat` to the valid-mask head;
+  teacher actions define valid/padding labels but are not a silent substitute
+  for the predicted-chunk input;
 - when a SO101 training dataset has camera1 object-position grid-bin sidecar
   metadata, use grid-bin balanced sampling for training; keep validation and
   closed-loop sampling unbalanced;
@@ -241,11 +309,20 @@ Durable SO101 fine-tuning contract:
 - SO101 training loss, augmentation, and runtime knobs must have an explicit
   config-to-CLI contract. If a training code path exposes a knob such as action
   prefix weighting, teacher-importance weighting, smoothness, consistency,
-  visual-servo loss, augmentation, or valid-mask loss, the selected training
+  action-overlap consistency, visual-servo loss, augmentation, or valid-mask loss, the selected training
   config/default config must declare the value and the launcher must forward it
   explicitly. Zero/disabled values should be explicit when they define the
   experiment contract. Add or update tests when adding a knob so code and
   config cannot silently drift;
+- `action_overlap_consistency` uses the same-episode future teacher action as a
+  detached target and does not add a second model forward;
+- `action_requery_consistency` is a separate, explicitly configured train-only
+  loss. It runs the same policy on the same-episode `t+offset` observation,
+  aligns the flow time/noise over the overlapping horizon, and penalizes the
+  disagreement between the current chunk tail and detached future-observation
+  chunk prefix. Gradients flow through the current prediction only so the
+  second forward does not double the retained backward graph. Do not silently
+  substitute it for teacher overlap consistency;
 - SO101 training config edits must pass the Pydantic/Hydra validator
   `PYTHONPATH=src .venv/bin/python scripts/validate_so101_training_configs.py`;
   the launcher also validates the selected config before command construction;
@@ -281,15 +358,56 @@ Durable SO101 fine-tuning contract:
   `closed_loop/<test_id>/rollout_episode_<NNN>` for every episode,
   `closed_loop/<test_id>/action_rmse_sweep` for action-chunk policies, and
   matching train reference when policy-input camera frames are available. The
-  action RMSE sweep is mandatory training-result evidence unless a clearly
+  train reference defaults to
+  `training_config.closed_loop.tensorboard_media.train_reference_frequency=once_per_run`;
+  do not regenerate it at every checkpoint unless the config explicitly says
+  `every_checkpoint`. A TensorBoard cleanup invalidates its event-file marker,
+  so the next loop test writes it once again. The
+  `observation_renderer.render_policy_inference_only` config controls rollout
+  frame capture. `true` captures fresh policy-query frames only and `false`
+  captures every environment step. It must not change the model's
+  `n_action_steps` re-query cadence. The action RMSE sweep is mandatory training-result evidence
+  unless a clearly
   named smoke/debug command explicitly disables it. The canonical rollout tag
   must be generated from the labeled camera1=egocentric/camera2=wrist
-  policy-input trace; raw GIFs are debug media only under `extra/closed_loop`
-  and must not replace canonical rollout evidence;
+  policy-input trace. Do not mirror evaluator raw GIFs into TensorBoard under
+  `extra/closed_loop/<test_id>/raw_rollout_gif_episode_*`;
+- use `tensorboard_media.render_test_cases` as the explicit rollout and
+  train-reference media allowlist. Tests outside it still run scalar and RMSE
+  diagnostics but publish no rollout video. Phase-split grip runs allowlist only
+  the periodic and final continuous-chain tests;
+- continuous phase-chain tests use
+  `tensorboard_media.chain_rollout_layout=per_episode` to publish one long
+  `closed_loop/<test_id>/rollout_episode_<NNN>` video per evaluated episode.
+  Never concatenate different episodes into one tag or tile phases/episodes
+  into a spatial grid. Build the matching train reference by concatenating the
+  same source episode's approach, alignment, and grip/lift teacher
+  trajectories. Keep failed policy rollouts partial at their real terminating
+  phase; never fabricate later phases. Use the canonical side-by-side camera
+  renderer;
+- phase-split photoreal configs use
+  `observation_renderer.render_policy_inference_only=true`; configure RMSE
+  sweeps the same way with `n_action_steps=[5,15,30,50]`. Set the observation
+  renderer value to `false` only for explicitly requested full environment-step
+  media;
+- phase-split action RMSE uses `timeline_mode=phase_chain`: evaluate the same
+  aligned source episode for approach, alignment, and grip/lift, concatenate
+  the three teacher timelines, mark phase transitions, and show overall plus
+  per-phase RMSE in one table. Allowlist this diagnostic to periodic/final
+  continuous-chain tests so primitive tests do not rerun the same sweep;
+- action-chunk loop-test diagnostics must report teacher-reference drift,
+  re-query-boundary action jump, non-boundary action jump, their ratio, and
+  overlapping chunk prediction RMSE as separate metrics. Teacher-reference
+  drift is not an oracle error at the rollout state and must not be labeled as
+  one;
 - loop-test GIF/video frames must show episode/frame, prompt, camera names,
   phase/primitive or active camera when available, target overlays when
   available, dx/dy values when available, terminal success/failure context, and
-  a green border on model inference/re-query frames;
+  a green border on model inference/re-query frames, plus a red outer border on
+  the final frame only when `termination.reason=valid_mask_stop` is confirmed,
+  or a blue outer border when `termination.reason=env_success` is confirmed;
+  hard-cap and failure termination receive neither terminal border. Repeat a
+  colored terminal frame briefly so TensorBoard GIF encoding preserves it;
 - training-time loop-test result generation must call
   `write_so101_training_loop_test_results(run_dir, row, report)` instead of
   creating runner-specific TensorBoard/video writers;

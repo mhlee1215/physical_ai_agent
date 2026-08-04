@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "name": "grip_the_cube_continuous_v1_outer_yaw_boundary_probe",
+  "description": "Final outer-reach probe over 30.5-32 cm with constructive robot-relative cube-face yaw offsets near the strongest shoulder bearing.",
+  "camera_rig_config": "configs/so101/camera_rigs/official_32x32_uvc_photoreal_v10_fov_calibrated_direct_square.json",
+  "base_reference": "shoulder_pan_axis_projection",
+  "home_qpos": [
+    0.0,
+    -1.5707963267948966,
+    1.5707963267948966,
+    0.66,
+    1.5707963267948966,
+    -0.17453
+  ],
+  "object_half_size_m": 0.015,
+  "object_color": "green",
+  "object_yaw_mode": "radial_face_normal",
+  "radial_yaw_offsets_degrees": [-15.0, 0.0, 15.0],
+  "seed_base": 535000000,
+  "polar_grid": {
+    "radius": {"min_m": 0.305, "max_m": 0.32, "step_m": 0.005},
+    "angle": {"min_deg": 40.0, "max_deg": 50.0, "step_deg": 5.0}
+  },
+  "evaluate_dataset_contract": true,
+  "teacher": {
+    "skill_mode": "grip_the_cube_continuous_v1",
+    "trajectory_variant": "auto",
+    "task_prompt": "grip the green cube and lift",
+    "approach_steps": 42,
+    "settle_steps": 10,
+    "close_steps": 42,
+    "lift_steps": 90,
+    "terminal_hold_steps": 12,
+    "lift_target_height_m": 0.06,
+    "operational_lift_height_m": 0.05,
+    "lift_controller_z_error_m": 0.015,
+    "move_target_z_offset_m": 0.075,
+    "edge_contact_xy_threshold_m": 0.012,
+    "edge_parallel_threshold_deg": 3.0,
+    "min_gripper_floor_clearance_m": 0.01,
+    "camera2_gate_mode": "geometry_only",
+    "camera2_pre_close_max_deg": 25.0,
+    "camera2_close_25_max_deg": 25.0,
+    "camera2_close_50_max_deg": 25.0
+  }
+}

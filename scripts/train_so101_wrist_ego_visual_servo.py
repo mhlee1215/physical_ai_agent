@@ -1589,6 +1589,8 @@ def make_high_contrast_picklift_env(
         configure_wrist_camera_over_fixed_jaw(env)
     elif wrist_camera_mount_preset not in {None, INTEGRATED_32X32_UVC_PRESET}:
         raise ValueError(f"unsupported wrist camera mount preset: {wrist_camera_mount_preset}")
+    if camera_rig_config is not None:
+        env.unwrapped._so101_camera_rig_config = camera_rig_config
     return env
 
 

@@ -48,8 +48,9 @@ information is object placement. Build the catalog once with
 `scripts/extract_so101_spawn_catalog.py`, then keep dataset roots out of the new
 recipe.
 
-New generated `grip_the_cube_v1` recipes require one geometry gate and may add
-one camera2 visual gate in `common.inspection_gates`:
+New generated full-grip recipes (`grip_the_cube_v1` and
+`grip_the_cube_near_v1`) require one geometry gate and may add one camera2
+visual gate in `common.inspection_gates`:
 
 ```json
 "inspection_gates": [
@@ -75,6 +76,29 @@ Place this object under `common`. Pydantic rejects missing, unknown, or
 contradictory fields before generation. The generator forwards these limits to
 the teacher exporter, so rejected trajectories never enter the dataset.
 
+Use `initial_target_visibility` when the visual policy must see the target in
+the first observation. `mode: "any"` accepts an episode only when at least one
+declared policy camera has the required segmentation area. Set the distribution
+report's `max_all_policy_cameras_invisible_fraction` to `0.0` to recheck the
+complete exported dataset.
+
+```json
+{
+  "kind": "initial_target_visibility",
+  "camera_keys": [
+    "observation.images.camera1",
+    "observation.images.camera2"
+  ],
+  "mode": "any",
+  "min_area_pixels": 20
+}
+```
+
+Large near-range placement catalogs may skip the expensive solver prefilter.
+This removes duplicate work only from catalog construction: the exporter must
+still run the authoritative IK, geometry, floor-clearance, grasp, lift, and
+hold gates for every episode, with backup candidates available for rejection.
+
 Run a config-first dry run before generating:
 
 ```bash
@@ -86,3 +110,16 @@ PYTHONPATH=src:.:scripts .venv/bin/python \
 
 The recipe must use new append-only output roots. A successful real run ends at
 the mandatory registry, training-ready, and viewer completion gate.
+
+Phase-subset datasets such as `move`, `align`, and `grip_lift` are training
+supervision only. Do not add `splits.validation.closed_loop` to those recipes.
+The parent full-task recipe owns one validation-backed end-to-end loop test
+that executes the complete task and uses final environment success.
+
+For schema-v2 recipes, declaring `splits.<name>.closed_loop` also declares an
+executable runtime contract. Dataset generation writes
+`<start-report-stem>.contract.json` beside the start report with the exact
+prompt, environment/object settings, episode horizon, and camera-renderer
+contract. The completion gate must reject the split when either the start
+report or this executable contract is missing or inconsistent. A start report
+alone is preview metadata and is not sufficient for a `loop_test` role mark.

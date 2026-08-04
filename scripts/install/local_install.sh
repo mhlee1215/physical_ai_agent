@@ -59,7 +59,7 @@ install_checkpoint() {
       ;;
     05-06)
       ensure_venv
-      .venv/bin/python -m pip install "lerobot[smolvla]>=0.5.1,<0.6"
+      .venv/bin/python -m pip install "lerobot[smolvla,peft]>=0.5.1,<0.6"
       ;;
     07-13)
       ensure_venv
@@ -67,7 +67,7 @@ install_checkpoint() {
       ;;
     14-15)
       install_checkpoint 07-13
-      .venv/bin/python -m pip install "lerobot[smolvla]>=0.5.1,<0.6"
+      .venv/bin/python -m pip install "lerobot[smolvla,peft]>=0.5.1,<0.6"
       ;;
     24)
       ensure_venv

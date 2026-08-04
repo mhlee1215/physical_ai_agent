@@ -40,6 +40,9 @@ task prompt, or grasp dynamics.
 5. **Render every required frame.** A training derivative requires every source
    episode/frame and every policy camera. A two-frame probe or sidecar is review
    evidence, not a dataset. Resume only with report-backed `--skip-existing`.
+   Production recipes default to `preserve_pinhole_renders: false`; retain the
+   512px pre-distortion PNGs only for an explicitly requested camera-calibration
+   diagnostic because retention does not change final policy-image pixels.
 6. **Build an image-only derivative.** Copy the source LeRobot contract and
    replace camera bytes while preserving state, action, timestamps, episode
    boundaries, and approved task prompts. Source and output roots must differ.

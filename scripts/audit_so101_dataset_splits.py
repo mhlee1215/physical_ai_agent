@@ -19,8 +19,10 @@ def main() -> None:
     parser.add_argument("--validation-root", type=Path, required=True)
     parser.add_argument("--expected-prompt", required=True)
     parser.add_argument("--expected-resolution", default="256x256")
-    parser.add_argument("--expected-train-bins", required=True)
-    parser.add_argument("--expected-validation-bins", required=True)
+    parser.add_argument("--expected-train-bins")
+    parser.add_argument("--expected-validation-bins")
+    parser.add_argument("--expected-train-episodes", type=int)
+    parser.add_argument("--expected-validation-episodes", type=int)
     parser.add_argument("--expected-terminal-hold-steps", type=int, required=True)
     parser.add_argument("--expected-min-lift-height", type=float, default=0.0)
     parser.add_argument("--expected-min-lift-steps", type=int, default=0)
@@ -34,8 +36,18 @@ def main() -> None:
         validation_root=args.validation_root,
         expected_prompt=args.expected_prompt,
         expected_resolution=(width, height),
-        expected_train_bins=_parse_bin_counts(args.expected_train_bins),
-        expected_validation_bins=_parse_bin_counts(args.expected_validation_bins),
+        expected_train_bins=(
+            _parse_bin_counts(args.expected_train_bins)
+            if args.expected_train_bins
+            else None
+        ),
+        expected_validation_bins=(
+            _parse_bin_counts(args.expected_validation_bins)
+            if args.expected_validation_bins
+            else None
+        ),
+        expected_train_episodes=args.expected_train_episodes,
+        expected_validation_episodes=args.expected_validation_episodes,
         expected_terminal_hold_steps=args.expected_terminal_hold_steps,
         expected_min_lift_height=args.expected_min_lift_height,
         expected_min_lift_steps=args.expected_min_lift_steps,
@@ -53,14 +65,20 @@ def audit_splits(
     validation_root: Path,
     expected_prompt: str,
     expected_resolution: tuple[int, int],
-    expected_train_bins: dict[int, int],
-    expected_validation_bins: dict[int, int],
+    expected_train_bins: dict[int, int] | None = None,
+    expected_validation_bins: dict[int, int] | None = None,
+    expected_train_episodes: int | None = None,
+    expected_validation_episodes: int | None = None,
     expected_terminal_hold_steps: int,
     max_pre_close_alignment_deg: float,
     expected_min_lift_height: float = 0.0,
     expected_min_lift_steps: int = 0,
     terminal_hold_action_tolerance: float | None = None,
 ) -> dict[str, Any]:
+    if expected_train_bins is None and expected_train_episodes is None:
+        raise ValueError("train split requires expected bins or expected episode count")
+    if expected_validation_bins is None and expected_validation_episodes is None:
+        raise ValueError("validation split requires expected bins or expected episode count")
     common = {
         "expected_prompt": expected_prompt,
         "expected_resolution": expected_resolution,
@@ -70,9 +88,17 @@ def audit_splits(
         "expected_min_lift_steps": expected_min_lift_steps,
         "terminal_hold_action_tolerance": terminal_hold_action_tolerance,
     }
-    train = _split_facts(train_root, expected_bins=expected_train_bins, **common)
+    train = _split_facts(
+        train_root,
+        expected_bins=expected_train_bins,
+        expected_episodes=expected_train_episodes,
+        **common,
+    )
     validation = _split_facts(
-        validation_root, expected_bins=expected_validation_bins, **common
+        validation_root,
+        expected_bins=expected_validation_bins,
+        expected_episodes=expected_validation_episodes,
+        **common,
     )
     overlaps = {
         "seeds": sorted(train["seeds"] & validation["seeds"]),
@@ -103,7 +129,8 @@ def _split_facts(
     *,
     expected_prompt: str,
     expected_resolution: tuple[int, int],
-    expected_bins: dict[int, int],
+    expected_bins: dict[int, int] | None,
+    expected_episodes: int | None,
     expected_terminal_hold_steps: int,
     max_pre_close_alignment_deg: float,
     expected_min_lift_height: float,
@@ -115,8 +142,9 @@ def _split_facts(
     episodes = report.get("episodes") or []
     actual_bins: dict[int, int] = {}
     for row in episodes:
-        bin_id = int(row["grid_balance_bin"])
-        actual_bins[bin_id] = actual_bins.get(bin_id, 0) + 1
+        bin_id = _episode_grid_bin(row)
+        if bin_id is not None:
+            actual_bins[bin_id] = actual_bins.get(bin_id, 0) + 1
         if not bool(row.get("success")) or not bool(row.get("task_success")):
             raise ValueError(f"unsuccessful teacher episode at {root}: seed={row.get('seed')}")
         hold_steps = int((row.get("phase_counts") or {}).get("terminal_hold", 0))
@@ -138,11 +166,15 @@ def _split_facts(
                 f"grasp/lift contract failed at {root}: seed={row.get('seed')} "
                 f"grasped={final_info.get('is_grasped')} lift_height={lift_height}"
             )
-        alignment = float(row["pre_close_cube_face_normal_parallel_error_deg"])
+        alignment = _episode_alignment_error_deg(row)
         if alignment > max_pre_close_alignment_deg:
             raise ValueError(f"pre-close alignment exceeds limit at {root}: seed={row.get('seed')}")
-    if actual_bins != expected_bins:
+    if expected_bins is not None and actual_bins != expected_bins:
         raise ValueError(f"grid-bin counts mismatch at {root}: {actual_bins} != {expected_bins}")
+    if expected_episodes is not None and len(episodes) != expected_episodes:
+        raise ValueError(
+            f"episode count mismatch at {root}: {len(episodes)} != {expected_episodes}"
+        )
     seeds = [int(row["seed"]) for row in episodes]
     if len(seeds) != len(set(seeds)):
         raise ValueError(f"duplicate seeds within split: {root}")
@@ -184,6 +216,24 @@ def _split_facts(
         "resolution": actual_resolution,
         "bin_counts": actual_bins,
     }
+
+
+def _episode_grid_bin(row: dict[str, Any]) -> int | None:
+    for key in ("grid_balance_bin", "desired_grid_bin", "camera1_grid_bin"):
+        value = row.get(key)
+        if value is not None:
+            return int(value)
+    workspace_spawn = row.get("workspace_spawn")
+    if isinstance(workspace_spawn, dict) and workspace_spawn.get("camera1_grid_bin") is not None:
+        return int(workspace_spawn["camera1_grid_bin"])
+    return None
+
+
+def _episode_alignment_error_deg(row: dict[str, Any]) -> float:
+    near_contact = row.get("near_contact_alignment_sample")
+    if isinstance(near_contact, dict) and near_contact.get("parallel_error_deg") is not None:
+        return float(near_contact["parallel_error_deg"])
+    return float(row["pre_close_cube_face_normal_parallel_error_deg"])
 
 
 def _trajectory_hashes_and_task_indexes(root: Path) -> tuple[list[str], set[int]]:

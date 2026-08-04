@@ -51,6 +51,25 @@ def require_lerobot_dataset_256(root: str | Path, *, context: str) -> dict[str, 
     return info
 
 
+def resolve_lerobot_root_for_start_report(report_path: str | Path, *, repo_root: Path | None = None) -> Path:
+    """Return the LeRobot dataset root associated with a closed-loop start report."""
+    path = Path(report_path)
+    if not path.is_absolute() and repo_root is not None:
+        path = repo_root / path
+    if path.name == "so101_lerobot_export_report.json":
+        return path.parent
+    report = json.loads(path.read_text(encoding="utf-8"))
+    source_report = report.get("source_validation_report") or report.get("source_train_report")
+    if source_report:
+        source_path = Path(str(source_report))
+        if not source_path.is_absolute() and repo_root is not None:
+            source_path = repo_root / source_path
+        if source_path.name == "so101_lerobot_export_report.json":
+            return source_path.parent
+        return source_path
+    return path.parent
+
+
 def require_dataset_config_256(dataset_config: dict[str, Any] | None, *, repo_root: Path, context: str) -> None:
     if not isinstance(dataset_config, dict):
         return
@@ -73,8 +92,8 @@ def require_dataset_config_256(dataset_config: dict[str, Any] | None, *, repo_ro
             start_report_path = test_case.get("start_report_path")
             if start_report_path:
                 report_path = _resolve_root(start_report_path, repo_root=repo_root)
-                if report_path.name == "so101_lerobot_export_report.json":
-                    require_lerobot_dataset_256(report_path.parent, context=f"{context}:closed_loop.test_cases[{index}].start_report_path")
+                dataset_root = resolve_lerobot_root_for_start_report(report_path, repo_root=repo_root)
+                require_lerobot_dataset_256(dataset_root, context=f"{context}:closed_loop.test_cases[{index}].start_report_path")
 
 
 def _dataset_entries(dataset_config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:

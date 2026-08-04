@@ -1,5 +1,9 @@
 # SO101 Fixed-Jaw Edge Chain Dataset
 
+> This is the historical three-primitive chain contract. For the current
+> production/full-task trajectories, supported modes, and known limitations,
+> use [`so101_teacher_trajectory_catalog.md`](so101_teacher_trajectory_catalog.md).
+
 This document defines the additive SO101 primitive chain used for agentic
 cube-grasp experiments. The raw LeRobot exports live under `_workspace/` and
 must stay out of pull requests. The durable sources of truth are:
@@ -11,11 +15,17 @@ must stay out of pull requests. The durable sources of truth are:
 Do not change the camera mapping, primitive boundaries, start poses, or split
 roots without explicit user approval.
 
+This historical chain and the current `grip_the_cube_v1` full teacher are the
+**mid-range** lane. The folded-arm 10-18 cm lane is separately implemented as
+`grip_the_cube_near_v1`; its contact-width alignment gate must not be replaced
+with this document's fully-open jaw alignment assumption.
+
 ## Camera Contract
 
 - `observation.images.camera1`: egocentric camera
 - `observation.images.camera2`: wrist camera
-- `observation.images.camera3`: wrist camera duplicate, when present
+- `observation.images.camera3`: optional legacy wrist-camera duplicate; not a
+  canonical current policy input
 - image shape: `[3, 256, 256]`
 
 The approved `camera1` pose is hardware-aligned:
@@ -41,9 +51,9 @@ information.
 
 Current templates:
 
-- `move_over_cube_edge`: `Move the static finger pad above one visible {color} {shape} edge.`
-- `align_fixed_jaw_cube_edge`: `Align the static finger pad with one visible {color} {shape} edge.`
-- `grip_from_edge_cube`: `Keep the static finger pad at the {color} {shape} edge, close the gripper, and lift.`
+- `move_over_cube_edge`: `Move the gripper above one visible {color} {shape} edge.`
+- `align_fixed_jaw_cube_edge`: `Align the gripper jaws around one visible {color} {shape} edge.`
+- `grip_from_edge_cube`: `grip the {color} {shape} and lift`
 
 The export report records `task_generation`, `task_template`,
 `object_color`, `object_shape`, and `target_object` for every episode summary.

@@ -7,7 +7,8 @@ RunPod run.
 ## Model Contract
 
 - Base checkpoint: `lerobot/smolvla_base`
-- Visual inputs: `observation.images.camera1`, `camera2`, `camera3`
+- Canonical grip visual inputs: `observation.images.camera1`, `camera2`
+- Optional stored compatibility input: `camera3` (inactive unless the config opts in)
 - Image tensor shape: `[3, 256, 256]`
 - SmolVLA preprocessing resize target: `[512, 512]`
 - State input: `observation.state`, shape `[6]`
@@ -20,18 +21,21 @@ The enforceable contract lives in
 
 ## Augmentation And Cache
 
-Training should use `scripts/lerobot_train_so101_sampling_aug.py`, not a bare
-`lerobot-train` command. The wrapper keeps the LeRobot train path intact while
-adding SO101 sample-time controls:
+Training should enter through `scripts/start_so101_training.py` and the selected
+Hydra config. Its canonical trainer is
+`scripts/lerobot_train_so101_lightning.py`, not a bare `lerobot-train` command.
+The trainer keeps the LeRobot policy path intact while adding SO101 sample-time
+controls:
 
 - predecoded image cache via `--so101-image-cache-dir`;
 - GPU/MPS-side image augmentation via `--so101-gpu-image-augmentation`;
-- image color, sharpness, and affine jitter with
+- image color/sharpness jitter and optional affine jitter with
   `--so101-image-affine-degrees` / `--so101-image-affine-translate`;
 - camera-level image dropout with `--so101-image-camera-dropout-prob`;
 - patch image dropout with `--so101-image-patch-dropout-prob`;
 - patch-ratio image masking with `--so101-image-patch-mask-ratio`;
-- motor-state jitter with `--so101-state-jitter-std`;
+- motor-state jitter with `--so101-state-jitter-std` and per-sample
+  `--so101-state-jitter-prob`;
 - motor-state dropout with `--so101-state-dropout-prob`.
 
 Image augmentation should run after the batch is moved to CUDA/MPS whenever
@@ -45,19 +49,53 @@ explicitly overrides it:
 
 ```json
 {
-  "state_jitter_std": 0.003,
+  "state_jitter_std": 0.01,
+  "state_jitter_prob": 0.35,
   "state_dropout_prob": 0.02,
   "state_dropout_keep_gripper": true,
   "image_camera_dropout_prob": 0.0,
   "image_patch_dropout_prob": 0.0,
-  "image_patch_mask_ratio": 0.15,
+  "image_patch_mask_ratio": 0.0,
   "image_color_jitter": true,
   "image_sharpness_jitter": true,
-  "image_affine_degrees": 5.0,
-  "image_affine_translate": 0.05,
+  "image_affine_degrees": 0.0,
+  "image_affine_translate": 0.0,
   "gpu_image_augmentation": true
 }
 ```
+
+For `grip_the_cube_v2`, state jitter is a deliberately small in-training
+recovery approximation: the observed motor state is perturbed while the clean
+teacher action remains the target. It improves tolerance to local state error,
+but it does not rerender cameras from the perturbed robot pose. Larger recovery
+errors still require simulator-generated correction trajectories.
+
+The canonical grip config presents only `camera1=egocentric` and
+`camera2=wrist` to SmolVLA. The duplicate wrist `camera3` remains in stored
+datasets for backward compatibility but is removed from the active policy
+feature contract and predecoded cache reads. Future three-camera experiments
+must opt in by changing `training_config.model_inputs.active_image_features`.
+
+The canonical PEFT path uses LeRobot's official `policy.wrap_with_peft` route:
+rank-8 LoRA is attached to VLM text/vision Q/V projections, while the action
+expert and state/action/time projections remain fully trainable through
+`full_training_modules`. A LoRA run starts from checkpoint weights without
+restoring the old full-finetune optimizer state. Evaluators must detect
+`adapter_config.json`, construct the base with the adapter directory's saved
+policy `config.json`, and then load the adapter. This preserves the camera1/2
+contract instead of restoring camera3 from an older base checkpoint.
+Resume an existing LoRA run through its retained
+`<checkpoint>/pretrained_model/train_config.json`, not `--policy.path`: the
+saved train config owns optimizer and scheduler reconstruction. The launcher
+must keep `training.policy_repo_id` mapped to output `policy.repo_id`, resolve
+the exact retained checkpoint for training state, and reactivate the loaded
+PEFT adapter as trainable before constructing the optimizer.
+
+Grip-focused loss uses teacher-derived movement, gripper-transition, and final
+valid-horizon weights. Wrist roll additionally uses a circular loss with a
+`2*pi` physical period, so equivalent angles across the wrap boundary are not
+penalized as far apart. Train and supervised validation use the same loss
+composition.
 
 `image_patch_mask_ratio` masks a fraction of an 8x8 image patch grid for every
 training image sample. It is distinct from legacy `image_patch_dropout_prob`,
@@ -68,10 +106,11 @@ unless a specific ablation requires it.
 image transform recipe while keeping validation and closed-loop inputs
 unchanged.
 
-`image_affine_degrees` and `image_affine_translate` apply a small random affine
-transform after the image batch is on the training device. The implementation
-uses Torch `affine_grid` / `grid_sample` on the current tensor device, so CUDA
-and MPS use the same augmentation path.
+`image_affine_degrees` and `image_affine_translate` are explicit config keys.
+For `grip_the_cube_v2` they default to `0.0` so color-referenced prompts do not
+also fight geometry-changing augmentation. If an ablation enables affine
+augmentation, the implementation uses Torch `affine_grid` / `grid_sample` on
+the current tensor device, so CUDA and MPS use the same augmentation path.
 
 ## Action Smoothness
 
@@ -88,17 +127,48 @@ make predicted chunks smoother. If generated action chunks are jittery, prefer:
 Report smoothness loss separately from supervised BC loss in TensorBoard when it
 is enabled.
 
+`action_overlap_consistency` is a train-only auxiliary loss for action-chunk
+re-query stability. When enabled, the dataset wrapper attaches the same-episode
+teacher action at `t + offset`; training penalizes the overlap between
+`action_hat[t][offset:offset+horizon]` and the normalized teacher action
+`action[t+offset][:horizon]`. The future teacher target is detached and does not
+run a second model forward. It must be declared in config and forwarded by the
+launcher with `--so101-action-overlap-consistency-*`.
+
+`action_requery_consistency` is the paired future-observation variant. The
+dataset wrapper supplies the same episode at `t + offset`; SmolVLA runs a
+second forward on that observation with the same flow time and overlap-aligned
+noise. Training applies Smooth L1 between the current prediction tail and the
+detached future-observation prediction prefix, so the second forward does not
+retain a second backward graph. Keep its offset, horizon, and weight in
+the training config and forward them with
+`--so101-action-requery-consistency-*`.
+
+For inference-only mitigation, `closed_loop.temporal_ensemble` blends all
+postprocessed action chunks that cover the current step with ACT-style
+exponential weights. Compare it against baseline on the same checkpoint,
+snapshot, seed, prompt, cameras, resolution, and rollout horizon before making
+it the default.
+
 ## Optional Subgoal Termination Head
 
-The SmolVLA baseline policy must remain unchanged. For agentic subgoal chaining,
-train a separate lightweight valid-mask head from LeRobot `action_is_pad`
-labels and enable it only during closed-loop evaluation with explicit flags.
+The SmolVLA baseline policy must remain unchanged. Train a lightweight
+valid-mask head from LeRobot `action_is_pad` labels and enable it only during
+closed-loop evaluation with explicit flags.
 
 The head predicts which positions in a predicted SmolVLA action chunk are still
 valid for the current subgoal. At inference time the evaluator can execute the
 current subgoal until the head predicts padding/end, then switch to the next
 subgoal. This is an experimental substitute for a full verifier; it should be
 reported separately from policy-only baseline rollouts.
+
+For a single-policy episode without an explicit subgoal sequence, valid-mask
+mode is a debounced global early-stop signal. It must inspect the same normalized
+action chunk that is postprocessed and executed, require the configured number
+of consecutive re-query confirmations, and retain a finite environment-step
+hard cap. The canonical `grip_the_cube_v2` lane uses two confirmations and a
+200-step cap. Log boundary-index MAE, stop precision/recall, premature-stop
+rate, and terminal-sample fraction; token accuracy by itself is insufficient.
 
 Train the head:
 
@@ -303,6 +373,12 @@ Allowed CLI exceptions:
 If an override becomes useful more than once, move it into the main config or a
 named preset before launching another training run.
 
+The post-checkpoint loop runner refreshes each test case's `success_metric` from
+that main JSON config when evaluation starts. This lets an approved metric fix
+take effect on the next checkpoint without stopping an otherwise healthy live
+training process, and prevents a stale launch-time CLI value from overriding the
+config source of truth.
+
 ## Live Training Process Safety Contract
 
 Read-only status/debug commands are allowed without another confirmation:
@@ -360,7 +436,7 @@ Required behavior for the function:
 - attach the action RMSE sweep plot for action-chunk policies;
 - attach canonical user-facing rollout videos at stable tags;
 - attach raw/debug media only under `extra/closed_loop/...`;
-- attach train reference media when available;
+- attach train reference media when available, using the configured frequency;
 - keep camera naming and rollout frame overlays consistent across runners.
 
 Closed-loop starts must be dataset-backed. Official training-time loop tests
@@ -371,6 +447,37 @@ episode `sim_snapshot` from that export report before policy rollout. Do not
 create a new random reset state, a new cube color, or a new object distribution
 inside the evaluator. If a test cannot restore the configured dataset snapshot,
 fail the loop test instead of silently falling back to a fresh reset.
+
+### Phase-Split Primitive And Chain Evaluation
+
+The hardware-locked photoreal phase lane virtually combines approach,
+alignment, and grip/lift train splits and validates on the three matching
+held-out splits. The phase datasets are supervision-only. At each scheduled
+checkpoint, run one continuous approach -> alignment -> grip/lift chain; do
+not create separate primitive loop tests.
+
+Periodic evaluation uses fixed validation source episode indices
+`[0,6,12,18,24,25,31,37,43,49]`, five from camera1 grid bin 9 and five from
+bin 10. Final evaluation uses all 50 validation episodes. The optional oracle
+handoff chain is `schedule=manual` and never contributes to official success.
+
+The continuous chain starts from the parent validation episode snapshot only.
+Change prompts at
+verified phase boundaries without resetting the environment, so the next phase
+receives the actual state produced by the previous policy. Valid-mask proposes
+the boundary, but the geometric verifier owns advance/completion. If a
+valid-mask proposal is rejected, continue the same phase and re-query instead
+of ending the episode. At a phase cap, advance/complete when the verifier
+passes and record `hard_cap` only when it fails. Policy inputs are camera1,
+camera2, motor state, and prompt. Simulator object pose is available only to
+the verifier.
+
+Phase caps are derived from each reference episode and checked against the
+declared config value: `ceil(reference frames * 1.5)`. The current phase
+lengths 44/44/89 therefore use caps 66/66/134 and a 266-step full-chain cap.
+Static reference media uses
+`train_reference_frequency=once_per_run`; the normal training profile uses
+`render_policy_inference_only=true`.
 
 Required TensorBoard outputs:
 
@@ -384,20 +491,70 @@ Required TensorBoard outputs:
   and is not used as training-result evidence;
 - one canonical animated rollout media tag per episode:
   `closed_loop/<test_id>/rollout_episode_<NNN>`;
-- when policy-input camera frames are recorded, debug side-by-side policy-input
-  video per episode:
-  `extra/closed_loop/<test_id>/rollout_camera_trace_camera1_camera2_episode_<NNN>`;
+- for an allowlisted continuous phase-chain test, each per-episode tag is one
+  time-ordered side-by-side video spanning every phase the policy actually
+  reached. A failed episode remains partial at its terminating phase;
+- do not publish duplicate side-by-side rollout media under
+  `extra/closed_loop/...`;
 - when the source train/validation root is available, a matching train
   reference video per episode:
-  `closed_loop/<test_id>/train_reference_camera1_camera2_episode_<NNN>`.
+  `closed_loop/<test_id>/train_reference_camera1_camera2_episode_<NNN>`. For a
+  phase chain, this reference concatenates the corresponding approach,
+  alignment, and grip/lift teacher trajectories for the same source episode.
+
+Train-reference media is static for a run/test pair. Configure its cadence at
+`training_config.closed_loop.tensorboard_media.train_reference_frequency`:
+
+- `once_per_run` (default): write it once, record a marker tied to the
+  TensorBoard event files, and skip regeneration at later checkpoints;
+- `every_checkpoint`: regenerate it with every loop-test result;
+- `disabled`: do not generate or require it.
+
+If TensorBoard event files are deliberately cleared, an old marker is not
+sufficient evidence and `once_per_run` writes the reference once again.
+
+The inference rollout render cadence is controlled by
+`training_config.closed_loop.observation_renderer.render_policy_inference_only`.
+With `true`, only fresh policy-query frames are captured. With `false`, every
+environment step is captured for an explicitly requested full review. This
+setting does not change policy inference/re-query cadence, and the green frame
+border remains limited to actual inference frames.
+
+`training_config.closed_loop.tensorboard_media.render_test_cases` explicitly
+selects which tests may publish rollout and train-reference media. Tests not in
+the allowlist still run and publish scalar/RMSE diagnostics. For phase-split
+grip training, only the periodic and final continuous-chain tests are listed.
+
+`training_config.closed_loop.tensorboard_media.chain_rollout_layout` controls
+continuous phase-chain presentation. The canonical value is `per_episode`:
+each evaluated episode gets one long time-axis video. It must not concatenate
+different episodes or build a spatial grid. Each video preserves side-by-side
+camera1/camera2, episode/frame, prompt, phase, inference, and termination
+overlays.
+
+Phase-split photoreal configs use
+`observation_renderer.render_policy_inference_only=true`.
+`action_rmse_sweep.render_policy_inference_only=true` applies the same
+policy-query-only capture contract to sweep subprocesses, with
+`n_action_steps=[5,15,30,50]`. Set the observation renderer value to `false`
+only when full-step TensorBoard rendering is explicitly requested.
 
 The user-facing rollout visualization must not change tag names or renderer
 priority across runs. The canonical `rollout_episode_<NNN>` tag must be built
 from the side-by-side camera1=egocentric and camera2=wrist policy-input trace.
 Do not silently swap display labels or camera sources to make a viewer look
 plausible. If the evaluator report only contains raw `rollout_gif` paths, the
-canonical rollout is missing evidence; keep raw/debug GIFs only under
-`extra/closed_loop/...` and fix the evaluator to emit policy-input traces.
+canonical rollout is missing evidence; fix the evaluator to emit policy-input
+traces. Do not mirror raw evaluator GIFs into TensorBoard under
+`extra/closed_loop/<test_id>/raw_rollout_gif_episode_*`.
+
+The closed-loop metrics row is written only after
+`write_so101_training_loop_test_results(run_dir, row, report)` successfully
+attaches the required TensorBoard evidence. If success scalar, canonical
+per-episode rollout media (or the configured combined chain montage), required
+RMSE sweep, or configured train-reference evidence is missing, the loop-test
+subprocess must fail instead of leaving behind a `closed_loop_metrics.jsonl`
+row that looks complete.
 
 Every rollout frame should be self-describing:
 
@@ -408,13 +565,27 @@ Every rollout frame should be self-describing:
 - predicted/ground-truth target overlays and dx/dy values when available;
 - success/failure state or enough terminal state information to understand the
   result;
-- green border exactly on frames where model inference/re-query happens.
+- green border exactly on frames where model inference/re-query happens;
+- red outer border on the final frame only when the episode is confirmed to
+  terminate with `termination.reason=valid_mask_stop`;
+- blue outer border on the final frame when the episode terminates with
+  `termination.reason=env_success`. Failure and hard-cap termination do not
+  receive either terminal border.
 
 The action RMSE sweep is a default diagnostic for action-chunk policies. Use the
 configured sweep, normally `n_action_steps=[1,3,5,10,15,30,40,50]`, and make
 the plot x-axis explicit as teacher episode frame index. The y-axis compares
 postprocessed policy action against teacher action at that frame. Missing RMSE
 sweep media is missing diagnostic evidence, not a complete loop-test result.
+For the phase-split grip lane, use `timeline_mode=phase_chain`: evaluate the
+same aligned source episode for approach, alignment, and grip/lift, concatenate
+their 44/44/89 teacher timelines, mark transition frames 44 and 88, and place
+overall plus per-phase RMSE in one table. Restrict this combined sweep to the
+single continuous-chain periodic/final test ID.
+The teacher-frame curve is teacher-reference drift, not oracle error at the
+actual rollout state. Also log re-query-boundary action jump RMSE,
+non-boundary action jump RMSE, their ratio, and overlapping chunk prediction
+RMSE separately so closed-loop discontinuity is not conflated with state drift.
 
 ## Runtime Platforms
 

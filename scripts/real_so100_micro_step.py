@@ -148,6 +148,9 @@ def run_micro_step(
             report["visual_check"] = {"before": before_visual}
         bus.connect(handshake=True)
         before = bus.sync_read("Present_Position", normalize=False)
+        hold_targets = _enable_torque_at_current_pose(bus, before)
+        report["hold_current_goal_preloaded_raw"] = hold_targets
+        report["torque_enabled_for_test"] = True
         if manual_delta_raw is not None:
             planned_current = float(before[joint])
             planned_target = planned_current + manual_delta_raw
@@ -183,6 +186,22 @@ def run_micro_step(
         after_joint = float(after[joint])
         report["observed_delta_raw"] = after_joint - before_joint
         report["target_error_raw"] = float(target) - after_joint
+        bus.sync_write("Goal_Position", {joint: int(round(before_joint))}, normalize=False, num_retry=3)
+        report["return_target_raw"] = {joint: int(round(before_joint))}
+        if video_capture is not None and video_writer is not None and video_result is not None:
+            _record_motion_video(
+                capture=video_capture,
+                writer=video_writer,
+                result=video_result,
+                duration_seconds=settle_seconds,
+                fps=video_fps,
+            )
+            report["motion_video"] = video_result
+        else:
+            time.sleep(settle_seconds)
+        returned = bus.sync_read("Present_Position", normalize=False)
+        report["readback_returned_raw"] = returned
+        report["return_error_raw"] = before_joint - float(returned[joint])
         if camera_index is not None and visual_output_dir is not None:
             after_visual = _capture_visual(
                 camera_index=camera_index,
@@ -213,6 +232,13 @@ def run_micro_step(
 
     _write_json(output, report)
     return report
+
+
+def _enable_torque_at_current_pose(bus: Any, positions: dict[str, Any]) -> dict[str, int]:
+    targets = {joint: int(round(float(position))) for joint, position in positions.items()}
+    bus.sync_write("Goal_Position", targets, normalize=False, num_retry=3)
+    bus.enable_torque(num_retry=3)
+    return targets
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
