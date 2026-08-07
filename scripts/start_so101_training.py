@@ -2413,8 +2413,40 @@ def _progress_monitor_command(
                     str(action_rmse_sweep["phase_contract_test_case_id"]),
                 ]
             )
-    temporal_ensemble = ((dataset_config.get("closed_loop") or {}).get("temporal_ensemble") or {}) if dataset_config else {}
-    if isinstance(temporal_ensemble, dict) and temporal_ensemble:
+    closed_loop_config = (dataset_config.get("closed_loop") or {}) if dataset_config else {}
+    inference = closed_loop_config.get("inference") or {}
+    if isinstance(inference, dict) and inference:
+        mode = str(inference["mode"])
+        cmd.extend(["--closed-loop-inference-mode", mode])
+        cmd.append(
+            "--closed-loop-temporal-ensemble"
+            if mode == "temporal_ensemble"
+            else "--no-closed-loop-temporal-ensemble"
+        )
+        cmd.extend(
+            [
+                "--closed-loop-temporal-ensemble-decay",
+                str(inference["temporal_ensemble_decay"]),
+            ]
+        )
+        rtc = inference["rtc"]
+        cmd.extend(
+            [
+                "--closed-loop-rtc-prefix-attention-schedule",
+                str(rtc["prefix_attention_schedule"]),
+                "--closed-loop-rtc-max-guidance-weight",
+                str(rtc["max_guidance_weight"]),
+                "--closed-loop-rtc-execution-horizon",
+                str(rtc["execution_horizon"]),
+                "--closed-loop-rtc-inference-delay",
+                str(rtc["inference_delay"]),
+                "--closed-loop-rtc-debug" if rtc["debug"] else "--no-closed-loop-rtc-debug",
+                "--closed-loop-rtc-debug-maxlen",
+                str(rtc["debug_maxlen"]),
+            ]
+        )
+    temporal_ensemble = closed_loop_config.get("temporal_ensemble") or {}
+    if not inference and isinstance(temporal_ensemble, dict) and temporal_ensemble:
         if "enabled" in temporal_ensemble:
             cmd.append(
                 "--closed-loop-temporal-ensemble"

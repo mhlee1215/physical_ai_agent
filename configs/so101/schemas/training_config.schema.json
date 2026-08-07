@@ -116,7 +116,7 @@
         "y_axis_max": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0.0,
+              "exclusiveMinimum": 0,
               "type": "number"
             },
             {
@@ -736,6 +736,17 @@
           ],
           "default": null
         },
+        "inference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClosedLoopInferenceConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "temporal_ensemble": {
           "anyOf": [
             {
@@ -852,6 +863,35 @@
         "spawn_angle_half_range_deg"
       ],
       "title": "ClosedLoopEnvironmentConfig",
+      "type": "object"
+    },
+    "ClosedLoopInferenceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "policy_queue",
+            "temporal_ensemble",
+            "rtc"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "temporal_ensemble_decay": {
+          "minimum": 0,
+          "title": "Temporal Ensemble Decay",
+          "type": "number"
+        },
+        "rtc": {
+          "$ref": "#/$defs/RTCInferenceConfig"
+        }
+      },
+      "required": [
+        "mode",
+        "temporal_ensemble_decay",
+        "rtc"
+      ],
+      "title": "ClosedLoopInferenceConfig",
       "type": "object"
     },
     "ClosedLoopObservationRendererConfig": {
@@ -2160,6 +2200,55 @@
         }
       },
       "title": "PredecodedImageCacheConfig",
+      "type": "object"
+    },
+    "RTCInferenceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "prefix_attention_schedule": {
+          "enum": [
+            "ZEROS",
+            "ONES",
+            "LINEAR",
+            "EXP"
+          ],
+          "title": "Prefix Attention Schedule",
+          "type": "string"
+        },
+        "max_guidance_weight": {
+          "exclusiveMinimum": 0,
+          "title": "Max Guidance Weight",
+          "type": "number"
+        },
+        "execution_horizon": {
+          "exclusiveMinimum": 0,
+          "title": "Execution Horizon",
+          "type": "integer"
+        },
+        "inference_delay": {
+          "minimum": 0,
+          "title": "Inference Delay",
+          "type": "integer"
+        },
+        "debug": {
+          "title": "Debug",
+          "type": "boolean"
+        },
+        "debug_maxlen": {
+          "exclusiveMinimum": 0,
+          "title": "Debug Maxlen",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "prefix_attention_schedule",
+        "max_guidance_weight",
+        "execution_horizon",
+        "inference_delay",
+        "debug",
+        "debug_maxlen"
+      ],
+      "title": "RTCInferenceConfig",
       "type": "object"
     },
     "SO101DatasetSectionConfig": {

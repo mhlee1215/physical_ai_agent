@@ -242,6 +242,21 @@ class TemporalEnsembleConfig(StrictModel):
     decay: NonNegativeFloat
 
 
+class RTCInferenceConfig(StrictModel):
+    prefix_attention_schedule: Literal["ZEROS", "ONES", "LINEAR", "EXP"]
+    max_guidance_weight: PositiveFloat
+    execution_horizon: PositiveInt
+    inference_delay: int = Field(ge=0)
+    debug: bool
+    debug_maxlen: PositiveInt
+
+
+class ClosedLoopInferenceConfig(StrictModel):
+    mode: Literal["policy_queue", "temporal_ensemble", "rtc"]
+    temporal_ensemble_decay: NonNegativeFloat
+    rtc: RTCInferenceConfig
+
+
 class ClosedLoopEnvironmentConfig(StrictModel):
     camera_rig_config: str
     target_object_color: Literal["red", "blue", "green"]
@@ -449,6 +464,7 @@ class ClosedLoopConfig(ExtensibleModel):
     success_threshold: float | None = None
     valid_mask_checkpoint: str | None = None
     action_rmse_sweep: ActionRmseSweepConfig | None = None
+    inference: ClosedLoopInferenceConfig | None = None
     temporal_ensemble: TemporalEnsembleConfig | None = None
     observation_renderer: ClosedLoopObservationRendererConfig | None = None
     tensorboard_media: ClosedLoopTensorBoardMediaConfig | None = None
@@ -512,6 +528,12 @@ class ClosedLoopConfig(ExtensibleModel):
             raise ValueError("closed_loop.action_rmse_sweep.enabled must be true")
         if not self.action_rmse_sweep.n_action_steps:
             raise ValueError("closed_loop.action_rmse_sweep.n_action_steps must be non-empty")
+        if (
+            self.inference is not None
+            and self.inference.mode == "rtc"
+            and self.runner != "picklift"
+        ):
+            raise ValueError("closed_loop.inference.mode=rtc currently requires runner=picklift")
         return self
 
 

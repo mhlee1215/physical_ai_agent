@@ -152,6 +152,23 @@ def main() -> None:
     parser.add_argument("--closed-loop-temporal-ensemble", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--closed-loop-temporal-ensemble-decay", type=float, default=0.01)
     parser.add_argument(
+        "--closed-loop-inference-mode",
+        choices=["policy_queue", "temporal_ensemble", "rtc"],
+    )
+    parser.add_argument(
+        "--closed-loop-rtc-prefix-attention-schedule",
+        choices=["ZEROS", "ONES", "LINEAR", "EXP"],
+    )
+    parser.add_argument("--closed-loop-rtc-max-guidance-weight", type=float)
+    parser.add_argument("--closed-loop-rtc-execution-horizon", type=int)
+    parser.add_argument("--closed-loop-rtc-inference-delay", type=int)
+    parser.add_argument(
+        "--closed-loop-rtc-debug",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument("--closed-loop-rtc-debug-maxlen", type=int)
+    parser.add_argument(
         "--closed-loop-action-rmse-sweep",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -424,6 +441,53 @@ def _checkpoint_valid_mask_head(policy_path: Path) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _closed_loop_action_chunk_inference_args(args: argparse.Namespace) -> list[str]:
+    mode = getattr(args, "closed_loop_inference_mode", None)
+    if mode is None:
+        mode = (
+            "temporal_ensemble"
+            if bool(getattr(args, "closed_loop_temporal_ensemble", False))
+            else "policy_queue"
+        )
+    result = [
+        "--action-chunk-inference-mode",
+        str(mode),
+        "--temporal-ensemble" if mode == "temporal_ensemble" else "--no-temporal-ensemble",
+        "--temporal-ensemble-decay",
+        str(args.closed_loop_temporal_ensemble_decay),
+    ]
+    if mode != "rtc":
+        return result
+    rtc_values = {
+        "--rtc-prefix-attention-schedule": getattr(
+            args, "closed_loop_rtc_prefix_attention_schedule", None
+        ),
+        "--rtc-max-guidance-weight": getattr(
+            args, "closed_loop_rtc_max_guidance_weight", None
+        ),
+        "--rtc-execution-horizon": getattr(
+            args, "closed_loop_rtc_execution_horizon", None
+        ),
+        "--rtc-inference-delay": getattr(
+            args, "closed_loop_rtc_inference_delay", None
+        ),
+        "--rtc-debug-maxlen": getattr(args, "closed_loop_rtc_debug_maxlen", None),
+    }
+    missing = [flag for flag, value in rtc_values.items() if value is None]
+    if getattr(args, "closed_loop_rtc_debug", None) is None:
+        missing.append("--rtc-debug/--no-rtc-debug")
+    if missing:
+        raise ValueError("RTC inference is missing explicit config values: " + ", ".join(missing))
+    for flag, value in rtc_values.items():
+        result.extend([flag, str(value)])
+    result.append(
+        "--rtc-debug"
+        if bool(args.closed_loop_rtc_debug)
+        else "--no-rtc-debug"
+    )
+    return result
+
+
 def _run_picklift_closed_loop_eval(
     args: argparse.Namespace,
     run_dir: Path,
@@ -436,9 +500,17 @@ def _run_picklift_closed_loop_eval(
         or getattr(args, "record_loop_artifacts", False)
         or getattr(args, "render_loop_media", False)
     )
+    inference_mode = str(
+        getattr(args, "closed_loop_inference_mode", None)
+        or (
+            "temporal_ensemble"
+            if bool(getattr(args, "closed_loop_temporal_ensemble", False))
+            else "policy_queue"
+        )
+    )
     output_dir = run_dir / "closed_loop_evals" / (
         f"{_safe_id(closed_loop_test_id)}_seed{args.closed_loop_seed}_"
-        f"nact{args.policy_n_action_steps}_{checkpoint}"
+        f"nact{args.policy_n_action_steps}_{_safe_id(inference_mode)}_{checkpoint}"
     )
     cmd = [
         args.python,
@@ -486,13 +558,7 @@ def _run_picklift_closed_loop_eval(
                 str(args.closed_loop_valid_mask_requery_confirmations),
             ]
         )
-    cmd.extend(
-        [
-            "--temporal-ensemble" if args.closed_loop_temporal_ensemble else "--no-temporal-ensemble",
-            "--temporal-ensemble-decay",
-            str(args.closed_loop_temporal_ensemble_decay),
-        ]
-    )
+    cmd.extend(_closed_loop_action_chunk_inference_args(args))
     if args.closed_loop_start_report_path is not None:
         cmd.extend(["--start-report-path", str(args.closed_loop_start_report_path)])
     if args.closed_loop_episode_indices:
@@ -782,6 +848,24 @@ def _refresh_closed_loop_runtime_from_config(args: argparse.Namespace, run_dir: 
     renderer = closed_loop.get("observation_renderer")
     if isinstance(renderer, dict):
         args.closed_loop_observation_renderer_json = json.dumps(renderer, sort_keys=True)
+    inference = closed_loop.get("inference")
+    if isinstance(inference, dict):
+        args.closed_loop_inference_mode = str(inference["mode"])
+        args.closed_loop_temporal_ensemble = inference["mode"] == "temporal_ensemble"
+        args.closed_loop_temporal_ensemble_decay = float(
+            inference["temporal_ensemble_decay"]
+        )
+        rtc = inference["rtc"]
+        args.closed_loop_rtc_prefix_attention_schedule = str(
+            rtc["prefix_attention_schedule"]
+        )
+        args.closed_loop_rtc_max_guidance_weight = float(
+            rtc["max_guidance_weight"]
+        )
+        args.closed_loop_rtc_execution_horizon = int(rtc["execution_horizon"])
+        args.closed_loop_rtc_inference_delay = int(rtc["inference_delay"])
+        args.closed_loop_rtc_debug = bool(rtc["debug"])
+        args.closed_loop_rtc_debug_maxlen = int(rtc["debug_maxlen"])
     action_rmse_sweep = closed_loop.get("action_rmse_sweep")
     if isinstance(action_rmse_sweep, dict):
         if "render_policy_inference_only" in action_rmse_sweep:
@@ -1345,13 +1429,7 @@ def _picklift_closed_loop_sweep_command(
                 str(args.closed_loop_valid_mask_requery_confirmations),
             ]
         )
-    cmd.extend(
-        [
-            "--temporal-ensemble" if args.closed_loop_temporal_ensemble else "--no-temporal-ensemble",
-            "--temporal-ensemble-decay",
-            str(args.closed_loop_temporal_ensemble_decay),
-        ]
-    )
+    cmd.extend(_closed_loop_action_chunk_inference_args(args))
     if args.closed_loop_start_report_path is not None:
         cmd.extend(["--start-report-path", str(args.closed_loop_start_report_path)])
     if args.closed_loop_episode_indices:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import unittest
 import sys
+import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import torch
 
 SCRIPTS_PATH = str(Path("scripts").resolve())
 if SCRIPTS_PATH not in sys.path:
@@ -12,9 +14,17 @@ if SCRIPTS_PATH not in sys.path:
 
 from evaluate_so101_picklift_smolvla_policy import (  # noqa: E402
     _action_chunk_overlap_rmse,
+    _resolve_action_chunk_inference_mode,
+    _rtc_policy_predict_kwargs,
+    _rtc_processed_overlap_rmse,
+    _rtc_unbatched_chunk,
     _temporal_ensemble_action,
+    _validate_rtc_settings,
 )
-from monitor_so101_training_dashboard import _summarize_requery_boundary  # noqa: E402
+from monitor_so101_training_dashboard import (  # noqa: E402
+    _closed_loop_action_chunk_inference_args,
+    _summarize_requery_boundary,
+)
 
 
 class SO101TemporalEnsembleTest(unittest.TestCase):
@@ -58,6 +68,86 @@ class SO101TemporalEnsembleTest(unittest.TestCase):
         self.assertEqual(summary["requery_boundary_count"], 1)
         self.assertEqual(summary["non_boundary_step_count"], 2)
         self.assertAlmostEqual(float(summary["requery_overlap_rmse_mean"]), 0.25)
+
+    def test_rtc_mode_requires_every_explicit_setting(self) -> None:
+        with self.assertRaisesRegex(ValueError, "debug_maxlen"):
+            _validate_rtc_settings(
+                mode="rtc",
+                prefix_attention_schedule="EXP",
+                max_guidance_weight=10.0,
+                execution_horizon=10,
+                inference_delay=0,
+                debug=False,
+                debug_maxlen=None,
+            )
+
+    def test_rtc_raw_leftover_is_forwarded_without_postprocessing(self) -> None:
+        raw_chunk = _rtc_unbatched_chunk(np.arange(24, dtype=np.float32).reshape(1, 4, 6))
+        settings = {
+            "prefix_attention_schedule": "EXP",
+            "max_guidance_weight": 10.0,
+            "execution_horizon": 3,
+            "inference_delay": 0,
+            "debug": False,
+            "debug_maxlen": 100,
+        }
+
+        kwargs = _rtc_policy_predict_kwargs(
+            previous_leftover=raw_chunk[2:],
+            settings=settings,
+        )
+
+        self.assertEqual(tuple(kwargs["prev_chunk_left_over"].shape), (2, 6))
+        self.assertEqual(kwargs["execution_horizon"], 3)
+        self.assertEqual(kwargs["inference_delay"], 0)
+
+    def test_rtc_gradient_correction_can_reenable_grad_under_no_grad(self) -> None:
+        with torch.no_grad():
+            with torch.enable_grad():
+                value = torch.tensor(2.0, requires_grad=True)
+                result = value.square()
+                gradient = torch.autograd.grad(result, value)[0]
+
+        self.assertAlmostEqual(float(gradient), 4.0)
+
+    def test_rtc_overlap_compares_previous_processed_tail(self) -> None:
+        previous = np.asarray([[1.0], [2.0], [3.0]], dtype=np.float32)
+        new = np.asarray([[1.0], [4.0], [8.0]], dtype=np.float32)
+
+        rmse = _rtc_processed_overlap_rmse(
+            previous_leftover=previous,
+            new_chunk=new,
+            max_horizon=2,
+        )
+
+        self.assertAlmostEqual(float(rmse), np.sqrt(2.0))
+
+    def test_rtc_monitor_command_is_config_complete_and_exclusive(self) -> None:
+        args = SimpleNamespace(
+            closed_loop_inference_mode="rtc",
+            closed_loop_temporal_ensemble=False,
+            closed_loop_temporal_ensemble_decay=0.01,
+            closed_loop_rtc_prefix_attention_schedule="EXP",
+            closed_loop_rtc_max_guidance_weight=10.0,
+            closed_loop_rtc_execution_horizon=10,
+            closed_loop_rtc_inference_delay=0,
+            closed_loop_rtc_debug=False,
+            closed_loop_rtc_debug_maxlen=100,
+        )
+
+        command = _closed_loop_action_chunk_inference_args(args)
+
+        self.assertIn("rtc", command)
+        self.assertIn("--no-temporal-ensemble", command)
+        self.assertIn("--no-rtc-debug", command)
+        self.assertNotIn("--temporal-ensemble", command)
+
+    def test_explicit_rtc_conflicts_with_legacy_temporal_ensemble_flag(self) -> None:
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            _resolve_action_chunk_inference_mode(
+                "rtc",
+                legacy_temporal_ensemble=True,
+            )
 
 
 if __name__ == "__main__":
