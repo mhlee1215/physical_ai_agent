@@ -83,6 +83,24 @@ def main() -> None:
         default=0.01,
         help="Exponential decay k used for temporal-ensemble weights exp(-k * age_index).",
     )
+    parser.add_argument(
+        "--action-chunk-inference-mode",
+        choices=["policy_queue", "temporal_ensemble", "rtc"],
+        default=None,
+        help=(
+            "Explicit chunk execution mode. New training runs provide this from "
+            "closed_loop.inference.mode."
+        ),
+    )
+    parser.add_argument(
+        "--rtc-prefix-attention-schedule",
+        choices=["ZEROS", "ONES", "LINEAR", "EXP"],
+    )
+    parser.add_argument("--rtc-max-guidance-weight", type=float)
+    parser.add_argument("--rtc-execution-horizon", type=int)
+    parser.add_argument("--rtc-inference-delay", type=int)
+    parser.add_argument("--rtc-debug", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--rtc-debug-maxlen", type=int)
     parser.add_argument("--task-prompt", default=None)
     parser.add_argument("--env-object-color", default=None)
     parser.add_argument(
@@ -168,6 +186,13 @@ def main() -> None:
         policy_num_steps=args.policy_num_steps,
         temporal_ensemble=args.temporal_ensemble,
         temporal_ensemble_decay=args.temporal_ensemble_decay,
+        action_chunk_inference_mode=args.action_chunk_inference_mode,
+        rtc_prefix_attention_schedule=args.rtc_prefix_attention_schedule,
+        rtc_max_guidance_weight=args.rtc_max_guidance_weight,
+        rtc_execution_horizon=args.rtc_execution_horizon,
+        rtc_inference_delay=args.rtc_inference_delay,
+        rtc_debug=args.rtc_debug,
+        rtc_debug_maxlen=args.rtc_debug_maxlen,
         task_prompt=args.task_prompt,
         env_object_color=args.env_object_color,
         env_config=(json.loads(args.env_config_json) if args.env_config_json else None),
@@ -219,6 +244,13 @@ def evaluate_smolvla_picklift(
     policy_num_steps: int | None = None,
     temporal_ensemble: bool = False,
     temporal_ensemble_decay: float = 0.01,
+    action_chunk_inference_mode: str | None = None,
+    rtc_prefix_attention_schedule: str | None = None,
+    rtc_max_guidance_weight: float | None = None,
+    rtc_execution_horizon: int | None = None,
+    rtc_inference_delay: int | None = None,
+    rtc_debug: bool | None = None,
+    rtc_debug_maxlen: int | None = None,
     task_prompt: str | None = None,
     env_object_color: str | None = None,
     env_config: dict[str, Any] | None = None,
@@ -250,6 +282,20 @@ def evaluate_smolvla_picklift(
     output_dir.mkdir(parents=True, exist_ok=True)
     if temporal_ensemble_decay < 0:
         raise ValueError(f"temporal_ensemble_decay must be non-negative, got {temporal_ensemble_decay}")
+    resolved_inference_mode = _resolve_action_chunk_inference_mode(
+        action_chunk_inference_mode,
+        legacy_temporal_ensemble=temporal_ensemble,
+    )
+    temporal_ensemble = resolved_inference_mode == "temporal_ensemble"
+    rtc_settings = _validate_rtc_settings(
+        mode=resolved_inference_mode,
+        prefix_attention_schedule=rtc_prefix_attention_schedule,
+        max_guidance_weight=rtc_max_guidance_weight,
+        execution_horizon=rtc_execution_horizon,
+        inference_delay=rtc_inference_delay,
+        debug=rtc_debug,
+        debug_maxlen=rtc_debug_maxlen,
+    )
     if phase_contract is not None and subgoal_chain_mode != "valid-mask":
         raise ValueError("phase-contract rollout requires --subgoal-chain-mode=valid-mask")
     started = perf_counter()
@@ -263,7 +309,14 @@ def evaluate_smolvla_picklift(
         n_action_steps=policy_n_action_steps,
         num_steps=policy_num_steps,
     )
+    rtc_policy_config = _configure_policy_rtc(
+        policy,
+        mode=resolved_inference_mode,
+        settings=rtc_settings,
+    )
     preprocessor, postprocessor = _load_policy_processors(policy, policy_path) if use_policy_processors else (None, None)
+    if resolved_inference_mode == "rtc" and (preprocessor is None or postprocessor is None):
+        raise ValueError("RTC rollout requires the saved policy preprocessor and postprocessor")
     valid_mask_head = None
     if subgoal_chain_mode == "valid-mask":
         if valid_mask_checkpoint is None:
@@ -404,6 +457,9 @@ def evaluate_smolvla_picklift(
                     valid_mask_requery_confirmations=int(valid_mask_requery_confirmations or 0),
                     temporal_ensemble=temporal_ensemble,
                     temporal_ensemble_decay=temporal_ensemble_decay,
+                    action_chunk_inference_mode=resolved_inference_mode,
+                    rtc_policy_config=rtc_policy_config,
+                    rtc_settings=rtc_settings,
                     live_observation_renderer=live_observation_renderer,
                     phase_contract=episode_phase_contract,
                 )
@@ -451,12 +507,11 @@ def evaluate_smolvla_picklift(
             else {"mode": "mujoco"}
         ),
         "policy_rollout_config": _policy_rollout_config(policy),
-        "temporal_ensemble": {
-            "enabled": bool(temporal_ensemble),
-            "decay": float(temporal_ensemble_decay),
-            "query_interval": int(getattr(getattr(policy, "config", None), "n_action_steps", 15) or 15),
-            "reference": "ACT temporal aggregation over overlapping postprocessed action chunks",
-        },
+        "action_chunk_inference": _action_chunk_inference_report(
+            mode=resolved_inference_mode,
+            temporal_ensemble_decay=temporal_ensemble_decay,
+            rtc_settings=rtc_settings,
+        ),
         "feature_mapping": {
             "observation.images.camera1": "egocentric_cam",
             "observation.images.camera2": "wrist_cam",
@@ -1005,6 +1060,9 @@ def _run_episode(
     valid_mask_requery_confirmations: int,
     temporal_ensemble: bool,
     temporal_ensemble_decay: float,
+    action_chunk_inference_mode: str,
+    rtc_policy_config: Any | None,
+    rtc_settings: dict[str, Any] | None,
     live_observation_renderer: Any | None,
     phase_contract: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -1034,6 +1092,11 @@ def _run_episode(
     pending_advance = False
     n_action_steps = int(getattr(getattr(policy, "config", None), "n_action_steps", 15) or 15)
     temporal_chunks: list[tuple[int, np.ndarray]] = []
+    rtc_action_queue = (
+        _make_rtc_action_queue(rtc_policy_config)
+        if action_chunk_inference_mode == "rtc"
+        else None
+    )
     next_policy_inference_step = 0
     valid_mask_stop_streak = 0
     valid_mask_stop_after_step: int | None = None
@@ -1067,6 +1130,7 @@ def _run_episode(
                 pending_advance = False
                 horizon_remaining = 0
                 temporal_chunks.clear()
+                _clear_rtc_action_queue(rtc_action_queue)
                 next_policy_inference_step = step
                 valid_mask_stop_streak = 0
                 valid_mask_stop_after_step = None
@@ -1099,6 +1163,7 @@ def _run_episode(
                 horizon_remaining = 0
                 pending_advance = False
                 temporal_chunks.clear()
+                _clear_rtc_action_queue(rtc_action_queue)
                 next_policy_inference_step = step
                 valid_mask_stop_streak = 0
                 if hasattr(policy, "reset"):
@@ -1154,6 +1219,7 @@ def _run_episode(
                 horizon_remaining = 0
                 pending_advance = False
                 temporal_chunks.clear()
+                _clear_rtc_action_queue(rtc_action_queue)
                 next_policy_inference_step = step
                 valid_mask_stop_streak = 0
                 if hasattr(policy, "reset"):
@@ -1165,7 +1231,11 @@ def _run_episode(
             has_last_camera_pixels=last_camera_pixels is not None,
             step=step,
             next_policy_inference_step=next_policy_inference_step,
-            has_temporal_chunks=bool(temporal_chunks),
+            has_temporal_chunks=(
+                not rtc_action_queue.empty()
+                if rtc_action_queue is not None
+                else bool(temporal_chunks)
+            ),
             subgoal_advance_due=bool(active_chain and horizon_remaining <= 0 and pending_advance),
         )
         live_render_record = None
@@ -1198,6 +1268,7 @@ def _run_episode(
             if pending_advance and subgoal_index < len(subgoal_sequence) - 1:
                 subgoal_index += 1
                 temporal_chunks.clear()
+                _clear_rtc_action_queue(rtc_action_queue)
                 valid_mask_stop_streak = 0
                 if hasattr(policy, "reset"):
                     policy.reset()
@@ -1228,9 +1299,34 @@ def _run_episode(
         valid_mask_probs: list[float] | None = None
         valid_mask_predicted_horizon: int | None = None
         valid_mask_horizon_reason: str | None = None
-        if (temporal_ensemble or valid_mask_mode) and preprocessor is not None and postprocessor is not None:
-            policy_inference = step >= next_policy_inference_step or not temporal_chunks
+        rtc_guidance_applied = False
+        rtc_leftover_steps = 0
+        if (
+            temporal_ensemble or valid_mask_mode or rtc_action_queue is not None
+        ) and preprocessor is not None and postprocessor is not None:
+            has_chunk_buffer = (
+                not rtc_action_queue.empty()
+                if rtc_action_queue is not None
+                else bool(temporal_chunks)
+            )
+            policy_inference = step >= next_policy_inference_step or not has_chunk_buffer
             if policy_inference:
+                rtc_previous_leftover = (
+                    rtc_action_queue.get_left_over()
+                    if rtc_action_queue is not None
+                    else None
+                )
+                rtc_previous_processed = (
+                    rtc_action_queue.get_processed_left_over()
+                    if rtc_action_queue is not None
+                    else None
+                )
+                rtc_leftover_steps = (
+                    int(rtc_previous_leftover.shape[0])
+                    if rtc_previous_leftover is not None
+                    else 0
+                )
+                rtc_guidance_applied = rtc_leftover_steps > 0
                 new_chunk, state_for_mask, raw_chunk_for_mask = _predict_action_chunk_with_processors_and_inputs(
                     policy=policy,
                     preprocessor=preprocessor,
@@ -1238,6 +1334,14 @@ def _run_episode(
                     qpos=_current_qpos(env).astype(float),
                     camera_pixels=camera_pixels,
                     task_prompt=current_task_prompt,
+                    policy_predict_kwargs=(
+                        _rtc_policy_predict_kwargs(
+                            previous_leftover=rtc_previous_leftover,
+                            settings=rtc_settings,
+                        )
+                        if rtc_action_queue is not None
+                        else None
+                    ),
                 )
                 next_policy_inference_step = step + n_action_steps
                 if valid_mask_mode:
@@ -1258,14 +1362,26 @@ def _run_episode(
                     )
                     if predicted_stop:
                         next_policy_inference_step = step + valid_mask_predicted_horizon
-                        new_chunk = new_chunk[:valid_mask_predicted_horizon]
+                        if rtc_action_queue is None:
+                            new_chunk = new_chunk[:valid_mask_predicted_horizon]
                     if active_chain:
                         horizon_remaining = int(valid_mask_predicted_horizon)
                         pending_advance = stop_confirmed if phase_contract_mode else predicted_stop
                     final_subgoal = not active_chain or subgoal_index == len(subgoal_sequence) - 1
                     if final_subgoal and stop_confirmed and not phase_contract_mode:
                         valid_mask_stop_after_step = step + int(valid_mask_predicted_horizon)
-                if temporal_chunks:
+                if rtc_action_queue is not None:
+                    requery_overlap_rmse = _rtc_processed_overlap_rmse(
+                        previous_leftover=rtc_previous_processed,
+                        new_chunk=new_chunk,
+                        max_horizon=n_action_steps,
+                    )
+                    rtc_action_queue.merge(
+                        original_actions=_rtc_unbatched_chunk(raw_chunk_for_mask),
+                        processed_actions=torch.as_tensor(new_chunk),
+                        real_delay=int((rtc_settings or {})["inference_delay"]),
+                    )
+                elif temporal_chunks:
                     previous_start, previous_chunk = temporal_chunks[-1]
                     requery_overlap_rmse = _action_chunk_overlap_rmse(
                         previous_start=previous_start,
@@ -1274,19 +1390,25 @@ def _run_episode(
                         new_chunk=new_chunk,
                         max_horizon=n_action_steps,
                     )
-                temporal_chunks.append((step, new_chunk))
-            temporal_chunks = [
-                (start, chunk)
-                for start, chunk in temporal_chunks
-                if step < start + int(chunk.shape[0])
-            ]
+                if rtc_action_queue is None:
+                    temporal_chunks.append((step, new_chunk))
+            if rtc_action_queue is not None:
+                raw_action = rtc_action_queue.get()
+                if raw_action is None:
+                    raise RuntimeError(f"RTC action queue is empty at environment step {step}")
+            else:
+                temporal_chunks = [
+                    (start, chunk)
+                    for start, chunk in temporal_chunks
+                    if step < start + int(chunk.shape[0])
+                ]
             if temporal_ensemble:
                 raw_action, temporal_source_count = _temporal_ensemble_action(
                     temporal_chunks,
                     step=step,
                     decay=temporal_ensemble_decay,
                 )
-            else:
+            elif rtc_action_queue is None:
                 chunk_start, current_chunk = temporal_chunks[-1]
                 raw_action = current_chunk[step - chunk_start]
             image_feature_mapping = dict(POLICY_DISPLAY_IMAGE_FEATURE_MAPPING)
@@ -1387,8 +1509,21 @@ def _run_episode(
                 ),
                 "phase_hold_streak": int(phase_hold_streak),
                 "policy_inference": bool(policy_inference),
+                "action_chunk_inference_mode": action_chunk_inference_mode,
                 "temporal_ensemble_enabled": bool(temporal_ensemble),
                 "temporal_ensemble_source_count": int(temporal_source_count),
+                "rtc_guidance_applied": bool(rtc_guidance_applied),
+                "rtc_leftover_steps": int(rtc_leftover_steps),
+                "rtc_execution_horizon": (
+                    int(rtc_settings["execution_horizon"])
+                    if rtc_settings is not None
+                    else None
+                ),
+                "rtc_inference_delay": (
+                    int(rtc_settings["inference_delay"])
+                    if rtc_settings is not None
+                    else None
+                ),
                 "requery_overlap_rmse": requery_overlap_rmse,
                 "valid_mask_probs": valid_mask_probs,
                 "valid_mask_predicted_horizon": valid_mask_predicted_horizon,
@@ -1516,10 +1651,11 @@ def _run_episode(
         "phase_contract": _phase_contract_episode_report(phase_contract),
         "phase_results": phase_results,
         "phase_stop_proposals": phase_stop_proposals,
-        "temporal_ensemble": {
-            "enabled": bool(temporal_ensemble),
-            "decay": float(temporal_ensemble_decay),
-        },
+        "action_chunk_inference": _action_chunk_inference_report(
+            mode=action_chunk_inference_mode,
+            temporal_ensemble_decay=temporal_ensemble_decay,
+            rtc_settings=rtc_settings,
+        ),
         "reset_meta": reset_meta,
         "search_steps": search_steps,
         "steps": len(records),
@@ -1863,6 +1999,7 @@ def _predict_action_chunk_with_processors_and_inputs(
     qpos: np.ndarray,
     camera_pixels: dict[str, np.ndarray],
     task_prompt: str,
+    policy_predict_kwargs: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, Any, Any]:
     try:
         from lerobot.utils.control_utils import prepare_observation_for_inference
@@ -1886,8 +2023,12 @@ def _predict_action_chunk_with_processors_and_inputs(
         "so101",
     )
     batch = preprocessor(observation)
-    with torch.inference_mode():
-        raw_chunk = policy.predict_action_chunk(batch)
+    inference_context = torch.no_grad if policy_predict_kwargs else torch.inference_mode
+    with inference_context():
+        if policy_predict_kwargs:
+            raw_chunk = policy.predict_action_chunk(batch, **policy_predict_kwargs)
+        else:
+            raw_chunk = policy.predict_action_chunk(batch)
     try:
         processed_chunk = postprocessor(raw_chunk)
     except Exception:  # Some LeRobot processor versions only accept one action at a time.
@@ -1902,6 +2043,173 @@ def _predict_action_chunk_with_processors_and_inputs(
     if chunk_array.ndim != 2:
         raise ValueError(f"postprocessed action chunk must have shape [T, A], got {chunk_array.shape}")
     return chunk_array[:, :6].astype(float, copy=False), batch["observation.state"], raw_chunk
+
+
+def _resolve_action_chunk_inference_mode(
+    requested_mode: str | None,
+    *,
+    legacy_temporal_ensemble: bool,
+) -> str:
+    if requested_mode is None:
+        return "temporal_ensemble" if legacy_temporal_ensemble else "policy_queue"
+    if requested_mode not in {"policy_queue", "temporal_ensemble", "rtc"}:
+        raise ValueError(f"unsupported action chunk inference mode: {requested_mode}")
+    if legacy_temporal_ensemble and requested_mode != "temporal_ensemble":
+        raise ValueError(
+            "--temporal-ensemble conflicts with "
+            f"--action-chunk-inference-mode={requested_mode}"
+        )
+    return requested_mode
+
+
+def _validate_rtc_settings(
+    *,
+    mode: str,
+    prefix_attention_schedule: str | None,
+    max_guidance_weight: float | None,
+    execution_horizon: int | None,
+    inference_delay: int | None,
+    debug: bool | None,
+    debug_maxlen: int | None,
+) -> dict[str, Any] | None:
+    values = {
+        "prefix_attention_schedule": prefix_attention_schedule,
+        "max_guidance_weight": max_guidance_weight,
+        "execution_horizon": execution_horizon,
+        "inference_delay": inference_delay,
+        "debug": debug,
+        "debug_maxlen": debug_maxlen,
+    }
+    if mode != "rtc":
+        return None
+    missing = [name for name, value in values.items() if value is None]
+    if missing:
+        raise ValueError("RTC mode requires explicit settings: " + ", ".join(missing))
+    if prefix_attention_schedule not in {"ZEROS", "ONES", "LINEAR", "EXP"}:
+        raise ValueError(
+            f"unsupported RTC prefix attention schedule: {prefix_attention_schedule}"
+        )
+    if float(max_guidance_weight) <= 0:
+        raise ValueError("rtc_max_guidance_weight must be positive")
+    if int(execution_horizon) < 1:
+        raise ValueError("rtc_execution_horizon must be positive")
+    if int(inference_delay) < 0:
+        raise ValueError("rtc_inference_delay must be non-negative")
+    if int(debug_maxlen) < 1:
+        raise ValueError("rtc_debug_maxlen must be positive")
+    return {
+        "prefix_attention_schedule": str(prefix_attention_schedule),
+        "max_guidance_weight": float(max_guidance_weight),
+        "execution_horizon": int(execution_horizon),
+        "inference_delay": int(inference_delay),
+        "debug": bool(debug),
+        "debug_maxlen": int(debug_maxlen),
+    }
+
+
+def _configure_policy_rtc(
+    policy: Any,
+    *,
+    mode: str,
+    settings: dict[str, Any] | None,
+) -> Any | None:
+    if mode != "rtc":
+        return None
+    if settings is None:
+        raise ValueError("RTC settings are required")
+    config = getattr(policy, "config", None)
+    if config is None or not hasattr(policy, "init_rtc_processor"):
+        raise ValueError("loaded policy does not support LeRobot RTC inference")
+    from lerobot.configs.types import RTCAttentionSchedule
+    from lerobot.policies.rtc import RTCConfig
+
+    rtc_config = RTCConfig(
+        enabled=True,
+        prefix_attention_schedule=RTCAttentionSchedule[
+            settings["prefix_attention_schedule"]
+        ],
+        max_guidance_weight=float(settings["max_guidance_weight"]),
+        execution_horizon=int(settings["execution_horizon"]),
+        debug=bool(settings["debug"]),
+        debug_maxlen=int(settings["debug_maxlen"]),
+    )
+    config.rtc_config = rtc_config
+    policy.init_rtc_processor()
+    return rtc_config
+
+
+def _make_rtc_action_queue(rtc_policy_config: Any) -> Any:
+    from lerobot.policies.rtc import ActionQueue
+
+    return ActionQueue(rtc_policy_config)
+
+
+def _clear_rtc_action_queue(action_queue: Any | None) -> None:
+    if action_queue is not None:
+        action_queue.clear()
+
+
+def _rtc_policy_predict_kwargs(
+    *,
+    previous_leftover: Any | None,
+    settings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if settings is None:
+        raise ValueError("RTC settings are required")
+    return {
+        "prev_chunk_left_over": previous_leftover,
+        "inference_delay": int(settings["inference_delay"]),
+        "execution_horizon": int(settings["execution_horizon"]),
+    }
+
+
+def _rtc_unbatched_chunk(raw_chunk: Any) -> torch.Tensor:
+    chunk = torch.as_tensor(raw_chunk).detach()
+    if chunk.ndim == 3 and chunk.shape[0] == 1:
+        chunk = chunk[0]
+    if chunk.ndim != 2:
+        raise ValueError(
+            f"RTC raw action chunk must have shape [T, A], got {tuple(chunk.shape)}"
+        )
+    return chunk
+
+
+def _rtc_processed_overlap_rmse(
+    *,
+    previous_leftover: Any | None,
+    new_chunk: np.ndarray,
+    max_horizon: int,
+) -> float | None:
+    if previous_leftover is None:
+        return None
+    previous = np.asarray(torch.as_tensor(previous_leftover).detach().float().cpu())
+    horizon = min(int(max_horizon), int(previous.shape[0]), int(new_chunk.shape[0]))
+    if horizon <= 0:
+        return None
+    delta = previous[:horizon] - np.asarray(new_chunk[:horizon], dtype=float)
+    return float(np.sqrt(np.mean(np.square(delta))))
+
+
+def _action_chunk_inference_report(
+    *,
+    mode: str,
+    temporal_ensemble_decay: float,
+    rtc_settings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "mode": mode,
+        "temporal_ensemble_decay": (
+            float(temporal_ensemble_decay)
+            if mode == "temporal_ensemble"
+            else None
+        ),
+        "rtc": dict(rtc_settings) if rtc_settings is not None else None,
+        "reference": (
+            "LeRobot RTCProcessor raw-chunk prefix guidance"
+            if mode == "rtc"
+            else None
+        ),
+    }
 
 
 def _temporal_ensemble_action(

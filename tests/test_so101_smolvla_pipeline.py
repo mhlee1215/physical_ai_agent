@@ -238,7 +238,19 @@ class SO101SmolVLAPipelineTest(TestCase):
             normalized["closed_loop"]["test_cases"][0]["id"],
             "grip_the_cube_v2_5_clean_valid_mask_200",
         )
-        self.assertEqual(normalized["closed_loop"]["temporal_ensemble"], {"enabled": True, "decay": 0.01})
+        self.assertEqual(normalized["closed_loop"]["inference"]["mode"], "temporal_ensemble")
+        self.assertEqual(
+            normalized["closed_loop"]["inference"]["rtc"],
+            {
+                "prefix_attention_schedule": "EXP",
+                "max_guidance_weight": 10.0,
+                "execution_horizon": 10,
+                "inference_delay": 0,
+                "debug": False,
+                "debug_maxlen": 100,
+            },
+        )
+        self.assertNotIn("temporal_ensemble", normalized["closed_loop"])
 
     def test_so101_training_default_config_excludes_dataset_fields(self) -> None:
         default_path = Path("configs/so101/training_defaults/grip_the_cube_v2_default.json")

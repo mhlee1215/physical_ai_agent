@@ -81,9 +81,17 @@
       "tensorboard_media": {
         "train_reference_frequency": "once_per_run"
       },
-      "temporal_ensemble": {
-        "enabled": true,
-        "decay": 0.01
+      "inference": {
+        "mode": "temporal_ensemble",
+        "temporal_ensemble_decay": 0.01,
+        "rtc": {
+          "prefix_attention_schedule": "EXP",
+          "max_guidance_weight": 10.0,
+          "execution_horizon": 10,
+          "inference_delay": 0,
+          "debug": false,
+          "debug_maxlen": 100
+        }
       },
       "action_rmse_sweep": {
         "enabled": true,

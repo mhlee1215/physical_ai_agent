@@ -144,11 +144,24 @@ retain a second backward graph. Keep its offset, horizon, and weight in
 the training config and forward them with
 `--so101-action-requery-consistency-*`.
 
-For inference-only mitigation, `closed_loop.temporal_ensemble` blends all
-postprocessed action chunks that cover the current step with ACT-style
-exponential weights. Compare it against baseline on the same checkpoint,
-snapshot, seed, prompt, cameras, resolution, and rollout horizon before making
-it the default.
+For inference-only mitigation, select one explicit strategy with
+`closed_loop.inference.mode`: `policy_queue`, `temporal_ensemble`, or `rtc`.
+Temporal ensemble blends postprocessed chunks with ACT-style exponential
+weights. RTC uses LeRobot's official `RTCProcessor`: every re-query sends the
+unprocessed, normalized remainder of the previous action chunk into the new
+SmolVLA flow-matching solve as prefix guidance, then executes the normally
+postprocessed replacement chunk. RTC therefore does not require retraining.
+The simulator is synchronous, so its canonical `rtc.inference_delay` is zero;
+a nonzero measured delay belongs to a future asynchronous hardware runtime.
+All RTC values are explicit in config, and the current RTC evaluator contract
+requires the `picklift` runner. Compare modes on the same checkpoint, snapshot,
+seed, prompt, cameras, resolution, and rollout horizon.
+
+Official references:
+
+- [LeRobot Real-Time Chunking guide](https://huggingface.co/docs/lerobot/en/rtc)
+- [LeRobot SmolVLA RTC integration](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/smolvla/modeling_smolvla.py)
+- [LeRobot real-robot RTC example](https://github.com/huggingface/lerobot/blob/main/examples/rtc/eval_with_real_robot.py)
 
 ## Optional Subgoal Termination Head
 
